@@ -1,0 +1,13 @@
+[package]
+name = "ryra-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+minijinja = "2"
+rand = "0.9"
+dirs = "6"

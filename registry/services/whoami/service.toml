@@ -1,0 +1,15 @@
+[service]
+name = "whoami"
+description = "Traefik whoami - simple HTTP request echo"
+image = "docker.io/traefik/whoami:latest"
+
+[[ports]]
+name = "http"
+container_port = 80
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false

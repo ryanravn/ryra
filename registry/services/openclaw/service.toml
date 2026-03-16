@@ -1,0 +1,23 @@
+[service]
+name = "openclaw"
+description = "OpenClaw - self-hosted AI assistant"
+image = "ghcr.io/openclaw/openclaw:latest"
+
+[[ports]]
+name = "gateway"
+container_port = 18789
+
+[[volumes]]
+name = "config"
+mount_path = "/home/node/.openclaw"
+
+[[env]]
+name = "OPENCLAW_GATEWAY_BIND"
+value = "lan"
+
+[nginx]
+upstream_port = "gateway"
+
+[integrations]
+auth = false
+smtp = false
