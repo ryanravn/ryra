@@ -32,4 +32,10 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 - `ryra-cli`: thin shell that calls core and handles sudo/system interaction
 - Core returns typed results describing what needs to happen; CLI decides whether to apply or print
 - Each service gets its own Linux user (`ryra-<name>`) running rootless podman
-- nginx runs as a root system quadlet — it's the only privileged component
+- nginx runs as a root system quadlet with `Network=host` — the only privileged component
+
+## System Dependencies
+
+- `podman` — rootless containers for services, root containers for nginx/cloudflared
+- `systemd-container` — provides `systemd-machined` and `--machine=` support for managing user services of other users (e.g., `systemctl --machine=ryra-whoami@ --user start whoami`)
+- `loginctl` linger — keeps service users' systemd alive without login sessions

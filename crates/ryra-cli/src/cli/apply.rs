@@ -121,6 +121,18 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 "sudo useradd --system --shell /usr/sbin/nologin --home-dir {} --create-home {username}",
                 home_dir.display()
             ))?;
+            // Rootless podman needs subordinate UID/GID ranges for user namespaces.
+            // Allocate a unique 65536-range based on the user's UID to avoid overlap.
+            let uid_output = Command::new("id").args(["-u", username])
+                .output()
+                .context("failed to get uid")?;
+            let uid: u64 = String::from_utf8_lossy(&uid_output.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(1000);
+            let sub_start = 100000 + (uid * 65536);
+            let sub_end = sub_start + 65535;
+            run(&format!("sudo usermod --add-subuids {sub_start}-{sub_end} --add-subgids {sub_start}-{sub_end} {username}"))?;
             created.push(Created::User(username.clone()));
             Ok(())
         }
@@ -435,9 +447,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             println!("  Origin cert generated for {domain}");
             Ok(())
         }
-        Step::PullImage { image } => {
+        Step::PullImage { image, username } => {
             println!("  Pulling {image}...");
-            run(&format!("sudo podman pull {image}"))
+            match username {
+                Some(u) => run(&format!("sudo -u {u} podman pull {image}")),
+                None => run(&format!("sudo podman pull {image}")),
+            }
         }
         Step::RemoveFile(path) => run(&format!("sudo rm -f {}", path.display())),
         Step::RemoveDir(path) => run(&format!("sudo rm -rf {}", path.display())),

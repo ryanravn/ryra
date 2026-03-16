@@ -117,8 +117,11 @@ pub enum Step {
         zone_id: String,
         domain: String,
     },
-    /// Pull a container image.
-    PullImage { image: String },
+    /// Pull a container image. If username is set, pull as that user (rootless).
+    PullImage {
+        image: String,
+        username: Option<String>,
+    },
     /// Remove a file (requires sudo).
     RemoveFile(PathBuf),
     /// Remove a directory tree (requires sudo).
@@ -181,7 +184,10 @@ impl Step {
             Step::RemoveTunnelRoute { domain, .. } => {
                 format!("cloudflare tunnel: remove route for {domain}")
             }
-            Step::PullImage { image } => format!("sudo podman pull {image}"),
+            Step::PullImage { image, username } => match username {
+                Some(u) => format!("sudo -u {u} podman pull {image}"),
+                None => format!("sudo podman pull {image}"),
+            },
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
@@ -247,6 +253,7 @@ pub async fn init(config: Config) -> Result<InitResult> {
         }),
         Step::PullImage {
             image: "docker.io/library/nginx:alpine".into(),
+            username: None,
         },
         Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/containers/systemd/nginx.container"),
@@ -391,7 +398,13 @@ pub fn add_service(service_name: &str, domain: &str, exposure: ExposureMode) -> 
         username: username.clone(),
     });
 
-    // 4. Write all generated files (quadlets + nginx)
+    // 4. Pre-pull the service image as the service user (rootless storage)
+    steps.push(Step::PullImage {
+        image: reg_service.def.service.image.clone(),
+        username: Some(username.clone()),
+    });
+
+    // 5. Write all generated files (quadlets + nginx)
     for file in generated.quadlet_files {
         steps.push(Step::WriteFile(file));
     }
@@ -399,13 +412,13 @@ pub fn add_service(service_name: &str, domain: &str, exposure: ExposureMode) -> 
         steps.push(Step::WriteFile(nginx_site));
     }
 
-    // 5. Fix ownership after writing to the service user's home
+    // 6. Fix ownership after writing to the service user's home
     steps.push(Step::Chown {
         path: home_dir,
         username: username.clone(),
     });
 
-    // 6. Start service + reload nginx
+    // 7. Start service + reload nginx
     steps.push(Step::DaemonReload {
         username: username.clone(),
     });
