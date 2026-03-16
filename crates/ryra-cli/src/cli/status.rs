@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ryra_core::config::status::{ProviderStatus, RyraStatus, StatusInfo};
+use ryra_core::config::status::{CloudflareStatus, ProviderStatus, RyraStatus, StatusInfo};
 
 pub fn run() -> Result<()> {
     match ryra_core::status() {
@@ -14,8 +14,16 @@ pub fn run() -> Result<()> {
 fn print_status(info: &StatusInfo) {
     println!("Host:       {}", info.domain);
     println!();
-    println!("DNS:        {}", format_provider(&info.dns));
-    println!("Tunnel:     {}", format_provider(&info.tunnel));
+    println!(
+        "Cloudflare: {}",
+        match &info.cloudflare {
+            CloudflareStatus::None => "not configured".into(),
+            CloudflareStatus::Configured { zone_name, tunnel } => {
+                let tunnel_str = if *tunnel { " + tunnel" } else { "" };
+                format!("{zone_name}{tunnel_str}")
+            }
+        }
+    );
     println!("SSL:        {}", format_provider(&info.ssl));
     println!("SMTP:       {}", format_provider(&info.smtp));
     println!("Auth:       {}", format_provider(&info.auth));
@@ -35,7 +43,10 @@ fn print_status(info: &StatusInfo) {
     } else {
         println!("Services:");
         for svc in &info.services {
-            println!("  {:<20} {}", svc.name, svc.domain);
+            println!(
+                "  {:<20} {:<30} ({})",
+                svc.name, svc.domain, svc.exposure
+            );
         }
     }
 

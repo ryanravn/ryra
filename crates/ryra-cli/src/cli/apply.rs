@@ -130,7 +130,9 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             Ok(())
         }
         Step::DisableLinger { username } => {
-            run(&format!("sudo loginctl disable-linger {username}"))
+            // Ignore errors — user may not exist (partial add failure)
+            let _ = run(&format!("sudo loginctl disable-linger {username}"));
+            Ok(())
         }
         Step::TerminateUserSession { username } => {
             // Ignore errors — user may not have an active session
@@ -230,10 +232,11 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             .await
             .unwrap_or_default();
 
-            // Add the new route (pointing to nginx on localhost)
+            // Add the new route (pointing to nginx HTTP on localhost —
+            // tunnel mode means nginx only listens on port 80)
             rules.push(ryra_core::integrations::tunnel::IngressRule {
                 hostname: domain.clone(),
-                service: "https://localhost:443".into(),
+                service: "http://localhost:80".into(),
                 path: None,
             });
 
@@ -251,7 +254,7 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             .await
             .context("failed to create tunnel CNAME")?;
 
-            println!("  Tunnel route added: {domain} -> https://localhost:443");
+            println!("  Tunnel route added: {domain} -> http://localhost:80");
             created.push(Created::DnsRecord {
                 api_token: api_token.clone(),
                 zone_id: zone_id.clone(),
@@ -287,14 +290,11 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             .await;
 
             // Delete CNAME record
-            match ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await {
-                Ok(Some(record)) => {
-                    let _ = ryra_core::integrations::dns::delete_record(
-                        api_token, zone_id, &record.id,
-                    )
-                    .await;
-                }
-                _ => {}
+            if let Ok(Some(record)) = ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await {
+                let _ = ryra_core::integrations::dns::delete_record(
+                    api_token, zone_id, &record.id,
+                )
+                .await;
             }
 
             println!("  Tunnel route removed for {domain}");
@@ -435,9 +435,16 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             println!("  Origin cert generated for {domain}");
             Ok(())
         }
+        Step::PullImage { image } => {
+            println!("  Pulling {image}...");
+            run(&format!("sudo podman pull {image}"))
+        }
         Step::RemoveFile(path) => run(&format!("sudo rm -f {}", path.display())),
+        Step::RemoveDir(path) => run(&format!("sudo rm -rf {}", path.display())),
         Step::RemoveUser { username } => {
-            run(&format!("sudo userdel --remove {username}"))
+            // Ignore errors — user may not exist (partial add failure)
+            let _ = run(&format!("sudo userdel --remove {username}"));
+            Ok(())
         }
     }
 }

@@ -6,7 +6,7 @@ pub mod tunnel;
 
 use std::path::{Path, PathBuf};
 
-use crate::config::schema::Config;
+use crate::config::schema::{Config, ExposureMode};
 use crate::config::state::State;
 use crate::error::{Error, Result};
 use crate::registry::service_def::{EnvVar, ServiceDef};
@@ -29,6 +29,7 @@ pub fn generate_service(
     state: &mut State,
     service_def: &ServiceDef,
     domain: &str,
+    exposure: &ExposureMode,
     quadlet_dir: &Path,
     nginx_dir: &Path,
 ) -> Result<GeneratedService> {
@@ -132,27 +133,36 @@ pub fn generate_service(
                 nginx_def.upstream_port
             )))?;
 
+        let mode = match exposure {
+            ExposureMode::Tunnel | ExposureMode::Local => nginx::SiteMode::HttpOnly,
+            ExposureMode::Proxy => {
+                let (cert_path, key_path) =
+                    crate::integrations::ssl::origin_cert_paths(domain);
+                nginx::SiteMode::Ssl {
+                    cert_path,
+                    key_path,
+                }
+            }
+            ExposureMode::DnsOnly => {
+                let (cert_path, key_path) = match &config.ssl {
+                    Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
+                    None => crate::integrations::ssl::letsencrypt_cert_paths(domain),
+                };
+                nginx::SiteMode::Ssl {
+                    cert_path,
+                    key_path,
+                }
+            }
+        };
+
         Some(GeneratedFile {
             path: nginx_dir.join(format!("{name}.conf")),
-            content: {
-                let mode = match config.tunnel.is_enabled() {
-                    true => nginx::SiteMode::Tunnel,
-                    false => {
-                        let (cert_path, key_path) =
-                            crate::integrations::ssl::cert_paths(&config.ssl, domain);
-                        nginx::SiteMode::Ssl {
-                            cert_path,
-                            key_path,
-                        }
-                    }
-                };
-                nginx::render_site(&nginx::NginxSiteParams {
-                    service_name: name,
-                    domain,
-                    upstream_port,
-                    mode,
-                })
-            },
+            content: nginx::render_site(&nginx::NginxSiteParams {
+                service_name: name,
+                domain,
+                upstream_port,
+                mode,
+            }),
         })
     } else {
         None

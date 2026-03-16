@@ -8,7 +8,7 @@ pub mod verbose;
 
 use std::path::{Path, PathBuf};
 
-use config::schema::{Config, InstalledService, RegistryEntry};
+use config::schema::{CloudflareConfig, Config, ExposureMode, InstalledService, RegistryEntry};
 use config::state::State;
 use config::ConfigPaths;
 use error::{Error, Result};
@@ -117,8 +117,12 @@ pub enum Step {
         zone_id: String,
         domain: String,
     },
+    /// Pull a container image.
+    PullImage { image: String },
     /// Remove a file (requires sudo).
     RemoveFile(PathBuf),
+    /// Remove a directory tree (requires sudo).
+    RemoveDir(PathBuf),
     /// Remove a Linux user and their home directory.
     RemoveUser { username: String },
 }
@@ -172,12 +176,14 @@ impl Step {
             Step::StartTunnel => "sudo systemctl start cloudflared".into(),
             Step::StopTunnel => "sudo systemctl stop cloudflared".into(),
             Step::AddTunnelRoute { domain, .. } => {
-                format!("cloudflare tunnel: add route {domain} -> https://localhost:443")
+                format!("cloudflare tunnel: add route {domain} -> http://localhost:80")
             }
             Step::RemoveTunnelRoute { domain, .. } => {
                 format!("cloudflare tunnel: remove route for {domain}")
             }
+            Step::PullImage { image } => format!("sudo podman pull {image}"),
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
+            Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
         }
     }
@@ -199,6 +205,12 @@ pub struct RemoveResult {
     pub steps: Vec<Step>,
     pub username: String,
     pub service_name: String,
+    pub domain: String,
+    pub exposure: ExposureMode,
+}
+
+pub struct ResetResult {
+    pub steps: Vec<Step>,
 }
 
 /// Initialize a new ryra project.
@@ -219,34 +231,34 @@ pub async fn init(config: Config) -> Result<InitResult> {
         }
     }
 
-    let use_tunnel = config.tunnel.is_enabled();
-
-    let nginx_exposure = match use_tunnel {
-        true => generate::nginx::NginxExposure::LocalOnly,
-        false => generate::nginx::NginxExposure::Public,
-    };
-
-    let mut steps = Vec::new();
-
-    // Nginx config + quadlet
-    steps.push(Step::WriteFile(GeneratedFile {
-        path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
-        content: String::new(),
-    }));
-    steps.push(Step::WriteFile(GeneratedFile {
-        path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
-        content: generate::nginx::render_nginx_base_conf(),
-    }));
-    steps.push(Step::WriteFile(GeneratedFile {
-        path: PathBuf::from("/etc/containers/systemd/nginx.container"),
-        content: generate::nginx::render_nginx_quadlet(&nginx_exposure),
-    }));
+    // Create dirs and write nginx config + quadlet
+    let mut steps = vec![
+        Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
+            content: String::new(),
+        }),
+        Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/certs/.keep"),
+            content: String::new(),
+        }),
+        Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
+            content: generate::nginx::render_nginx_base_conf(),
+        }),
+        Step::PullImage {
+            image: "docker.io/library/nginx:alpine".into(),
+        },
+        Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/containers/systemd/nginx.container"),
+            content: generate::nginx::render_nginx_quadlet(),
+        }),
+    ];
 
     // Cloudflared quadlet (if tunnel configured)
-    if let config::schema::TunnelConfig::Cloudflare { tunnel_token, .. } = &config.tunnel {
+    if let CloudflareConfig::Configured { tunnel: Some(ref ti), .. } = config.cloudflare {
         steps.push(Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
-            content: generate::tunnel::render_cloudflared_quadlet(tunnel_token),
+            content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
         }));
     }
 
@@ -255,7 +267,7 @@ pub async fn init(config: Config) -> Result<InitResult> {
         unit: "nginx".into(),
     });
 
-    if use_tunnel {
+    if config.cloudflare.tunnel_info().is_some() {
         steps.push(Step::StartTunnel);
     }
 
@@ -263,9 +275,9 @@ pub async fn init(config: Config) -> Result<InitResult> {
 }
 
 /// Add a service: generate config, return steps to execute.
-pub fn add_service(service_name: &str, domain: &str) -> Result<AddResult> {
+pub fn add_service(service_name: &str, domain: &str, exposure: ExposureMode) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
-    let mut config = config::load_config(&paths.config_file)?;
+    let config = config::load_config(&paths.config_file)?;
     let mut state = config::load_state(&paths.state_file)?;
 
     if config.services.iter().any(|s| s.name == service_name) {
@@ -289,77 +301,85 @@ pub fn add_service(service_name: &str, domain: &str) -> Result<AddResult> {
         &mut state,
         &reg_service.def,
         domain,
+        &exposure,
         &quadlet_dir,
         nginx_dir,
     )?;
 
-    // Save ryra's own state
+    // Save port/secret allocations (needed even if steps fail, so ports aren't reused)
     config::save_state(&paths.state_file, &state)?;
-    config.services.push(InstalledService {
-        name: service_name.to_string(),
-        domain: domain.to_string(),
-        version: "0.1.0".to_string(),
-    });
-    config::save_config(&paths.config_file, &config)?;
+    // NOTE: service entry is NOT saved here — call finalize_add() after steps succeed
 
     // Build ordered steps
     let mut steps = Vec::new();
 
-    // 1. Networking: tunnel route OR DNS record
-    match &config.tunnel {
-        config::schema::TunnelConfig::Cloudflare {
-            tunnel_id,
-            account_id,
-            ..
-        } => {
-            // Tunnel handles routing — need CF credentials for CNAME + ingress
-            if let Some((api_token, zone_id, _)) = config.dns.cloudflare_credentials() {
+    // 1. Networking: based on exposure mode
+    match &exposure {
+        ExposureMode::Tunnel => {
+            if let CloudflareConfig::Configured {
+                api_token,
+                zone_id,
+                tunnel: Some(ti),
+                ..
+            } = &config.cloudflare
+            {
                 steps.push(Step::AddTunnelRoute {
-                    api_token: api_token.to_string(),
-                    account_id: account_id.clone(),
-                    tunnel_id: tunnel_id.clone(),
-                    zone_id: zone_id.to_string(),
+                    api_token: api_token.clone(),
+                    account_id: ti.account_id.clone(),
+                    tunnel_id: ti.tunnel_id.clone(),
+                    zone_id: zone_id.clone(),
                     domain: domain.to_string(),
                 });
             }
         }
-        config::schema::TunnelConfig::None => {
-            // No tunnel — create A record if Cloudflare DNS configured
-            if let Some((api_token, zone_id, _)) = config.dns.cloudflare_credentials() {
+        ExposureMode::Proxy => {
+            if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
                 steps.push(Step::CreateDnsRecord {
                     api_token: api_token.to_string(),
                     zone_id: zone_id.to_string(),
                     domain: domain.to_string(),
-                    proxied: config.dns.is_proxied(),
+                    proxied: true,
                 });
             }
         }
+        ExposureMode::DnsOnly => {
+            if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
+                steps.push(Step::CreateDnsRecord {
+                    api_token: api_token.to_string(),
+                    zone_id: zone_id.to_string(),
+                    domain: domain.to_string(),
+                    proxied: false,
+                });
+            }
+        }
+        ExposureMode::Local => {}
     }
 
-    // 2. SSL certificate — skip entirely when tunnel handles SSL
-    match config.tunnel.is_enabled() {
-        true => {} // Tunnel → Cloudflare edge handles SSL, no origin cert needed
-        false => match &config.ssl {
-            config::schema::SslConfig::Letsencrypt { email } => {
-                let cf_token = config
-                    .dns
-                    .cloudflare_credentials()
-                    .map(|(token, _, _)| token.to_string());
-                steps.push(Step::ObtainCert {
-                    domain: domain.to_string(),
-                    email: email.clone(),
-                    cloudflare_api_token: cf_token,
-                });
-            }
-            config::schema::SslConfig::CloudflareOrigin => {
-                steps.push(Step::GenerateOriginCert {
-                    domain: domain.to_string(),
-                });
-            }
-            config::schema::SslConfig::Custom { .. } => {
-                // User manages certs — nothing to do
-            }
-        },
+    // 2. SSL certificate — depends on exposure mode
+    match &exposure {
+        ExposureMode::Proxy => {
+            steps.push(Step::GenerateOriginCert {
+                domain: domain.to_string(),
+            });
+        }
+        ExposureMode::DnsOnly => {
+            let email = match &config.ssl {
+                Some(config::schema::SslConfig::Letsencrypt { email }) => email.clone(),
+                _ => return Err(Error::Template(
+                    "DnsOnly exposure requires SSL config with Let's Encrypt email".to_string(),
+                )),
+            };
+            let cf_token = config
+                .cloudflare
+                .credentials()
+                .map(|(token, _, _)| token.to_string());
+            steps.push(Step::ObtainCert {
+                domain: domain.to_string(),
+                email,
+                cloudflare_api_token: cf_token,
+            });
+        }
+        ExposureMode::Tunnel | ExposureMode::Local => {}
     }
 
     // 3. Create service user
@@ -440,42 +460,67 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         },
     ];
 
-    // Clean up networking: tunnel route or DNS record
-    match &config.tunnel {
-        config::schema::TunnelConfig::Cloudflare {
-            tunnel_id,
-            account_id,
-            ..
-        } => {
-            if let Some((api_token, zone_id, _)) = config.dns.cloudflare_credentials() {
+    // Clean up networking based on stored exposure mode
+    match &service.exposure {
+        ExposureMode::Tunnel => {
+            if let CloudflareConfig::Configured {
+                api_token,
+                zone_id,
+                tunnel: Some(ti),
+                ..
+            } = &config.cloudflare
+            {
                 steps.push(Step::RemoveTunnelRoute {
-                    api_token: api_token.to_string(),
-                    account_id: account_id.clone(),
-                    tunnel_id: tunnel_id.clone(),
-                    zone_id: zone_id.to_string(),
-                    domain,
+                    api_token: api_token.clone(),
+                    account_id: ti.account_id.clone(),
+                    tunnel_id: ti.tunnel_id.clone(),
+                    zone_id: zone_id.clone(),
+                    domain: domain.clone(),
                 });
             }
         }
-        config::schema::TunnelConfig::None => {
-            if let Some((api_token, zone_id, _)) = config.dns.cloudflare_credentials() {
+        ExposureMode::Proxy | ExposureMode::DnsOnly => {
+            if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
                 steps.push(Step::DeleteDnsRecord {
                     api_token: api_token.to_string(),
                     zone_id: zone_id.to_string(),
-                    domain,
+                    domain: domain.clone(),
                 });
             }
         }
+        ExposureMode::Local => {}
     }
 
     Ok(RemoveResult {
         steps,
         username,
         service_name: service_name.to_string(),
+        domain,
+        exposure: service.exposure.clone(),
     })
 }
 
 /// Called after remove steps succeed — cleans up ryra's internal state.
+/// Called after add steps succeed — records the service in config.
+pub fn finalize_add(
+    service_name: &str,
+    domain: &str,
+    exposure: ExposureMode,
+) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = config::load_config(&paths.config_file)?;
+
+    config.services.push(InstalledService {
+        name: service_name.to_string(),
+        domain: domain.to_string(),
+        version: "0.1.0".to_string(),
+        exposure,
+    });
+    config::save_config(&paths.config_file, &config)?;
+
+    Ok(())
+}
+
 pub fn finalize_remove(service_name: &str) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = config::load_config(&paths.config_file)?;
@@ -487,6 +532,131 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     config.services.retain(|s| s.name != service_name);
     config::save_config(&paths.config_file, &config)?;
 
+    Ok(())
+}
+
+/// Reset ryra: tear down all services, infrastructure, and config.
+/// Always produces steps — discovers system artifacts even without config.
+pub fn reset(system_ryra_users: &[String]) -> ResetResult {
+    let config = ConfigPaths::resolve()
+        .ok()
+        .and_then(|p| config::load_config(&p.config_file).ok());
+
+    let mut steps = Vec::new();
+
+    // 1. Clean up services known from config (includes DNS/tunnel cleanup)
+    if let Some(ref config) = config {
+        for service in &config.services {
+            let username = service_user(&service.name);
+            push_service_teardown(&mut steps, &username, &service.name);
+
+            // Clean up networking based on stored exposure
+            match &service.exposure {
+                ExposureMode::Tunnel => {
+                    if let CloudflareConfig::Configured {
+                        api_token,
+                        zone_id,
+                        tunnel: Some(ti),
+                        ..
+                    } = &config.cloudflare
+                    {
+                        steps.push(Step::RemoveTunnelRoute {
+                            api_token: api_token.clone(),
+                            account_id: ti.account_id.clone(),
+                            tunnel_id: ti.tunnel_id.clone(),
+                            zone_id: zone_id.clone(),
+                            domain: service.domain.clone(),
+                        });
+                    }
+                }
+                ExposureMode::Proxy | ExposureMode::DnsOnly => {
+                    if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
+                        steps.push(Step::DeleteDnsRecord {
+                            api_token: api_token.to_string(),
+                            zone_id: zone_id.to_string(),
+                            domain: service.domain.clone(),
+                        });
+                    }
+                }
+                ExposureMode::Local => {}
+            }
+        }
+    }
+
+    // 2. Discover orphaned ryra-* users not tracked in config
+    let known_users: Vec<String> = config
+        .as_ref()
+        .map(|c| c.services.iter().map(|s| service_user(&s.name)).collect())
+        .unwrap_or_default();
+
+    for username in system_ryra_users {
+        if known_users.contains(username) {
+            continue; // Already handled above
+        }
+        let service_name = username.strip_prefix("ryra-").unwrap_or(username);
+        push_service_teardown(&mut steps, username, service_name);
+    }
+
+    // 3. Stop and remove cloudflared tunnel
+    let has_tunnel = config
+        .as_ref()
+        .map(|c| c.cloudflare.tunnel_info().is_some())
+        .unwrap_or(false);
+    if has_tunnel || PathBuf::from("/etc/containers/systemd/cloudflared.container").exists() {
+        steps.push(Step::StopTunnel);
+        steps.push(Step::RemoveFile(PathBuf::from(
+            "/etc/containers/systemd/cloudflared.container",
+        )));
+    }
+
+    // 4. Stop and remove nginx
+    if PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
+        steps.push(Step::SystemStop {
+            unit: "nginx".into(),
+        });
+        steps.push(Step::RemoveFile(PathBuf::from(
+            "/etc/containers/systemd/nginx.container",
+        )));
+        steps.push(Step::SystemDaemonReload);
+    }
+
+    // 5. Remove system-level directories
+    if PathBuf::from("/etc/ryra").exists() {
+        steps.push(Step::RemoveDir(PathBuf::from("/etc/ryra")));
+    }
+
+    ResetResult { steps }
+}
+
+/// Push the standard teardown steps for a single service user.
+fn push_service_teardown(steps: &mut Vec<Step>, username: &str, service_name: &str) {
+    steps.push(Step::StopService {
+        username: username.to_string(),
+        unit: service_name.to_string(),
+    });
+    steps.push(Step::DisableLinger {
+        username: username.to_string(),
+    });
+    steps.push(Step::TerminateUserSession {
+        username: username.to_string(),
+    });
+    steps.push(Step::RemoveUser {
+        username: username.to_string(),
+    });
+    steps.push(Step::RemoveFile(PathBuf::from(format!(
+        "/etc/ryra/nginx/sites/{service_name}.conf"
+    ))));
+}
+
+/// Called after reset steps succeed — removes ryra's config directory.
+pub fn finalize_reset() -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    if paths.config_dir.exists() {
+        std::fs::remove_dir_all(&paths.config_dir).map_err(|source| Error::FileWrite {
+            path: paths.config_dir,
+            source,
+        })?;
+    }
     Ok(())
 }
 
@@ -532,6 +702,7 @@ pub fn list_services() -> Result<Vec<ServiceStatus>> {
                     name: name.clone(),
                     description: reg_svc.def.service.description,
                     domain: inst.domain.clone(),
+                    exposure: inst.exposure.clone(),
                 },
                 None => ServiceStatus::Available {
                     name: name.clone(),
@@ -581,5 +752,6 @@ pub enum ServiceStatus {
         name: String,
         description: String,
         domain: String,
+        exposure: ExposureMode,
     },
 }

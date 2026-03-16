@@ -9,8 +9,8 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<10} {}", "SERVICE", "STATUS", "DETAILS");
-    println!("{}", "-".repeat(60));
+    println!("{:<20} {:<10} DETAILS", "SERVICE", "STATUS");
+    println!("{}", "-".repeat(70));
 
     for svc in &services {
         match svc {
@@ -21,8 +21,12 @@ pub fn run() -> Result<()> {
                 name,
                 description,
                 domain,
+                exposure,
             } => {
-                println!("{:<20} {:<10} {} ({})", name, "installed", description, domain);
+                println!(
+                    "{:<20} {:<10} {} ({}, {})",
+                    name, "installed", description, domain, exposure
+                );
             }
         }
     }

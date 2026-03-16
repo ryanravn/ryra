@@ -259,15 +259,15 @@ pub async fn delete_record(api_token: &str, zone_id: &str, record_id: &str) -> R
 }
 
 /// Find an A record by domain name.
-pub async fn find_record(
+pub async fn find_records(
     api_token: &str,
     zone_id: &str,
     domain: &str,
-) -> Result<Option<DnsRecord>> {
+) -> Result<Vec<DnsRecord>> {
     let client = reqwest::Client::new();
     let resp = client
         .get(format!(
-            "{CF_API}/zones/{zone_id}/dns_records?type=A&name={domain}"
+            "{CF_API}/zones/{zone_id}/dns_records?name={domain}"
         ))
         .bearer_auth(api_token)
         .send()
@@ -289,7 +289,30 @@ pub async fn find_record(
     let records: Vec<DnsRecord> = serde_json::from_value(body["result"].clone())
         .map_err(|e| Error::Cloudflare(format!("failed to parse records: {e}")))?;
 
+    Ok(records)
+}
+
+/// Find a single record for a domain (first match).
+pub async fn find_record(
+    api_token: &str,
+    zone_id: &str,
+    domain: &str,
+) -> Result<Option<DnsRecord>> {
+    let records = find_records(api_token, zone_id, domain).await?;
     Ok(records.into_iter().next())
+}
+
+/// Delete all DNS records for a domain.
+pub async fn delete_all_records(
+    api_token: &str,
+    zone_id: &str,
+    domain: &str,
+) -> Result<()> {
+    let records = find_records(api_token, zone_id, domain).await?;
+    for record in records {
+        delete_record(api_token, zone_id, &record.id).await?;
+    }
+    Ok(())
 }
 
 /// Get this server's public IP.

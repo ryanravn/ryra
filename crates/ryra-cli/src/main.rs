@@ -63,6 +63,15 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Tear down all services, containers, and config
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show ryra configuration and installation status
     Status,
     /// List available and installed services
@@ -118,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
             yes,
             dry_run,
         } => cli::remove::run(service, yes, dry_run).await?,
+        Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
         Command::Status => cli::status::run()?,
         Command::List => cli::list::run()?,
         Command::Registry { action } => match action {

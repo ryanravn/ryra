@@ -9,8 +9,7 @@ pub enum RyraStatus {
 
 pub struct StatusInfo {
     pub domain: String,
-    pub dns: ProviderStatus,
-    pub tunnel: ProviderStatus,
+    pub cloudflare: CloudflareStatus,
     pub ssl: ProviderStatus,
     pub smtp: ProviderStatus,
     pub auth: ProviderStatus,
@@ -21,6 +20,14 @@ pub struct StatusInfo {
     pub secrets_count: usize,
 }
 
+pub enum CloudflareStatus {
+    None,
+    Configured {
+        zone_name: String,
+        tunnel: bool,
+    },
+}
+
 pub enum ProviderStatus {
     None,
     Configured { name: String },
@@ -29,35 +36,28 @@ pub enum ProviderStatus {
 pub struct ServiceInfo {
     pub name: String,
     pub domain: String,
+    pub exposure: ExposureMode,
 }
 
 impl StatusInfo {
     pub fn from_config_and_state(config: &Config, state: &State) -> Self {
         Self {
             domain: config.host.domain.clone(),
-            dns: match &config.dns {
-                DnsConfig::None => ProviderStatus::None,
-                DnsConfig::CloudflareProxy { zone_name, .. } => ProviderStatus::Configured {
-                    name: format!("cloudflare proxy ({zone_name})"),
-                },
-                DnsConfig::CloudflareDns { zone_name, .. } => ProviderStatus::Configured {
-                    name: format!("cloudflare dns-only ({zone_name})"),
-                },
-            },
-            tunnel: match &config.tunnel {
-                TunnelConfig::None => ProviderStatus::None,
-                TunnelConfig::Cloudflare { .. } => ProviderStatus::Configured {
-                    name: "cloudflare tunnel".into(),
+            cloudflare: match &config.cloudflare {
+                CloudflareConfig::None => CloudflareStatus::None,
+                CloudflareConfig::Configured {
+                    zone_name, tunnel, ..
+                } => CloudflareStatus::Configured {
+                    zone_name: zone_name.clone(),
+                    tunnel: tunnel.is_some(),
                 },
             },
             ssl: match &config.ssl {
-                SslConfig::Letsencrypt { email } => ProviderStatus::Configured {
+                None => ProviderStatus::None,
+                Some(SslConfig::Letsencrypt { email }) => ProviderStatus::Configured {
                     name: format!("letsencrypt ({email})"),
                 },
-                SslConfig::CloudflareOrigin => ProviderStatus::Configured {
-                    name: "cloudflare origin cert".into(),
-                },
-                SslConfig::Custom { cert_dir } => ProviderStatus::Configured {
+                Some(SslConfig::Custom { cert_dir }) => ProviderStatus::Configured {
                     name: format!("custom ({cert_dir})"),
                 },
             },
@@ -83,6 +83,7 @@ impl StatusInfo {
                 .map(|s| ServiceInfo {
                     name: s.name.clone(),
                     domain: s.domain.clone(),
+                    exposure: s.exposure.clone(),
                 })
                 .collect(),
             next_port: state.next_port,

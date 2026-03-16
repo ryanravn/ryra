@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// How nginx should handle SSL for this site.
 pub enum SiteMode {
-    /// Tunnel handles SSL — nginx just serves HTTP on localhost.
-    Tunnel,
+    /// No SSL — nginx just serves HTTP (used for tunnel + local modes).
+    HttpOnly,
     /// Direct exposure — nginx terminates SSL with certs.
     Ssl {
         cert_path: PathBuf,
@@ -22,7 +22,7 @@ pub struct NginxSiteParams<'a> {
 /// Render an nginx reverse-proxy site config.
 pub fn render_site(params: &NginxSiteParams) -> String {
     match &params.mode {
-        SiteMode::Tunnel => render_http_site(params),
+        SiteMode::HttpOnly => render_http_site(params),
         SiteMode::Ssl { cert_path, key_path } => render_ssl_site(params, cert_path, key_path),
     }
 }
@@ -57,7 +57,7 @@ server {{
     )
 }
 
-fn render_ssl_site(params: &NginxSiteParams, cert_path: &PathBuf, key_path: &PathBuf) -> String {
+fn render_ssl_site(params: &NginxSiteParams, cert_path: &Path, key_path: &Path) -> String {
     format!(
         r#"# Managed by ryra — do not edit manually
 upstream {name} {{
@@ -102,41 +102,18 @@ server {{
     )
 }
 
-/// Whether nginx should publish ports to the host or only listen locally.
-pub enum NginxExposure {
-    /// Publish 80/443 to the world (no tunnel).
-    Public,
-    /// Listen only on localhost (tunnel handles external traffic).
-    LocalOnly,
-}
-
 /// Render the main ryra nginx container quadlet (root-level).
-pub fn render_nginx_quadlet(exposure: &NginxExposure) -> String {
-    let ports = match exposure {
-        NginxExposure::Public => "\
-PublishPort=80:80
-PublishPort=443:443"
-            .to_string(),
-        NginxExposure::LocalOnly => "\
-PublishPort=127.0.0.1:80:80"
-            .to_string(),
-    };
-
-    // Only mount certs volume if exposing publicly (tunnel mode doesn't need certs)
-    let cert_volume = match exposure {
-        NginxExposure::Public => "\nVolume=/etc/ryra/certs:/etc/ryra/certs:ro",
-        NginxExposure::LocalOnly => "",
-    };
-
-    format!(
-        r#"[Unit]
+/// Uses host networking so nginx can reach upstream services on 127.0.0.1.
+pub fn render_nginx_quadlet() -> String {
+    r#"[Unit]
 Description=Ryra nginx reverse proxy
 
 [Container]
 Image=docker.io/library/nginx:alpine
-{ports}
+Network=host
 Volume=/etc/ryra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-Volume=/etc/ryra/nginx/sites:/etc/nginx/conf.d:ro{cert_volume}
+Volume=/etc/ryra/nginx/sites:/etc/nginx/conf.d:ro
+Volume=/etc/ryra/certs:/etc/ryra/certs:ro
 
 [Service]
 Restart=always
@@ -145,7 +122,7 @@ TimeoutStartSec=60
 [Install]
 WantedBy=multi-user.target
 "#
-    )
+    .to_string()
 }
 
 /// Render the base nginx.conf that includes sites.

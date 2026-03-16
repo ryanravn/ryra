@@ -172,6 +172,137 @@ pub async fn update_tunnel_config(
     Ok(())
 }
 
+/// A newly created tunnel with its connector token.
+pub struct CreatedTunnel {
+    pub id: String,
+    pub name: String,
+    pub token: String,
+}
+
+/// Create a new Cloudflare Tunnel.
+pub async fn create_tunnel(
+    api_token: &str,
+    account_id: &str,
+    name: &str,
+) -> Result<CreatedTunnel> {
+    let client = reqwest::Client::new();
+
+    // Create the tunnel
+    let resp = client
+        .post(format!(
+            "{CF_API}/accounts/{account_id}/cfd_tunnel"
+        ))
+        .bearer_auth(api_token)
+        .json(&serde_json::json!({
+            "name": name,
+            "tunnel_secret": base64_random_secret(),
+            "config_src": "cloudflare",
+        }))
+        .send()
+        .await
+        .map_err(|e| Error::Cloudflare(format!("failed to create tunnel: {e}")))?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| Error::Cloudflare(format!("invalid response: {e}")))?;
+
+    if !body["success"].as_bool().unwrap_or(false) {
+        let errors = &body["errors"];
+        return Err(Error::Cloudflare(format!(
+            "failed to create tunnel: {errors}"
+        )));
+    }
+
+    let id = body["result"]["id"]
+        .as_str()
+        .ok_or_else(|| Error::Cloudflare("no tunnel id in response".into()))?
+        .to_string();
+
+    let tunnel_name = body["result"]["name"]
+        .as_str()
+        .unwrap_or(name)
+        .to_string();
+
+    // Get the connector token
+    let token = get_tunnel_token(api_token, account_id, &id).await?;
+
+    Ok(CreatedTunnel {
+        id,
+        name: tunnel_name,
+        token,
+    })
+}
+
+/// Get the connector install token for a tunnel.
+pub async fn get_tunnel_token(
+    api_token: &str,
+    account_id: &str,
+    tunnel_id: &str,
+) -> Result<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "{CF_API}/accounts/{account_id}/cfd_tunnel/{tunnel_id}/token"
+        ))
+        .bearer_auth(api_token)
+        .send()
+        .await
+        .map_err(|e| Error::Cloudflare(format!("failed to get tunnel token: {e}")))?;
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| Error::Cloudflare(format!("invalid response: {e}")))?;
+
+    if !body["success"].as_bool().unwrap_or(false) {
+        let errors = &body["errors"];
+        return Err(Error::Cloudflare(format!(
+            "failed to get tunnel token: {errors}"
+        )));
+    }
+
+    body["result"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| Error::Cloudflare("no token in response".into()))
+}
+
+/// Generate a random 32-byte base64-encoded secret for tunnel creation.
+/// Uses a simple encoding since this is just an initial handshake secret.
+fn base64_random_secret() -> String {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random::<u8>()).collect();
+    // Simple base64 without pulling in the base64 crate
+    data_encoding_base64(&bytes)
+}
+
+fn data_encoding_base64(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 /// Create a CNAME DNS record pointing a hostname to a tunnel.
 pub async fn create_tunnel_dns(
     api_token: &str,
@@ -181,12 +312,8 @@ pub async fn create_tunnel_dns(
 ) -> Result<()> {
     let target = format!("{tunnel_id}.cfargotunnel.com");
 
-    // Check for existing record first
-    let existing = crate::integrations::dns::find_record(api_token, zone_id, hostname).await;
-    if let Ok(Some(record)) = existing {
-        // Delete existing record
-        crate::integrations::dns::delete_record(api_token, zone_id, &record.id).await?;
-    }
+    // Delete all existing records for this hostname (A, AAAA, CNAME, etc.)
+    let _ = crate::integrations::dns::delete_all_records(api_token, zone_id, hostname).await;
 
     let client = reqwest::Client::new();
     let resp = client
