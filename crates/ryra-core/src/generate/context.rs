@@ -19,8 +19,6 @@ pub fn build_context(
 
     // host.*
     ctx.insert("host.domain".into(), config.host.domain.clone());
-    ctx.insert("host.data_dir".into(), config.host.data_dir.clone());
-
     // smtp.* (only if configured)
     if let SmtpConfig::Configured {
         host,
@@ -45,14 +43,11 @@ pub fn build_context(
     }
 
     // dep.*.host_port — allocated ports for dependencies
+    let prefix = format!("{}-", service_def.service.name);
     for alloc in &state.allocated {
-        if alloc.service.starts_with(&format!("{}-", service_def.service.name)) {
-            let dep_name = alloc
-                .service
-                .strip_prefix(&format!("{}-", service_def.service.name))
-                .unwrap_or(&alloc.service);
+        if let Some(dep_name) = alloc.service.strip_prefix(&prefix) {
             ctx.insert(
-                format!("dep.{}.host_port", dep_name),
+                format!("dep.{dep_name}.host_port"),
                 alloc.host_port.to_string(),
             );
         }

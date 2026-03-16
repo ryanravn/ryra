@@ -2,6 +2,7 @@ pub mod context;
 pub mod nginx;
 pub mod quadlet;
 pub mod template;
+pub mod tunnel;
 
 use std::path::{Path, PathBuf};
 
@@ -133,11 +134,25 @@ pub fn generate_service(
 
         Some(GeneratedFile {
             path: nginx_dir.join(format!("{name}.conf")),
-            content: nginx::render_site(&nginx::NginxSiteParams {
-                service_name: name,
-                domain,
-                upstream_port,
-            }),
+            content: {
+                let mode = match config.tunnel.is_enabled() {
+                    true => nginx::SiteMode::Tunnel,
+                    false => {
+                        let (cert_path, key_path) =
+                            crate::integrations::ssl::cert_paths(&config.ssl, domain);
+                        nginx::SiteMode::Ssl {
+                            cert_path,
+                            key_path,
+                        }
+                    }
+                };
+                nginx::render_site(&nginx::NginxSiteParams {
+                    service_name: name,
+                    domain,
+                    upstream_port,
+                    mode,
+                })
+            },
         })
     } else {
         None

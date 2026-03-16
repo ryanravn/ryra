@@ -1,5 +1,6 @@
 pub mod schema;
 pub mod state;
+pub mod status;
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,13 @@ pub struct ConfigPaths {
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
         let config_dir = dirs::config_dir()
-            .expect("could not determine config directory")
+            .ok_or_else(|| Error::FileRead {
+                path: "~/.config".into(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "could not determine config directory",
+                ),
+            })?
             .join("ryra");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),

@@ -7,6 +7,7 @@ pub struct Config {
     #[serde(default)]
     pub dns: DnsConfig,
     #[serde(default)]
+    pub tunnel: TunnelConfig,
     pub ssl: SslConfig,
     #[serde(default)]
     pub smtp: SmtpConfig,
@@ -21,18 +22,26 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostConfig {
     pub domain: String,
-    pub data_dir: String,
 }
 
-// --- DNS ---
+// --- DNS (optional, manages records automatically) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "provider", rename_all = "lowercase")]
 pub enum DnsConfig {
+    /// No automatic DNS — user manages records manually.
     None,
-    Cloudflare {
+    /// Cloudflare DNS with proxy (orange cloud).
+    CloudflareProxy {
         api_token: String,
         zone_id: String,
+        zone_name: String,
+    },
+    /// Cloudflare DNS-only (grey cloud).
+    CloudflareDns {
+        api_token: String,
+        zone_id: String,
+        zone_name: String,
     },
 }
 
@@ -42,19 +51,67 @@ impl Default for DnsConfig {
     }
 }
 
+impl DnsConfig {
+    pub fn cloudflare_credentials(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            DnsConfig::CloudflareProxy {
+                api_token,
+                zone_id,
+                zone_name,
+            }
+            | DnsConfig::CloudflareDns {
+                api_token,
+                zone_id,
+                zone_name,
+            } => Some((api_token, zone_id, zone_name)),
+            DnsConfig::None => None,
+        }
+    }
+
+    pub fn is_proxied(&self) -> bool {
+        matches!(self, DnsConfig::CloudflareProxy { .. })
+    }
+}
+
+// --- Tunnel (optional, exposes services without port forwarding) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "provider", rename_all = "lowercase")]
+pub enum TunnelConfig {
+    /// No tunnel — services exposed via direct port binding.
+    None,
+    /// Cloudflare Tunnel — outbound connection, no ports needed.
+    Cloudflare {
+        tunnel_token: String,
+        tunnel_id: String,
+        account_id: String,
+    },
+}
+
+impl Default for TunnelConfig {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl TunnelConfig {
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self, TunnelConfig::None)
+    }
+}
+
 // --- SSL ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "provider", rename_all = "lowercase")]
 pub enum SslConfig {
-    None,
+    /// Let's Encrypt (DNS-01 with Cloudflare, or HTTP-01 standalone).
     Letsencrypt { email: String },
-}
-
-impl Default for SslConfig {
-    fn default() -> Self {
-        Self::None
-    }
+    /// Cloudflare handles SSL — origin uses self-signed cert.
+    /// Valid with CloudflareProxy DNS or Cloudflare Tunnel.
+    CloudflareOrigin,
+    /// User-provided certs at a custom path.
+    Custom { cert_dir: String },
 }
 
 // --- SMTP ---

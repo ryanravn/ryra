@@ -7,7 +7,10 @@ pub async fn fetch_registry(url: &str, cache_dir: &Path, name: &str) -> Result<P
     let dest = cache_dir.join(name);
 
     if dest.exists() {
-        pull_registry(&dest).await?;
+        // Already cached — pull if it's a git repo, otherwise leave as-is
+        if dest.join(".git").exists() {
+            pull_registry(&dest).await?;
+        }
     } else {
         clone_registry(url, &dest).await?;
     }

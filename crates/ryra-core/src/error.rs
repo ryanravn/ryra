@@ -61,6 +61,9 @@ pub enum Error {
 
     #[error("template rendering failed: {0}")]
     Template(String),
+
+    #[error("cloudflare API: {0}")]
+    Cloudflare(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

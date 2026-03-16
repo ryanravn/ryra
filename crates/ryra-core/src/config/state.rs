@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Internal state managed by ryra (state.toml). Users don't edit this.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     #[serde(default = "default_next_port")]
     pub next_port: u16,
@@ -9,6 +9,16 @@ pub struct State {
     pub allocated: Vec<PortAllocation>,
     #[serde(default)]
     pub secrets: Vec<SecretEntry>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            next_port: default_next_port(),
+            allocated: Vec::new(),
+            secrets: Vec::new(),
+        }
+    }
 }
 
 fn default_next_port() -> u16 {

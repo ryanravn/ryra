@@ -1,9 +1,9 @@
 use crate::error::{Error, Result};
 
-/// Reload the ryra-nginx container via systemctl (runs as root).
+/// Reload the nginx container via systemctl (runs as root).
 pub async fn reload() -> Result<()> {
     let output = tokio::process::Command::new("sudo")
-        .args(["systemctl", "reload", "ryra-nginx"])
+        .args(["systemctl", "reload", "nginx"])
         .output()
         .await
         .map_err(|e| Error::NginxReload(format!("failed to run sudo systemctl: {e}")))?;
@@ -17,10 +17,10 @@ pub async fn reload() -> Result<()> {
     Ok(())
 }
 
-/// Start the ryra-nginx service (root quadlet).
+/// Start the nginx service (root quadlet).
 pub async fn start() -> Result<()> {
     let output = tokio::process::Command::new("sudo")
-        .args(["systemctl", "start", "ryra-nginx"])
+        .args(["systemctl", "start", "nginx"])
         .output()
         .await
         .map_err(|e| Error::NginxReload(format!("failed to start nginx: {e}")))?;
