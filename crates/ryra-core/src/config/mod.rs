@@ -25,21 +25,43 @@ impl ConfigPaths {
     }
 
     pub fn ensure_cache_dir(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.cache_dir).map_err(|source| Error::DirCreate {
-            path: self.cache_dir.clone(),
-            source,
-        })?;
-        Ok(())
+        ensure_dir(&self.cache_dir)
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
-        for dir in [&self.config_dir, &self.cache_dir] {
-            std::fs::create_dir_all(dir).map_err(|source| Error::DirCreate {
-                path: dir.clone(),
-                source,
-            })?;
-        }
+        ensure_dir(&self.config_dir)?;
+        ensure_dir(&self.cache_dir)?;
         Ok(())
+    }
+}
+
+/// Create a directory, falling back to sudo if permission denied.
+fn ensure_dir(path: &Path) -> Result<()> {
+    match std::fs::create_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let status = std::process::Command::new("sudo")
+                .args(["mkdir", "-p", &path.to_string_lossy()])
+                .status()
+                .map_err(|source| Error::DirCreate {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            if !status.success() {
+                return Err(Error::DirCreate {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "sudo mkdir failed",
+                    ),
+                });
+            }
+            // Make it writable by the current user for cache operations
+            let _ = std::process::Command::new("sudo")
+                .args(["chmod", "777", &path.to_string_lossy()])
+                .status();
+            Ok(())
+        }
     }
 }
 
