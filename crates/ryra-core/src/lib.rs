@@ -272,6 +272,8 @@ pub struct ResetResult {
     pub steps: Vec<Step>,
 }
 
+pub const DEFAULT_REPO: &str = "https://github.com/ryanravn/ryra-registry";
+
 /// Resolve which repo to use and ensure it's cached.
 /// Returns (repo_url, repo_dir).
 pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
@@ -280,11 +282,17 @@ pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
     let repo_url = match repo {
         Some(url) => url.to_string(),
         None => {
-            let config = config::load_config(&paths.config_file)?;
+            // Try config first, then legacy registries, then hardcoded default
+            let config = config::load_config(&paths.config_file).ok();
             config
-                .default_repo
-                .or_else(|| config.registries.first().map(|r| r.url.clone()))
-                .ok_or(Error::NoDefaultRepo)?
+                .as_ref()
+                .and_then(|c| c.default_repo.clone())
+                .or_else(|| {
+                    config
+                        .as_ref()
+                        .and_then(|c| c.registries.first().map(|r| r.url.clone()))
+                })
+                .unwrap_or_else(|| DEFAULT_REPO.to_string())
         }
     };
 
