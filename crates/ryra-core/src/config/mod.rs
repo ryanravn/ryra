@@ -85,13 +85,44 @@ fn set_permissions(path: &Path, mode: u32) -> Result<()> {
 
 fn write_file(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::DirCreate {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+        // Try direct creation first, fall back to sudo
+        if std::fs::create_dir_all(parent).is_err() {
+            let _ = std::process::Command::new("sudo")
+                .args(["mkdir", "-p", &parent.to_string_lossy()])
+                .status();
+        }
     }
-    std::fs::write(path, contents).map_err(|source| Error::FileWrite {
-        path: path.to_path_buf(),
-        source,
-    })
+    // Try direct write first, fall back to sudo tee
+    match std::fs::write(path, contents) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            use std::io::Write;
+            let mut child = std::process::Command::new("sudo")
+                .args(["tee", &path.to_string_lossy()])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .map_err(|source| Error::FileWrite {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(contents.as_bytes()).map_err(|source| Error::FileWrite {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            }
+            let status = child.wait().map_err(|source| Error::FileWrite {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            if !status.success() {
+                return Err(Error::FileWrite {
+                    path: path.to_path_buf(),
+                    source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "sudo tee failed"),
+                });
+            }
+            Ok(())
+        }
+    }
 }

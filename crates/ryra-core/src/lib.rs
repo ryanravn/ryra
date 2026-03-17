@@ -295,17 +295,24 @@ pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
 /// Initialize a new ryra project.
 pub async fn init(config: Config) -> Result<InitResult> {
     let paths = ConfigPaths::resolve()?;
-    paths.ensure_dirs()?;
 
-    config::save_config(&paths.config_file, &config)?;
-
-    // Fetch default repo if configured
+    // Fetch default repo if configured (into cache, which may not exist yet)
+    // Cache dir is under /etc/ryra which needs sudo — create it first if we can,
+    // otherwise the repo fetch happens after steps execute
+    let _ = paths.ensure_dirs();
     if let Some(ref repo_url) = config.default_repo {
-        registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
+        let _ = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await;
     }
 
-    // Create dirs and write nginx config + quadlet
+    // Write config as a step (needs sudo for /etc/ryra)
+    let config_content = toml::to_string_pretty(&config)
+        .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
+
     let mut steps = vec![
+        Step::WriteFile(GeneratedFile {
+            path: paths.config_file.clone(),
+            content: config_content,
+        }),
         Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
             content: String::new(),
