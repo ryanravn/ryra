@@ -146,6 +146,8 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         }
         Step::EnableLinger { username } => {
             run(&format!("sudo loginctl enable-linger {username}"))?;
+            // Wait for systemd to initialize the user session after linger
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             created.push(Created::Linger(username.clone()));
             Ok(())
         }
