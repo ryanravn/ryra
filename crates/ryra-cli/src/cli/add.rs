@@ -214,7 +214,7 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
 
         let u = &result.username;
         println!();
-        println!("Commands:");
+        println!("Useful commands:");
         println!("  sudo cat {}", home_dir.join(".env").display());
         println!("  sudo systemctl --machine={u}@ --user status {service}");
         println!("  sudo journalctl --machine={u}@ --user -u {service} -f");

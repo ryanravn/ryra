@@ -49,7 +49,7 @@ pub fn run(service: &str) -> Result<()> {
         }
         println!("Config:   {}", home_dir.display());
         println!();
-        println!("Commands:");
+        println!("Useful commands:");
         println!("  sudo cat {}", home_dir.join(".env").display());
         println!("  sudo systemctl --machine={username}@ --user status {service}");
         println!("  sudo journalctl --machine={username}@ --user -u {service} -f");
