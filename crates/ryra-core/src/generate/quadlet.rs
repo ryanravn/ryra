@@ -37,7 +37,7 @@ pub fn render_container(params: &QuadletParams) -> String {
 
     lines.push("[Unit]".to_string());
     lines.push(format!(
-        "Description=Ryra service: {}",
+        "Description={}",
         params.service_name
     ));
     lines.push(String::new());
@@ -87,7 +87,7 @@ pub fn render_container(params: &QuadletParams) -> String {
 pub fn render_network(name: &str) -> String {
     format!(
         "[Unit]\n\
-         Description=Ryra network: {name}\n\
+         Description={name} network\n\
          \n\
          [Network]\n\
          \n\
@@ -100,7 +100,7 @@ pub fn render_network(name: &str) -> String {
 pub fn render_volume(name: &str) -> String {
     format!(
         "[Unit]\n\
-         Description=Ryra volume: {name}\n\
+         Description={name} volume\n\
          \n\
          [Volume]\n\
          \n\

@@ -248,7 +248,7 @@ fn render_compose_unit(name: &str, _username: &str, home_dir: &Path) -> String {
     let dir = home_dir.display();
     format!(
         "[Unit]\n\
-         Description=Ryra compose service: {name}\n\
+         Description={name}\n\
          \n\
          [Service]\n\
          Type=oneshot\n\

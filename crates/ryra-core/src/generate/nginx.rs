@@ -106,7 +106,7 @@ server {{
 /// Uses host networking so nginx can reach upstream services on 127.0.0.1.
 pub fn render_nginx_quadlet() -> String {
     r#"[Unit]
-Description=Ryra nginx reverse proxy
+Description=nginx reverse proxy
 
 [Container]
 Image=docker.io/library/nginx:alpine
