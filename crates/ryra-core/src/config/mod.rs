@@ -42,6 +42,7 @@ impl ConfigPaths {
                 source,
             })?;
         }
+        set_permissions(&self.config_dir, 0o700)?;
         Ok(())
     }
 }
@@ -49,6 +50,9 @@ impl ConfigPaths {
 pub fn load_config(path: &Path) -> Result<Config> {
     if !path.exists() {
         return Err(Error::ConfigNotFound(path.to_path_buf()));
+    }
+    if let Some(parent) = path.parent() {
+        check_permissions(parent)?;
     }
     check_permissions(path)?;
     let contents = std::fs::read_to_string(path).map_err(|source| Error::FileRead {
