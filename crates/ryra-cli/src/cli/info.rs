@@ -52,7 +52,7 @@ pub fn run(service: &str) -> Result<()> {
         println!("Useful commands:");
         println!("  sudo cat {}", home_dir.join(".env").display());
         println!("  sudo systemctl --machine={username}@ --user status {service}");
-        println!("  sudo machinectl shell {username}@ /bin/journalctl --user -u {service} -f");
+        println!("  sudo journalctl _SYSTEMD_USER_UNIT={service}.service -f");
         println!("  sudo systemctl --machine={username}@ --user restart {service}");
     } else {
         println!();
