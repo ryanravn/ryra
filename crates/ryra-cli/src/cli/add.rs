@@ -217,7 +217,7 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         println!("Useful commands:");
         println!("  sudo cat {}", home_dir.join(".env").display());
         println!("  sudo systemctl --machine={u}@ --user status {service}");
-        println!("  sudo journalctl --machine={u}@ --user -u {service} -f");
+        println!("  sudo machinectl shell {u}@ /bin/journalctl --user -u {service} -f");
         println!("  sudo systemctl --machine={u}@ --user restart {service}");
     }
 
