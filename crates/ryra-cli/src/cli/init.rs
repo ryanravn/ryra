@@ -125,12 +125,12 @@ pub async fn run(
         Some(r) => Some(r),
         None if interactive => {
             let url: String = Input::new()
-                .with_prompt("Default repo (git URL or local path, empty to skip)")
-                .allow_empty(true)
+                .with_prompt("Default repo")
+                .default(ryra_core::DEFAULT_REPO.to_string())
                 .interact_text()?;
-            if url.is_empty() { None } else { Some(url) }
+            Some(url)
         }
-        None => None,
+        None => Some(ryra_core::DEFAULT_REPO.to_string()),
     };
 
     let config = Config {
