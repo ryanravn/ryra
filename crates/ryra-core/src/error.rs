@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("config not found at {0} — run `ryra init` first")]
+    #[error("config not found at {0}")]
     ConfigNotFound(PathBuf),
 
     #[error("failed to read {path}: {source}")]

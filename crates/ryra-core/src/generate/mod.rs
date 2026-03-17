@@ -289,7 +289,7 @@ fn render_env_vars(
     Ok(rendered)
 }
 
-fn generate_nginx_site(
+pub fn generate_nginx_site(
     config: &Config,
     service_def: &ServiceDef,
     name: &str,
@@ -307,7 +307,7 @@ fn generate_nginx_site(
                         crate::integrations::ssl::origin_cert_paths(domain);
                     nginx::SiteMode::Ssl { cert_path, key_path }
                 }
-                ExposureMode::DnsOnly => {
+                ExposureMode::DnsOnly | ExposureMode::Public => {
                     let (cert_path, key_path) = match &config.ssl {
                         Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
                         None => crate::integrations::ssl::letsencrypt_cert_paths(domain),

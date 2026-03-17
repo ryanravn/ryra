@@ -43,7 +43,7 @@ impl StatusInfo {
     pub fn from_config(config_path: PathBuf, config: &Config) -> Self {
         Self {
             config_path,
-            domain: config.host.domain.clone().unwrap_or_default(),
+            domain: config.base_domain().unwrap_or_default().to_string(),
             cloudflare: match &config.cloudflare {
                 None => CloudflareStatus::None,
                 Some(cf) => CloudflareStatus::Configured {

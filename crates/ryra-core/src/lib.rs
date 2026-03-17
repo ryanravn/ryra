@@ -268,6 +268,11 @@ pub struct RemoveResult {
     pub exposure: ExposureMode,
 }
 
+pub struct ExposeResult {
+    pub steps: Vec<Step>,
+    pub warnings: Vec<Warning>,
+}
+
 pub struct ResetResult {
     pub steps: Vec<Step>,
 }
@@ -283,7 +288,7 @@ pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
         Some(url) => url.to_string(),
         None => {
             // Try config first, then legacy registries, then hardcoded default
-            let config = config::load_config(&paths.config_file).ok();
+            let config = config::load_or_default(&paths.config_file).ok();
             config
                 .as_ref()
                 .and_then(|c| c.default_repo.clone())
@@ -339,7 +344,7 @@ pub fn add_service(
     repo_dir: &Path,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
+    let config = config::load_or_default(&paths.config_file)?;
 
     if config.services.iter().any(|s| s.name == service_name) {
         return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
@@ -512,19 +517,25 @@ pub fn add_service(
                     });
                 }
                 ExposureMode::DnsOnly => {
-                    let email = match &config.ssl {
-                        Some(config::schema::SslConfig::Letsencrypt { email }) => email.clone(),
-                        _ => return Err(Error::Template(
-                            "DnsOnly exposure requires SSL config with Let's Encrypt email"
-                                .to_string(),
-                        )),
-                    };
-                    let cf_token = config.cloudflare.as_ref().map(|cf| cf.api_token.clone());
-                    steps.push(Step::ObtainCert {
-                        domain: domain.to_string(),
-                        email,
-                        cloudflare_api_token: cf_token,
-                    });
+                    // LE with DNS-01 via Cloudflare; custom certs skip this step
+                    if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
+                        let cf_token = config.cloudflare.as_ref().map(|cf| cf.api_token.clone());
+                        steps.push(Step::ObtainCert {
+                            domain: domain.to_string(),
+                            email: email.clone(),
+                            cloudflare_api_token: cf_token,
+                        });
+                    }
+                }
+                ExposureMode::Public => {
+                    // LE with HTTP-01 standalone (no Cloudflare); custom certs skip this step
+                    if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
+                        steps.push(Step::ObtainCert {
+                            domain: domain.to_string(),
+                            email: email.clone(),
+                            cloudflare_api_token: None,
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -737,7 +748,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
                     domain: domain.clone(),
                 });
             }
-            ExposureMode::Local | ExposureMode::HostPort => {}
+            ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
         }
     }
 
@@ -760,7 +771,8 @@ pub fn finalize_add(
     host_port: Option<u16>,
 ) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let mut config = config::load_config(&paths.config_file)?;
+    paths.ensure_dirs()?;
+    let mut config = config::load_or_default(&paths.config_file)?;
 
     config.services.push(InstalledService {
         name: service_name.to_string(),
@@ -778,9 +790,248 @@ pub fn finalize_add(
 
 pub fn finalize_remove(service_name: &str) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let mut config = config::load_config(&paths.config_file)?;
+    let mut config = config::load_or_default(&paths.config_file)?;
 
     config.services.retain(|s| s.name != service_name);
+    config::save_config(&paths.config_file, &config)?;
+
+    Ok(())
+}
+
+/// Change the exposure mode of an installed service.
+/// Tears down old networking/nginx/certs, sets up new ones.
+pub fn change_exposure(
+    service_name: &str,
+    new_exposure: ExposureMode,
+    new_domain: Option<&str>,
+    repo_dir: &Path,
+) -> Result<ExposeResult> {
+    let paths = ConfigPaths::resolve()?;
+    let config = config::load_or_default(&paths.config_file)?;
+
+    let service = config
+        .services
+        .iter()
+        .find(|s| s.name == service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    let reg_service = registry::find_service(repo_dir, service_name)?;
+    let has_nginx = reg_service.def.nginx.is_some();
+    let new_proxied = new_exposure.needs_domain();
+
+    // Validate: proxied modes require nginx config
+    if new_proxied && !has_nginx {
+        return Err(Error::InvalidExposure(format!(
+            "{} exposure requires an HTTP service (no [nginx] config)",
+            new_exposure.label()
+        )));
+    }
+
+    let old_exposure = &service.exposure;
+    let old_domain = service.domain.as_deref();
+    let old_proxied = old_domain.is_some();
+    let nginx_dir = Path::new("/etc/ryra/nginx/sites");
+
+    let mut steps = Vec::new();
+
+    // --- Tear down old networking ---
+    if let (Some(cf), Some(domain)) = (&config.cloudflare, old_domain) {
+        match old_exposure {
+            ExposureMode::Tunnel => {
+                if let Some(ti) = &cf.tunnel {
+                    steps.push(Step::RemoveTunnelRoute {
+                        api_token: cf.api_token.clone(),
+                        account_id: ti.account_id.clone(),
+                        tunnel_id: ti.tunnel_id.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.to_string(),
+                    });
+                }
+            }
+            ExposureMode::Proxy | ExposureMode::DnsOnly => {
+                steps.push(Step::DeleteDnsRecord {
+                    api_token: cf.api_token.clone(),
+                    zone_id: cf.zone_id.clone(),
+                    domain: domain.to_string(),
+                });
+            }
+            ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
+        }
+    }
+
+    // Remove old nginx site if was proxied
+    if old_proxied {
+        steps.push(Step::RemoveFile(PathBuf::from(format!(
+            "/etc/ryra/nginx/sites/{service_name}.conf"
+        ))));
+    }
+
+    // --- Ensure nginx infra if going proxied for first time ---
+    if new_proxied && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
+            content: String::new(),
+        }));
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/certs/.keep"),
+            content: String::new(),
+        }));
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
+            content: generate::nginx::render_nginx_base_conf(),
+        }));
+        steps.push(Step::PullImage {
+            image: "docker.io/library/nginx:alpine".into(),
+            username: None,
+        });
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/containers/systemd/nginx.container"),
+            content: generate::nginx::render_nginx_quadlet(),
+        }));
+        steps.push(Step::SystemDaemonReload);
+        steps.push(Step::SystemStart {
+            unit: "nginx".into(),
+        });
+    }
+
+    // --- Set up new networking ---
+    if new_proxied
+        && let Some(domain) = new_domain
+    {
+        match &new_exposure {
+            ExposureMode::Tunnel => {
+                if let Some(cf) = &config.cloudflare
+                    && let Some(ti) = &cf.tunnel
+                {
+                    steps.push(Step::AddTunnelRoute {
+                        api_token: cf.api_token.clone(),
+                        account_id: ti.account_id.clone(),
+                        tunnel_id: ti.tunnel_id.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.to_string(),
+                    });
+                }
+            }
+            ExposureMode::Proxy => {
+                if let Some(cf) = &config.cloudflare {
+                    steps.push(Step::CreateDnsRecord {
+                        api_token: cf.api_token.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.to_string(),
+                        proxied: true,
+                    });
+                }
+            }
+            ExposureMode::DnsOnly => {
+                if let Some(cf) = &config.cloudflare {
+                    steps.push(Step::CreateDnsRecord {
+                        api_token: cf.api_token.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.to_string(),
+                        proxied: false,
+                    });
+                }
+            }
+            ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
+        }
+
+        // SSL for new mode
+        match &new_exposure {
+            ExposureMode::Proxy => {
+                steps.push(Step::GenerateOriginCert {
+                    domain: domain.to_string(),
+                });
+            }
+            ExposureMode::DnsOnly => {
+                if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
+                    let cf_token = config.cloudflare.as_ref().map(|cf| cf.api_token.clone());
+                    steps.push(Step::ObtainCert {
+                        domain: domain.to_string(),
+                        email: email.clone(),
+                        cloudflare_api_token: cf_token,
+                    });
+                }
+                // Custom certs: no step needed, certs already in place
+            }
+            ExposureMode::Public => {
+                if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
+                    steps.push(Step::ObtainCert {
+                        domain: domain.to_string(),
+                        email: email.clone(),
+                        cloudflare_api_token: None, // HTTP-01 standalone
+                    });
+                }
+                // Custom certs: no step needed, certs already in place
+            }
+            _ => {}
+        }
+
+        // Generate new nginx site config
+        let host_port = service.host_port.or_else(|| {
+            // Allocate a port if we're going proxied and don't have one
+            system::port::allocate_port(&config).ok()
+        });
+
+        if let Some(upstream_port) = host_port {
+            let nginx_site = generate::generate_nginx_site(
+                &config,
+                &reg_service.def,
+                service_name,
+                Some(domain),
+                &new_exposure,
+                Some(upstream_port),
+                nginx_dir,
+            )?;
+            if let Some(site_file) = nginx_site {
+                steps.push(Step::WriteFile(site_file));
+            }
+        }
+    }
+
+    // Reload nginx if either old or new was proxied
+    if old_proxied || new_proxied {
+        steps.push(Step::SystemRestart {
+            unit: "nginx".into(),
+        });
+    }
+
+    // Warnings
+    let mut warnings = Vec::new();
+    if new_exposure == ExposureMode::HostPort {
+        let ports: Vec<(u16, PortProtocol)> = reg_service
+            .def
+            .ports
+            .iter()
+            .map(|p| (p.container_port, p.protocol.clone()))
+            .collect();
+        if !ports.is_empty() {
+            warnings.push(Warning::HostPortExposure {
+                service_name: service_name.to_string(),
+                ports,
+            });
+        }
+    }
+
+    Ok(ExposeResult { steps, warnings })
+}
+
+/// Called after expose steps succeed — updates the service record in config.
+pub fn finalize_expose(
+    service_name: &str,
+    new_exposure: ExposureMode,
+    new_domain: Option<&str>,
+    new_host_port: Option<u16>,
+) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = config::load_or_default(&paths.config_file)?;
+
+    if let Some(svc) = config.services.iter_mut().find(|s| s.name == service_name) {
+        svc.exposure = new_exposure;
+        svc.domain = new_domain.map(|d| d.to_string());
+        if new_host_port.is_some() {
+            svc.host_port = new_host_port;
+        }
+    }
     config::save_config(&paths.config_file, &config)?;
 
     Ok(())
@@ -822,7 +1073,7 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
                             domain: domain.clone(),
                         });
                     }
-                    ExposureMode::Local | ExposureMode::HostPort => {}
+                    ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
                 }
             }
         }
@@ -927,14 +1178,14 @@ pub fn status() -> config::status::RyraStatus {
 /// List installed services.
 pub fn list_installed() -> Result<Vec<InstalledService>> {
     let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
+    let config = config::load_or_default(&paths.config_file)?;
     Ok(config.services)
 }
 
 /// Search available services in a repo, optionally filtered by query.
 pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<SearchResult>> {
     let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
+    let config = config::load_or_default(&paths.config_file)?;
 
     let available = registry::list_available(repo_dir)?;
 
@@ -975,7 +1226,7 @@ pub struct SearchResult {
 /// Get detailed info about a service from a repo.
 pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail> {
     let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
+    let config = config::load_or_default(&paths.config_file)?;
 
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let def = &reg_service.def;

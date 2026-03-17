@@ -1,8 +1,10 @@
 pub mod add;
 pub mod apply;
-pub mod info;
+pub mod config_cmd;
+pub mod expose;
 pub mod init;
 pub mod list;
+pub mod prompts;
 pub mod remove;
 pub mod reset;
 pub mod search;

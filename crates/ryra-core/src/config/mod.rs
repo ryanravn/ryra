@@ -79,6 +79,14 @@ pub fn load_config(path: &Path) -> Result<Config> {
     })
 }
 
+/// Load config from path, returning a default config if the file doesn't exist.
+pub fn load_or_default(path: &Path) -> Result<Config> {
+    if !path.exists() {
+        return Ok(Config::default());
+    }
+    load_config(path)
+}
+
 pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     let contents = toml::to_string_pretty(config)?;
     write_file(path, &contents)?;

@@ -4,17 +4,18 @@ use std::io::IsTerminal;
 use anyhow::{bail, Result};
 use dialoguer::{Confirm, Input};
 
-use ryra_core::config::schema::{ExposureMode, SslConfig};
+use ryra_core::config::schema::ExposureMode;
 use ryra_core::registry::service_def::DeployMode;
 use ryra_core::Warning;
 
 use super::apply;
+use super::prompts;
 
 pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_run: bool) -> Result<()> {
     let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
 
     let paths = ryra_core::config::ConfigPaths::resolve()?;
-    let mut config = ryra_core::config::load_config(&paths.config_file)?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     let interactive = std::io::stdin().is_terminal();
 
     // Look up the service definition
@@ -44,36 +45,58 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
         _ => None,
     };
 
-    // Exposure mode first — affects domain default
-    let available = ExposureMode::available_modes(&config.cloudflare, has_nginx);
+    // Show ALL modes the service supports, annotate which need setup
+    let supported = ExposureMode::supported_modes(has_nginx);
 
-    let exposure = match available.len() {
-        0 => bail!("No exposure modes available (this shouldn't happen)"),
-        1 => {
-            let mode = available.into_iter().next().unwrap_or(ExposureMode::Local);
-            println!("Exposure mode: {} — {}", mode.label(), mode.description());
-            mode
-        }
-        _ if interactive => {
-            let items: Vec<String> = available
-                .iter()
-                .map(|m| format!("{} — {}", m.label(), m.description()))
-                .collect();
-            let selection = dialoguer::Select::new()
-                .with_prompt("Exposure mode")
-                .items(&items)
-                .default(0)
-                .interact()?;
-            available[selection].clone()
-        }
-        _ => {
-            available.into_iter().next().unwrap_or(ExposureMode::Local)
-        }
+    let exposure = if supported.len() == 1 {
+        let mode = supported[0].clone();
+        println!("Exposure mode: {} — {}", mode.label(), mode.description());
+        mode
+    } else if interactive {
+        let items: Vec<String> = supported
+            .iter()
+            .map(|m| {
+                let missing = m.missing_config(&config);
+                if missing.is_empty() {
+                    format!("{} — {}", m.label(), m.description())
+                } else {
+                    format!("{} — {} (setup required)", m.label(), m.description())
+                }
+            })
+            .collect();
+        let selection = dialoguer::Select::new()
+            .with_prompt("Exposure mode")
+            .items(&items)
+            .default(0)
+            .interact()?;
+        supported[selection].clone()
+    } else {
+        // Non-interactive: pick first mode that needs no setup
+        supported
+            .iter()
+            .find(|m| m.missing_config(&config).is_empty())
+            .cloned()
+            .unwrap_or(ExposureMode::Local)
     };
+
+    // Just-in-time: prompt for missing config sections
+    if !exposure.missing_config(&config).is_empty() {
+        if interactive {
+            if !prompts::ensure_config_for_mode(&mut config, &paths, &exposure).await? {
+                println!("Cancelled.");
+                return Ok(());
+            }
+        } else {
+            bail!(
+                "{} exposure requires additional config. Run interactively or use `ryra config`.",
+                exposure.label()
+            );
+        }
+    }
 
     // Domain — only for proxied modes (tunnel/proxy/dns-only)
     let domain = if exposure.needs_domain() {
-        let default_domain = match &config.host.domain {
+        let default_domain = match config.base_domain() {
             Some(d) => format!("{service}.{d}"),
             None => format!("{service}.localhost"),
         };
@@ -88,19 +111,6 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
     } else {
         None
     };
-
-    // If DnsOnly and no SSL config, ask for LE email
-    if exposure == ExposureMode::DnsOnly && config.ssl.is_none() {
-        if interactive {
-            let le_email: String = Input::new()
-                .with_prompt("Email for Let's Encrypt SSL certificates")
-                .interact_text()?;
-            config.ssl = Some(SslConfig::Letsencrypt { email: le_email });
-            ryra_core::config::save_config(&paths.config_file, &config)?;
-        } else {
-            bail!("DnsOnly exposure requires --email for Let's Encrypt SSL");
-        }
-    }
 
     // Prompt for configurable env vars
     let mut env_overrides = BTreeMap::new();

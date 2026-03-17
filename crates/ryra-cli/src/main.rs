@@ -11,11 +11,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Initialize ryra on this host
+    /// Initialize ryra on this host (optional — `ryra add` works without it)
     Init {
-        /// Domain name (e.g., example.com)
-        #[arg(long)]
-        domain: Option<String>,
         /// Default repo (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
@@ -45,7 +42,7 @@ enum Command {
     Add {
         /// Service name from repo
         service: String,
-        /// Domain for this service (defaults to <service>.<host domain>)
+        /// Domain for this service (defaults to <service>.<zone>)
         #[arg(long)]
         domain: Option<String>,
         /// Repo to install from (git URL or local path)
@@ -84,8 +81,33 @@ enum Command {
         #[arg(long, short)]
         verbose: bool,
     },
-    /// Show ryra configuration and installation status
-    Status,
+    /// View or edit global configuration
+    Config {
+        /// Section to configure (cloudflare, tunnel, ssl, smtp, repo)
+        section: Option<String>,
+    },
+    /// Change how a service is exposed (local, tunnel, proxy, dns-only, host-port)
+    Expose {
+        /// Service name
+        service: String,
+        /// New domain (optional, for proxied modes)
+        #[arg(long)]
+        domain: Option<String>,
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Show file contents as they are written
+        #[arg(long, short)]
+        verbose: bool,
+    },
+    /// Show global config, or details about a specific service
+    Status {
+        /// Service name (omit for global overview)
+        service: Option<String>,
+        /// Repo to look up service from (git URL or local path)
+        #[arg(long)]
+        repo: Option<String>,
+    },
     /// List installed services
     List,
     /// Search available services in a repo
@@ -93,14 +115,6 @@ enum Command {
         /// Filter by name or description
         query: Option<String>,
         /// Repo to search (git URL or local path)
-        #[arg(long)]
-        repo: Option<String>,
-    },
-    /// Show details about a service
-    Info {
-        /// Service name
-        service: String,
-        /// Repo to look up from (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
     },
@@ -112,7 +126,6 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Init {
-            domain,
             repo,
             email,
             cf_token,
@@ -123,10 +136,8 @@ async fn main() -> anyhow::Result<()> {
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::init::run(
-                domain, repo, email, cf_token, cf_zone_id, cf_zone_name, tunnel_token, dry_run,
-            )
-            .await?
+            cli::init::run(repo, email, cf_token, cf_zone_id, cf_zone_name, tunnel_token, dry_run)
+                .await?
         }
         Command::Add {
             ref service,
@@ -155,13 +166,24 @@ async fn main() -> anyhow::Result<()> {
             ryra_core::verbose::set(verbose);
             cli::reset::run(yes, dry_run).await?
         }
-        Command::Status => cli::status::run()?,
+        Command::Config { ref section } => {
+            cli::config_cmd::run(section.as_deref()).await?
+        }
+        Command::Expose {
+            ref service,
+            ref domain,
+            dry_run,
+            verbose,
+        } => {
+            ryra_core::verbose::set(verbose);
+            cli::expose::run(service, domain.as_deref(), dry_run).await?
+        }
+        Command::Status { ref service, ref repo } => {
+            cli::status::run(service.as_deref(), repo.as_deref()).await?
+        }
         Command::List => cli::list::run()?,
         Command::Search { ref query, ref repo } => {
             cli::search::run(query.as_deref(), repo.as_deref()).await?
-        }
-        Command::Info { ref service, ref repo } => {
-            cli::info::run(service, repo.as_deref()).await?
         }
     }
 
