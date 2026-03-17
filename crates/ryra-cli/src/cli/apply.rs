@@ -21,9 +21,18 @@ enum Created {
 pub async fn execute_all(steps: &[Step]) -> Result<()> {
     let mut created: Vec<Created> = Vec::new();
 
+    let verbose = ryra_core::verbose::is_enabled();
     for step in steps {
+        let start = std::time::Instant::now();
         match execute(step, &mut created).await {
-            Ok(()) => {}
+            Ok(()) => {
+                if verbose {
+                    let elapsed = start.elapsed();
+                    if elapsed.as_millis() > 500 {
+                        println!("    ({:.1}s)", elapsed.as_secs_f64());
+                    }
+                }
+            }
             Err(e) => {
                 eprintln!("\nStep failed: {e}");
                 prompt_rollback(&created).await;
@@ -47,7 +56,7 @@ async fn prompt_rollback(created: &[Created]) {
     let should_rollback = if std::io::stdin().is_terminal() {
         dialoguer::Confirm::new()
             .with_prompt("Roll back changes?")
-            .default(true)
+            .default(false)
             .interact()
             .unwrap_or(false)
     } else {
@@ -215,7 +224,7 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         }
         Step::StartService { username, unit } => {
             run(&format!(
-                "sudo systemctl --machine={username}@ --user start {unit}"
+                "sudo systemctl --machine={username}@ --user start --no-block {unit}"
             ))?;
             created.push(Created::StartedService {
                 username: username.clone(),

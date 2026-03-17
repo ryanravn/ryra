@@ -42,6 +42,9 @@ pub enum Error {
     #[error("no ports available in range {start}–{end}")]
     PortsExhausted { start: u16, end: u16 },
 
+    #[error("port {port} is already in use")]
+    PortConflict { port: u16 },
+
     #[error("git command failed: {0}")]
     Git(String),
 

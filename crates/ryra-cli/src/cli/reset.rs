@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 
 use anyhow::Result;
-use dialoguer::Confirm;
+use dialoguer::Input;
 
 use super::apply;
 
@@ -20,12 +20,11 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
             println!("  - Delete all certs, nginx configs, and ryra state");
             println!();
 
-            let confirmed = Confirm::new()
-                .with_prompt("Reset ryra completely?")
-                .default(false)
-                .interact()?;
+            let input: String = Input::new()
+                .with_prompt("Type \"reset\" to confirm")
+                .interact_text()?;
 
-            if !confirmed {
+            if input != "reset" {
                 println!("Cancelled.");
                 return Ok(());
             }

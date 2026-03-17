@@ -359,12 +359,26 @@ pub fn add_service(
         )));
     }
 
-    // Allocate a host port only for proxied modes (nginx upstream)
-    let host_port = if proxied {
+    // Allocate a host port for proxied modes (nginx upstream) or when any
+    // container port is privileged (<1024) — rootless podman cannot bind those.
+    let has_privileged_port = reg_service
+        .def
+        .ports
+        .iter()
+        .any(|p| p.container_port < 1024);
+    let host_port = if proxied || has_privileged_port {
         Some(system::port::allocate_port(&config)?)
     } else {
         None
     };
+
+    // Check for port conflicts by probing whether the port is already bound.
+    for p in &reg_service.def.ports {
+        let port = host_port.unwrap_or(p.container_port);
+        if system::port::is_port_in_use(port) {
+            return Err(Error::PortConflict { port });
+        }
+    }
 
     let username = service_user(service_name);
     let home_dir = service_home(service_name);

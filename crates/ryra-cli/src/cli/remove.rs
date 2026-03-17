@@ -1,7 +1,7 @@
 use std::io::IsTerminal;
 
 use anyhow::Result;
-use dialoguer::Confirm;
+use dialoguer::Input;
 use ryra_core::config::schema::ExposureMode;
 
 use super::apply;
@@ -26,12 +26,11 @@ pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
             }
             println!();
 
-            let confirmed = Confirm::new()
-                .with_prompt(format!("Remove {service}?"))
-                .default(true)
-                .interact()?;
+            let input: String = Input::new()
+                .with_prompt(format!("Type \"{service}\" to confirm removal"))
+                .interact_text()?;
 
-            if !confirmed {
+            if input != service {
                 println!("Cancelled.");
                 return Ok(());
             }

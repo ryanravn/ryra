@@ -71,13 +71,14 @@ impl ExposureMode {
             return vec![ExposureMode::Local, ExposureMode::HostPort];
         }
         match cf {
-            None => vec![ExposureMode::Local],
+            None => vec![ExposureMode::Local, ExposureMode::HostPort],
             Some(CloudflareCredentials { tunnel: None, .. }) => {
-                vec![ExposureMode::Local, ExposureMode::DnsOnly, ExposureMode::Proxy]
+                vec![ExposureMode::Local, ExposureMode::HostPort, ExposureMode::DnsOnly, ExposureMode::Proxy]
             }
             Some(CloudflareCredentials { tunnel: Some(_), .. }) => {
                 vec![
                     ExposureMode::Local,
+                    ExposureMode::HostPort,
                     ExposureMode::DnsOnly,
                     ExposureMode::Proxy,
                     ExposureMode::Tunnel,

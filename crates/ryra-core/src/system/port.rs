@@ -1,3 +1,5 @@
+use std::net::TcpListener;
+
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
 
@@ -18,4 +20,9 @@ pub fn allocate_port(config: &Config) -> Result<u16> {
             start: PORT_RANGE_START,
             end: PORT_RANGE_END,
         })
+}
+
+/// Check if a port is already bound on the host.
+pub fn is_port_in_use(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_err()
 }
