@@ -585,13 +585,23 @@ pub fn add_service(
         InstalledDeployMode::Quadlet
     };
 
-    // Collect post-install info
-    let allocated_ports: Vec<(String, u16)> = state
-        .allocated
-        .iter()
-        .filter(|a| a.service == service_name)
-        .map(|a| (a.port_name.clone(), a.host_port))
-        .collect();
+    // Collect post-install info: web services use allocated ports,
+    // non-web services use the container port directly
+    let allocated_ports: Vec<(String, u16)> = if is_web {
+        state
+            .allocated
+            .iter()
+            .filter(|a| a.service == service_name)
+            .map(|a| (a.port_name.clone(), a.host_port))
+            .collect()
+    } else {
+        reg_service
+            .def
+            .ports
+            .iter()
+            .map(|p| (p.name.clone(), p.container_port))
+            .collect()
+    };
 
     // Secret names from env var templates (not stored in state)
     let generated_secrets: Vec<String> = reg_service

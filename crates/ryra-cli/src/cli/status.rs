@@ -53,11 +53,7 @@ fn print_status(info: &StatusInfo) {
     }
 
     println!();
-    println!(
-        "Ports:      {} allocated (next: {})",
-        info.ports_allocated, info.next_port
-    );
-    println!("Secrets:    {} stored", info.secrets_count);
+    println!("Ports:      {} allocated", info.ports_allocated);
 }
 
 fn format_provider(status: &ProviderStatus) -> &str {

@@ -18,9 +18,7 @@ pub struct StatusInfo {
     pub auth: ProviderStatus,
     pub registries: Vec<String>,
     pub services: Vec<ServiceInfo>,
-    pub next_port: u16,
     pub ports_allocated: usize,
-    pub secrets_count: usize,
 }
 
 pub enum CloudflareStatus {
@@ -88,9 +86,7 @@ impl StatusInfo {
                     exposure: s.exposure.clone(),
                 })
                 .collect(),
-            next_port: state.next_port,
             ports_allocated: state.allocated.len(),
-            secrets_count: state.secrets.len(),
         }
     }
 }

@@ -48,10 +48,14 @@ pub fn generate_service(
     compose_file_override: Option<&str>,
 ) -> Result<GeneratedService> {
     let name = &service_def.service.name;
+    let is_web = service_def.nginx.is_some();
 
-    // Allocate ports
-    for port_def in &service_def.ports {
-        port::allocate_port(state, name, &port_def.name)?;
+    // Allocate ports: web services get unique ports for nginx upstream,
+    // non-web services use the container port directly (e.g. 5432 for postgres)
+    if is_web {
+        for port_def in &service_def.ports {
+            port::allocate_port(state, name, &port_def.name)?;
+        }
     }
 
     // Collect all secret references from non-overridden env vars
@@ -98,12 +102,16 @@ fn build_env_file(
         lines.push(format!("{}={}", env.name, env.value));
     }
 
-    // Expose allocated ports as RYRA_PORT_* for compose files
+    // Expose port mappings as RYRA_PORT_* for compose files
+    let is_web = service_def.nginx.is_some();
     for port_def in &service_def.ports {
-        if let Some(host_port) = port::get_port(state, name, &port_def.name) {
-            let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
-            lines.push(format!("{var_name}={host_port}"));
-        }
+        let host_port = if is_web {
+            port::get_port(state, name, &port_def.name).unwrap_or(port_def.container_port)
+        } else {
+            port_def.container_port
+        };
+        let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
+        lines.push(format!("{var_name}={host_port}"));
     }
 
     GeneratedFile {
@@ -125,15 +133,23 @@ fn generate_quadlet(
 ) -> Result<GeneratedService> {
     let mut files = Vec::new();
 
+    let is_web = service_def.nginx.is_some();
     let port_mappings: Vec<quadlet::PortMapping> = service_def
         .ports
         .iter()
-        .filter_map(|p| {
-            port::get_port(state, name, &p.name).map(|host_port| quadlet::PortMapping {
+        .map(|p| {
+            // Web services use allocated ports (for nginx upstream),
+            // non-web services use the container port directly (e.g. 5432)
+            let host_port = if is_web {
+                port::get_port(state, name, &p.name).unwrap_or(p.container_port)
+            } else {
+                p.container_port
+            };
+            quadlet::PortMapping {
                 host_port,
                 container_port: p.container_port,
                 protocol: p.protocol.clone(),
-            })
+            }
         })
         .collect();
 
