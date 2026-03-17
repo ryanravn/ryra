@@ -222,9 +222,9 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         println!();
         println!("  Useful commands:");
         println!();
-        println!("    sudo systemctl --machine={u}@ --user restart {service}");
         println!("    sudo systemctl --machine={u}@ --user status {service}");
         println!("    sudo journalctl --machine={u}@ --user -u {service} -f");
+        println!("    sudo systemctl --machine={u}@ --user restart {service}");
     }
 
     Ok(())
