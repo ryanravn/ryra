@@ -59,7 +59,26 @@ pub struct ComposeProfile {
     pub file: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Raw helper for deserializing ServiceMeta — defaults mode to "quadlet" when absent.
+#[derive(Deserialize)]
+struct ServiceMetaRaw {
+    name: String,
+    description: String,
+    #[serde(default = "default_quadlet_mode")]
+    mode: String,
+    image: Option<String>,
+    file: Option<String>,
+    #[serde(default)]
+    profiles: Vec<ComposeProfile>,
+    #[serde(default)]
+    kind: ServiceKind,
+}
+
+fn default_quadlet_mode() -> String {
+    "quadlet".to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ServiceMeta {
     pub name: String,
     pub description: String,
@@ -67,6 +86,44 @@ pub struct ServiceMeta {
     pub deploy: DeployMode,
     #[serde(default)]
     pub kind: ServiceKind,
+}
+
+impl<'de> Deserialize<'de> for ServiceMeta {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = ServiceMetaRaw::deserialize(deserializer)?;
+        let deploy = match raw.mode.as_str() {
+            "quadlet" => {
+                let image = raw.image.ok_or_else(|| {
+                    serde::de::Error::missing_field("image")
+                })?;
+                DeployMode::Quadlet { image }
+            }
+            "compose" => {
+                let file = raw.file.ok_or_else(|| {
+                    serde::de::Error::missing_field("file")
+                })?;
+                DeployMode::Compose {
+                    file,
+                    profiles: raw.profiles,
+                }
+            }
+            other => {
+                return Err(serde::de::Error::unknown_variant(
+                    other,
+                    &["quadlet", "compose"],
+                ));
+            }
+        };
+        Ok(ServiceMeta {
+            name: raw.name,
+            description: raw.description,
+            deploy,
+            kind: raw.kind,
+        })
+    }
 }
 
 /// What role this service plays in the system.

@@ -1,7 +1,6 @@
 [service]
 name = "vaultwarden"
 description = "Vaultwarden - lightweight Bitwarden-compatible server"
-mode = "quadlet"
 image = "docker.io/vaultwarden/server:latest"
 
 [[ports]]

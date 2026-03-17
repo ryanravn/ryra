@@ -1,7 +1,6 @@
 [service]
 name = "openclaw"
 description = "OpenClaw - self-hosted AI assistant"
-mode = "quadlet"
 image = "ghcr.io/openclaw/openclaw:latest"
 
 [[ports]]
