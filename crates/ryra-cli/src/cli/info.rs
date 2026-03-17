@@ -39,11 +39,26 @@ pub fn run(service: &str) -> Result<()> {
     }
 
     if let Some(exposure) = &detail.installed_exposure {
+        let home_dir = ryra_core::service_home(service);
+        let username = ryra_core::service_user(service);
+
         println!();
         match &detail.installed_domain {
             Some(domain) => println!("Installed: {domain} ({exposure})"),
             None => println!("Installed: ({exposure})"),
         }
+        println!("  Config: {}", home_dir.display());
+
+        println!();
+        println!("  Useful commands:");
+        println!();
+        println!("    sudo cat {}", home_dir.join(".env").display());
+        println!("    sudo systemctl --machine={username}@ --user status {service}");
+        println!("    sudo journalctl --machine={username}@ --user -u {service} -f");
+        println!("    sudo systemctl --machine={username}@ --user restart {service}");
+    } else {
+        println!();
+        println!("Not installed. Run `ryra add {service}` to install.");
     }
 
     Ok(())
