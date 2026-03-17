@@ -4,7 +4,7 @@ pub fn run() -> Result<()> {
     let services = ryra_core::list_installed()?;
 
     if services.is_empty() {
-        println!("No services installed. Use `ryra search` to find available services.");
+        println!("No services installed. Run `ryra search` to browse available services.");
         return Ok(());
     }
 

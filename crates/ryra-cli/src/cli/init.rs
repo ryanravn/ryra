@@ -158,7 +158,7 @@ pub async fn run(
             println!();
             println!("ryra initialized!");
             println!("  Config: {config_path}");
-            println!("  Run `ryra list` to see available services.");
+            println!("  Run `ryra search` to browse available services.");
         }
     }
 
