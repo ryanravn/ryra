@@ -38,6 +38,12 @@ impl ConfigPaths {
                 source,
             })?;
         }
+        // .gitignore to prevent accidental commits of secrets
+        let gitignore = self.config_dir.join(".gitignore");
+        if !gitignore.exists() {
+            let _ = std::fs::write(&gitignore, "ryra.toml\n");
+        }
+
         Ok(())
     }
 }
