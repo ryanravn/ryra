@@ -11,8 +11,10 @@ pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
 
     if !yes && !dry_run {
         if std::io::stdin().is_terminal() {
+            let home_dir = ryra_core::service_home(service);
             println!("This will:");
             println!("  - Stop {service} and remove user {}", result.username);
+            println!("  - Delete all data and config at {}", home_dir.display());
             match (&result.exposure, &result.domain) {
                 (ExposureMode::Tunnel, Some(domain)) => {
                     println!("  - Remove tunnel route for {domain}");
