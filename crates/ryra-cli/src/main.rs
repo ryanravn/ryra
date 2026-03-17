@@ -5,9 +5,6 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "ryra", version, about = "Self-hosted service manager using rootless Podman quadlets")]
 struct Cli {
-    /// Show file contents as they are written
-    #[arg(long, short, global = true)]
-    verbose: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -40,6 +37,9 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Show file contents as they are written
+        #[arg(long, short)]
+        verbose: bool,
     },
     /// Add and start a service
     Add {
@@ -51,6 +51,9 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Show file contents as they are written
+        #[arg(long, short)]
+        verbose: bool,
     },
     /// Remove a service
     Remove {
@@ -62,6 +65,9 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Show file contents as they are written
+        #[arg(long, short)]
+        verbose: bool,
     },
     /// Tear down all services, containers, and config
     Reset {
@@ -71,6 +77,9 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Show file contents as they are written
+        #[arg(long, short)]
+        verbose: bool,
     },
     /// Show ryra configuration and installation status
     Status,
@@ -109,8 +118,6 @@ enum RegistryAction {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    ryra_core::verbose::set(cli.verbose);
-
     match cli.command {
         Command::Init {
             domain,
@@ -121,7 +128,9 @@ async fn main() -> anyhow::Result<()> {
             cf_zone_name,
             tunnel_token,
             dry_run,
+            verbose,
         } => {
+            ryra_core::verbose::set(verbose);
             cli::init::run(
                 domain, registry, email, cf_token, cf_zone_id, cf_zone_name, tunnel_token, dry_run,
             )
@@ -131,13 +140,24 @@ async fn main() -> anyhow::Result<()> {
             ref service,
             ref domain,
             dry_run,
-        } => cli::add::run(service, domain.as_deref(), dry_run).await?,
+            verbose,
+        } => {
+            ryra_core::verbose::set(verbose);
+            cli::add::run(service, domain.as_deref(), dry_run).await?
+        }
         Command::Remove {
             ref service,
             yes,
             dry_run,
-        } => cli::remove::run(service, yes, dry_run).await?,
-        Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
+            verbose,
+        } => {
+            ryra_core::verbose::set(verbose);
+            cli::remove::run(service, yes, dry_run).await?
+        }
+        Command::Reset { yes, dry_run, verbose } => {
+            ryra_core::verbose::set(verbose);
+            cli::reset::run(yes, dry_run).await?
+        }
         Command::Status => cli::status::run()?,
         Command::List => cli::list::run()?,
         Command::Search { ref query } => cli::search::run(query.as_deref())?,
