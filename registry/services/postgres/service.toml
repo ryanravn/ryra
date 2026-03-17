@@ -1,6 +1,7 @@
 [service]
 name = "postgres"
 description = "PostgreSQL - open source relational database"
+mode = "quadlet"
 image = "docker.io/library/postgres:17-alpine"
 kind = "infrastructure"
 

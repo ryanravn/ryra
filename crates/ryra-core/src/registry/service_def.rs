@@ -30,11 +30,41 @@ impl ServiceDef {
     }
 }
 
+/// How a service is deployed: single container via quadlet, or multi-container via compose.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum DeployMode {
+    /// Single container managed via podman quadlet.
+    Quadlet { image: String },
+    /// Multi-service stack managed via podman compose.
+    Compose {
+        /// Path to compose file relative to the service directory in the registry.
+        file: String,
+        /// Named profiles: alternative compose files for different configurations.
+        #[serde(default)]
+        profiles: Vec<ComposeProfile>,
+    },
+}
+
+impl DeployMode {
+    pub fn is_compose(&self) -> bool {
+        matches!(self, DeployMode::Compose { .. })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComposeProfile {
+    pub name: String,
+    pub description: String,
+    pub file: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceMeta {
     pub name: String,
     pub description: String,
-    pub image: String,
+    #[serde(flatten)]
+    pub deploy: DeployMode,
     #[serde(default)]
     pub kind: ServiceKind,
 }

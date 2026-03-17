@@ -4,8 +4,8 @@ use std::io::IsTerminal;
 use anyhow::{bail, Result};
 use dialoguer::{Confirm, Input};
 
-use ryra_core::config::schema::ExposureMode;
-use ryra_core::config::schema::SslConfig;
+use ryra_core::config::schema::{ExposureMode, SslConfig};
+use ryra_core::registry::service_def::DeployMode;
 use ryra_core::Warning;
 
 use super::apply;
@@ -15,7 +15,7 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
     let mut config = ryra_core::config::load_config(&paths.config_file)?;
     let interactive = std::io::stdin().is_terminal();
 
-    // Look up the service definition to determine if it's a web service
+    // Look up the service definition
     let reg_pairs: Vec<(String, String)> = config
         .registries
         .iter()
@@ -24,6 +24,29 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
     let reg_service =
         ryra_core::registry::find_service(&paths.cache_dir, &reg_pairs, service)?;
     let is_web = reg_service.def.nginx.is_some();
+
+    // Profile selection for compose services
+    let compose_file_override = match &reg_service.def.service.deploy {
+        DeployMode::Compose { profiles, .. } if !profiles.is_empty() && interactive => {
+            let mut items: Vec<String> = vec!["default".to_string()];
+            items.extend(
+                profiles
+                    .iter()
+                    .map(|p| format!("{} — {}", p.name, p.description)),
+            );
+            let selection = dialoguer::Select::new()
+                .with_prompt("Configuration profile")
+                .items(&items)
+                .default(0)
+                .interact()?;
+            if selection == 0 {
+                None
+            } else {
+                Some(profiles[selection - 1].file.clone())
+            }
+        }
+        _ => None,
+    };
 
     // Only prompt for domain if this is a web service
     let domain = if is_web {
@@ -90,26 +113,28 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         .filter(|e| e.prompt.is_some())
         .collect();
 
-    if !promptable.is_empty() {
-        if interactive {
-            println!("\nConfigure {service}:");
-            for env in &promptable {
-                let prompt_text = env.prompt.as_deref().unwrap_or(&env.name);
-                let value: String = Input::new()
-                    .with_prompt(format!("  {prompt_text}"))
-                    .default(env.value.clone())
-                    .interact_text()?;
-                if value != env.value {
-                    env_overrides.insert(env.name.clone(), value);
-                }
+    if !promptable.is_empty() && interactive {
+        println!("\nConfigure {service}:");
+        for env in &promptable {
+            let prompt_text = env.prompt.as_deref().unwrap_or(&env.name);
+            let value: String = Input::new()
+                .with_prompt(format!("  {prompt_text}"))
+                .default(env.value.clone())
+                .interact_text()?;
+            if value != env.value {
+                env_overrides.insert(env.name.clone(), value);
             }
-            println!();
         }
-        // Non-interactive: use defaults silently
+        println!();
     }
 
-    let result =
-        ryra_core::add_service(service, domain.as_deref(), exposure.clone(), &env_overrides)?;
+    let result = ryra_core::add_service(
+        service,
+        domain.as_deref(),
+        exposure.clone(),
+        &env_overrides,
+        compose_file_override.as_deref(),
+    )?;
 
     // Show warnings and confirm
     if !result.warnings.is_empty() {
@@ -163,15 +188,19 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
     } else {
         println!("Setting up {service} as user {}...", result.username);
         apply::execute_all(&result.steps).await?;
-        // Only record the service after all steps succeed
-        ryra_core::finalize_add(service, domain.as_deref(), exposure)?;
-        let quadlet_dir = ryra_core::service_quadlet_dir(service);
+        ryra_core::finalize_add(
+            service,
+            domain.as_deref(),
+            exposure,
+            result.deploy_mode,
+        )?;
+        let home_dir = ryra_core::service_home(service);
         if let Some(ref domain) = result.domain {
             println!("\n{service} is running at https://{domain}");
         } else {
             println!("\n{service} is running.");
         }
-        println!("  Config: {}", quadlet_dir.display());
+        println!("  Config: {}", home_dir.display());
         println!(
             "  Restart: sudo systemctl --machine={}@ --user restart {service}",
             result.username

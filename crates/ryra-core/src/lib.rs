@@ -9,7 +9,8 @@ pub mod verbose;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledService, RegistryEntry};
+use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService, RegistryEntry};
+use registry::service_def::DeployMode;
 use config::state::State;
 use config::ConfigPaths;
 use error::{Error, Result};
@@ -130,6 +131,21 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Remove a Linux user and their home directory.
     RemoveUser { username: String },
+    /// Pull images for a compose stack as a specific user.
+    ComposePull {
+        username: String,
+        compose_dir: PathBuf,
+    },
+    /// Start a compose stack (`podman compose up -d`).
+    ComposeUp {
+        username: String,
+        compose_dir: PathBuf,
+    },
+    /// Stop a compose stack (`podman compose down`).
+    ComposeDown {
+        username: String,
+        compose_dir: PathBuf,
+    },
 }
 
 
@@ -193,6 +209,18 @@ impl Step {
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
+            Step::ComposePull { username, compose_dir } => format!(
+                "cd {} && sudo -H -u {username} podman compose pull",
+                compose_dir.display()
+            ),
+            Step::ComposeUp { username, compose_dir } => format!(
+                "cd {} && sudo -H -u {username} podman compose up -d",
+                compose_dir.display()
+            ),
+            Step::ComposeDown { username, compose_dir } => format!(
+                "cd {} && sudo -H -u {username} podman compose down",
+                compose_dir.display()
+            ),
         }
     }
 }
@@ -224,6 +252,7 @@ pub struct AddResult {
     pub domain: Option<String>,
     pub username: String,
     pub warnings: Vec<Warning>,
+    pub deploy_mode: InstalledDeployMode,
 }
 
 pub struct RemoveResult {
@@ -302,11 +331,13 @@ pub async fn init(config: Config) -> Result<InitResult> {
 
 /// Add a service: generate config, return steps to execute.
 /// `env_overrides` contains user-provided values for env vars with `prompt` set.
+/// `compose_file_override` selects a specific compose profile file.
 pub fn add_service(
     service_name: &str,
     domain: Option<&str>,
     exposure: ExposureMode,
     env_overrides: &BTreeMap<String, String>,
+    compose_file_override: Option<&str>,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
@@ -324,6 +355,7 @@ pub fn add_service(
     let reg_service = registry::find_service(&paths.cache_dir, &reg_pairs, service_name)?;
 
     let is_web = reg_service.def.nginx.is_some();
+    let is_compose = reg_service.def.service.deploy.is_compose();
 
     // Validate exposure vs service type
     if is_web && exposure == ExposureMode::HostPort {
@@ -352,11 +384,12 @@ pub fn add_service(
         &quadlet_dir,
         nginx_dir,
         env_overrides,
+        &reg_service.service_dir,
+        compose_file_override,
     )?;
 
     // Save port/secret allocations (needed even if steps fail, so ports aren't reused)
     config::save_state(&paths.state_file, &state)?;
-    // NOTE: service entry is NOT saved here — call finalize_add() after steps succeed
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -469,45 +502,90 @@ pub fn add_service(
         username: username.clone(),
     });
 
-    // 4. Pre-pull the service image as the service user (rootless storage)
-    steps.push(Step::PullImage {
-        image: reg_service.def.service.image.clone(),
-        username: Some(username.clone()),
-    });
+    // 4-7: Deploy mode specific steps
+    match generated {
+        generate::GeneratedService::Quadlet { files, nginx_site } => {
+            // Pull image
+            if let DeployMode::Quadlet { ref image } = reg_service.def.service.deploy {
+                steps.push(Step::PullImage {
+                    image: image.clone(),
+                    username: Some(username.clone()),
+                });
+            }
 
-    // 5. Write all generated files (quadlets + nginx)
-    for file in generated.quadlet_files {
-        steps.push(Step::WriteFile(file));
+            // Write quadlet + nginx files
+            for file in files {
+                steps.push(Step::WriteFile(file));
+            }
+            if let Some(nginx_site) = nginx_site {
+                steps.push(Step::WriteFile(nginx_site));
+            }
+
+            // Fix ownership, start via systemd
+            steps.push(Step::Chown {
+                path: home_dir,
+                username: username.clone(),
+            });
+            steps.push(Step::DaemonReload {
+                username: username.clone(),
+            });
+            steps.push(Step::StartService {
+                username: username.clone(),
+                unit: service_name.to_string(),
+            });
+        }
+        generate::GeneratedService::Compose {
+            compose_file,
+            env_file,
+            systemd_unit,
+            nginx_site,
+        } => {
+            // Write compose file, .env, systemd unit
+            steps.push(Step::WriteFile(compose_file));
+            steps.push(Step::WriteFile(env_file));
+            steps.push(Step::WriteFile(systemd_unit));
+            if let Some(nginx_site) = nginx_site {
+                steps.push(Step::WriteFile(nginx_site));
+            }
+
+            // Fix ownership, pull images, start compose stack
+            steps.push(Step::Chown {
+                path: home_dir.clone(),
+                username: username.clone(),
+            });
+            steps.push(Step::ComposePull {
+                username: username.clone(),
+                compose_dir: home_dir,
+            });
+            steps.push(Step::DaemonReload {
+                username: username.clone(),
+            });
+            steps.push(Step::StartService {
+                username: username.clone(),
+                unit: format!("{service_name}-compose"),
+            });
+        }
     }
-    if let Some(nginx_site) = generated.nginx_site {
-        steps.push(Step::WriteFile(nginx_site));
-    }
 
-    // 6. Fix ownership after writing to the service user's home
-    steps.push(Step::Chown {
-        path: home_dir,
-        username: username.clone(),
-    });
-
-    // 7. Start service + reload nginx (only if web)
-    steps.push(Step::DaemonReload {
-        username: username.clone(),
-    });
-    steps.push(Step::StartService {
-        username: username.clone(),
-        unit: service_name.to_string(),
-    });
+    // Reload nginx if web service
     if is_web {
         steps.push(Step::SystemRestart {
             unit: "nginx".into(),
         });
     }
 
+    let deploy_mode = if is_compose {
+        InstalledDeployMode::Compose
+    } else {
+        InstalledDeployMode::Quadlet
+    };
+
     Ok(AddResult {
         steps,
         domain: domain.map(|d| d.to_string()),
         username,
         warnings,
+        deploy_mode,
     })
 }
 
@@ -526,21 +604,31 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let domain = service.domain.clone();
     let is_web = domain.is_some();
 
-    let mut steps = vec![
-        Step::StopService {
-            username: username.clone(),
-            unit: service_name.to_string(),
-        },
-        Step::DisableLinger {
-            username: username.clone(),
-        },
-        Step::TerminateUserSession {
-            username: username.clone(),
-        },
-        Step::RemoveUser {
-            username: username.clone(),
-        },
-    ];
+    // Stop the service based on deploy mode
+    let mut steps = Vec::new();
+    match &service.deploy_mode {
+        InstalledDeployMode::Quadlet => {
+            steps.push(Step::StopService {
+                username: username.clone(),
+                unit: service_name.to_string(),
+            });
+        }
+        InstalledDeployMode::Compose => {
+            steps.push(Step::ComposeDown {
+                username: username.clone(),
+                compose_dir: service_home(service_name),
+            });
+        }
+    }
+    steps.push(Step::DisableLinger {
+        username: username.clone(),
+    });
+    steps.push(Step::TerminateUserSession {
+        username: username.clone(),
+    });
+    steps.push(Step::RemoveUser {
+        username: username.clone(),
+    });
 
     // Only clean up nginx for web services
     if is_web {
@@ -591,6 +679,7 @@ pub fn finalize_add(
     service_name: &str,
     domain: Option<&str>,
     exposure: ExposureMode,
+    deploy_mode: InstalledDeployMode,
 ) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = config::load_config(&paths.config_file)?;
@@ -600,6 +689,7 @@ pub fn finalize_add(
         domain: domain.map(|d| d.to_string()),
         version: "0.1.0".to_string(),
         exposure,
+        deploy_mode,
     });
     config::save_config(&paths.config_file, &config)?;
 
@@ -798,6 +888,7 @@ pub fn search_services(query: Option<&str>) -> Result<Vec<SearchResult>> {
                 name: name.clone(),
                 description: reg_svc.def.service.description,
                 is_web: reg_svc.def.nginx.is_some(),
+                is_compose: reg_svc.def.service.deploy.is_compose(),
                 installed,
             }
         })
@@ -810,6 +901,7 @@ pub struct SearchResult {
     pub name: String,
     pub description: String,
     pub is_web: bool,
+    pub is_compose: bool,
     pub installed: bool,
 }
 

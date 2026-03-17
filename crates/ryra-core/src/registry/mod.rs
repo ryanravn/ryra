@@ -1,7 +1,7 @@
 pub mod fetch;
 pub mod service_def;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use service_def::ServiceDef;
@@ -10,16 +10,18 @@ use service_def::ServiceDef;
 pub struct RegistryService {
     pub registry_name: String,
     pub def: ServiceDef,
+    /// Path to the service directory in the registry (contains service.toml, compose files, etc.)
+    pub service_dir: PathBuf,
 }
 
 /// Look up a service by name across all cached registries.
 pub fn find_service(cache_dir: &Path, registries: &[(String, String)], name: &str) -> Result<RegistryService> {
     for (reg_name, _url) in registries {
-        let service_toml = cache_dir
+        let svc_dir = cache_dir
             .join(reg_name)
             .join("services")
-            .join(name)
-            .join("service.toml");
+            .join(name);
+        let service_toml = svc_dir.join("service.toml");
 
         if service_toml.exists() {
             let contents = std::fs::read_to_string(&service_toml).map_err(|source| {
@@ -36,6 +38,7 @@ pub fn find_service(cache_dir: &Path, registries: &[(String, String)], name: &st
             return Ok(RegistryService {
                 registry_name: reg_name.clone(),
                 def,
+                service_dir: svc_dir,
             });
         }
     }
@@ -62,7 +65,8 @@ pub fn list_available(cache_dir: &Path, registries: &[(String, String)]) -> Resu
                 path: services_dir.clone(),
                 source,
             })?;
-            let service_toml = entry.path().join("service.toml");
+            let svc_dir = entry.path();
+            let service_toml = svc_dir.join("service.toml");
             if service_toml.exists() {
                 let contents =
                     std::fs::read_to_string(&service_toml).map_err(|source| Error::FileRead {
@@ -77,6 +81,7 @@ pub fn list_available(cache_dir: &Path, registries: &[(String, String)]) -> Resu
                 services.push(RegistryService {
                     registry_name: reg_name.clone(),
                     def,
+                    service_dir: svc_dir,
                 });
             }
         }

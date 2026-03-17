@@ -187,10 +187,21 @@ pub struct RegistryEntry {
 
 // --- Installed service record ---
 
+/// How the installed service was deployed (stored in config for removal).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum InstalledDeployMode {
+    #[default]
+    Quadlet,
+    Compose,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledService {
     pub name: String,
     pub domain: Option<String>,
     pub version: String,
     pub exposure: ExposureMode,
+    #[serde(default)]
+    pub deploy_mode: InstalledDeployMode,
 }

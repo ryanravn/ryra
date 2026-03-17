@@ -1,6 +1,7 @@
 [service]
 name = "whoami"
 description = "Traefik whoami - simple HTTP request echo"
+mode = "quadlet"
 image = "docker.io/traefik/whoami:latest"
 
 [[ports]]
