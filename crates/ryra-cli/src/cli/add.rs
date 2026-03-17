@@ -10,19 +10,15 @@ use ryra_core::Warning;
 
 use super::apply;
 
-pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<()> {
+pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_run: bool) -> Result<()> {
+    let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
+
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_config(&paths.config_file)?;
     let interactive = std::io::stdin().is_terminal();
 
     // Look up the service definition
-    let reg_pairs: Vec<(String, String)> = config
-        .registries
-        .iter()
-        .map(|r| (r.name.clone(), r.url.clone()))
-        .collect();
-    let reg_service =
-        ryra_core::registry::find_service(&paths.cache_dir, &reg_pairs, service)?;
+    let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
     let is_web = reg_service.def.nginx.is_some();
 
     // Profile selection for compose services
@@ -70,7 +66,7 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         0 => bail!("No exposure modes available (this shouldn't happen)"),
         1 => {
             let mode = available.into_iter().next().unwrap_or(ExposureMode::Local);
-            println!("  Exposure: {} (only available option)", mode.label());
+            println!("Exposure mode: {} — {}", mode.label(), mode.description());
             mode
         }
         _ if interactive => {
@@ -86,7 +82,6 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
             available[selection].clone()
         }
         _ => {
-            // Non-interactive: default to first available (Local)
             available.into_iter().next().unwrap_or(ExposureMode::Local)
         }
     };
@@ -104,7 +99,7 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         }
     }
 
-    // Prompt for configurable env vars (those with `prompt` set in service.toml)
+    // Prompt for configurable env vars
     let mut env_overrides = BTreeMap::new();
     let promptable: Vec<_> = reg_service
         .def
@@ -134,6 +129,8 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         exposure.clone(),
         &env_overrides,
         compose_file_override.as_deref(),
+        &repo_url,
+        &repo_dir,
     )?;
 
     // Show warnings and confirm
@@ -193,6 +190,7 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
             domain.as_deref(),
             exposure,
             result.deploy_mode,
+            &result.repo_url,
         )?;
         let home_dir = ryra_core::service_home(service);
         if let Some(ref domain) = result.domain {

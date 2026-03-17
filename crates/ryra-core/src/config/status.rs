@@ -16,7 +16,7 @@ pub struct StatusInfo {
     pub ssl: ProviderStatus,
     pub smtp: ProviderStatus,
     pub auth: ProviderStatus,
-    pub registries: Vec<String>,
+    pub default_repo: Option<String>,
     pub services: Vec<ServiceInfo>,
     pub ports_allocated: usize,
 }
@@ -76,7 +76,7 @@ impl StatusInfo {
                     },
                 },
             },
-            registries: config.registries.iter().map(|r| r.name.clone()).collect(),
+            default_repo: config.default_repo.clone(),
             services: config
                 .services
                 .iter()

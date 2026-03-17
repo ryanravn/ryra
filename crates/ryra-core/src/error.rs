@@ -38,8 +38,8 @@ pub enum Error {
     #[error("registry {0} not found")]
     RegistryNotFound(String),
 
-    #[error("registry {name} already exists")]
-    RegistryAlreadyExists { name: String },
+    #[error("no repo specified and no default_repo configured — use --repo or set default_repo in config")]
+    NoDefaultRepo,
 
     #[error("no ports available in range {start}–{end}")]
     PortsExhausted { start: u16, end: u16 },

@@ -9,7 +9,7 @@ pub mod verbose;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService, RegistryEntry};
+use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService};
 use registry::service_def::DeployMode;
 use config::state::State;
 use config::ConfigPaths;
@@ -253,9 +253,10 @@ pub struct AddResult {
     pub username: String,
     pub warnings: Vec<Warning>,
     pub deploy_mode: InstalledDeployMode,
+    pub repo_url: String,
     /// Allocated ports for this service (port_name, host_port).
     pub allocated_ports: Vec<(String, u16)>,
-    /// Names of auto-generated secrets (values are in state.toml).
+    /// Names of auto-generated secrets (values are in .env).
     pub generated_secrets: Vec<String>,
 }
 
@@ -271,6 +272,26 @@ pub struct ResetResult {
     pub steps: Vec<Step>,
 }
 
+/// Resolve which repo to use and ensure it's cached.
+/// Returns (repo_url, repo_dir).
+pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
+    let paths = ConfigPaths::resolve()?;
+
+    let repo_url = match repo {
+        Some(url) => url.to_string(),
+        None => {
+            let config = config::load_config(&paths.config_file)?;
+            config
+                .default_repo
+                .or_else(|| config.registries.first().map(|r| r.url.clone()))
+                .ok_or(Error::NoDefaultRepo)?
+        }
+    };
+
+    let repo_dir = registry::fetch::ensure_repo(&repo_url, &paths.cache_dir).await?;
+    Ok((repo_url, repo_dir))
+}
+
 /// Initialize a new ryra project.
 pub async fn init(config: Config) -> Result<InitResult> {
     let paths = ConfigPaths::resolve()?;
@@ -279,14 +300,9 @@ pub async fn init(config: Config) -> Result<InitResult> {
     config::save_config(&paths.config_file, &config)?;
     config::save_state(&paths.state_file, &State::default())?;
 
-    // Fetch registries
-    for reg in &config.registries {
-        let source_path = Path::new(&reg.url);
-        if source_path.exists() && source_path.is_dir() {
-            registry::fetch::add_local_registry(source_path, &paths.cache_dir, &reg.name)?;
-        } else {
-            registry::fetch::fetch_registry(&reg.url, &paths.cache_dir, &reg.name).await?;
-        }
+    // Fetch default repo if configured
+    if let Some(ref repo_url) = config.default_repo {
+        registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
     }
 
     // Create dirs and write nginx config + quadlet
@@ -334,14 +350,15 @@ pub async fn init(config: Config) -> Result<InitResult> {
 }
 
 /// Add a service: generate config, return steps to execute.
-/// `env_overrides` contains user-provided values for env vars with `prompt` set.
-/// `compose_file_override` selects a specific compose profile file.
+/// `repo_url` and `repo_dir` come from `resolve_repo()`.
 pub fn add_service(
     service_name: &str,
     domain: Option<&str>,
     exposure: ExposureMode,
     env_overrides: &BTreeMap<String, String>,
     compose_file_override: Option<&str>,
+    repo_url: &str,
+    repo_dir: &Path,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
@@ -351,12 +368,7 @@ pub fn add_service(
         return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
     }
 
-    let reg_pairs: Vec<(String, String)> = config
-        .registries
-        .iter()
-        .map(|r| (r.name.clone(), r.url.clone()))
-        .collect();
-    let reg_service = registry::find_service(&paths.cache_dir, &reg_pairs, service_name)?;
+    let reg_service = registry::find_service(repo_dir, service_name)?;
 
     let is_web = reg_service.def.nginx.is_some();
     let is_compose = reg_service.def.service.deploy.is_compose();
@@ -631,6 +643,7 @@ pub fn add_service(
         username,
         warnings,
         deploy_mode,
+        repo_url: repo_url.to_string(),
         allocated_ports,
         generated_secrets,
     })
@@ -727,6 +740,7 @@ pub fn finalize_add(
     domain: Option<&str>,
     exposure: ExposureMode,
     deploy_mode: InstalledDeployMode,
+    repo: &str,
 ) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = config::load_config(&paths.config_file)?;
@@ -737,6 +751,7 @@ pub fn finalize_add(
         version: "0.1.0".to_string(),
         exposure,
         deploy_mode,
+        repo: repo.to_string(),
     });
     config::save_config(&paths.config_file, &config)?;
 
@@ -902,29 +917,21 @@ pub fn list_installed() -> Result<Vec<InstalledService>> {
     Ok(config.services)
 }
 
-/// Search available services in registries, optionally filtered by query.
-pub fn search_services(query: Option<&str>) -> Result<Vec<SearchResult>> {
+/// Search available services in a repo, optionally filtered by query.
+pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<SearchResult>> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
-    let reg_pairs: Vec<(String, String)> = config
-        .registries
-        .iter()
-        .map(|r| (r.name.clone(), r.url.clone()))
-        .collect();
-
-    let available = registry::list_available(&paths.cache_dir, &reg_pairs)?;
+    let available = registry::list_available(repo_dir)?;
 
     let results = available
         .into_iter()
-        .filter(|reg_svc| {
-            match query {
-                None => true,
-                Some(q) => {
-                    let q = q.to_lowercase();
-                    reg_svc.def.service.name.to_lowercase().contains(&q)
-                        || reg_svc.def.service.description.to_lowercase().contains(&q)
-                }
+        .filter(|reg_svc| match query {
+            None => true,
+            Some(q) => {
+                let q = q.to_lowercase();
+                reg_svc.def.service.name.to_lowercase().contains(&q)
+                    || reg_svc.def.service.description.to_lowercase().contains(&q)
             }
         })
         .map(|reg_svc| {
@@ -951,18 +958,12 @@ pub struct SearchResult {
     pub installed: bool,
 }
 
-/// Get detailed info about a service from the registry.
-pub fn service_info(service_name: &str) -> Result<ServiceDetail> {
+/// Get detailed info about a service from a repo.
+pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
-    let reg_pairs: Vec<(String, String)> = config
-        .registries
-        .iter()
-        .map(|r| (r.name.clone(), r.url.clone()))
-        .collect();
-
-    let reg_service = registry::find_service(&paths.cache_dir, &reg_pairs, service_name)?;
+    let reg_service = registry::find_service(repo_dir, service_name)?;
     let def = &reg_service.def;
     let installed = config.services.iter().find(|s| s.name == service_name);
 
@@ -989,30 +990,4 @@ pub struct ServiceDetail {
     pub installed_exposure: Option<ExposureMode>,
 }
 
-/// Add a registry to the config and fetch it.
-pub async fn add_registry(name: &str, url: &str) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-    let mut config = config::load_config(&paths.config_file)?;
-
-    if config.registries.iter().any(|r| r.name == name) {
-        return Err(Error::RegistryAlreadyExists {
-            name: name.to_string(),
-        });
-    }
-
-    let source_path = Path::new(url);
-    if source_path.exists() && source_path.is_dir() {
-        registry::fetch::add_local_registry(source_path, &paths.cache_dir, name)?;
-    } else {
-        registry::fetch::fetch_registry(url, &paths.cache_dir, name).await?;
-    }
-
-    config.registries.push(RegistryEntry {
-        name: name.to_string(),
-        url: url.to_string(),
-    });
-    config::save_config(&paths.config_file, &config)?;
-
-    Ok(())
-}
 

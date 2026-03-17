@@ -9,6 +9,9 @@ pub struct Config {
     pub smtp: Option<SmtpCredentials>,
     pub auth: Option<AuthCredentials>,
     #[serde(default)]
+    pub default_repo: Option<String>,
+    /// Legacy field — reads old configs with [[registries]], never written back.
+    #[serde(default, skip_serializing)]
     pub registries: Vec<RegistryEntry>,
     #[serde(default)]
     pub services: Vec<InstalledService>,
@@ -204,4 +207,6 @@ pub struct InstalledService {
     pub exposure: ExposureMode,
     #[serde(default)]
     pub deploy_mode: InstalledDeployMode,
+    #[serde(default)]
+    pub repo: String,
 }

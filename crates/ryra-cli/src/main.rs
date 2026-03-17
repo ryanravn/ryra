@@ -16,9 +16,9 @@ enum Command {
         /// Domain name (e.g., example.com)
         #[arg(long)]
         domain: Option<String>,
-        /// Registry URL (git repo or local path)
+        /// Default repo (git URL or local path)
         #[arg(long)]
-        registry: Option<String>,
+        repo: Option<String>,
         /// Email for Let's Encrypt SSL certificates
         #[arg(long)]
         email: Option<String>,
@@ -43,11 +43,14 @@ enum Command {
     },
     /// Add and start a service
     Add {
-        /// Service name from registry
+        /// Service name from repo
         service: String,
         /// Domain for this service (defaults to <service>.<host domain>)
         #[arg(long)]
         domain: Option<String>,
+        /// Repo to install from (git URL or local path)
+        #[arg(long)]
+        repo: Option<String>,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -85,32 +88,21 @@ enum Command {
     Status,
     /// List installed services
     List,
-    /// Search available services in registries
+    /// Search available services in a repo
     Search {
         /// Filter by name or description
         query: Option<String>,
+        /// Repo to search (git URL or local path)
+        #[arg(long)]
+        repo: Option<String>,
     },
     /// Show details about a service
     Info {
         /// Service name
         service: String,
-    },
-    /// Manage registries
-    Registry {
-        #[command(subcommand)]
-        action: RegistryAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum RegistryAction {
-    /// Add a new registry
-    Add {
-        /// Git URL or local path
-        url: String,
-        /// Registry name
+        /// Repo to look up from (git URL or local path)
         #[arg(long)]
-        name: Option<String>,
+        repo: Option<String>,
     },
 }
 
@@ -121,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Init {
             domain,
-            registry,
+            repo,
             email,
             cf_token,
             cf_zone_id,
@@ -132,18 +124,19 @@ async fn main() -> anyhow::Result<()> {
         } => {
             ryra_core::verbose::set(verbose);
             cli::init::run(
-                domain, registry, email, cf_token, cf_zone_id, cf_zone_name, tunnel_token, dry_run,
+                domain, repo, email, cf_token, cf_zone_id, cf_zone_name, tunnel_token, dry_run,
             )
             .await?
         }
         Command::Add {
             ref service,
             ref domain,
+            ref repo,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(service, domain.as_deref(), dry_run).await?
+            cli::add::run(service, domain.as_deref(), repo.as_deref(), dry_run).await?
         }
         Command::Remove {
             ref service,
@@ -154,19 +147,22 @@ async fn main() -> anyhow::Result<()> {
             ryra_core::verbose::set(verbose);
             cli::remove::run(service, yes, dry_run).await?
         }
-        Command::Reset { yes, dry_run, verbose } => {
+        Command::Reset {
+            yes,
+            dry_run,
+            verbose,
+        } => {
             ryra_core::verbose::set(verbose);
             cli::reset::run(yes, dry_run).await?
         }
         Command::Status => cli::status::run()?,
         Command::List => cli::list::run()?,
-        Command::Search { ref query } => cli::search::run(query.as_deref())?,
-        Command::Info { ref service } => cli::info::run(service)?,
-        Command::Registry { action } => match action {
-            RegistryAction::Add { ref url, ref name } => {
-                cli::registry::run_add(url, name.as_deref()).await?
-            }
-        },
+        Command::Search { ref query, ref repo } => {
+            cli::search::run(query.as_deref(), repo.as_deref()).await?
+        }
+        Command::Info { ref service, ref repo } => {
+            cli::info::run(service, repo.as_deref()).await?
+        }
     }
 
     Ok(())

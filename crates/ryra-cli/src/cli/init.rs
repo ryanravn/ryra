@@ -10,7 +10,7 @@ use super::apply;
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     domain: Option<String>,
-    registry: Option<String>,
+    repo: Option<String>,
     email: Option<String>,
     cf_token: Option<String>,
     cf_zone_id: Option<String>,
@@ -118,13 +118,17 @@ pub async fn run(
         None
     };
 
-    // 6. Registry
-    let registry_url = match registry {
-        Some(r) => r,
-        None if interactive => Input::new()
-            .with_prompt("Registry URL (git repo or local path)")
-            .interact_text()?,
-        None => bail!("--registry is required in non-interactive mode"),
+    // 6. Repo
+    let default_repo = match repo {
+        Some(r) => Some(r),
+        None if interactive => {
+            let url: String = Input::new()
+                .with_prompt("Default repo (git URL or local path, empty to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            if url.is_empty() { None } else { Some(url) }
+        }
+        None => None,
     };
 
     let config = Config {
@@ -133,10 +137,8 @@ pub async fn run(
         ssl,
         smtp,
         auth: None,
-        registries: vec![RegistryEntry {
-            name: "default".into(),
-            url: registry_url,
-        }],
+        default_repo,
+        registries: vec![],
         services: vec![],
     };
 

@@ -1,7 +1,8 @@
 use anyhow::Result;
 
-pub fn run(service: &str) -> Result<()> {
-    let detail = ryra_core::service_info(service)?;
+pub async fn run(service: &str, repo: Option<&str>) -> Result<()> {
+    let (_repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
+    let detail = ryra_core::service_info(&repo_dir, service)?;
 
     println!("{}", detail.name);
     println!("  {}", detail.description);

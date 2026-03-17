@@ -3,7 +3,6 @@ pub mod apply;
 pub mod info;
 pub mod init;
 pub mod list;
-pub mod registry;
 pub mod remove;
 pub mod reset;
 pub mod search;

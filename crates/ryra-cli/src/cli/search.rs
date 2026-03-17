@@ -1,12 +1,13 @@
 use anyhow::Result;
 
-pub fn run(query: Option<&str>) -> Result<()> {
-    let results = ryra_core::search_services(query)?;
+pub async fn run(query: Option<&str>, repo: Option<&str>) -> Result<()> {
+    let (_repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
+    let results = ryra_core::search_services(&repo_dir, query)?;
 
     if results.is_empty() {
         match query {
             Some(q) => println!("No services matching \"{q}\"."),
-            None => println!("No services found. Add a registry with `ryra registry add <url>`."),
+            None => println!("No services found in repo."),
         }
         return Ok(());
     }

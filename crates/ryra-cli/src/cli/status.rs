@@ -30,12 +30,8 @@ fn print_status(info: &StatusInfo) {
     println!("Auth:       {}", format_provider(&info.auth));
     println!();
     println!(
-        "Registries: {}",
-        if info.registries.is_empty() {
-            "none".into()
-        } else {
-            info.registries.join(", ")
-        }
+        "Repo:       {}",
+        info.default_repo.as_deref().unwrap_or("not configured")
     );
     println!();
 
