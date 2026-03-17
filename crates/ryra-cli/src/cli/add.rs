@@ -44,22 +44,7 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
         _ => None,
     };
 
-    // Only prompt for domain if this is a web service
-    let domain = if is_web {
-        let default_domain = format!("{service}.{}", config.host.domain);
-        Some(match domain {
-            Some(d) => d.to_string(),
-            None if interactive => Input::new()
-                .with_prompt(format!("Domain for {service}"))
-                .default(default_domain.clone())
-                .interact_text()?,
-            None => default_domain,
-        })
-    } else {
-        None
-    };
-
-    // Compute available exposure modes
+    // Exposure mode first — affects domain default
     let available = ExposureMode::available_modes(&config.cloudflare, is_web);
 
     let exposure = match available.len() {
@@ -84,6 +69,24 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
         _ => {
             available.into_iter().next().unwrap_or(ExposureMode::Local)
         }
+    };
+
+    // Domain — only for web services, default depends on exposure
+    let domain = if is_web {
+        let default_domain = match exposure {
+            ExposureMode::Local => format!("{service}.localhost"),
+            _ => format!("{service}.{}", config.host.domain),
+        };
+        Some(match domain {
+            Some(d) => d.to_string(),
+            None if interactive => Input::new()
+                .with_prompt(format!("Domain for {service}"))
+                .default(default_domain.clone())
+                .interact_text()?,
+            None => default_domain,
+        })
+    } else {
+        None
     };
 
     // If DnsOnly and no SSL config, ask for LE email
