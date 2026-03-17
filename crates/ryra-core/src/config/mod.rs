@@ -50,7 +50,20 @@ pub fn load_config(path: &Path) -> Result<Config> {
 
 pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     let contents = toml::to_string_pretty(config)?;
-    write_file(path, &contents)
+    write_file(path, &contents)?;
+    // Config contains credentials — owner-only access
+    let _ = set_permissions(path, 0o600);
+    Ok(())
+}
+
+fn set_permissions(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|source| {
+        Error::FileWrite {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<()> {
