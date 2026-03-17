@@ -73,7 +73,10 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
 
     // Domain — only for proxied modes (tunnel/proxy/dns-only)
     let domain = if exposure.needs_domain() {
-        let default_domain = format!("{service}.{}", config.host.domain);
+        let default_domain = match &config.host.domain {
+            Some(d) => format!("{service}.{d}"),
+            None => format!("{service}.localhost"),
+        };
         Some(match domain {
             Some(d) => d.to_string(),
             None if interactive => Input::new()

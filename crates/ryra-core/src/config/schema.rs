@@ -19,7 +19,8 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostConfig {
-    pub domain: String,
+    #[serde(default)]
+    pub domain: Option<String>,
 }
 
 // --- Cloudflare (credentials + shared tunnel resource) ---

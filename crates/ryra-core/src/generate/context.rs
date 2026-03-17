@@ -19,7 +19,9 @@ pub fn build_context(
     ctx.insert("service.domain".into(), domain.to_string());
 
     // host.*
-    ctx.insert("host.domain".into(), config.host.domain.clone());
+    if let Some(ref host_domain) = config.host.domain {
+        ctx.insert("host.domain".into(), host_domain.clone());
+    }
 
     // smtp.*
     if let Some(smtp) = &config.smtp {

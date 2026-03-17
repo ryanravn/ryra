@@ -70,22 +70,24 @@ pub async fn run(
         _ => cloudflare,
     };
 
-    // 3. Domain
+    // 3. Domain (optional — services default to <name>.<domain>)
     let domain = match domain {
-        Some(d) => d,
+        Some(d) => Some(d),
         None if interactive => {
+            println!();
+            println!("  Base domain for services (e.g. example.com).");
+            println!("  Services will default to <name>.example.com.");
+            println!("  Leave empty if only running local services.");
+            println!();
             let default = derived_domain.unwrap_or_default();
-            match default.is_empty() {
-                true => Input::new()
-                    .with_prompt("Your domain (e.g., example.com)")
-                    .interact_text()?,
-                false => Input::new()
-                    .with_prompt("Domain")
-                    .default(default)
-                    .interact_text()?,
-            }
+            let input: String = Input::new()
+                .with_prompt("Base domain")
+                .default(default)
+                .allow_empty(true)
+                .interact_text()?;
+            if input.is_empty() { None } else { Some(input) }
         }
-        None => bail!("--domain is required in non-interactive mode"),
+        None => None,
     };
 
     // 4. Let's Encrypt email (skip if tunnel-only)
