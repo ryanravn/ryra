@@ -68,8 +68,6 @@ pub enum Error {
     #[error("invalid exposure mode: {0}")]
     InvalidExposure(String),
 
-    #[error("{path} has insecure permissions ({mode:o}). Run: chmod 600 {path}", path = path.display())]
-    InsecurePermissions { path: PathBuf, mode: u32 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

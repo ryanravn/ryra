@@ -38,7 +38,6 @@ pub fn load_config(path: &Path) -> Result<Config> {
     if !path.exists() {
         return Err(Error::ConfigNotFound(path.to_path_buf()));
     }
-    check_permissions(path)?;
     let contents = std::fs::read_to_string(path).map_err(|source| Error::FileRead {
         path: path.to_path_buf(),
         source,
@@ -51,36 +50,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
 
 pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     let contents = toml::to_string_pretty(config)?;
-    write_file(path, &contents)?;
-    set_permissions(path, 0o600)?;
-    Ok(())
-}
-
-/// Refuse to load config if permissions are too open.
-fn check_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = std::fs::metadata(path).map_err(|source| Error::FileRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mode = metadata.permissions().mode() & 0o777;
-    if mode & 0o077 != 0 {
-        return Err(Error::InsecurePermissions {
-            path: path.to_path_buf(),
-            mode,
-        });
-    }
-    Ok(())
-}
-
-fn set_permissions(path: &Path, mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|source| {
-        Error::FileWrite {
-            path: path.to_path_buf(),
-            source,
-        }
-    })
+    write_file(path, &contents)
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<()> {
