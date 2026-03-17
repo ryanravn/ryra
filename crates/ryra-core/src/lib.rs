@@ -368,24 +368,20 @@ pub fn add_service(
 
     let reg_service = registry::find_service(repo_dir, service_name)?;
 
-    let is_web = reg_service.def.nginx.is_some();
+    let has_nginx = reg_service.def.nginx.is_some();
     let is_compose = reg_service.def.service.deploy.is_compose();
+    let proxied = exposure.needs_domain();
 
-    // Validate exposure vs service type
-    if is_web && exposure == ExposureMode::HostPort {
-        return Err(Error::InvalidExposure(
-            "web services cannot use host-port exposure (they require nginx)".to_string(),
-        ));
-    }
-    if !is_web && exposure.is_web_only() {
+    // Validate: proxied modes require nginx config
+    if proxied && !has_nginx {
         return Err(Error::InvalidExposure(format!(
-            "non-web services cannot use {} exposure (no nginx config)",
+            "{} exposure requires an HTTP service (no [nginx] config)",
             exposure.label()
         )));
     }
 
-    // Allocate a host port for web services (nginx upstream)
-    let host_port = if is_web {
+    // Allocate a host port only for proxied modes (nginx upstream)
+    let host_port = if proxied {
         Some(system::port::allocate_port(&config)?)
     } else {
         None
@@ -412,13 +408,7 @@ pub fn add_service(
     // Generate warnings
     let mut warnings = Vec::new();
 
-    if is_web
-        && !reg_service.def.integrations.auth
-        && matches!(
-            exposure,
-            ExposureMode::Tunnel | ExposureMode::Proxy | ExposureMode::DnsOnly
-        )
-    {
+    if proxied && !reg_service.def.integrations.auth {
         warnings.push(Warning::NoAuthPublicExposure {
             service_name: service_name.to_string(),
             exposure: exposure.clone(),
@@ -441,8 +431,8 @@ pub fn add_service(
     // Build ordered steps
     let mut steps = Vec::new();
 
-    // 1. Networking: based on exposure mode (web services only)
-    if is_web {
+    // 1. Networking: only for proxied modes
+    if proxied {
         match (&exposure, domain) {
             (ExposureMode::Tunnel, Some(domain)) => {
                 if let Some(cf) = &config.cloudflare {
@@ -583,8 +573,8 @@ pub fn add_service(
         }
     }
 
-    // Reload nginx if web service
-    if is_web {
+    // Reload nginx if proxied
+    if proxied {
         steps.push(Step::SystemRestart {
             unit: "nginx".into(),
         });
@@ -655,7 +645,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
 
     let username = service_user(service_name);
     let domain = service.domain.clone();
-    let is_web = domain.is_some();
+    let was_proxied = domain.is_some();
 
     // Stop the service based on deploy mode
     let mut steps = Vec::new();
@@ -683,8 +673,8 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         username: username.clone(),
     });
 
-    // Only clean up nginx for web services
-    if is_web {
+    // Clean up nginx if service was proxied
+    if was_proxied {
         steps.push(Step::RemoveFile(PathBuf::from(format!(
             "/etc/ryra/nginx/sites/{service_name}.conf"
         ))));

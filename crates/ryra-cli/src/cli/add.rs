@@ -19,7 +19,7 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
 
     // Look up the service definition
     let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
-    let is_web = reg_service.def.nginx.is_some();
+    let has_nginx = reg_service.def.nginx.is_some();
 
     // Profile selection for compose services
     let compose_file_override = match &reg_service.def.service.deploy {
@@ -45,7 +45,7 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
     };
 
     // Exposure mode first — affects domain default
-    let available = ExposureMode::available_modes(&config.cloudflare, is_web);
+    let available = ExposureMode::available_modes(&config.cloudflare, has_nginx);
 
     let exposure = match available.len() {
         0 => bail!("No exposure modes available (this shouldn't happen)"),
@@ -71,12 +71,9 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
         }
     };
 
-    // Domain — only for web services, default depends on exposure
-    let domain = if is_web {
-        let default_domain = match exposure {
-            ExposureMode::Local => format!("{service}.localhost"),
-            _ => format!("{service}.{}", config.host.domain),
-        };
+    // Domain — only for proxied modes (tunnel/proxy/dns-only)
+    let domain = if exposure.needs_domain() {
+        let default_domain = format!("{service}.{}", config.host.domain);
         Some(match domain {
             Some(d) => d.to_string(),
             None if interactive => Input::new()

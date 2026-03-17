@@ -63,9 +63,10 @@ pub enum ExposureMode {
 }
 
 impl ExposureMode {
-    /// What modes are available given the current Cloudflare config and service type?
-    pub fn available_modes(cf: &Option<CloudflareCredentials>, is_web: bool) -> Vec<ExposureMode> {
-        if !is_web {
+    /// What modes are available given the current Cloudflare config and service capabilities?
+    /// `has_nginx` means the service can be proxied (has an HTTP interface).
+    pub fn available_modes(cf: &Option<CloudflareCredentials>, has_nginx: bool) -> Vec<ExposureMode> {
+        if !has_nginx {
             return vec![ExposureMode::Local, ExposureMode::HostPort];
         }
         match cf {
@@ -104,8 +105,8 @@ impl ExposureMode {
         matches!(self, ExposureMode::Proxy)
     }
 
-    /// Whether this mode requires a web service (nginx + domain).
-    pub fn is_web_only(&self) -> bool {
+    /// Whether this mode requires a domain and nginx proxy.
+    pub fn needs_domain(&self) -> bool {
         matches!(
             self,
             ExposureMode::Tunnel | ExposureMode::Proxy | ExposureMode::DnsOnly
