@@ -44,10 +44,11 @@ fn print_status(info: &StatusInfo) {
     } else {
         println!("Services:");
         for svc in &info.services {
-            println!(
-                "  {:<20} {:<30} ({})",
-                svc.name, svc.domain, svc.exposure
-            );
+            let location = match &svc.domain {
+                Some(d) => d.clone(),
+                None => format!("[no domain — {}]", svc.exposure),
+            };
+            println!("  {:<20} {:<30} ({})", svc.name, location, svc.exposure);
         }
     }
 

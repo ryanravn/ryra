@@ -64,6 +64,9 @@ pub enum Error {
 
     #[error("cloudflare API: {0}")]
     Cloudflare(String),
+
+    #[error("invalid exposure mode: {0}")]
+    InvalidExposure(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -48,10 +48,30 @@ pub enum ServiceKind {
     Infrastructure,
 }
 
+/// Whether a port uses TCP or UDP.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PortProtocol {
+    #[default]
+    Tcp,
+    Udp,
+}
+
+impl std::fmt::Display for PortProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PortProtocol::Tcp => write!(f, "tcp"),
+            PortProtocol::Udp => write!(f, "udp"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortDef {
     pub name: String,
     pub container_port: u16,
+    #[serde(default)]
+    pub protocol: PortProtocol,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +84,11 @@ pub struct VolumeDef {
 pub struct EnvVar {
     pub name: String,
     pub value: String,
+    /// If set, the CLI prompts the user with this message during `ryra add`.
+    /// The `value` field serves as the default. User input replaces `value`
+    /// before template rendering.
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

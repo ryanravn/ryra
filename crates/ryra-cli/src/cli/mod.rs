@@ -5,6 +5,7 @@ pub mod list;
 pub mod registry;
 pub mod remove;
 pub mod reset;
+pub mod search;
 pub mod status;
 
 use ryra_core::Step;

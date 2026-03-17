@@ -38,7 +38,7 @@ pub enum ProviderStatus {
 
 pub struct ServiceInfo {
     pub name: String,
-    pub domain: String,
+    pub domain: Option<String>,
     pub exposure: ExposureMode,
 }
 

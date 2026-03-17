@@ -74,8 +74,13 @@ enum Command {
     },
     /// Show ryra configuration and installation status
     Status,
-    /// List available and installed services
+    /// List installed services
     List,
+    /// Search available services in registries
+    Search {
+        /// Filter by name or description
+        query: Option<String>,
+    },
     /// Manage registries
     Registry {
         #[command(subcommand)]
@@ -130,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
         Command::Status => cli::status::run()?,
         Command::List => cli::list::run()?,
+        Command::Search { ref query } => cli::search::run(query.as_deref())?,
         Command::Registry { action } => match action {
             RegistryAction::Add { ref url, ref name } => {
                 cli::registry::run_add(url, name.as_deref()).await?

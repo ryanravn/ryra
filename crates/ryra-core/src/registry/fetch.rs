@@ -50,47 +50,28 @@ async fn pull_registry(dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy a local directory as a registry (for development/testing).
+/// Symlink a local directory as a registry — changes are reflected immediately.
 pub fn add_local_registry(source: &Path, cache_dir: &Path, name: &str) -> Result<PathBuf> {
     let dest = cache_dir.join(name);
-    if dest.exists() {
-        // Remove old cached copy
-        std::fs::remove_dir_all(&dest).map_err(|source| Error::FileWrite {
+    if dest.exists() || dest.is_symlink() {
+        if dest.is_symlink() {
+            std::fs::remove_file(&dest)
+        } else {
+            std::fs::remove_dir_all(&dest)
+        }
+        .map_err(|source| Error::FileWrite {
             path: dest.clone(),
             source,
         })?;
     }
-    copy_dir_recursive(source, &dest)?;
+    let canonical = source.canonicalize().map_err(|source_err| Error::FileRead {
+        path: source.to_path_buf(),
+        source: source_err,
+    })?;
+    std::os::unix::fs::symlink(&canonical, &dest).map_err(|source| Error::FileWrite {
+        path: dest.clone(),
+        source,
+    })?;
     Ok(dest)
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst).map_err(|source| Error::DirCreate {
-        path: dst.to_path_buf(),
-        source,
-    })?;
-
-    let entries = std::fs::read_dir(src).map_err(|source| Error::FileRead {
-        path: src.to_path_buf(),
-        source,
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|source| Error::FileRead {
-            path: src.to_path_buf(),
-            source,
-        })?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path).map_err(|source| Error::FileWrite {
-                path: dst_path,
-                source,
-            })?;
-        }
-    }
-    Ok(())
-}

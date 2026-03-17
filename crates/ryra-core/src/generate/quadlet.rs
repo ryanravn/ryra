@@ -1,4 +1,12 @@
-use crate::registry::service_def::EnvVar;
+use crate::registry::service_def::{EnvVar, PortProtocol};
+
+/// Whether a container port binds to localhost or all interfaces.
+pub enum BindAddress {
+    /// 127.0.0.1 — only reachable from the same host.
+    Localhost,
+    /// 0.0.0.0 — reachable from the network.
+    Any,
+}
 
 /// All the pieces needed to generate quadlet files for one container.
 pub struct QuadletParams<'a> {
@@ -9,11 +17,13 @@ pub struct QuadletParams<'a> {
     pub volumes: &'a [VolumeMapping<'a>],
     pub network: &'a str,
     pub command: Option<&'a str>,
+    pub bind_address: &'a BindAddress,
 }
 
 pub struct PortMapping {
     pub host_port: u16,
     pub container_port: u16,
+    pub protocol: PortProtocol,
 }
 
 pub struct VolumeMapping<'a> {
@@ -44,9 +54,18 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push(format!("Environment={}={}", env.name, env.value));
     }
 
+    let bind_ip = match params.bind_address {
+        BindAddress::Localhost => "127.0.0.1",
+        BindAddress::Any => "0.0.0.0",
+    };
+
     for port in params.ports {
+        let proto_suffix = match port.protocol {
+            PortProtocol::Tcp => String::new(),
+            PortProtocol::Udp => "/udp".to_string(),
+        };
         lines.push(format!(
-            "PublishPort=127.0.0.1:{}:{}",
+            "PublishPort={bind_ip}:{}:{}{proto_suffix}",
             port.host_port, port.container_port
         ));
     }

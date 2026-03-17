@@ -4,6 +4,7 @@ pub mod quadlet;
 pub mod template;
 pub mod tunnel;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::schema::{Config, ExposureMode};
@@ -24,14 +25,16 @@ pub struct GeneratedFile {
 }
 
 /// Generate all files for a standalone service (v0.1 — no dependency support).
+/// `env_overrides` contains user-provided values that replace env var defaults.
 pub fn generate_service(
     config: &Config,
     state: &mut State,
     service_def: &ServiceDef,
-    domain: &str,
+    domain: Option<&str>,
     exposure: &ExposureMode,
     quadlet_dir: &Path,
     nginx_dir: &Path,
+    env_overrides: &BTreeMap<String, String>,
 ) -> Result<GeneratedService> {
     let name = &service_def.service.name;
     let mut quadlet_files = Vec::new();
@@ -42,26 +45,33 @@ pub fn generate_service(
     }
 
     // Generate secrets for any {{secret.*}} references in env vars
+    // (skip for env vars that have been overridden by user input)
     for env in &service_def.env {
-        extract_secret_refs(&env.value)
-            .into_iter()
-            .for_each(|secret_name| {
-                secret::ensure_secret(state, name, &secret_name);
-            });
+        if !env_overrides.contains_key(&env.name) {
+            extract_secret_refs(&env.value)
+                .into_iter()
+                .for_each(|secret_name| {
+                    secret::ensure_secret(state, name, &secret_name);
+                });
+        }
     }
 
     // Build template context
-    let ctx = context::build_context(config, state, service_def, domain);
+    let ctx = context::build_context(config, state, service_def, domain.unwrap_or_default());
 
-    // Render env vars
+    // Render env vars — user overrides replace the template value
     let mut rendered_env: Vec<EnvVar> = service_def
         .env
         .iter()
         .map(|env| {
-            let rendered_value = template::render(&env.value, &ctx)?;
+            let value = match env_overrides.get(&env.name) {
+                Some(override_value) => override_value.clone(),
+                None => template::render(&env.value, &ctx)?,
+            };
             Ok(EnvVar {
                 name: env.name.clone(),
-                value: rendered_value,
+                value,
+                prompt: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -75,6 +85,7 @@ pub fn generate_service(
                 rendered_env.push(EnvVar {
                     name: env_name.clone(),
                     value: rendered,
+                    prompt: None,
                 });
             }
         }
@@ -86,6 +97,7 @@ pub fn generate_service(
                 rendered_env.push(EnvVar {
                     name: env_name.clone(),
                     value: rendered,
+                    prompt: None,
                 });
             }
         }
@@ -99,9 +111,16 @@ pub fn generate_service(
             port::get_port(state, name, &p.name).map(|host_port| quadlet::PortMapping {
                 host_port,
                 container_port: p.container_port,
+                protocol: p.protocol.clone(),
             })
         })
         .collect();
+
+    // Determine bind address from exposure mode
+    let bind_address = match exposure {
+        ExposureMode::HostPort => quadlet::BindAddress::Any,
+        _ => quadlet::BindAddress::Localhost,
+    };
 
     // Generate network
     let network_name = name.to_string();
@@ -143,6 +162,7 @@ pub fn generate_service(
         volumes: &volume_refs,
         network: &network_name,
         command: None,
+        bind_address: &bind_address,
     };
 
     quadlet_files.push(GeneratedFile {
@@ -150,47 +170,49 @@ pub fn generate_service(
         content: quadlet::render_container(&container_params),
     });
 
-    // Generate nginx site config
-    let nginx_site = if let Some(nginx_def) = &service_def.nginx {
-        let upstream_port = port::get_port(state, name, &nginx_def.upstream_port)
-            .ok_or_else(|| Error::Template(format!(
-                "upstream port '{}' not allocated for service '{name}'",
-                nginx_def.upstream_port
-            )))?;
+    // Generate nginx site config (only for web services with a domain)
+    let nginx_site = match (&service_def.nginx, domain) {
+        (Some(nginx_def), Some(domain)) => {
+            let upstream_port = port::get_port(state, name, &nginx_def.upstream_port)
+                .ok_or_else(|| Error::Template(format!(
+                    "upstream port '{}' not allocated for service '{name}'",
+                    nginx_def.upstream_port
+                )))?;
 
-        let mode = match exposure {
-            ExposureMode::Tunnel | ExposureMode::Local => nginx::SiteMode::HttpOnly,
-            ExposureMode::Proxy => {
-                let (cert_path, key_path) =
-                    crate::integrations::ssl::origin_cert_paths(domain);
-                nginx::SiteMode::Ssl {
-                    cert_path,
-                    key_path,
+            let mode = match exposure {
+                ExposureMode::Tunnel | ExposureMode::Local => nginx::SiteMode::HttpOnly,
+                ExposureMode::Proxy => {
+                    let (cert_path, key_path) =
+                        crate::integrations::ssl::origin_cert_paths(domain);
+                    nginx::SiteMode::Ssl {
+                        cert_path,
+                        key_path,
+                    }
                 }
-            }
-            ExposureMode::DnsOnly => {
-                let (cert_path, key_path) = match &config.ssl {
-                    Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
-                    None => crate::integrations::ssl::letsencrypt_cert_paths(domain),
-                };
-                nginx::SiteMode::Ssl {
-                    cert_path,
-                    key_path,
+                ExposureMode::DnsOnly => {
+                    let (cert_path, key_path) = match &config.ssl {
+                        Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
+                        None => crate::integrations::ssl::letsencrypt_cert_paths(domain),
+                    };
+                    nginx::SiteMode::Ssl {
+                        cert_path,
+                        key_path,
+                    }
                 }
-            }
-        };
+                ExposureMode::HostPort => nginx::SiteMode::HttpOnly,
+            };
 
-        Some(GeneratedFile {
-            path: nginx_dir.join(format!("{name}.conf")),
-            content: nginx::render_site(&nginx::NginxSiteParams {
-                service_name: name,
-                domain,
-                upstream_port,
-                mode,
-            }),
-        })
-    } else {
-        None
+            Some(GeneratedFile {
+                path: nginx_dir.join(format!("{name}.conf")),
+                content: nginx::render_site(&nginx::NginxSiteParams {
+                    service_name: name,
+                    domain,
+                    upstream_port,
+                    mode,
+                }),
+            })
+        }
+        _ => None,
     };
 
     Ok(GeneratedService {

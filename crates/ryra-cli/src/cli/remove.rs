@@ -13,14 +13,14 @@ pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
         if std::io::stdin().is_terminal() {
             println!("This will:");
             println!("  - Stop {service} and remove user {}", result.username);
-            match &result.exposure {
-                ExposureMode::Tunnel => {
-                    println!("  - Remove tunnel route for {}", result.domain);
+            match (&result.exposure, &result.domain) {
+                (ExposureMode::Tunnel, Some(domain)) => {
+                    println!("  - Remove tunnel route for {domain}");
                 }
-                ExposureMode::Proxy | ExposureMode::DnsOnly => {
-                    println!("  - Delete DNS record for {}", result.domain);
+                (ExposureMode::Proxy | ExposureMode::DnsOnly, Some(domain)) => {
+                    println!("  - Delete DNS record for {domain}");
                 }
-                ExposureMode::Local => {}
+                _ => {}
             }
             println!();
 

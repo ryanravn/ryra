@@ -55,11 +55,16 @@ pub enum ExposureMode {
     DnsOnly,
     /// No DNS, no tunnel; localhost only.
     Local,
+    /// Binds to 0.0.0.0; reachable from network, no nginx/domain/DNS.
+    HostPort,
 }
 
 impl ExposureMode {
-    /// What modes are available given the current Cloudflare config?
-    pub fn available_modes(cf: &Option<CloudflareCredentials>) -> Vec<ExposureMode> {
+    /// What modes are available given the current Cloudflare config and service type?
+    pub fn available_modes(cf: &Option<CloudflareCredentials>, is_web: bool) -> Vec<ExposureMode> {
+        if !is_web {
+            return vec![ExposureMode::Local, ExposureMode::HostPort];
+        }
         match cf {
             None => vec![ExposureMode::Local],
             Some(CloudflareCredentials { tunnel: None, .. }) => {
@@ -96,12 +101,21 @@ impl ExposureMode {
         matches!(self, ExposureMode::Proxy)
     }
 
+    /// Whether this mode requires a web service (nginx + domain).
+    pub fn is_web_only(&self) -> bool {
+        matches!(
+            self,
+            ExposureMode::Tunnel | ExposureMode::Proxy | ExposureMode::DnsOnly
+        )
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             ExposureMode::Tunnel => "tunnel",
             ExposureMode::Proxy => "proxy",
             ExposureMode::DnsOnly => "dns-only",
             ExposureMode::Local => "local",
+            ExposureMode::HostPort => "host-port",
         }
     }
 
@@ -111,6 +125,7 @@ impl ExposureMode {
             ExposureMode::Proxy => "CF proxy (orange cloud), DDoS protection + caching",
             ExposureMode::DnsOnly => "CF DNS (grey cloud), Let's Encrypt SSL",
             ExposureMode::Local => "localhost only, no DNS or tunnel",
+            ExposureMode::HostPort => "bind to 0.0.0.0, reachable from network, no nginx/domain",
         }
     }
 }
@@ -175,7 +190,7 @@ pub struct RegistryEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledService {
     pub name: String,
-    pub domain: String,
+    pub domain: Option<String>,
     pub version: String,
     pub exposure: ExposureMode,
 }
