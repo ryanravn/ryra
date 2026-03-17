@@ -208,8 +208,11 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
             }
         }
         if !result.generated_secrets.is_empty() {
+            let state_path = ryra_core::config::ConfigPaths::resolve()
+                .map(|p| p.state_file.display().to_string())
+                .unwrap_or_else(|_| "~/.config/ryra/state.toml".to_string());
             println!(
-                "  Secrets auto-generated: {} (stored in ryra state)",
+                "  Secrets auto-generated: {} (see {state_path})",
                 result.generated_secrets.join(", ")
             );
         }
