@@ -1,5 +1,4 @@
 use std::io::IsTerminal;
-use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use dialoguer::Confirm;
@@ -7,9 +6,7 @@ use dialoguer::Confirm;
 use super::apply;
 
 pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
-    let system_users = discover_ryra_users();
-    let result = ryra_core::reset(&system_users);
-
+    let result = ryra_core::reset(&[]);
     if result.steps.is_empty() {
         println!("Nothing to reset — no ryra artifacts found.");
         return Ok(());
@@ -47,30 +44,4 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Discover system users matching the ryra-* naming convention.
-fn discover_ryra_users() -> Vec<String> {
-    let output = Command::new("getent")
-        .args(["passwd"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
-    };
-
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let username = line.split(':').next()?;
-            if username.starts_with("ryra-") {
-                Some(username.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
 }

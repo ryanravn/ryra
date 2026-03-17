@@ -20,11 +20,11 @@ use registry::service_def::PortProtocol;
 // --- Per-service user conventions ---
 
 pub fn service_user(service_name: &str) -> String {
-    format!("ryra-{service_name}")
+    service_name.to_string()
 }
 
 pub fn service_home(service_name: &str) -> PathBuf {
-    PathBuf::from(format!("/var/lib/ryra-{service_name}"))
+    PathBuf::from(format!("/var/lib/{service_name}"))
 }
 
 pub fn service_quadlet_dir(service_name: &str) -> PathBuf {
@@ -798,7 +798,7 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
         if known_users.contains(username) {
             continue; // Already handled above
         }
-        let service_name = username.strip_prefix("ryra-").unwrap_or(username);
+        let service_name = username.as_str();
         push_service_teardown(&mut steps, username, service_name);
     }
 
