@@ -7,6 +7,7 @@ use super::state::State;
 pub enum RyraStatus {
     NotInitialized,
     Initialized(StatusInfo),
+    Error(String),
 }
 
 pub struct StatusInfo {

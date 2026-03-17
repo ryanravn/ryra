@@ -900,7 +900,8 @@ pub fn status() -> config::status::RyraStatus {
 
     let config = match config::load_config(&paths.config_file) {
         Ok(c) => c,
-        Err(_) => return config::status::RyraStatus::NotInitialized,
+        Err(Error::ConfigNotFound(_)) => return config::status::RyraStatus::NotInitialized,
+        Err(e) => return config::status::RyraStatus::Error(e.to_string()),
     };
 
     let state = config::load_state(&paths.state_file).unwrap_or_default();

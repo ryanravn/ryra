@@ -6,6 +6,9 @@ pub fn run() -> Result<()> {
         RyraStatus::NotInitialized => {
             println!("ryra is not initialized. Run `ryra init` to get started.");
         }
+        RyraStatus::Error(msg) => {
+            eprintln!("Error: {msg}");
+        }
         RyraStatus::Initialized(info) => print_status(&info),
     }
     Ok(())
