@@ -670,7 +670,7 @@ pub fn status() -> config::status::RyraStatus {
     let state = config::load_state(&paths.state_file).unwrap_or_default();
 
     config::status::RyraStatus::Initialized(
-        config::status::StatusInfo::from_config_and_state(&config, &state),
+        config::status::StatusInfo::from_config_and_state(paths.config_file, &config, &state),
     )
 }
 

@@ -12,6 +12,7 @@ pub fn run() -> Result<()> {
 }
 
 fn print_status(info: &StatusInfo) {
+    println!("Config:     {}", info.config_path.display());
     println!("Host:       {}", info.domain);
     println!();
     println!(

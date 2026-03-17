@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::schema::*;
 use super::state::State;
 
@@ -8,6 +10,7 @@ pub enum RyraStatus {
 }
 
 pub struct StatusInfo {
+    pub config_path: PathBuf,
     pub domain: String,
     pub cloudflare: CloudflareStatus,
     pub ssl: ProviderStatus,
@@ -40,8 +43,9 @@ pub struct ServiceInfo {
 }
 
 impl StatusInfo {
-    pub fn from_config_and_state(config: &Config, state: &State) -> Self {
+    pub fn from_config_and_state(config_path: PathBuf, config: &Config, state: &State) -> Self {
         Self {
+            config_path,
             domain: config.host.domain.clone(),
             cloudflare: match &config.cloudflare {
                 None => CloudflareStatus::None,
