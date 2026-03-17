@@ -52,7 +52,6 @@ fn print_status(info: &StatusInfo) {
     }
 
     println!();
-    println!("Ports:      {} allocated", info.ports_allocated);
 }
 
 fn format_provider(status: &ProviderStatus) -> &str {

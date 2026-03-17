@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use super::schema::*;
-use super::state::State;
 
 /// High-level status of the ryra installation.
 pub enum RyraStatus {
@@ -19,7 +18,6 @@ pub struct StatusInfo {
     pub auth: ProviderStatus,
     pub default_repo: Option<String>,
     pub services: Vec<ServiceInfo>,
-    pub ports_allocated: usize,
 }
 
 pub enum CloudflareStatus {
@@ -42,7 +40,7 @@ pub struct ServiceInfo {
 }
 
 impl StatusInfo {
-    pub fn from_config_and_state(config_path: PathBuf, config: &Config, state: &State) -> Self {
+    pub fn from_config(config_path: PathBuf, config: &Config) -> Self {
         Self {
             config_path,
             domain: config.host.domain.clone(),
@@ -87,7 +85,6 @@ impl StatusInfo {
                     exposure: s.exposure.clone(),
                 })
                 .collect(),
-            ports_allocated: state.allocated.len(),
         }
     }
 }

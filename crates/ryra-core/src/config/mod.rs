@@ -1,18 +1,15 @@
 pub mod schema;
-pub mod state;
 pub mod status;
 
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use schema::Config;
-use state::State;
 
 /// Resolved paths for all ryra config/state files.
 pub struct ConfigPaths {
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
-    pub state_file: PathBuf,
     pub cache_dir: PathBuf,
 }
 
@@ -29,7 +26,6 @@ impl ConfigPaths {
             .join("ryra");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
-            state_file: config_dir.join("state.toml"),
             cache_dir: config_dir.join("cache").join("registries"),
             config_dir,
         })
@@ -69,24 +65,6 @@ pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub fn load_state(path: &Path) -> Result<State> {
-    if !path.exists() {
-        return Ok(State::default());
-    }
-    let contents = std::fs::read_to_string(path).map_err(|source| Error::FileRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    toml::from_str(&contents).map_err(|source| Error::TomlParse {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-pub fn save_state(path: &Path, state: &State) -> Result<()> {
-    let contents = toml::to_string_pretty(state)?;
-    write_file(path, &contents)
-}
 
 /// Refuse to load config if permissions are too open (like SSH does).
 fn check_permissions(path: &Path) -> Result<()> {

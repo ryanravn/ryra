@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService};
 use registry::service_def::DeployMode;
-use config::state::State;
 use config::ConfigPaths;
 use error::{Error, Result};
 use generate::GeneratedFile;
@@ -254,6 +253,7 @@ pub struct AddResult {
     pub warnings: Vec<Warning>,
     pub deploy_mode: InstalledDeployMode,
     pub repo_url: String,
+    pub host_port: Option<u16>,
     /// Allocated ports for this service (port_name, host_port).
     pub allocated_ports: Vec<(String, u16)>,
     /// Names of auto-generated secrets (values are in .env).
@@ -298,7 +298,6 @@ pub async fn init(config: Config) -> Result<InitResult> {
     paths.ensure_dirs()?;
 
     config::save_config(&paths.config_file, &config)?;
-    config::save_state(&paths.state_file, &State::default())?;
 
     // Fetch default repo if configured
     if let Some(ref repo_url) = config.default_repo {
@@ -362,7 +361,6 @@ pub fn add_service(
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
-    let mut state = config::load_state(&paths.state_file)?;
 
     if config.services.iter().any(|s| s.name == service_name) {
         return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
@@ -386,6 +384,13 @@ pub fn add_service(
         )));
     }
 
+    // Allocate a host port for web services (nginx upstream)
+    let host_port = if is_web {
+        Some(system::port::allocate_port(&config)?)
+    } else {
+        None
+    };
+
     let username = service_user(service_name);
     let home_dir = service_home(service_name);
     let quadlet_dir = service_quadlet_dir(service_name);
@@ -393,19 +398,16 @@ pub fn add_service(
 
     let generated = generate::generate_service(
         &config,
-        &mut state,
         &reg_service.def,
         domain,
         &exposure,
+        host_port,
         &quadlet_dir,
         nginx_dir,
         env_overrides,
         &reg_service.service_dir,
         compose_file_override,
     )?;
-
-    // Save port/secret allocations (needed even if steps fail, so ports aren't reused)
-    config::save_state(&paths.state_file, &state)?;
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -428,10 +430,7 @@ pub fn add_service(
             .def
             .ports
             .iter()
-            .filter_map(|p| {
-                system::port::get_port(&state, service_name, &p.name)
-                    .map(|hp| (hp, p.protocol.clone()))
-            })
+            .map(|p| (p.container_port, p.protocol.clone()))
             .collect();
         warnings.push(Warning::HostPortExposure {
             service_name: service_name.to_string(),
@@ -597,23 +596,16 @@ pub fn add_service(
         InstalledDeployMode::Quadlet
     };
 
-    // Collect post-install info: web services use allocated ports,
-    // non-web services use the container port directly
-    let allocated_ports: Vec<(String, u16)> = if is_web {
-        state
-            .allocated
-            .iter()
-            .filter(|a| a.service == service_name)
-            .map(|a| (a.port_name.clone(), a.host_port))
-            .collect()
-    } else {
-        reg_service
-            .def
-            .ports
-            .iter()
-            .map(|p| (p.name.clone(), p.container_port))
-            .collect()
-    };
+    // Collect post-install info
+    let allocated_ports: Vec<(String, u16)> = reg_service
+        .def
+        .ports
+        .iter()
+        .map(|p| {
+            let port = host_port.unwrap_or(p.container_port);
+            (p.name.clone(), port)
+        })
+        .collect();
 
     // Secret names from env var templates (not stored in state)
     let generated_secrets: Vec<String> = reg_service
@@ -644,6 +636,7 @@ pub fn add_service(
         warnings,
         deploy_mode,
         repo_url: repo_url.to_string(),
+        host_port,
         allocated_ports,
         generated_secrets,
     })
@@ -741,6 +734,7 @@ pub fn finalize_add(
     exposure: ExposureMode,
     deploy_mode: InstalledDeployMode,
     repo: &str,
+    host_port: Option<u16>,
 ) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = config::load_config(&paths.config_file)?;
@@ -752,6 +746,7 @@ pub fn finalize_add(
         exposure,
         deploy_mode,
         repo: repo.to_string(),
+        host_port,
     });
     config::save_config(&paths.config_file, &config)?;
 
@@ -761,10 +756,7 @@ pub fn finalize_add(
 pub fn finalize_remove(service_name: &str) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = config::load_config(&paths.config_file)?;
-    let mut state = config::load_state(&paths.state_file)?;
 
-    system::port::deallocate_ports(&mut state, service_name);
-    config::save_state(&paths.state_file, &state)?;
     config.services.retain(|s| s.name != service_name);
     config::save_config(&paths.config_file, &config)?;
 
@@ -904,10 +896,8 @@ pub fn status() -> config::status::RyraStatus {
         Err(e) => return config::status::RyraStatus::Error(e.to_string()),
     };
 
-    let state = config::load_state(&paths.state_file).unwrap_or_default();
-
     config::status::RyraStatus::Initialized(
-        config::status::StatusInfo::from_config_and_state(paths.config_file, &config, &state),
+        config::status::StatusInfo::from_config(paths.config_file, &config),
     )
 }
 

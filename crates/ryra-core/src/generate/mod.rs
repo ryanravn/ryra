@@ -8,10 +8,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::schema::{Config, ExposureMode};
-use crate::config::state::State;
 use crate::error::{Error, Result};
 use crate::registry::service_def::{DeployMode, EnvVar, ServiceDef};
-use crate::system::port;
 
 /// Everything generated for a service, ready to be written to disk.
 pub enum GeneratedService {
@@ -23,7 +21,6 @@ pub enum GeneratedService {
     Compose {
         compose_file: GeneratedFile,
         env_file: GeneratedFile,
-        /// Systemd unit to run `podman compose up` on boot.
         systemd_unit: GeneratedFile,
         nginx_site: Option<GeneratedFile>,
     },
@@ -35,12 +32,13 @@ pub struct GeneratedFile {
 }
 
 /// Generate all files for a service based on its deploy mode.
+/// `host_port` is the allocated port for web services (None for non-web).
 pub fn generate_service(
     config: &Config,
-    state: &mut State,
     service_def: &ServiceDef,
     domain: Option<&str>,
     exposure: &ExposureMode,
+    host_port: Option<u16>,
     quadlet_dir: &Path,
     nginx_dir: &Path,
     env_overrides: &BTreeMap<String, String>,
@@ -48,15 +46,6 @@ pub fn generate_service(
     compose_file_override: Option<&str>,
 ) -> Result<GeneratedService> {
     let name = &service_def.service.name;
-    let is_web = service_def.nginx.is_some();
-
-    // Allocate ports: web services get unique ports for nginx upstream,
-    // non-web services use the container port directly (e.g. 5432 for postgres)
-    if is_web {
-        for port_def in &service_def.ports {
-            port::allocate_port(state, name, &port_def.name)?;
-        }
-    }
 
     // Collect all secret references from non-overridden env vars
     let secret_refs: Vec<String> = service_def
@@ -67,19 +56,19 @@ pub fn generate_service(
         .collect();
 
     // Build template context (generates fresh secrets inline)
-    let ctx = context::build_context(config, state, service_def, domain.unwrap_or_default(), &secret_refs);
+    let ctx = context::build_context(config, service_def, domain.unwrap_or_default(), &secret_refs);
     let rendered_env = render_env_vars(service_def, &ctx, env_overrides)?;
 
     // Build .env file content
     let home_dir = crate::service_home(name);
-    let env_file = build_env_file(&home_dir, &rendered_env, service_def, state, name);
+    let env_file = build_env_file(&home_dir, &rendered_env, service_def, host_port);
 
     // Nginx site config
-    let nginx_site = generate_nginx_site(config, state, service_def, name, domain, exposure, nginx_dir)?;
+    let nginx_site = generate_nginx_site(config, service_def, name, domain, exposure, host_port, nginx_dir)?;
 
     match &service_def.service.deploy {
         DeployMode::Quadlet { image } => {
-            generate_quadlet(name, image, service_def, state, exposure, quadlet_dir, env_file, nginx_site)
+            generate_quadlet(name, image, service_def, exposure, host_port, quadlet_dir, env_file, nginx_site)
         }
         DeployMode::Compose { file, .. } => {
             let compose_filename = compose_file_override.unwrap_or(file);
@@ -93,8 +82,7 @@ fn build_env_file(
     home_dir: &Path,
     rendered_env: &[EnvVar],
     service_def: &ServiceDef,
-    state: &State,
-    name: &str,
+    host_port: Option<u16>,
 ) -> GeneratedFile {
     let mut lines = Vec::new();
 
@@ -102,16 +90,11 @@ fn build_env_file(
         lines.push(format!("{}={}", env.name, env.value));
     }
 
-    // Expose port mappings as RYRA_PORT_* for compose files
-    let is_web = service_def.nginx.is_some();
+    // Expose port as RYRA_PORT_* for compose files
     for port_def in &service_def.ports {
-        let host_port = if is_web {
-            port::get_port(state, name, &port_def.name).unwrap_or(port_def.container_port)
-        } else {
-            port_def.container_port
-        };
+        let port = host_port.unwrap_or(port_def.container_port);
         let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
-        lines.push(format!("{var_name}={host_port}"));
+        lines.push(format!("{var_name}={port}"));
     }
 
     GeneratedFile {
@@ -125,28 +108,20 @@ fn generate_quadlet(
     name: &str,
     image: &str,
     service_def: &ServiceDef,
-    state: &State,
     exposure: &ExposureMode,
+    host_port: Option<u16>,
     quadlet_dir: &Path,
     env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
 ) -> Result<GeneratedService> {
     let mut files = Vec::new();
 
-    let is_web = service_def.nginx.is_some();
     let port_mappings: Vec<quadlet::PortMapping> = service_def
         .ports
         .iter()
         .map(|p| {
-            // Web services use allocated ports (for nginx upstream),
-            // non-web services use the container port directly (e.g. 5432)
-            let host_port = if is_web {
-                port::get_port(state, name, &p.name).unwrap_or(p.container_port)
-            } else {
-                p.container_port
-            };
             quadlet::PortMapping {
-                host_port,
+                host_port: host_port.unwrap_or(p.container_port),
                 container_port: p.container_port,
                 protocol: p.protocol.clone(),
             }
@@ -243,7 +218,6 @@ fn generate_compose(
     })
 }
 
-/// Render a systemd user unit that manages a compose stack.
 fn render_compose_unit(name: &str, _username: &str, home_dir: &Path) -> String {
     let dir = home_dir.display();
     format!(
@@ -266,7 +240,6 @@ fn render_compose_unit(name: &str, _username: &str, home_dir: &Path) -> String {
 
 // --- Shared helpers ---
 
-/// Render env vars with template substitution and user overrides.
 fn render_env_vars(
     service_def: &ServiceDef,
     ctx: &BTreeMap<String, String>,
@@ -288,7 +261,6 @@ fn render_env_vars(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Integration mappings
     if service_def.integrations.smtp {
         for (env_name, value_template) in &service_def.mappings.smtp {
             let value = template::render(value_template, ctx)?;
@@ -317,24 +289,17 @@ fn render_env_vars(
     Ok(rendered)
 }
 
-/// Generate nginx site config if the service is a web service with a domain.
 fn generate_nginx_site(
     config: &Config,
-    state: &State,
     service_def: &ServiceDef,
     name: &str,
     domain: Option<&str>,
     exposure: &ExposureMode,
+    host_port: Option<u16>,
     nginx_dir: &Path,
 ) -> Result<Option<GeneratedFile>> {
-    match (&service_def.nginx, domain) {
-        (Some(nginx_def), Some(domain)) => {
-            let upstream_port = port::get_port(state, name, &nginx_def.upstream_port)
-                .ok_or_else(|| Error::Template(format!(
-                    "upstream port '{}' not allocated for service '{name}'",
-                    nginx_def.upstream_port
-                )))?;
-
+    match (&service_def.nginx, domain, host_port) {
+        (Some(_nginx_def), Some(domain), Some(upstream_port)) => {
             let mode = match exposure {
                 ExposureMode::Tunnel | ExposureMode::Local => nginx::SiteMode::HttpOnly,
                 ExposureMode::Proxy => {
@@ -366,7 +331,6 @@ fn generate_nginx_site(
     }
 }
 
-/// Extract secret names from template strings like "{{secret.db_password}}".
 fn extract_secret_refs(value: &str) -> Vec<String> {
     let mut secrets = Vec::new();
     let mut rest = value;

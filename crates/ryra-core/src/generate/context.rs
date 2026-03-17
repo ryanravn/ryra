@@ -1,15 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::config::schema::Config;
-use crate::config::state::State;
 use crate::registry::service_def::ServiceDef;
 use crate::system::secret;
 
 /// Build the template context for rendering env var values.
-/// Secrets are generated fresh and returned separately (not stored in state).
+/// Secrets are generated fresh (not stored anywhere).
 pub fn build_context(
     config: &Config,
-    state: &State,
     service_def: &ServiceDef,
     domain: &str,
     secret_refs: &[String],
@@ -22,7 +20,8 @@ pub fn build_context(
 
     // host.*
     ctx.insert("host.domain".into(), config.host.domain.clone());
-    // smtp.* (only if configured)
+
+    // smtp.*
     if let Some(smtp) = &config.smtp {
         ctx.insert("smtp.host".into(), smtp.host.clone());
         ctx.insert("smtp.port".into(), smtp.port.to_string());
@@ -31,22 +30,11 @@ pub fn build_context(
         ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
-    // secret.* — generate fresh values for each unique secret reference
+    // secret.* — generate fresh values
     for secret_name in secret_refs {
         let key = format!("secret.{secret_name}");
         if !ctx.contains_key(&key) {
             ctx.insert(key, secret::generate_secret());
-        }
-    }
-
-    // dep.*.host_port — allocated ports for dependencies
-    let prefix = format!("{}-", service_def.service.name);
-    for alloc in &state.allocated {
-        if let Some(dep_name) = alloc.service.strip_prefix(&prefix) {
-            ctx.insert(
-                format!("dep.{dep_name}.host_port"),
-                alloc.host_port.to_string(),
-            );
         }
     }
 

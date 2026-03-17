@@ -191,6 +191,7 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
             exposure,
             result.deploy_mode,
             &result.repo_url,
+            result.host_port,
         )?;
         let home_dir = ryra_core::service_home(service);
         if let Some(ref domain) = result.domain {

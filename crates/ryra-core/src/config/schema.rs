@@ -209,4 +209,7 @@ pub struct InstalledService {
     pub deploy_mode: InstalledDeployMode,
     #[serde(default)]
     pub repo: String,
+    /// Allocated host port for web services (nginx upstream). None for non-web.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
 }
