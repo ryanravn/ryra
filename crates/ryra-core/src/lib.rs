@@ -253,6 +253,10 @@ pub struct AddResult {
     pub username: String,
     pub warnings: Vec<Warning>,
     pub deploy_mode: InstalledDeployMode,
+    /// Allocated ports for this service (port_name, host_port).
+    pub allocated_ports: Vec<(String, u16)>,
+    /// Names of auto-generated secrets (values are in state.toml).
+    pub generated_secrets: Vec<String>,
 }
 
 pub struct RemoveResult {
@@ -580,12 +584,29 @@ pub fn add_service(
         InstalledDeployMode::Quadlet
     };
 
+    // Collect post-install info
+    let allocated_ports: Vec<(String, u16)> = state
+        .allocated
+        .iter()
+        .filter(|a| a.service == service_name)
+        .map(|a| (a.port_name.clone(), a.host_port))
+        .collect();
+
+    let generated_secrets: Vec<String> = state
+        .secrets
+        .iter()
+        .filter(|s| s.service == service_name)
+        .map(|s| s.name.clone())
+        .collect();
+
     Ok(AddResult {
         steps,
         domain: domain.map(|d| d.to_string()),
         username,
         warnings,
         deploy_mode,
+        allocated_ports,
+        generated_secrets,
     })
 }
 

@@ -200,9 +200,32 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         } else {
             println!("\n{service} is running.");
         }
-        println!("  Config: {}", home_dir.display());
+
+        // Connection info
+        if !result.allocated_ports.is_empty() {
+            for (port_name, host_port) in &result.allocated_ports {
+                println!("  Port ({port_name}): 127.0.0.1:{host_port}");
+            }
+        }
+        if !result.generated_secrets.is_empty() {
+            println!(
+                "  Secrets auto-generated: {} (stored in ryra state)",
+                result.generated_secrets.join(", ")
+            );
+        }
+
+        println!();
+        println!("  Config:  {}", home_dir.display());
         println!(
             "  Restart: sudo systemctl --machine={}@ --user restart {service}",
+            result.username
+        );
+        println!(
+            "  Logs:    sudo journalctl --machine={}@ --user -u {service} -f",
+            result.username
+        );
+        println!(
+            "  Status:  sudo systemctl --machine={}@ --user status {service}",
             result.username
         );
     }
