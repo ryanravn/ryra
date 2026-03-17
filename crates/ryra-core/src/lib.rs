@@ -8,7 +8,7 @@ pub mod verbose;
 
 use std::path::{Path, PathBuf};
 
-use config::schema::{CloudflareConfig, Config, ExposureMode, InstalledService, RegistryEntry};
+use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledService, RegistryEntry};
 use config::state::State;
 use config::ConfigPaths;
 use error::{Error, Result};
@@ -262,7 +262,7 @@ pub async fn init(config: Config) -> Result<InitResult> {
     ];
 
     // Cloudflared quadlet (if tunnel configured)
-    if let CloudflareConfig::Configured { tunnel: Some(ref ti), .. } = config.cloudflare {
+    if let Some(CloudflareCredentials { tunnel: Some(ref ti), .. }) = config.cloudflare {
         steps.push(Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
             content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
@@ -274,7 +274,7 @@ pub async fn init(config: Config) -> Result<InitResult> {
         unit: "nginx".into(),
     });
 
-    if config.cloudflare.tunnel_info().is_some() {
+    if config.cloudflare.as_ref().and_then(|cf| cf.tunnel.as_ref()).is_some() {
         steps.push(Step::StartTunnel);
     }
 
@@ -323,37 +323,33 @@ pub fn add_service(service_name: &str, domain: &str, exposure: ExposureMode) -> 
     // 1. Networking: based on exposure mode
     match &exposure {
         ExposureMode::Tunnel => {
-            if let CloudflareConfig::Configured {
-                api_token,
-                zone_id,
-                tunnel: Some(ti),
-                ..
-            } = &config.cloudflare
-            {
-                steps.push(Step::AddTunnelRoute {
-                    api_token: api_token.clone(),
-                    account_id: ti.account_id.clone(),
-                    tunnel_id: ti.tunnel_id.clone(),
-                    zone_id: zone_id.clone(),
-                    domain: domain.to_string(),
-                });
+            if let Some(cf) = &config.cloudflare {
+                if let Some(ti) = &cf.tunnel {
+                    steps.push(Step::AddTunnelRoute {
+                        api_token: cf.api_token.clone(),
+                        account_id: ti.account_id.clone(),
+                        tunnel_id: ti.tunnel_id.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.to_string(),
+                    });
+                }
             }
         }
         ExposureMode::Proxy => {
-            if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
+            if let Some(cf) = &config.cloudflare {
                 steps.push(Step::CreateDnsRecord {
-                    api_token: api_token.to_string(),
-                    zone_id: zone_id.to_string(),
+                    api_token: cf.api_token.clone(),
+                    zone_id: cf.zone_id.clone(),
                     domain: domain.to_string(),
                     proxied: true,
                 });
             }
         }
         ExposureMode::DnsOnly => {
-            if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
+            if let Some(cf) = &config.cloudflare {
                 steps.push(Step::CreateDnsRecord {
-                    api_token: api_token.to_string(),
-                    zone_id: zone_id.to_string(),
+                    api_token: cf.api_token.clone(),
+                    zone_id: cf.zone_id.clone(),
                     domain: domain.to_string(),
                     proxied: false,
                 });
@@ -376,10 +372,7 @@ pub fn add_service(service_name: &str, domain: &str, exposure: ExposureMode) -> 
                     "DnsOnly exposure requires SSL config with Let's Encrypt email".to_string(),
                 )),
             };
-            let cf_token = config
-                .cloudflare
-                .credentials()
-                .map(|(token, _, _)| token.to_string());
+            let cf_token = config.cloudflare.as_ref().map(|cf| cf.api_token.clone());
             steps.push(Step::ObtainCert {
                 domain: domain.to_string(),
                 email,
@@ -474,34 +467,28 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     ];
 
     // Clean up networking based on stored exposure mode
-    match &service.exposure {
-        ExposureMode::Tunnel => {
-            if let CloudflareConfig::Configured {
-                api_token,
-                zone_id,
-                tunnel: Some(ti),
-                ..
-            } = &config.cloudflare
-            {
-                steps.push(Step::RemoveTunnelRoute {
-                    api_token: api_token.clone(),
-                    account_id: ti.account_id.clone(),
-                    tunnel_id: ti.tunnel_id.clone(),
-                    zone_id: zone_id.clone(),
-                    domain: domain.clone(),
-                });
+    if let Some(cf) = &config.cloudflare {
+        match &service.exposure {
+            ExposureMode::Tunnel => {
+                if let Some(ti) = &cf.tunnel {
+                    steps.push(Step::RemoveTunnelRoute {
+                        api_token: cf.api_token.clone(),
+                        account_id: ti.account_id.clone(),
+                        tunnel_id: ti.tunnel_id.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.clone(),
+                    });
+                }
             }
-        }
-        ExposureMode::Proxy | ExposureMode::DnsOnly => {
-            if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
+            ExposureMode::Proxy | ExposureMode::DnsOnly => {
                 steps.push(Step::DeleteDnsRecord {
-                    api_token: api_token.to_string(),
-                    zone_id: zone_id.to_string(),
+                    api_token: cf.api_token.clone(),
+                    zone_id: cf.zone_id.clone(),
                     domain: domain.clone(),
                 });
             }
+            ExposureMode::Local => {}
         }
-        ExposureMode::Local => {}
     }
 
     Ok(RemoveResult {
@@ -564,34 +551,28 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
             push_service_teardown(&mut steps, &username, &service.name);
 
             // Clean up networking based on stored exposure
-            match &service.exposure {
-                ExposureMode::Tunnel => {
-                    if let CloudflareConfig::Configured {
-                        api_token,
-                        zone_id,
-                        tunnel: Some(ti),
-                        ..
-                    } = &config.cloudflare
-                    {
-                        steps.push(Step::RemoveTunnelRoute {
-                            api_token: api_token.clone(),
-                            account_id: ti.account_id.clone(),
-                            tunnel_id: ti.tunnel_id.clone(),
-                            zone_id: zone_id.clone(),
-                            domain: service.domain.clone(),
-                        });
+            if let Some(cf) = &config.cloudflare {
+                match &service.exposure {
+                    ExposureMode::Tunnel => {
+                        if let Some(ti) = &cf.tunnel {
+                            steps.push(Step::RemoveTunnelRoute {
+                                api_token: cf.api_token.clone(),
+                                account_id: ti.account_id.clone(),
+                                tunnel_id: ti.tunnel_id.clone(),
+                                zone_id: cf.zone_id.clone(),
+                                domain: service.domain.clone(),
+                            });
+                        }
                     }
-                }
-                ExposureMode::Proxy | ExposureMode::DnsOnly => {
-                    if let Some((api_token, zone_id, _)) = config.cloudflare.credentials() {
+                    ExposureMode::Proxy | ExposureMode::DnsOnly => {
                         steps.push(Step::DeleteDnsRecord {
-                            api_token: api_token.to_string(),
-                            zone_id: zone_id.to_string(),
+                            api_token: cf.api_token.clone(),
+                            zone_id: cf.zone_id.clone(),
                             domain: service.domain.clone(),
                         });
                     }
+                    ExposureMode::Local => {}
                 }
-                ExposureMode::Local => {}
             }
         }
     }
@@ -613,8 +594,9 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
     // 3. Stop and remove cloudflared tunnel
     let has_tunnel = config
         .as_ref()
-        .map(|c| c.cloudflare.tunnel_info().is_some())
-        .unwrap_or(false);
+        .and_then(|c| c.cloudflare.as_ref())
+        .and_then(|cf| cf.tunnel.as_ref())
+        .is_some();
     if has_tunnel || PathBuf::from("/etc/containers/systemd/cloudflared.container").exists() {
         steps.push(Step::StopTunnel);
         steps.push(Step::RemoveFile(PathBuf::from(

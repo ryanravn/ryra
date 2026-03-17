@@ -104,16 +104,30 @@ pub async fn get_tunnel_config(
     }
 
     // Extract ingress rules from the config
-    let ingress = body["result"]["config"]["ingress"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let ingress = match body["result"]["config"]["ingress"].as_array() {
+        Some(arr) => arr.clone(),
+        None => {
+            eprintln!("  Warning: no ingress rules found in tunnel config");
+            Vec::new()
+        }
+    };
 
     let rules: Vec<IngressRule> = ingress
         .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
-        // Filter out the catch-all rule (no hostname)
-        .filter(|r: &IngressRule| !r.hostname.is_empty())
+        .filter_map(|v| {
+            let result: std::result::Result<IngressRule, _> = serde_json::from_value(v.clone());
+            match result {
+                Ok(rule) => Some(rule),
+                Err(e) => {
+                    // Catch-all rules (no hostname) will fail to parse — that's expected
+                    if v.get("hostname").and_then(|h| h.as_str()).is_some() {
+                        eprintln!("  Warning: skipping malformed ingress rule: {e}");
+                    }
+                    None
+                }
+            }
+        })
+        .filter(|r| !r.hostname.is_empty())
         .collect();
 
     Ok(rules)

@@ -4,13 +4,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub host: HostConfig,
-    #[serde(default)]
-    pub cloudflare: CloudflareConfig,
+    pub cloudflare: Option<CloudflareCredentials>,
     pub ssl: Option<SslConfig>,
-    #[serde(default)]
-    pub smtp: SmtpConfig,
-    #[serde(default)]
-    pub auth: AuthConfig,
+    pub smtp: Option<SmtpCredentials>,
+    pub auth: Option<AuthCredentials>,
     #[serde(default)]
     pub registries: Vec<RegistryEntry>,
     #[serde(default)]
@@ -24,41 +21,17 @@ pub struct HostConfig {
 
 // --- Cloudflare (credentials + shared tunnel resource) ---
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "lowercase")]
-pub enum CloudflareConfig {
-    /// No Cloudflare — user manages DNS manually.
-    #[default]
-    None,
-    /// Cloudflare API configured, optional tunnel.
-    Configured {
-        api_token: String,
-        zone_id: String,
-        zone_name: String,
-        #[serde(default)]
-        tunnel: Option<TunnelInfo>,
-    },
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudflareCredentials {
+    pub api_token: String,
+    pub zone_id: String,
+    pub zone_name: String,
+    pub tunnel: Option<TunnelInfo>,
 }
 
-
-impl CloudflareConfig {
-    pub fn credentials(&self) -> Option<(&str, &str, &str)> {
-        match self {
-            CloudflareConfig::Configured {
-                api_token,
-                zone_id,
-                zone_name,
-                ..
-            } => Some((api_token, zone_id, zone_name)),
-            CloudflareConfig::None => None,
-        }
-    }
-
-    pub fn tunnel_info(&self) -> Option<&TunnelInfo> {
-        match self {
-            CloudflareConfig::Configured { tunnel, .. } => tunnel.as_ref(),
-            CloudflareConfig::None => None,
-        }
+impl CloudflareCredentials {
+    pub fn credentials(&self) -> (&str, &str, &str) {
+        (&self.api_token, &self.zone_id, &self.zone_name)
     }
 }
 
@@ -86,13 +59,13 @@ pub enum ExposureMode {
 
 impl ExposureMode {
     /// What modes are available given the current Cloudflare config?
-    pub fn available_modes(cf: &CloudflareConfig) -> Vec<ExposureMode> {
+    pub fn available_modes(cf: &Option<CloudflareCredentials>) -> Vec<ExposureMode> {
         match cf {
-            CloudflareConfig::None => vec![ExposureMode::Local],
-            CloudflareConfig::Configured { tunnel: None, .. } => {
+            None => vec![ExposureMode::Local],
+            Some(CloudflareCredentials { tunnel: None, .. }) => {
                 vec![ExposureMode::Local, ExposureMode::DnsOnly, ExposureMode::Proxy]
             }
-            CloudflareConfig::Configured { tunnel: Some(_), .. } => {
+            Some(CloudflareCredentials { tunnel: Some(_), .. }) => {
                 vec![
                     ExposureMode::Local,
                     ExposureMode::DnsOnly,
@@ -161,28 +134,20 @@ pub enum SslConfig {
 
 // --- SMTP ---
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(tag = "provider", rename_all = "lowercase")]
-pub enum SmtpConfig {
-    #[default]
-    None,
-    Configured {
-        host: String,
-        port: u16,
-        username: String,
-        password: String,
-        from: String,
-    },
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmtpCredentials {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub from: String,
 }
-
 
 // --- Auth ---
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "provider", rename_all = "lowercase")]
-pub enum AuthConfig {
-    #[default]
-    None,
+pub enum AuthCredentials {
     Authentik {
         mode: AuthentikMode,
         url: String,

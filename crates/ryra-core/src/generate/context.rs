@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::config::schema::{Config, SmtpConfig};
+use crate::config::schema::Config;
 use crate::config::state::State;
 use crate::registry::service_def::ServiceDef;
 
@@ -20,19 +20,12 @@ pub fn build_context(
     // host.*
     ctx.insert("host.domain".into(), config.host.domain.clone());
     // smtp.* (only if configured)
-    if let SmtpConfig::Configured {
-        host,
-        port,
-        username,
-        password,
-        from,
-    } = &config.smtp
-    {
-        ctx.insert("smtp.host".into(), host.clone());
-        ctx.insert("smtp.port".into(), port.to_string());
-        ctx.insert("smtp.username".into(), username.clone());
-        ctx.insert("smtp.password".into(), password.clone());
-        ctx.insert("smtp.from".into(), from.clone());
+    if let Some(smtp) = &config.smtp {
+        ctx.insert("smtp.host".into(), smtp.host.clone());
+        ctx.insert("smtp.port".into(), smtp.port.to_string());
+        ctx.insert("smtp.username".into(), smtp.username.clone());
+        ctx.insert("smtp.password".into(), smtp.password.clone());
+        ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
     // secret.* — all secrets for this service

@@ -54,7 +54,7 @@ pub fn generate_service(
     let ctx = context::build_context(config, state, service_def, domain);
 
     // Render env vars
-    let rendered_env: Vec<EnvVar> = service_def
+    let mut rendered_env: Vec<EnvVar> = service_def
         .env
         .iter()
         .map(|env| {
@@ -65,6 +65,31 @@ pub fn generate_service(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // Apply integration mappings (smtp, auth) — these map global config
+    // to service-specific env var names
+    if service_def.integrations.smtp {
+        for (env_name, value_template) in &service_def.mappings.smtp {
+            let rendered = template::render(value_template, &ctx)?;
+            if !rendered.is_empty() {
+                rendered_env.push(EnvVar {
+                    name: env_name.clone(),
+                    value: rendered,
+                });
+            }
+        }
+    }
+    if service_def.integrations.auth {
+        for (env_name, value_template) in &service_def.mappings.auth {
+            let rendered = template::render(value_template, &ctx)?;
+            if !rendered.is_empty() {
+                rendered_env.push(EnvVar {
+                    name: env_name.clone(),
+                    value: rendered,
+                });
+            }
+        }
+    }
 
     // Build port mappings
     let port_mappings: Vec<quadlet::PortMapping> = service_def

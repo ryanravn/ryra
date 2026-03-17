@@ -238,11 +238,17 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             println!("  Adding tunnel route for {domain}...");
 
             // Get current ingress rules
-            let mut rules = ryra_core::integrations::tunnel::get_tunnel_config(
+            let mut rules = match ryra_core::integrations::tunnel::get_tunnel_config(
                 api_token, account_id, tunnel_id,
             )
             .await
-            .unwrap_or_default();
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("  Warning: could not fetch tunnel config: {e}");
+                    Vec::new()
+                }
+            };
 
             // Add the new route (pointing to nginx HTTP on localhost —
             // tunnel mode means nginx only listens on port 80)
@@ -284,11 +290,17 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             println!("  Removing tunnel route for {domain}...");
 
             // Get current ingress rules and filter out this domain
-            let rules = ryra_core::integrations::tunnel::get_tunnel_config(
+            let rules = match ryra_core::integrations::tunnel::get_tunnel_config(
                 api_token, account_id, tunnel_id,
             )
             .await
-            .unwrap_or_default();
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("  Warning: could not fetch tunnel config: {e}");
+                    Vec::new()
+                }
+            };
 
             let filtered: Vec<_> = rules
                 .into_iter()
@@ -450,7 +462,7 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         Step::PullImage { image, username } => {
             println!("  Pulling {image}...");
             match username {
-                Some(u) => run(&format!("sudo -u {u} podman pull {image}")),
+                Some(u) => run(&format!("cd / && sudo -H -u {u} podman pull {image}")),
                 None => run(&format!("sudo podman pull {image}")),
             }
         }

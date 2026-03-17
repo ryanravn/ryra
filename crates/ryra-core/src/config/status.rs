@@ -44,12 +44,10 @@ impl StatusInfo {
         Self {
             domain: config.host.domain.clone(),
             cloudflare: match &config.cloudflare {
-                CloudflareConfig::None => CloudflareStatus::None,
-                CloudflareConfig::Configured {
-                    zone_name, tunnel, ..
-                } => CloudflareStatus::Configured {
-                    zone_name: zone_name.clone(),
-                    tunnel: tunnel.is_some(),
+                None => CloudflareStatus::None,
+                Some(cf) => CloudflareStatus::Configured {
+                    zone_name: cf.zone_name.clone(),
+                    tunnel: cf.tunnel.is_some(),
                 },
             },
             ssl: match &config.ssl {
@@ -62,14 +60,14 @@ impl StatusInfo {
                 },
             },
             smtp: match &config.smtp {
-                SmtpConfig::None => ProviderStatus::None,
-                SmtpConfig::Configured { host, .. } => ProviderStatus::Configured {
-                    name: host.clone(),
+                None => ProviderStatus::None,
+                Some(smtp) => ProviderStatus::Configured {
+                    name: smtp.host.clone(),
                 },
             },
             auth: match &config.auth {
-                AuthConfig::None => ProviderStatus::None,
-                AuthConfig::Authentik { mode, url, .. } => ProviderStatus::Configured {
+                None => ProviderStatus::None,
+                Some(AuthCredentials::Authentik { mode, url, .. }) => ProviderStatus::Configured {
                     name: match mode {
                         AuthentikMode::Managed => format!("authentik (managed, {url})"),
                         AuthentikMode::External => format!("authentik (external, {url})"),

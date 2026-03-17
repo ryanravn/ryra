@@ -20,169 +20,110 @@ pub async fn run(
 ) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
 
-    // Load existing config if present (for re-init)
-    let existing = ryra_core::config::ConfigPaths::resolve()
+    // If config exists, ask to overwrite
+    let has_existing = ryra_core::config::ConfigPaths::resolve()
         .ok()
-        .and_then(|p| ryra_core::config::load_config(&p.config_file).ok());
+        .map(|p| p.config_file.exists())
+        .unwrap_or(false);
 
-    let existing_cf = existing.as_ref().and_then(|c| match &c.cloudflare {
-        CloudflareConfig::Configured {
-            api_token,
-            zone_id,
-            zone_name,
-            tunnel,
-        } => Some((
-            api_token.clone(),
-            zone_id.clone(),
-            zone_name.clone(),
-            tunnel.clone(),
-        )),
-        CloudflareConfig::None => None,
-    });
+    if has_existing && interactive && !dry_run {
+        let overwrite = dialoguer::Confirm::new()
+            .with_prompt("ryra is already initialized. Overwrite config?")
+            .default(false)
+            .interact()?;
+        if !overwrite {
+            println!("Cancelled. Edit config directly or run `ryra reset` first.");
+            return Ok(());
+        }
+    }
 
-    // 1. Cloudflare credentials (no proxy/dns-only question — that's per-service)
+    // 1. Cloudflare
     let (cloudflare, derived_domain) = match (cf_token, cf_zone_id, cf_zone_name) {
-        // All provided via flags
         (Some(token), Some(zone_id), Some(zone_name)) => (
-            CloudflareConfig::Configured {
+            Some(CloudflareCredentials {
                 api_token: token,
                 zone_id,
                 zone_name: zone_name.clone(),
                 tunnel: None,
-            },
+            }),
             Some(zone_name),
         ),
-        // Interactive setup
-        (None, None, None) if interactive => {
-            match existing_cf {
-                Some((token, zone_id, zone_name, tunnel)) => {
-                    let masked = format!("{}...{}", &token[..4], &token[token.len() - 4..]);
-                    println!();
-                    println!(
-                        "  Existing Cloudflare config found: {zone_name} (token: {masked})"
-                    );
-
-                    let keep = dialoguer::Confirm::new()
-                        .with_prompt("  Keep existing Cloudflare configuration?")
-                        .default(true)
-                        .interact()?;
-
-                    match keep {
-                        true => {
-                            let cf = CloudflareConfig::Configured {
-                                api_token: token,
-                                zone_id,
-                                zone_name: zone_name.clone(),
-                                tunnel,
-                            };
-                            (cf, Some(zone_name))
-                        }
-                        false => prompt_cloudflare_setup().await?,
-                    }
-                }
-                None => prompt_cloudflare_setup().await?,
-            }
-        }
-        // Non-interactive without Cloudflare
-        (None, None, None) => (CloudflareConfig::None, None),
-        // Partial flags
+        (None, None, None) if interactive => prompt_cloudflare_setup().await?,
+        (None, None, None) => (None, None),
         _ => bail!("--cf-token, --cf-zone-id, and --cf-zone-name must all be provided together"),
     };
 
-    // 2. Tunnel setup (only if CF is configured)
+    // 2. Tunnel (only if CF is configured)
     let cloudflare = match (&cloudflare, tunnel_token) {
-        (CloudflareConfig::Configured { tunnel: Some(_), .. }, _) => {
-            // Already has tunnel from existing config reuse
-            cloudflare
-        }
-        (CloudflareConfig::Configured { .. }, Some(_token)) => {
-            // CLI flag for tunnel — need interactive for selecting tunnel
+        (Some(_), Some(_token)) => {
             bail!("Use interactive mode for tunnel setup (need to select tunnel)");
         }
-        (CloudflareConfig::Configured { api_token, zone_id, zone_name, .. }, None)
-            if interactive =>
-        {
-            let tunnel = prompt_tunnel_setup(api_token, zone_id).await?;
-            CloudflareConfig::Configured {
-                api_token: api_token.clone(),
-                zone_id: zone_id.clone(),
-                zone_name: zone_name.clone(),
+        (Some(cf), None) if interactive => {
+            let tunnel = prompt_tunnel_setup(&cf.api_token, &cf.zone_id).await?;
+            Some(CloudflareCredentials {
+                api_token: cf.api_token.clone(),
+                zone_id: cf.zone_id.clone(),
+                zone_name: cf.zone_name.clone(),
                 tunnel,
-            }
+            })
         }
         _ => cloudflare,
     };
 
-    // 3. Domain — use Cloudflare zone if available, otherwise ask
-    let existing_domain = existing.as_ref().map(|c| c.host.domain.clone());
+    // 3. Domain
     let domain = match domain {
         Some(d) => d,
-        None => match (derived_domain, existing_domain) {
-            (Some(d), _) | (None, Some(d)) => match interactive {
-                true => Input::new()
-                    .with_prompt("Domain")
-                    .default(d)
-                    .interact_text()?,
-                false => d,
-            },
-            (None, None) => match interactive {
+        None if interactive => {
+            let default = derived_domain.unwrap_or_default();
+            match default.is_empty() {
                 true => Input::new()
                     .with_prompt("Your domain (e.g., example.com)")
                     .interact_text()?,
-                false => bail!("--domain is required in non-interactive mode"),
-            },
-        },
+                false => Input::new()
+                    .with_prompt("Domain")
+                    .default(default)
+                    .interact_text()?,
+            }
+        }
+        None => bail!("--domain is required in non-interactive mode"),
     };
 
-    // 4. Let's Encrypt email (only ask if they might use DnsOnly mode — i.e., not tunnel-only)
-    let has_tunnel = cloudflare.tunnel_info().is_some();
+    // 4. Let's Encrypt email (skip if tunnel-only)
+    let has_tunnel = cloudflare
+        .as_ref()
+        .and_then(|cf| cf.tunnel.as_ref())
+        .is_some();
     let ssl = match email {
         Some(e) => Some(SslConfig::Letsencrypt { email: e }),
         None if interactive && !has_tunnel => {
-            // They might use DnsOnly mode, so ask for LE email
-            let existing_email = existing.as_ref().and_then(|c| match &c.ssl {
-                Some(SslConfig::Letsencrypt { email }) => Some(email.clone()),
-                _ => None,
-            });
             println!();
             println!("  Let's Encrypt email is needed for DNS-only exposure mode.");
-            println!("  Leave empty to skip (you can configure it later when adding a service).");
-            let le_email: String = match existing_email {
-                Some(e) => Input::new()
-                    .with_prompt("Let's Encrypt email")
-                    .default(e)
-                    .allow_empty(true)
-                    .interact_text()?,
-                None => Input::new()
-                    .with_prompt("Let's Encrypt email")
-                    .allow_empty(true)
-                    .interact_text()?,
-            };
+            println!("  Leave empty to skip.");
+            let le_email: String = Input::new()
+                .with_prompt("Let's Encrypt email")
+                .allow_empty(true)
+                .interact_text()?;
             match le_email.is_empty() {
                 true => None,
                 false => Some(SslConfig::Letsencrypt { email: le_email }),
             }
         }
-        None => {
-            // Preserve existing SSL config if present
-            existing.as_ref().and_then(|c| c.ssl.clone())
-        }
+        None => None,
     };
 
-    // 5. Registry
-    let existing_registry = existing
-        .as_ref()
-        .and_then(|c| c.registries.first().map(|r| r.url.clone()));
+    // 5. SMTP
+    let smtp = if interactive {
+        prompt_smtp_setup()?
+    } else {
+        None
+    };
+
+    // 6. Registry
     let registry_url = match registry {
         Some(r) => r,
-        None if interactive => {
-            let default = existing_registry
-                .unwrap_or_else(|| "https://github.com/user/ryra-registry".into());
-            Input::new()
-                .with_prompt("Registry URL (git repo or local path)")
-                .default(default)
-                .interact_text()?
-        }
+        None if interactive => Input::new()
+            .with_prompt("Registry URL (git repo or local path)")
+            .interact_text()?,
         None => bail!("--registry is required in non-interactive mode"),
     };
 
@@ -190,19 +131,13 @@ pub async fn run(
         host: HostConfig { domain },
         cloudflare,
         ssl,
-        smtp: existing
-            .as_ref()
-            .map(|c| c.smtp.clone())
-            .unwrap_or_default(),
-        auth: existing
-            .as_ref()
-            .map(|c| c.auth.clone())
-            .unwrap_or_default(),
+        smtp,
+        auth: None,
         registries: vec![RegistryEntry {
             name: "default".into(),
             url: registry_url,
         }],
-        services: existing.map(|c| c.services).unwrap_or_default(),
+        services: vec![],
     };
 
     let result = ryra_core::init(config.clone()).await?;
@@ -215,50 +150,25 @@ pub async fn run(
         false => {
             println!("Setting up...");
             apply::execute_all(&result.steps).await?;
-            println!("\nryra initialized! Run `ryra list` to see available services.");
-        }
-    }
-
-    // After everything succeeds, ask about persisting the API token
-    if interactive && config.cloudflare.credentials().is_some() {
-        let save_token = dialoguer::Confirm::new()
-            .with_prompt(
-                "Save Cloudflare API token in config? (needed for auto DNS on future services)",
-            )
-            .default(true)
-            .interact()?;
-
-        match save_token {
-            true => {}
-            false => {
-                let mut saved_config = ryra_core::config::load_config(
-                    &ryra_core::config::ConfigPaths::resolve()?.config_file,
-                )?;
-                saved_config.cloudflare = CloudflareConfig::None;
-                ryra_core::config::save_config(
-                    &ryra_core::config::ConfigPaths::resolve()?.config_file,
-                    &saved_config,
-                )?;
-                println!(
-                    "API token removed from config. DNS records will need to be created manually."
-                );
-            }
+            let config_path = ryra_core::config::ConfigPaths::resolve()
+                .map(|p| p.config_file.display().to_string())
+                .unwrap_or_else(|_| "~/.config/ryra/ryra.toml".into());
+            println!();
+            println!("ryra initialized!");
+            println!("  Config: {config_path}");
+            println!("  Run `ryra list` to see available services.");
         }
     }
 
     Ok(())
 }
 
-/// Interactive Cloudflare setup flow — credentials only, no proxy/dns-only choice.
-async fn prompt_cloudflare_setup() -> Result<(CloudflareConfig, Option<String>)> {
+/// Interactive Cloudflare setup — credentials only.
+async fn prompt_cloudflare_setup() -> Result<(Option<CloudflareCredentials>, Option<String>)> {
     println!();
     println!("  Cloudflare handles DNS, SSL, and tunnels for your services.");
-    println!("  One token covers everything — DNS records, proxy, and tunnel management.");
-    println!();
     println!("  Create an API token at: https://dash.cloudflare.com/profile/api-tokens");
-    println!("  Permissions needed:");
-    println!("    Zone > DNS > Edit");
-    println!("    Account > Cloudflare Tunnel > Edit  (only if using tunnel)");
+    println!("  Permissions: Zone > DNS > Edit, Account > Cloudflare Tunnel > Edit");
     println!();
 
     let api_token: String = Input::new()
@@ -267,7 +177,7 @@ async fn prompt_cloudflare_setup() -> Result<(CloudflareConfig, Option<String>)>
         .interact_text()?;
 
     match api_token.is_empty() {
-        true => Ok((CloudflareConfig::None, None)),
+        true => Ok((None, None)),
         false => {
             println!("  Fetching zones...");
             let zones = ryra_core::integrations::dns::list_zones(&api_token).await?;
@@ -285,25 +195,21 @@ async fn prompt_cloudflare_setup() -> Result<(CloudflareConfig, Option<String>)>
             let zone = &zones[selection];
 
             Ok((
-                CloudflareConfig::Configured {
+                Some(CloudflareCredentials {
                     api_token,
                     zone_id: zone.id.clone(),
                     zone_name: zone.name.clone(),
                     tunnel: None,
-                },
+                }),
                 Some(zone.name.clone()),
             ))
         }
     }
 }
 
-/// Interactive tunnel setup. Uses CF API token to list/create tunnels.
+/// Interactive tunnel setup.
 async fn prompt_tunnel_setup(api_token: &str, zone_id: &str) -> Result<Option<TunnelInfo>> {
     println!();
-    println!("  Cloudflare Tunnel exposes services without port forwarding.");
-    println!("  No open ports needed — traffic flows through an outbound connection.");
-    println!();
-
     let setup = dialoguer::Confirm::new()
         .with_prompt("  Set up a Cloudflare Tunnel?")
         .default(false)
@@ -313,34 +219,27 @@ async fn prompt_tunnel_setup(api_token: &str, zone_id: &str) -> Result<Option<Tu
         return Ok(None);
     }
 
-    // Get account ID from zone data
     let account_id =
         match ryra_core::integrations::tunnel::get_account_id(api_token, zone_id).await {
             Ok(id) => id,
             Err(e) => {
                 eprintln!("  Failed to get account ID: {e}");
-                eprintln!("  The token may not have access to the zone details.");
                 return Ok(None);
             }
         };
 
-    // List tunnels
     println!("  Fetching tunnels...");
     let tunnels =
         match ryra_core::integrations::tunnel::list_tunnels(api_token, &account_id).await {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("  Failed to list tunnels: {e}");
-                eprintln!("  The token needs Account > Cloudflare Tunnel > Edit permission.");
-                eprintln!(
-                    "  Update your token at: https://dash.cloudflare.com/profile/api-tokens"
-                );
+                eprintln!("  Token needs Account > Cloudflare Tunnel > Edit permission.");
                 return Ok(None);
             }
         };
 
-    let (tunnel_id, tunnel_name) = if tunnels.is_empty() {
-        // Offer to create one
+    if tunnels.is_empty() {
         println!("  No tunnels found.");
         let create = dialoguer::Confirm::new()
             .with_prompt("  Create a new tunnel?")
@@ -359,7 +258,6 @@ async fn prompt_tunnel_setup(api_token: &str, zone_id: &str) -> Result<Option<Tu
         println!("  Creating tunnel '{name}'...");
         let created =
             ryra_core::integrations::tunnel::create_tunnel(api_token, &account_id, &name).await?;
-
         println!("  Tunnel created: {} ({})", created.name, created.id);
 
         return Ok(Some(TunnelInfo {
@@ -367,50 +265,82 @@ async fn prompt_tunnel_setup(api_token: &str, zone_id: &str) -> Result<Option<Tu
             tunnel_id: created.id,
             account_id,
         }));
-    } else {
-        // Select from existing
-        let mut items: Vec<String> = tunnels.iter().map(|t| t.name.clone()).collect();
-        items.push("Create new tunnel".into());
+    }
 
-        let selection = dialoguer::FuzzySelect::new()
-            .with_prompt("Select tunnel")
-            .items(&items)
-            .interact()?;
+    let mut items: Vec<String> = tunnels.iter().map(|t| t.name.clone()).collect();
+    items.push("Create new tunnel".into());
 
-        if selection == tunnels.len() {
-            // Create new
-            let name: String = Input::new()
-                .with_prompt("Tunnel name")
-                .default("ryra".into())
-                .interact_text()?;
+    let selection = dialoguer::FuzzySelect::new()
+        .with_prompt("Select tunnel")
+        .items(&items)
+        .interact()?;
 
-            println!("  Creating tunnel '{name}'...");
-            let created =
-                ryra_core::integrations::tunnel::create_tunnel(api_token, &account_id, &name)
-                    .await?;
+    if selection == tunnels.len() {
+        let name: String = Input::new()
+            .with_prompt("Tunnel name")
+            .default("ryra".into())
+            .interact_text()?;
 
-            println!("  Tunnel created: {} ({})", created.name, created.id);
+        println!("  Creating tunnel '{name}'...");
+        let created =
+            ryra_core::integrations::tunnel::create_tunnel(api_token, &account_id, &name).await?;
+        println!("  Tunnel created: {} ({})", created.name, created.id);
 
-            return Ok(Some(TunnelInfo {
-                tunnel_token: created.token,
-                tunnel_id: created.id,
-                account_id,
-            }));
-        }
+        return Ok(Some(TunnelInfo {
+            tunnel_token: created.token,
+            tunnel_id: created.id,
+            account_id,
+        }));
+    }
 
-        let tunnel = &tunnels[selection];
-        (tunnel.id.clone(), tunnel.name.clone())
-    };
-
-    // Fetch token for existing tunnel
-    println!("  Fetching token for '{tunnel_name}'...");
+    let tunnel = &tunnels[selection];
+    println!("  Fetching token for '{}'...", tunnel.name);
     let token =
-        ryra_core::integrations::tunnel::get_tunnel_token(api_token, &account_id, &tunnel_id)
+        ryra_core::integrations::tunnel::get_tunnel_token(api_token, &account_id, &tunnel.id)
             .await?;
 
     Ok(Some(TunnelInfo {
         tunnel_token: token,
-        tunnel_id,
+        tunnel_id: tunnel.id.clone(),
         account_id,
+    }))
+}
+
+/// Interactive SMTP setup.
+fn prompt_smtp_setup() -> Result<Option<SmtpCredentials>> {
+    println!();
+    let setup = dialoguer::Confirm::new()
+        .with_prompt("  Configure SMTP? (for email notifications, password resets)")
+        .default(false)
+        .interact()?;
+
+    if !setup {
+        return Ok(None);
+    }
+
+    let host: String = Input::new()
+        .with_prompt("SMTP host")
+        .interact_text()?;
+    let port: u16 = Input::new()
+        .with_prompt("SMTP port")
+        .default(587)
+        .interact_text()?;
+    let username: String = Input::new()
+        .with_prompt("SMTP username")
+        .interact_text()?;
+    let password: String = Input::new()
+        .with_prompt("SMTP password")
+        .interact_text()?;
+    let from: String = Input::new()
+        .with_prompt("From address")
+        .default(format!("noreply@{host}"))
+        .interact_text()?;
+
+    Ok(Some(SmtpCredentials {
+        host,
+        port,
+        username,
+        password,
+        from,
     }))
 }
