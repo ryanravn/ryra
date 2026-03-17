@@ -15,18 +15,10 @@ pub struct ConfigPaths {
 
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| Error::FileRead {
-                path: "~/.config".into(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "could not determine config directory",
-                ),
-            })?
-            .join("ryra");
+        let config_dir = PathBuf::from("/etc/ryra");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
-            cache_dir: config_dir.join("cache").join("registries"),
+            cache_dir: config_dir.join("cache"),
             config_dir,
         })
     }
@@ -38,12 +30,6 @@ impl ConfigPaths {
                 source,
             })?;
         }
-        // .gitignore to prevent accidental commits of secrets
-        let gitignore = self.config_dir.join(".gitignore");
-        if !gitignore.exists() {
-            let _ = std::fs::write(&gitignore, "ryra.toml\ncache/\n");
-        }
-
         Ok(())
     }
 }
@@ -66,13 +52,11 @@ pub fn load_config(path: &Path) -> Result<Config> {
 pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     let contents = toml::to_string_pretty(config)?;
     write_file(path, &contents)?;
-    // Config contains credentials — owner-only access
     set_permissions(path, 0o600)?;
     Ok(())
 }
 
-
-/// Refuse to load config if permissions are too open (like SSH does).
+/// Refuse to load config if permissions are too open.
 fn check_permissions(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let metadata = std::fs::metadata(path).map_err(|source| Error::FileRead {

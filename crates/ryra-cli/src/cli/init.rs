@@ -146,7 +146,7 @@ pub async fn run(
 
     match dry_run {
         true => {
-            println!("Config written to ~/.config/ryra/ryra.toml\n");
+            println!("Config written to /etc/ryra/ryra.toml\n");
             super::print_dry_run(&result.steps);
         }
         false => {
@@ -154,7 +154,7 @@ pub async fn run(
             apply::execute_all(&result.steps).await?;
             let config_path = ryra_core::config::ConfigPaths::resolve()
                 .map(|p| p.config_file.display().to_string())
-                .unwrap_or_else(|_| "~/.config/ryra/ryra.toml".into());
+                .unwrap_or_else(|_| "/etc/ryra/ryra.toml".into());
             println!();
             println!("ryra initialized!");
             println!("  Config: {config_path}");
