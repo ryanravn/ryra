@@ -11,12 +11,13 @@ use crate::config::schema::{Config, ExposureMode};
 use crate::config::state::State;
 use crate::error::{Error, Result};
 use crate::registry::service_def::{DeployMode, EnvVar, ServiceDef};
-use crate::system::{port, secret};
+use crate::system::port;
 
 /// Everything generated for a service, ready to be written to disk.
 pub enum GeneratedService {
     Quadlet {
         files: Vec<GeneratedFile>,
+        env_file: GeneratedFile,
         nginx_site: Option<GeneratedFile>,
     },
     Compose {
@@ -48,38 +49,66 @@ pub fn generate_service(
 ) -> Result<GeneratedService> {
     let name = &service_def.service.name;
 
-    // Common: allocate ports
+    // Allocate ports
     for port_def in &service_def.ports {
         port::allocate_port(state, name, &port_def.name)?;
     }
 
-    // Common: generate secrets (skip overridden env vars)
-    for env in &service_def.env {
-        if !env_overrides.contains_key(&env.name) {
-            extract_secret_refs(&env.value)
-                .into_iter()
-                .for_each(|secret_name| {
-                    secret::ensure_secret(state, name, &secret_name);
-                });
-        }
-    }
+    // Collect all secret references from non-overridden env vars
+    let secret_refs: Vec<String> = service_def
+        .env
+        .iter()
+        .filter(|env| !env_overrides.contains_key(&env.name))
+        .flat_map(|env| extract_secret_refs(&env.value))
+        .collect();
 
-    // Common: build template context and render env vars
-    let ctx = context::build_context(config, state, service_def, domain.unwrap_or_default());
+    // Build template context (generates fresh secrets inline)
+    let ctx = context::build_context(config, state, service_def, domain.unwrap_or_default(), &secret_refs);
     let rendered_env = render_env_vars(service_def, &ctx, env_overrides)?;
 
-    // Common: nginx site config
+    // Build .env file content
+    let home_dir = crate::service_home(name);
+    let env_file = build_env_file(&home_dir, &rendered_env, service_def, state, name);
+
+    // Nginx site config
     let nginx_site = generate_nginx_site(config, state, service_def, name, domain, exposure, nginx_dir)?;
 
     match &service_def.service.deploy {
         DeployMode::Quadlet { image } => {
-            generate_quadlet(name, image, service_def, state, &rendered_env, exposure, quadlet_dir, nginx_site)
+            generate_quadlet(name, image, service_def, state, exposure, quadlet_dir, env_file, nginx_site)
         }
         DeployMode::Compose { file, .. } => {
             let compose_filename = compose_file_override.unwrap_or(file);
-            let home_dir = crate::service_home(name);
-            generate_compose(name, service_def, state, &rendered_env, &home_dir, service_dir, compose_filename, quadlet_dir, nginx_site)
+            generate_compose(name, service_dir, compose_filename, quadlet_dir, env_file, nginx_site)
         }
+    }
+}
+
+/// Build the .env file for a service (used by both quadlet and compose).
+fn build_env_file(
+    home_dir: &Path,
+    rendered_env: &[EnvVar],
+    service_def: &ServiceDef,
+    state: &State,
+    name: &str,
+) -> GeneratedFile {
+    let mut lines = Vec::new();
+
+    for env in rendered_env {
+        lines.push(format!("{}={}", env.name, env.value));
+    }
+
+    // Expose allocated ports as RYRA_PORT_* for compose files
+    for port_def in &service_def.ports {
+        if let Some(host_port) = port::get_port(state, name, &port_def.name) {
+            let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
+            lines.push(format!("{var_name}={host_port}"));
+        }
+    }
+
+    GeneratedFile {
+        path: home_dir.join(".env"),
+        content: lines.join("\n") + "\n",
     }
 }
 
@@ -89,9 +118,9 @@ fn generate_quadlet(
     image: &str,
     service_def: &ServiceDef,
     state: &State,
-    rendered_env: &[EnvVar],
     exposure: &ExposureMode,
     quadlet_dir: &Path,
+    env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
 ) -> Result<GeneratedService> {
     let mut files = Vec::new();
@@ -147,7 +176,6 @@ fn generate_quadlet(
     let container_params = quadlet::QuadletParams {
         service_name: name,
         image,
-        env_vars: rendered_env,
         ports: &port_mappings,
         volumes: &volume_refs,
         network: &network_name,
@@ -160,59 +188,35 @@ fn generate_quadlet(
         content: quadlet::render_container(&container_params),
     });
 
-    Ok(GeneratedService::Quadlet { files, nginx_site })
+    Ok(GeneratedService::Quadlet { files, env_file, nginx_site })
 }
 
 /// Generate compose files + .env for a multi-container stack.
 fn generate_compose(
     name: &str,
-    service_def: &ServiceDef,
-    state: &State,
-    rendered_env: &[EnvVar],
-    home_dir: &Path,
     service_dir: &Path,
     compose_filename: &str,
     quadlet_dir: &Path,
+    env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
 ) -> Result<GeneratedService> {
-    // Read the compose file from the registry
     let compose_src = service_dir.join(compose_filename);
     let compose_content = std::fs::read_to_string(&compose_src).map_err(|source| Error::FileRead {
         path: compose_src,
         source,
     })?;
 
-    // Build .env file: rendered env vars + port allocations
-    let mut env_lines = Vec::new();
-    env_lines.push("# Generated by ryra — do not edit manually".to_string());
-
-    for env in rendered_env {
-        env_lines.push(format!("{}={}", env.name, env.value));
-    }
-
-    // Expose allocated ports as RYRA_PORT_* so compose files can reference them
-    for port_def in &service_def.ports {
-        if let Some(host_port) = port::get_port(state, name, &port_def.name) {
-            let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
-            env_lines.push(format!("{var_name}={host_port}"));
-        }
-    }
+    let home_dir = crate::service_home(name);
+    let username = crate::service_user(name);
 
     let compose_file = GeneratedFile {
         path: home_dir.join("docker-compose.yml"),
         content: compose_content,
     };
 
-    let env_file = GeneratedFile {
-        path: home_dir.join(".env"),
-        content: env_lines.join("\n") + "\n",
-    };
-
-    // Systemd unit to manage the compose stack lifecycle
-    let username = crate::service_user(name);
     let systemd_unit = GeneratedFile {
         path: quadlet_dir.join(format!("{name}-compose.service")),
-        content: render_compose_unit(name, &username, home_dir),
+        content: render_compose_unit(name, &username, &home_dir),
     };
 
     Ok(GeneratedService::Compose {

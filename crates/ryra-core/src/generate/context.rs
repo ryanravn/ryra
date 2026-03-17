@@ -3,13 +3,16 @@ use std::collections::BTreeMap;
 use crate::config::schema::Config;
 use crate::config::state::State;
 use crate::registry::service_def::ServiceDef;
+use crate::system::secret;
 
 /// Build the template context for rendering env var values.
+/// Secrets are generated fresh and returned separately (not stored in state).
 pub fn build_context(
     config: &Config,
     state: &State,
     service_def: &ServiceDef,
     domain: &str,
+    secret_refs: &[String],
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
 
@@ -28,10 +31,11 @@ pub fn build_context(
         ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
-    // secret.* — all secrets for this service
-    for secret in &state.secrets {
-        if secret.service == service_def.service.name {
-            ctx.insert(format!("secret.{}", secret.name), secret.value.clone());
+    // secret.* — generate fresh values for each unique secret reference
+    for secret_name in secret_refs {
+        let key = format!("secret.{secret_name}");
+        if !ctx.contains_key(&key) {
+            ctx.insert(key, secret::generate_secret());
         }
     }
 

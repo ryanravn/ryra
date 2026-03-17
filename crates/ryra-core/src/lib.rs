@@ -508,7 +508,7 @@ pub fn add_service(
 
     // 4-7: Deploy mode specific steps
     match generated {
-        generate::GeneratedService::Quadlet { files, nginx_site } => {
+        generate::GeneratedService::Quadlet { files, env_file, nginx_site } => {
             // Pull image
             if let DeployMode::Quadlet { ref image } = reg_service.def.service.deploy {
                 steps.push(Step::PullImage {
@@ -517,10 +517,11 @@ pub fn add_service(
                 });
             }
 
-            // Write quadlet + nginx files
+            // Write quadlet + .env + nginx files
             for file in files {
                 steps.push(Step::WriteFile(file));
             }
+            steps.push(Step::WriteFile(env_file));
             if let Some(nginx_site) = nginx_site {
                 steps.push(Step::WriteFile(nginx_site));
             }
@@ -592,11 +593,26 @@ pub fn add_service(
         .map(|a| (a.port_name.clone(), a.host_port))
         .collect();
 
-    let generated_secrets: Vec<String> = state
-        .secrets
+    // Secret names from env var templates (not stored in state)
+    let generated_secrets: Vec<String> = reg_service
+        .def
+        .env
         .iter()
-        .filter(|s| s.service == service_name)
-        .map(|s| s.name.clone())
+        .filter(|e| !env_overrides.contains_key(&e.name))
+        .flat_map(|e| {
+            let mut secrets = Vec::new();
+            let mut rest = e.value.as_str();
+            while let Some(start) = rest.find("{{secret.") {
+                let after = &rest[start + 9..];
+                if let Some(end) = after.find("}}") {
+                    secrets.push(after[..end].to_string());
+                    rest = &after[end + 2..];
+                } else {
+                    break;
+                }
+            }
+            secrets
+        })
         .collect();
 
     Ok(AddResult {
@@ -723,7 +739,6 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     let mut state = config::load_state(&paths.state_file)?;
 
     system::port::deallocate_ports(&mut state, service_name);
-    system::secret::remove_secrets(&mut state, service_name);
     config::save_state(&paths.state_file, &state)?;
     config.services.retain(|s| s.name != service_name);
     config::save_config(&paths.config_file, &config)?;

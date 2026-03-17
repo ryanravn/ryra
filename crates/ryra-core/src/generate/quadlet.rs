@@ -1,4 +1,4 @@
-use crate::registry::service_def::{EnvVar, PortProtocol};
+use crate::registry::service_def::PortProtocol;
 
 /// Whether a container port binds to localhost or all interfaces.
 pub enum BindAddress {
@@ -12,7 +12,6 @@ pub enum BindAddress {
 pub struct QuadletParams<'a> {
     pub service_name: &'a str,
     pub image: &'a str,
-    pub env_vars: &'a [EnvVar],
     pub ports: &'a [PortMapping],
     pub volumes: &'a [VolumeMapping<'a>],
     pub network: &'a str,
@@ -32,6 +31,7 @@ pub struct VolumeMapping<'a> {
 }
 
 /// Render a .container quadlet unit file.
+/// Env vars come from EnvironmentFile=%h/.env, not inline.
 pub fn render_container(params: &QuadletParams) -> String {
     let mut lines = Vec::new();
 
@@ -45,13 +45,10 @@ pub fn render_container(params: &QuadletParams) -> String {
     lines.push("[Container]".to_string());
     lines.push(format!("Image={}", params.image));
     lines.push(format!("Network={}.network", params.network));
+    lines.push("EnvironmentFile=%h/.env".to_string());
 
     if let Some(cmd) = params.command {
         lines.push(format!("Exec={cmd}"));
-    }
-
-    for env in params.env_vars {
-        lines.push(format!("Environment={}={}", env.name, env.value));
     }
 
     let bind_ip = match params.bind_address {
@@ -71,7 +68,7 @@ pub fn render_container(params: &QuadletParams) -> String {
     }
 
     for vol in params.volumes {
-        lines.push(format!("Volume={}.volume:{}",vol.volume_name, vol.mount_path));
+        lines.push(format!("Volume={}.volume:{}", vol.volume_name, vol.mount_path));
     }
 
     lines.push(String::new());
