@@ -209,27 +209,22 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
         }
         if !result.generated_secrets.is_empty() {
             let env_path = home_dir.join(".env");
-            println!(
-                "  Secrets auto-generated: {} (see {})",
-                result.generated_secrets.join(", "),
-                env_path.display()
-            );
+            println!();
+            println!("  Secrets auto-generated: {}", result.generated_secrets.join(", "));
+            println!("  View with:");
+            println!();
+            println!("    sudo cat {}", env_path.display());
         }
 
+        let u = &result.username;
         println!();
-        println!("  Config:  {}", home_dir.display());
-        println!(
-            "  Restart: sudo systemctl --machine={}@ --user restart {service}",
-            result.username
-        );
-        println!(
-            "  Logs:    sudo journalctl --machine={}@ --user -u {service} -f",
-            result.username
-        );
-        println!(
-            "  Status:  sudo systemctl --machine={}@ --user status {service}",
-            result.username
-        );
+        println!("  Config: {}", home_dir.display());
+        println!();
+        println!("  Useful commands:");
+        println!();
+        println!("    sudo systemctl --machine={u}@ --user restart {service}");
+        println!("    sudo systemctl --machine={u}@ --user status {service}");
+        println!("    sudo journalctl --machine={u}@ --user -u {service} -f");
     }
 
     Ok(())
