@@ -296,6 +296,7 @@ pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
         }
     };
 
+    paths.ensure_cache_dir()?;
     let repo_dir = registry::fetch::ensure_repo(&repo_url, &paths.cache_dir).await?;
     Ok((repo_url, repo_dir))
 }

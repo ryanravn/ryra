@@ -16,11 +16,20 @@ pub struct ConfigPaths {
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
         let config_dir = PathBuf::from("/etc/ryra");
+        let cache_dir = PathBuf::from("/var/cache/ryra");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
-            cache_dir: config_dir.join("cache"),
+            cache_dir,
             config_dir,
         })
+    }
+
+    pub fn ensure_cache_dir(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.cache_dir).map_err(|source| Error::DirCreate {
+            path: self.cache_dir.clone(),
+            source,
+        })?;
+        Ok(())
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
