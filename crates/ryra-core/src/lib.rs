@@ -316,49 +316,12 @@ pub async fn init(config: Config) -> Result<InitResult> {
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
 
-    let mut steps = vec![
+    let steps = vec![
         Step::WriteFile(GeneratedFile {
             path: paths.config_file.clone(),
             content: config_content,
         }),
-        Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
-            content: String::new(),
-        }),
-        Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/certs/.keep"),
-            content: String::new(),
-        }),
-        Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
-            content: generate::nginx::render_nginx_base_conf(),
-        }),
-        Step::PullImage {
-            image: "docker.io/library/nginx:alpine".into(),
-            username: None,
-        },
-        Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/containers/systemd/nginx.container"),
-            content: generate::nginx::render_nginx_quadlet(),
-        }),
     ];
-
-    // Cloudflared quadlet (if tunnel configured)
-    if let Some(CloudflareCredentials { tunnel: Some(ref ti), .. }) = config.cloudflare {
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
-            content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
-        }));
-    }
-
-    steps.push(Step::SystemDaemonReload);
-    steps.push(Step::SystemStart {
-        unit: "nginx".into(),
-    });
-
-    if config.cloudflare.as_ref().and_then(|cf| cf.tunnel.as_ref()).is_some() {
-        steps.push(Step::StartTunnel);
-    }
 
     Ok(InitResult { steps })
 }
@@ -445,6 +408,46 @@ pub fn add_service(
 
     // Build ordered steps
     let mut steps = Vec::new();
+
+    // 0. Ensure nginx is set up (first proxied service triggers this)
+    if proxied && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
+            content: String::new(),
+        }));
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/certs/.keep"),
+            content: String::new(),
+        }));
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
+            content: generate::nginx::render_nginx_base_conf(),
+        }));
+        steps.push(Step::PullImage {
+            image: "docker.io/library/nginx:alpine".into(),
+            username: None,
+        });
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: PathBuf::from("/etc/containers/systemd/nginx.container"),
+            content: generate::nginx::render_nginx_quadlet(),
+        }));
+        steps.push(Step::SystemDaemonReload);
+        steps.push(Step::SystemStart {
+            unit: "nginx".into(),
+        });
+
+        // Cloudflared (if tunnel configured and not already running)
+        if let Some(CloudflareCredentials { tunnel: Some(ref ti), .. }) = config.cloudflare {
+            if !PathBuf::from("/etc/containers/systemd/cloudflared.container").exists() {
+                steps.push(Step::WriteFile(GeneratedFile {
+                    path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
+                    content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
+                }));
+                steps.push(Step::SystemDaemonReload);
+                steps.push(Step::StartTunnel);
+            }
+        }
+    }
 
     // 1. Networking: only for proxied modes
     if proxied {
