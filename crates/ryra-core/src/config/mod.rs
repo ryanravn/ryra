@@ -41,7 +41,7 @@ impl ConfigPaths {
         // .gitignore to prevent accidental commits of secrets
         let gitignore = self.config_dir.join(".gitignore");
         if !gitignore.exists() {
-            let _ = std::fs::write(&gitignore, "ryra.toml\n");
+            let _ = std::fs::write(&gitignore, "ryra.toml\ncache/\n");
         }
 
         Ok(())
