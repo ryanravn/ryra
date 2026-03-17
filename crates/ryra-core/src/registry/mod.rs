@@ -15,7 +15,7 @@ pub struct RegistryService {
 
 /// Find a service by name in a repo directory.
 pub fn find_service(repo_dir: &Path, name: &str) -> Result<RegistryService> {
-    let svc_dir = repo_dir.join("services").join(name);
+    let svc_dir = repo_dir.join(name);
     let service_toml = svc_dir.join("service.toml");
 
     if !service_toml.exists() {
@@ -39,20 +39,19 @@ pub fn find_service(repo_dir: &Path, name: &str) -> Result<RegistryService> {
 
 /// List all available services in a repo directory.
 pub fn list_available(repo_dir: &Path) -> Result<Vec<RegistryService>> {
-    let services_dir = repo_dir.join("services");
-    if !services_dir.exists() {
+    if !repo_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let entries = std::fs::read_dir(&services_dir).map_err(|source| Error::FileRead {
-        path: services_dir.clone(),
+    let entries = std::fs::read_dir(repo_dir).map_err(|source| Error::FileRead {
+        path: repo_dir.to_path_buf(),
         source,
     })?;
 
     let mut services = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|source| Error::FileRead {
-            path: services_dir.clone(),
+            path: repo_dir.to_path_buf(),
             source,
         })?;
         let svc_dir = entry.path();
