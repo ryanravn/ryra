@@ -905,6 +905,44 @@ pub struct SearchResult {
     pub installed: bool,
 }
 
+/// Get detailed info about a service from the registry.
+pub fn service_info(service_name: &str) -> Result<ServiceDetail> {
+    let paths = ConfigPaths::resolve()?;
+    let config = config::load_config(&paths.config_file)?;
+
+    let reg_pairs: Vec<(String, String)> = config
+        .registries
+        .iter()
+        .map(|r| (r.name.clone(), r.url.clone()))
+        .collect();
+
+    let reg_service = registry::find_service(&paths.cache_dir, &reg_pairs, service_name)?;
+    let def = &reg_service.def;
+    let installed = config.services.iter().find(|s| s.name == service_name);
+
+    Ok(ServiceDetail {
+        name: def.service.name.clone(),
+        description: def.service.description.clone(),
+        url: def.service.url.clone(),
+        is_compose: def.service.deploy.is_compose(),
+        ports: def.ports.iter().map(|p| (p.container_port, p.protocol.clone(), p.name.clone())).collect(),
+        env_vars: def.env.iter().map(|e| (e.name.clone(), e.prompt.clone())).collect(),
+        installed_domain: installed.and_then(|s| s.domain.clone()),
+        installed_exposure: installed.map(|s| s.exposure.clone()),
+    })
+}
+
+pub struct ServiceDetail {
+    pub name: String,
+    pub description: String,
+    pub url: Option<String>,
+    pub is_compose: bool,
+    pub ports: Vec<(u16, PortProtocol, String)>,
+    pub env_vars: Vec<(String, Option<String>)>,
+    pub installed_domain: Option<String>,
+    pub installed_exposure: Option<ExposureMode>,
+}
+
 /// Add a registry to the config and fetch it.
 pub async fn add_registry(name: &str, url: &str) -> Result<()> {
     let paths = ConfigPaths::resolve()?;

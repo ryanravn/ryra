@@ -1,5 +1,6 @@
 pub mod add;
 pub mod apply;
+pub mod info;
 pub mod init;
 pub mod list;
 pub mod registry;

@@ -11,16 +11,12 @@ pub fn run(query: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<6} {:<10} DESCRIPTION", "SERVICE", "TYPE", "STATUS");
-    println!("{}", "-".repeat(75));
+    println!("{:<20} {:<10} DESCRIPTION", "SERVICE", "STATUS");
+    println!("{}", "-".repeat(70));
 
     for svc in &results {
-        let svc_type = if svc.is_web { "web" } else { "tcp" };
-        let status = if svc.installed { "installed" } else { "-" };
-        println!(
-            "{:<20} {:<6} {:<10} {}",
-            svc.name, svc_type, status, svc.description
-        );
+        let status = if svc.installed { "installed" } else { "" };
+        println!("{:<20} {:<10} {}", svc.name, status, svc.description);
     }
 
     Ok(())

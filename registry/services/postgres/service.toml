@@ -1,6 +1,7 @@
 [service]
 name = "postgres"
 description = "PostgreSQL - open source relational database"
+url = "https://www.postgresql.org/docs/"
 image = "docker.io/library/postgres:17-alpine"
 kind = "infrastructure"
 

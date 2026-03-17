@@ -1,6 +1,7 @@
 [service]
 name = "whoami"
 description = "Traefik whoami - simple HTTP request echo"
+url = "https://github.com/traefik/whoami"
 image = "docker.io/traefik/whoami:latest"
 
 [[ports]]

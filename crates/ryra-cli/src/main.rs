@@ -81,6 +81,11 @@ enum Command {
         /// Filter by name or description
         query: Option<String>,
     },
+    /// Show details about a service
+    Info {
+        /// Service name
+        service: String,
+    },
     /// Manage registries
     Registry {
         #[command(subcommand)]
@@ -136,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Status => cli::status::run()?,
         Command::List => cli::list::run()?,
         Command::Search { ref query } => cli::search::run(query.as_deref())?,
+        Command::Info { ref service } => cli::info::run(service)?,
         Command::Registry { action } => match action {
             RegistryAction::Add { ref url, ref name } => {
                 cli::registry::run_add(url, name.as_deref()).await?

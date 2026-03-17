@@ -64,6 +64,8 @@ pub struct ComposeProfile {
 struct ServiceMetaRaw {
     name: String,
     description: String,
+    #[serde(default)]
+    url: Option<String>,
     #[serde(default = "default_quadlet_mode")]
     mode: String,
     image: Option<String>,
@@ -82,6 +84,9 @@ fn default_quadlet_mode() -> String {
 pub struct ServiceMeta {
     pub name: String,
     pub description: String,
+    /// Optional URL to documentation or project homepage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(flatten)]
     pub deploy: DeployMode,
     #[serde(default)]
@@ -120,6 +125,7 @@ impl<'de> Deserialize<'de> for ServiceMeta {
         Ok(ServiceMeta {
             name: raw.name,
             description: raw.description,
+            url: raw.url,
             deploy,
             kind: raw.kind,
         })
