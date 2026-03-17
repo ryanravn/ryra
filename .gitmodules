@@ -1,0 +1,3 @@
+[submodule "registry"]
+	path = registry
+	url = git@github.com:ryanravn/ryra-registry.git
