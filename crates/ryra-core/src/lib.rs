@@ -24,7 +24,7 @@ pub fn service_user(service_name: &str) -> String {
 }
 
 pub fn service_home(service_name: &str) -> PathBuf {
-    PathBuf::from(format!("/var/lib/ryra/{service_name}"))
+    PathBuf::from(format!("/var/lib/ryra-{service_name}"))
 }
 
 pub fn service_quadlet_dir(service_name: &str) -> PathBuf {
