@@ -27,3 +27,16 @@ value = "ryra"
 [integrations]
 auth = false
 smtp = false
+
+[[tests]]
+name = "accepts-connections"
+run = "PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -p $RYRA_PORT_TCP -U $POSTGRES_USER -c 'SELECT 1'"
+timeout = 60
+
+[[tests]]
+name = "user-created"
+run = "id ryra-postgres"
+
+[[tests]]
+name = "data-dir-exists"
+run = "test -d /var/lib/postgres"

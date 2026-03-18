@@ -2,6 +2,7 @@ mod assert;
 mod image;
 mod machine;
 mod ports;
+mod registry;
 mod scenario;
 mod tests;
 

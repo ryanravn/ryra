@@ -13,3 +13,20 @@ upstream_port = "http"
 [integrations]
 auth = false
 smtp = false
+
+[[tests]]
+name = "http-responds"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
+
+[[tests]]
+name = "returns-hostname"
+run = "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname"
+
+[[tests]]
+name = "user-created"
+run = "id ryra-whoami"
+
+[[tests]]
+name = "journal-clean"
+run = "journalctl _SYSTEMD_USER_UNIT=whoami.service -p err -q --no-pager | grep -c . | grep -q '^0$'"
+timeout = 10
