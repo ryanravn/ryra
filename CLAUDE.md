@@ -39,3 +39,15 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 - `podman` — rootless containers for services, root containers for nginx/cloudflared
 - `systemd-container` — provides `systemd-machined` and `--machine=` support for managing user services of other users (e.g., `systemctl --machine=ryra-whoami@ --user start whoami`)
 - `loginctl` linger — keeps service users' systemd alive without login sessions
+
+## E2E Testing
+
+See `E2E_TEST_PLAN.md` for the full plan. Key points:
+
+- Tests run inside systemd-nspawn containers — each test gets a fresh Linux environment
+- The test runner (`tests/e2e/`) is a standalone Rust binary, not shell scripts
+- `--parallel=N` controls concurrency, `--private-network` isolates each container
+- The `registry/` dir is currently empty — test fixtures go in `tests/e2e/fixtures/registry/`
+- The nspawn `--capability=all --system-call-filter=add_key keyctl bpf` flags are needed for rootless podman inside containers — if podman fails inside nspawn, this is the first thing to check
+- `sudo` inside nspawn is a no-op when running as root, so ryra's apply.rs works unmodified
+- Base images are created with `debootstrap` called from Rust (`Command::new`), not shell scripts
