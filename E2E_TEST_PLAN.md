@@ -2,29 +2,30 @@
 
 ## Goal
 
-Test ryra end-to-end inside ephemeral systemd-nspawn containers. Each test gets a fresh Linux environment with systemd, podman, and nginx — the full stack ryra needs. Tests can run in parallel.
+Test ryra end-to-end inside ephemeral QEMU VMs. Each test gets a fresh Debian install with its own kernel, systemd, podman, and nginx — identical to what a real user would have. Tests can run in parallel.
 
 ## Architecture
 
 ```
-Linux host (developer's machine or CI)
+Linux host (developer's machine or CI with KVM)
   └── ryra-e2e binary (the test runner)
-       ├── spawns nspawn container "ryra-test-a1b2c3"
-       │    └── runs ryra commands, checks results
-       ├── spawns nspawn container "ryra-test-d4e5f6"  (parallel)
+       ├── spawns QEMU VM "ryra-test-a1b2c3" (ssh port 10022)
+       │    └── runs ryra commands via SSH, checks results
+       ├── spawns QEMU VM "ryra-test-d4e5f6" (ssh port 10023, parallel)
        │    └── runs different test
-       └── collects results, destroys containers
+       └── collects results, destroys VMs
 ```
 
-The test runner is a standalone Rust binary in `tests/e2e/`. It manages the full lifecycle: base image creation, container spawn/destroy, test execution, assertions.
+The test runner is a standalone Rust binary in `tests/e2e/`. It manages the full lifecycle: cloud image download, VM spawn/destroy, test execution, assertions, and result reporting.
 
 ## Prerequisites on host
 
 ```
-sudo apt install systemd-container debootstrap podman
+sudo apt install qemu-system-arm qemu-utils qemu-efi-aarch64 \
+    genisoimage openssh-client curl
 ```
 
-The test runner checks for these and errors with a clear message if missing.
+The test runner checks for these and errors with a clear message if missing. KVM (`/dev/kvm`) is required by default; use `--no-kvm` for software emulation (slower).
 
 ## Directory structure
 
@@ -33,18 +34,14 @@ tests/
   e2e/
     Cargo.toml              # standalone binary crate
     src/
-      main.rs               # CLI entry point: --parallel=N, --distro=, test filters
-      container.rs           # nspawn lifecycle: create base image, spawn, destroy, exec
-      distro.rs              # distro-specific base image setup (debian, ubuntu, arch)
-      assert.rs              # assertion helpers
+      main.rs               # CLI entry point: --parallel=N, --distro=, --no-kvm, etc.
+      machine.rs             # VM lifecycle: spawn QEMU, SSH exec, SCP, destroy
+      image.rs               # cloud image download/cache, EFI firmware discovery
+      ports.rs               # atomic SSH port allocator for parallel VMs
+      scenario.rs            # scenario builder + result types with per-event tracing
+      assert.rs              # assertion helpers (service, curl, user, file, journal)
       tests/
-        mod.rs               # test registry — lists all tests
-        init.rs              # ryra init
-        add_service.rs       # add whoami, verify it works
-        remove_service.rs    # remove, verify cleanup
-        add_compose.rs       # compose-based service
-        reset.rs             # full reset
-        parallel_services.rs # add multiple services at once
+        mod.rs               # scenario registry — all test scenarios defined here
     fixtures/
       registry/
         whoami/
@@ -53,159 +50,103 @@ tests/
 
 ## How it works
 
-### Base image creation (`container.rs` + `distro.rs`)
+### Base image (`image.rs`)
 
-Each distro has a `create_base_image()` function:
+Downloads the Debian 13 generic cloud image (qcow2) from `cloud.debian.org` and caches it locally at `~/.cache/ryra-e2e/`. EFI firmware is located from standard system paths (`/usr/share/AAVMF/` or `/usr/share/qemu-efi-aarch64/`).
 
-**Debian 13:**
-```
-debootstrap trixie /var/lib/machines/ryra-base-debian-13
-```
-Then inside the chroot (via nspawn --pipe or systemd-nspawn -D ... /bin/bash -c):
-```
-apt install -y podman uidmap slirp4netns nginx curl systemd-container
-systemctl enable podman.socket
-```
+Re-download with `--redownload`.
 
-**Arch (later):**
-```
-pacstrap /var/lib/machines/ryra-base-arch base podman nginx curl
-```
-
-**Ubuntu (later):**
-```
-debootstrap noble /var/lib/machines/ryra-base-ubuntu-2404
-```
-
-Base images are cached at `/var/lib/machines/ryra-base-{distro}`. Rebuild with `--rebuild-base`.
-
-### Container lifecycle (`container.rs`)
+### VM lifecycle (`machine.rs`)
 
 **Spawn:**
-```rust
-fn spawn(distro: &str, test_id: &str) -> Container {
-    let name = format!("ryra-test-{test_id}");
-    let base = format!("/var/lib/machines/ryra-base-{distro}");
-    let dest = format!("/var/lib/machines/{name}");
+1. `qemu-img create -b base.qcow2` — copy-on-write disk per test (fast, small)
+2. Generate SSH key pair per VM
+3. Build cloud-init seed ISO with:
+   - Root SSH key injection
+   - Package install: podman, uidmap, slirp4netns, nginx, curl, systemd-container
+   - Enable podman.socket, configure sshd for root login
+4. Boot QEMU with KVM acceleration, port-forwarded SSH
+5. Wait for SSH + cloud-init completion
+6. SCP ryra binary + test fixtures into the VM
 
-    // Copy base image
-    Command::new("sudo").args(["cp", "-a", &base, &dest]).status();
-
-    // Copy ryra binary into container
-    let ryra_bin = find_ryra_binary(); // from target/release or target/debug
-    Command::new("sudo").args(["cp", &ryra_bin, &format!("{dest}/usr/local/bin/ryra")]).status();
-
-    // Copy test fixtures (registry)
-    Command::new("sudo").args(["cp", "-a", "tests/e2e/fixtures/registry", &format!("{dest}/opt/ryra-test-registry")]).status();
-
-    // Boot container
-    Command::new("sudo").args([
-        "systemd-nspawn",
-        "--boot",
-        &format!("--machine={name}"),
-        &format!("--directory={dest}"),
-        "--capability=all",
-        "--system-call-filter=add_key keyctl bpf",
-        "--private-network",  // isolated networking per container — no conflicts
-        "--quiet",
-    ]).spawn();
-
-    // Wait for container to be ready
-    wait_for_machine(&name);
-
-    Container { name, dir: dest }
-}
+**Execute command:**
 ```
-
-Key flags:
-- `--capability=all` — rootless podman needs user namespace capabilities
-- `--system-call-filter=add_key keyctl bpf` — additional syscalls podman needs
-- `--private-network` — each container gets its own network namespace, no port conflicts between parallel tests
-- `--boot` — full systemd init inside
-
-**Execute command inside:**
-```rust
-fn exec(container: &str, cmd: &str) -> Output {
-    Command::new("sudo")
-        .args(["machinectl", "shell", container, "/bin/bash", "-c", cmd])
-        .output()
-}
+ssh -i /tmp/ryra-test-xxx/id_ed25519 -p 10022 root@127.0.0.1 "ryra add whoami"
 ```
 
 **Destroy:**
-```rust
-fn destroy(container: &Container) {
-    Command::new("sudo").args(["machinectl", "poweroff", &container.name]).status();
-    // Wait for shutdown
-    Command::new("sudo").args(["rm", "-rf", &container.dir]).status();
-}
+```
+ssh poweroff → kill QEMU → rm -rf work_dir
 ```
 
-### Test structure
-
-Each test is a function that receives a `Container` handle:
-
-```rust
-// tests/add_service.rs
-
-pub fn test_add_whoami(c: &Container) -> TestResult {
-    // Init ryra with local-only config, pointing to test registry
-    c.exec("ryra init --repo /opt/ryra-test-registry")?;
-
-    // Add whoami (non-interactive picks Local exposure)
-    c.exec("ryra add whoami --repo /opt/ryra-test-registry")?;
-
-    // Wait for service to start
-    c.wait_for_service("whoami", "whoami.service", Duration::from_secs(30))?;
-
-    // Assert service is active
-    c.assert_service_active("whoami", "whoami.service")?;
-
-    // Get allocated port from env file
-    let port = c.exec("grep RYRA_PORT /var/lib/whoami/.env | head -1 | cut -d= -f2")?
-        .stdout_trimmed();
-
-    // Assert HTTP response
-    c.assert_curl(&format!("http://127.0.0.1:{port}"), 200)?;
-
-    // Assert no errors in journal
-    c.assert_journal_clean("whoami.service")?;
-
-    // Assert config was updated
-    let config = c.exec("cat /etc/ryra/ryra.toml")?.stdout_trimmed();
-    assert!(config.contains("whoami"));
-
-    Ok(())
-}
+**Debug failed tests:**
+With `--keep-failed`, the VM stays running and prints the SSH command:
+```
+ssh -o StrictHostKeyChecking=no -i /tmp/ryra-test-xxx/id_ed25519 -p 10022 root@127.0.0.1
 ```
 
-### Assertions (`assert.rs`)
+### Scenario builder (`scenario.rs`)
+
+Tests are defined declaratively with a builder pattern:
 
 ```rust
-fn assert_service_active(container: &str, user: &str, unit: &str) -> Result<()>
-    // machinectl shell -> systemctl --machine={user}@ --user is-active {unit}
-
-fn assert_service_inactive(container: &str, user: &str, unit: &str) -> Result<()>
-
-fn assert_curl(container: &str, url: &str, expected_status: u16) -> Result<()>
-    // machinectl shell -> curl -sf -o /dev/null -w '%{http_code}' {url}
-
-fn assert_journal_clean(container: &str, unit: &str) -> Result<()>
-    // machinectl shell -> journalctl _SYSTEMD_USER_UNIT={unit} -p err -q --no-pager
-    // fails if any error-level entries exist
-
-fn assert_user_exists(container: &str, username: &str) -> Result<()>
-    // machinectl shell -> id {username}
-
-fn assert_user_not_exists(container: &str, username: &str) -> Result<()>
-
-fn assert_file_exists(container: &str, path: &str) -> Result<()>
-
-fn assert_file_not_exists(container: &str, path: &str) -> Result<()>
-
-fn assert_port_listening(container: &str, port: u16) -> Result<()>
-    // machinectl shell -> ss -tlnp | grep :{port}
+Scenario::new("add-whoami")
+    .add("whoami")
+    .assert_running("whoami")
+    .assert_user_exists("ryra-whoami")
+    .assert_http("whoami", 200)
+    .assert_journal_clean("whoami")
+    .assert_config_contains("whoami")
 ```
+
+Steps and assertions interleave in order — you can assert between steps:
+
+```rust
+Scenario::new("remove-whoami")
+    .add("whoami")
+    .assert_running("whoami")    // runs after add
+    .remove("whoami")
+    .assert_not_running("whoami") // runs after remove
+```
+
+Every scenario automatically runs `ryra init` first.
+
+**Result tracking:** Each step and assertion produces an `Event` with description, outcome (pass/fail/skip), and duration. Failed steps skip all remaining phases. The output looks like:
+
+```
+PASS  add-whoami (45.2s)
+  [ ok ] init: ryra init --repo /opt/ryra-test-registry (1.2s)
+  [ ok ] step: ryra add whoami (25.1s)
+  [ ok ] assert: whoami is running (0.3s)
+  [ ok ] assert: user ryra-whoami exists (0.1s)
+  [ ok ] assert: whoami returns HTTP 200 (0.2s)
+  [ ok ] assert: whoami.service journal is clean (0.1s)
+  [ ok ] assert: config contains 'whoami' (0.1s)
+
+FAIL  remove-whoami (38.7s)
+  [ ok ] init: ryra init --repo /opt/ryra-test-registry (1.1s)
+  [ ok ] step: ryra add whoami (24.3s)
+  [ ok ] assert: whoami is running (0.2s)
+  [FAIL] step: ryra remove whoami (2.1s)
+         command failed in VM: exit 1
+  [skip] assert: whoami is not running
+  [skip] assert: user ryra-whoami does not exist
+```
+
+### Available assertions
+
+| Method | What it checks |
+|--------|---------------|
+| `assert_running(service)` | `systemctl --machine=ryra-{service}@ --user is-active` |
+| `assert_not_running(service)` | opposite of above |
+| `assert_http(service, status)` | `curl` the service's allocated port, check HTTP status |
+| `assert_user_exists(username)` | `id {username}` succeeds |
+| `assert_user_not_exists(username)` | `id {username}` fails |
+| `assert_file_exists(path)` | `test -e {path}` |
+| `assert_file_not_exists(path)` | opposite of above |
+| `assert_config_contains(text)` | grep ryra.toml for substring |
+| `assert_config_not_contains(text)` | opposite of above |
+| `assert_journal_clean(service)` | no error-level journal entries |
 
 ### Test runner (`main.rs`)
 
@@ -213,40 +154,22 @@ fn assert_port_listening(container: &str, port: u16) -> Result<()>
 Usage: ryra-e2e [OPTIONS] [TESTS...]
 
 Options:
-  --parallel <N>      Max concurrent containers (default: 1)
+  --parallel <N>      Max concurrent VMs (default: 1)
   --distro <name>     Base image distro (default: debian-13)
-  --rebuild-base      Recreate the base image from scratch
+  --redownload        Re-download the base cloud image
   --ryra-bin <path>   Path to ryra binary (default: auto-detect from workspace)
-  --keep-failed       Don't destroy containers for failed tests (for debugging)
-  --list              List available tests
+  --keep-failed       Keep VMs alive for failed tests (prints SSH command)
+  --no-kvm            Disable KVM acceleration (software emulation, slower)
+  --memory <MB>       VM memory in MB (default: 2048)
+  --cpus <N>          VM CPU count (default: 2)
+  --list              List available scenarios
 
 Examples:
   ryra-e2e                           # run all tests sequentially
-  ryra-e2e --parallel=4              # run 4 at a time
-  ryra-e2e add_service remove        # run specific tests
-  ryra-e2e --distro=arch --parallel=2
-```
-
-Parallel execution uses a semaphore/thread pool:
-
-```rust
-let semaphore = Arc::new(Semaphore::new(parallel));
-let mut handles = vec![];
-
-for test in tests {
-    let permit = semaphore.acquire().await;
-    handles.push(tokio::spawn(async move {
-        let id = random_id();
-        let container = spawn(&distro, &id);
-        let result = test.run(&container);
-        if !keep_failed || result.is_ok() {
-            destroy(&container);
-        }
-        (test.name, result)
-    }));
-}
-
-// Collect and report results
+  ryra-e2e --parallel=4              # run 4 VMs at a time
+  ryra-e2e add-whoami remove         # run specific tests (substring match)
+  ryra-e2e --keep-failed add-whoami  # debug a failure
+  ryra-e2e --no-kvm                  # software emulation (no /dev/kvm needed)
 ```
 
 ### Test fixtures
@@ -264,71 +187,42 @@ container_port = 80
 
 [nginx]
 upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false
 ```
 
-This is a minimal service that starts fast and responds to HTTP — ideal for testing the full flow.
+## Scenario list
 
-## Refactoring needed in ryra (optional but helpful)
-
-### 1. Config paths via env vars
-
-Currently hardcoded in `config/mod.rs:17-19`. Not strictly needed since each nspawn container has its own `/etc/ryra`, but useful for local dev:
-
-```rust
-pub fn resolve() -> Result<Self> {
-    let config_dir = std::env::var("RYRA_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/etc/ryra"));
-    let cache_dir = std::env::var("RYRA_CACHE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/var/cache/ryra"));
-    // ...
-}
-```
-
-### 2. Non-interactive mode already works
-
-The CLI checks `is_terminal()` and falls back to defaults. `Local` exposure is picked automatically in non-interactive mode. `--yes` exists on remove/reset. No changes needed.
-
-### 3. Sudoless mode inside containers
-
-Inside nspawn containers, the test runner runs as root. ryra's `apply.rs` prepends `sudo` to everything. This works fine — `sudo` as root is a no-op. No changes needed.
-
-## Test list (initial)
-
-| Test | What it verifies |
-|------|-----------------|
+| Scenario | What it verifies |
+|----------|-----------------|
 | `init` | `ryra init` creates config at `/etc/ryra/ryra.toml` |
-| `add_service` | Add whoami → user created, podman container running, port responding, journal clean |
-| `remove_service` | Remove whoami → user deleted, files cleaned up, port freed |
-| `add_compose` | Add a compose-based service (needs fixture) → compose stack running |
-| `reset` | Init + add service + reset → everything gone |
-| `parallel_services` | Add 2-3 services → all running, no port conflicts |
-| `host_port_exposure` | Add with HostPort mode → bound to 0.0.0.0 |
-| `idempotent_init` | Init twice → no errors, config unchanged |
+| `idempotent-init` | Running init twice works, config preserved |
+| `add-whoami` | Add whoami → user created, container running, HTTP 200, journal clean |
+| `remove-whoami` | Add then remove → user deleted, service stopped, config cleaned |
+| `reset` | Init + add + reset → everything gone |
+| `re-add-after-remove` | Remove then re-add same service → works correctly |
 
 ## Build and run
 
 ```bash
-# On Linux (your VM or any Debian machine):
-cd tests/e2e
-
 # Build ryra first
 cargo build --release -p ryra-cli
 
 # Build test runner
+cd tests/e2e
 cargo build --release
 
-# Create base image (first time only)
-sudo ./target/release/ryra-e2e --rebuild-base
-
-# Run all tests
-sudo ./target/release/ryra-e2e --parallel=4
+# Run all tests (needs KVM)
+./target/release/ryra-e2e --parallel=4
 
 # Run specific test
-sudo ./target/release/ryra-e2e add_service
+./target/release/ryra-e2e add-whoami
 
-# Debug a failure (keeps container alive)
-sudo ./target/release/ryra-e2e --keep-failed add_service
-# Then: sudo machinectl shell ryra-test-xxxxx
+# Debug a failure (VM stays alive, prints SSH command)
+./target/release/ryra-e2e --keep-failed add-whoami
+
+# Without KVM (slower, works anywhere)
+./target/release/ryra-e2e --no-kvm
 ```

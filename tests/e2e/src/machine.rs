@@ -1,0 +1,529 @@
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+use anyhow::{Context, Result};
+use tokio::process::Command;
+
+use crate::image::Image;
+
+/// A running QEMU VM for E2E testing.
+pub struct Machine {
+    pub name: String,
+    pub ssh_port: u16,
+    pub work_dir: PathBuf,
+    qemu: tokio::process::Child,
+}
+
+/// Options that affect how the VM is launched.
+pub struct SpawnOpts {
+    pub use_kvm: bool,
+    pub memory_mb: u32,
+    pub cpus: u32,
+}
+
+impl SpawnOpts {
+    /// SSH + cloud-init timeout. Without KVM, everything is ~10x slower.
+    pub fn boot_timeout(&self) -> std::time::Duration {
+        if self.use_kvm {
+            std::time::Duration::from_secs(300)
+        } else {
+            std::time::Duration::from_secs(900) // 15 minutes for TCG
+        }
+    }
+}
+
+impl Default for SpawnOpts {
+    fn default() -> Self {
+        Self {
+            use_kvm: true,
+            memory_mb: 2048,
+            cpus: 2,
+        }
+    }
+}
+
+pub fn random_id() -> String {
+    use rand::Rng;
+    let mut rng = rand::rng();
+    format!("{:06x}", rng.random::<u32>() & 0xffffff)
+}
+
+impl Machine {
+    pub async fn spawn(
+        image: &Image,
+        test_id: &str,
+        ssh_port: u16,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        let name = format!("ryra-test-{test_id}");
+        let work_dir = std::env::temp_dir().join(&name);
+        tokio::fs::create_dir_all(&work_dir)
+            .await
+            .context("failed to create VM work directory")?;
+
+        // Create a copy-on-write disk backed by the base image
+        let disk = work_dir.join("disk.qcow2");
+        run_cmd(
+            "qemu-img",
+            &[
+                "create",
+                "-f",
+                "qcow2",
+                "-b",
+                &image.path.to_string_lossy(),
+                "-F",
+                "qcow2",
+                &disk.to_string_lossy(),
+                "20G",
+            ],
+        )
+        .await
+        .context("qemu-img create failed")?;
+
+        // Copy EFI vars template (writable per-VM)
+        let efi_vars = work_dir.join("efivars.fd");
+        tokio::fs::copy(&image.efi_vars_template, &efi_vars)
+            .await
+            .context("failed to copy EFI vars template")?;
+
+        // Generate SSH key pair
+        let key_path = work_dir.join("id_ed25519");
+        let _ = tokio::fs::remove_file(&key_path).await;
+        run_cmd(
+            "ssh-keygen",
+            &[
+                "-t",
+                "ed25519",
+                "-f",
+                &key_path.to_string_lossy(),
+                "-N",
+                "",
+                "-q",
+            ],
+        )
+        .await
+        .context("ssh-keygen failed")?;
+
+        let pub_key = tokio::fs::read_to_string(format!("{}.pub", key_path.display()))
+            .await
+            .context("failed to read SSH public key")?;
+
+        // Build cloud-init seed ISO
+        let seed_iso = work_dir.join("seed.iso");
+        build_seed_iso(&work_dir, &seed_iso, &name, pub_key.trim()).await?;
+
+        // Build QEMU args
+        let memory = opts.memory_mb.to_string();
+        let cpus = opts.cpus.to_string();
+        let efi_code_arg = format!(
+            "if=pflash,format=raw,file={},readonly=on",
+            image.efi_code.display()
+        );
+        let efi_vars_arg = format!("if=pflash,format=raw,file={}", efi_vars.display());
+        let disk_arg = format!("if=virtio,file={},format=qcow2", disk.display());
+        let seed_arg = format!("if=virtio,file={},format=raw", seed_iso.display());
+        let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
+        let serial_log = work_dir.join("serial.log");
+        let serial_arg = format!("file:{}", serial_log.display());
+
+        let mut args: Vec<&str> = vec![
+            "-machine",
+            "virt",
+            "-cpu",
+            if opts.use_kvm { "host" } else { "max" },
+            "-m",
+            &memory,
+            "-smp",
+            &cpus,
+            "-drive",
+            &efi_code_arg,
+            "-drive",
+            &efi_vars_arg,
+            "-drive",
+            &disk_arg,
+            "-drive",
+            &seed_arg,
+            "-nic",
+            &nic_arg,
+            "-nographic",
+            "-serial",
+            &serial_arg,
+            "-monitor",
+            "none",
+        ];
+
+        if opts.use_kvm {
+            args.push("-enable-kvm");
+        }
+
+        let qemu = Command::new("qemu-system-aarch64")
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("failed to start QEMU — is qemu-system-aarch64 installed?")?;
+
+        let machine = Machine {
+            name,
+            ssh_port,
+            work_dir,
+            qemu,
+        };
+
+        // Wait for SSH to come up (cloud-init installs sshd + packages first)
+        let boot_timeout = opts.boot_timeout();
+        machine.wait_for_ssh(boot_timeout).await?;
+
+        // Wait for cloud-init to finish (packages installed, files written)
+        // cloud-init status --wait blocks until all stages complete
+        machine
+            .exec("cloud-init status --wait")
+            .await
+            .context("cloud-init did not complete")?;
+
+        Ok(machine)
+    }
+
+    /// Run a command inside the VM via SSH.
+    pub async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
+        let key = self.ssh_key_path();
+        let port = self.ssh_port.to_string();
+        let output = Command::new("ssh")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "BatchMode=yes",
+                "-i",
+                &key.to_string_lossy(),
+                "-p",
+                &port,
+                "root@127.0.0.1",
+                cmd,
+            ])
+            .output()
+            .await
+            .with_context(|| format!("failed to SSH exec in {}: {cmd}", self.name))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "command failed in VM {} (exit {}): {cmd}\nstdout: {stdout}\nstderr: {stderr}",
+                self.name,
+                output.status,
+            );
+        }
+
+        Ok(ExecOutput { stdout, stderr })
+    }
+
+    /// Shut down the VM and clean up files.
+    pub async fn destroy(mut self) -> Result<()> {
+        let _ = self.exec("poweroff").await;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let _ = self.qemu.kill().await;
+        let _ = self.qemu.wait().await;
+        let _ = tokio::fs::remove_dir_all(&self.work_dir).await;
+        Ok(())
+    }
+
+    /// Print SSH connection info for debugging, then detach.
+    /// VM keeps running until the user kills it or the process exits.
+    pub fn keep_alive(self) {
+        println!(
+            "  VM still running. Connect with:\n    \
+             ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+             -i {}/id_ed25519 -p {} root@127.0.0.1\n  \
+             Serial log: {}/serial.log\n  \
+             Kill with: kill {}",
+            self.work_dir.display(),
+            self.ssh_port,
+            self.work_dir.display(),
+            // QEMU PID — Child.id() returns Option<u32>
+            self.qemu
+                .id()
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "?".to_string()),
+        );
+        // Intentionally leak — QEMU process stays alive, cleaned up when parent exits
+        std::mem::forget(self);
+    }
+
+    fn ssh_key_path(&self) -> PathBuf {
+        self.work_dir.join("id_ed25519")
+    }
+
+    async fn wait_for_ssh(&self, timeout: std::time::Duration) -> Result<()> {
+        let start = std::time::Instant::now();
+        let key = self.ssh_key_path();
+        let port = self.ssh_port.to_string();
+        let mut last_log = std::time::Instant::now();
+
+        loop {
+            // Log progress every 30 seconds
+            if last_log.elapsed().as_secs() >= 30 {
+                println!(
+                    "  [{}] still waiting for SSH... ({:.0}s elapsed)",
+                    self.name,
+                    start.elapsed().as_secs_f64()
+                );
+                last_log = std::time::Instant::now();
+            }
+
+            // Try a real SSH command (not just TCP connect)
+            let result = Command::new("ssh")
+                .args([
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "LogLevel=ERROR",
+                    "-o",
+                    "ConnectTimeout=3",
+                    "-o",
+                    "BatchMode=yes",
+                    "-i",
+                    &key.to_string_lossy(),
+                    "-p",
+                    &port,
+                    "root@127.0.0.1",
+                    "true",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+
+            if let Ok(status) = result {
+                if status.success() {
+                    return Ok(());
+                }
+            }
+
+            if start.elapsed() > timeout {
+                anyhow::bail!(
+                    "timed out waiting for SSH on port {} after {}s\n  \
+                     Check serial log: {}/serial.log",
+                    self.ssh_port,
+                    timeout.as_secs(),
+                    self.work_dir.display(),
+                );
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub struct ExecOutput {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl ExecOutput {
+    pub fn stdout_trimmed(&self) -> &str {
+        self.stdout.trim()
+    }
+}
+
+/// Run a command and bail if it fails.
+async fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new(program)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .with_context(|| format!("failed to run {program}"))?;
+    if !status.success() {
+        anyhow::bail!("{program} failed with exit status {status}");
+    }
+    Ok(())
+}
+
+/// Build a cloud-init NoCloud seed ISO.
+///
+/// Creates user-data and meta-data in a temp dir, then burns an ISO
+/// with volume label "cidata" that cloud-init auto-detects.
+async fn build_seed_iso(
+    work_dir: &Path,
+    output: &Path,
+    hostname: &str,
+    pub_key: &str,
+) -> Result<()> {
+    let seed_dir = work_dir.join("seed");
+    tokio::fs::create_dir_all(&seed_dir)
+        .await
+        .context("failed to create seed dir")?;
+
+    // meta-data (YAML)
+    let meta_data = format!("instance-id: {hostname}\nlocal-hostname: {hostname}\n");
+    tokio::fs::write(seed_dir.join("meta-data"), &meta_data)
+        .await
+        .context("failed to write meta-data")?;
+
+    // user-data (cloud-config)
+    // Debian cloud images have a "debian" user by default with no root login.
+    // We enable root SSH, set up the key, and install our dependencies.
+    let user_data = format!(
+        r#"#cloud-config
+disable_root: false
+ssh_pwauth: false
+
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {pub_key}
+
+packages:
+  - podman
+  - uidmap
+  - slirp4netns
+  - nginx
+  - curl
+  - git
+  - systemd-container
+
+runcmd:
+  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+  - systemctl enable podman.socket
+  - loginctl enable-linger root
+"#
+    );
+    tokio::fs::write(seed_dir.join("user-data"), &user_data)
+        .await
+        .context("failed to write user-data")?;
+
+    // Build ISO with genisoimage or mkisofs
+    let iso_tools = ["genisoimage", "mkisofs"];
+    let mut created = false;
+    for tool in &iso_tools {
+        let result = Command::new(tool)
+            .args([
+                "-output",
+                &output.to_string_lossy(),
+                "-volid",
+                "cidata",
+                "-joliet",
+                "-rock",
+                &seed_dir.to_string_lossy(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        if let Ok(status) = result {
+            if status.success() {
+                created = true;
+                break;
+            }
+        }
+    }
+
+    if !created {
+        anyhow::bail!(
+            "failed to create seed ISO — install genisoimage or mkisofs:\n  \
+             sudo apt install genisoimage"
+        );
+    }
+
+    // Clean up seed dir
+    let _ = tokio::fs::remove_dir_all(&seed_dir).await;
+
+    Ok(())
+}
+
+/// Copy the ryra binary into a running VM via SCP.
+pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
+    let key = machine.ssh_key_path();
+    let port = machine.ssh_port.to_string();
+
+    let status = Command::new("scp")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-i",
+            &key.to_string_lossy(),
+            "-P",
+            &port,
+            &ryra_bin.to_string_lossy(),
+            "root@127.0.0.1:/usr/local/bin/ryra",
+        ])
+        .status()
+        .await
+        .context("failed to SCP ryra binary to VM")?;
+    if !status.success() {
+        anyhow::bail!("SCP of ryra binary failed");
+    }
+
+    machine.exec("chmod +x /usr/local/bin/ryra").await?;
+    Ok(())
+}
+
+/// Copy test fixtures into a running VM via SCP.
+///
+/// The fixtures_dir contains service directories (e.g. whoami/, postgres/).
+/// These get copied into /opt/ryra-test-registry/ so ryra can find them
+/// at /opt/ryra-test-registry/whoami/service.toml etc.
+pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Result<()> {
+    if !fixtures_dir.exists() {
+        return Ok(());
+    }
+
+    let key = machine.ssh_key_path();
+    let port = machine.ssh_port.to_string();
+
+    // Create destination dir first
+    machine.exec("mkdir -p /opt/ryra-test-registry").await?;
+
+    // SCP each service dir individually to avoid nesting issues
+    // (scp -r dir/ remote:dest/ creates dest/dir/, not dest/contents/)
+    let mut entries = tokio::fs::read_dir(fixtures_dir)
+        .await
+        .context("failed to read fixtures directory")?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let status = Command::new("scp")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-i",
+                &key.to_string_lossy(),
+                "-P",
+                &port,
+                "-r",
+                &path.to_string_lossy(),
+                "root@127.0.0.1:/opt/ryra-test-registry/",
+            ])
+            .status()
+            .await
+            .context("failed to SCP fixtures to VM")?;
+        if !status.success() {
+            anyhow::bail!("SCP of {} failed", path.display());
+        }
+    }
+
+    Ok(())
+}

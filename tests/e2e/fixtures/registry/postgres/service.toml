@@ -1,0 +1,29 @@
+[service]
+name = "postgres"
+description = "PostgreSQL relational database"
+image = "docker.io/library/postgres:17-alpine"
+kind = "infrastructure"
+
+[[ports]]
+name = "tcp"
+container_port = 5432
+
+[[volumes]]
+name = "data"
+mount_path = "/var/lib/postgresql/data"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.postgres_password}}"
+
+[[env]]
+name = "POSTGRES_USER"
+value = "ryra"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "ryra"
+
+[integrations]
+auth = false
+smtp = false

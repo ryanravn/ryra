@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/ryra-core", "crates/ryra-cli"]
+exclude = ["tests/e2e"]
 resolver = "3"
 
 [workspace.dependencies]

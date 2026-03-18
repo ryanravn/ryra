@@ -44,10 +44,13 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 
 See `E2E_TEST_PLAN.md` for the full plan. Key points:
 
-- Tests run inside systemd-nspawn containers — each test gets a fresh Linux environment
+- Tests run inside ephemeral QEMU VMs — each test gets a fresh Debian install with its own kernel
 - The test runner (`tests/e2e/`) is a standalone Rust binary, not shell scripts
-- `--parallel=N` controls concurrency, `--private-network` isolates each container
-- The `registry/` dir is currently empty — test fixtures go in `tests/e2e/fixtures/registry/`
-- The nspawn `--capability=all --system-call-filter=add_key keyctl bpf` flags are needed for rootless podman inside containers — if podman fails inside nspawn, this is the first thing to check
-- `sudo` inside nspawn is a no-op when running as root, so ryra's apply.rs works unmodified
-- Base images are created with `debootstrap` called from Rust (`Command::new`), not shell scripts
+- VMs use Debian cloud images + cloud-init for setup, SSH for command execution
+- `--parallel=N` controls concurrency, each VM gets a unique SSH port
+- Test fixtures (service definitions) live in `tests/e2e/fixtures/registry/`
+- Scenarios are defined declaratively with a builder pattern in `tests/e2e/src/tests/mod.rs`
+- KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower)
+- `--keep-failed` keeps VMs alive and prints the SSH command for debugging
+- `--verbose` dumps the serial log on failure
+- Host prerequisites: `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
