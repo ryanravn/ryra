@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
         None => find_ryra_binary()?,
     };
 
-    let base_image = image::ensure_image(&args.distro, args.redownload).await?;
+    let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm).await?;
     let base_image = std::sync::Arc::new(base_image);
 
     // Resolve fixtures path

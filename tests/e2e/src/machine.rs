@@ -351,30 +351,43 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Build a cloud-init NoCloud seed ISO.
-///
-/// Creates user-data and meta-data in a temp dir, then burns an ISO
-/// with volume label "cidata" that cloud-init auto-detects.
+/// Build a minimal cloud-init seed ISO — just SSH key, no package installs.
+/// Used for test VMs backed by a prepared image that already has packages.
 async fn build_seed_iso(
     work_dir: &Path,
     output: &Path,
     hostname: &str,
     pub_key: &str,
 ) -> Result<()> {
-    let seed_dir = work_dir.join("seed");
-    tokio::fs::create_dir_all(&seed_dir)
-        .await
-        .context("failed to create seed dir")?;
+    let user_data = format!(
+        r#"#cloud-config
+disable_root: false
+ssh_pwauth: false
 
-    // meta-data (YAML)
-    let meta_data = format!("instance-id: {hostname}\nlocal-hostname: {hostname}\n");
-    tokio::fs::write(seed_dir.join("meta-data"), &meta_data)
-        .await
-        .context("failed to write meta-data")?;
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {pub_key}
 
-    // user-data (cloud-config)
-    // Debian cloud images have a "debian" user by default with no root login.
-    // We enable root SSH, set up the key, and install our dependencies.
+runcmd:
+  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+  - systemctl enable podman.socket
+  - loginctl enable-linger root
+"#
+    );
+    write_seed_iso(work_dir, output, hostname, &user_data).await
+}
+
+/// Build a full cloud-init seed ISO — installs all packages.
+/// Used once during image preparation.
+pub async fn build_seed_iso_full(
+    work_dir: &Path,
+    output: &Path,
+    hostname: &str,
+    pub_key: &str,
+) -> Result<()> {
     let user_data = format!(
         r#"#cloud-config
 disable_root: false
@@ -402,7 +415,27 @@ runcmd:
   - loginctl enable-linger root
 "#
     );
-    tokio::fs::write(seed_dir.join("user-data"), &user_data)
+    write_seed_iso(work_dir, output, hostname, &user_data).await
+}
+
+/// Write a cloud-init seed ISO from given user-data content.
+async fn write_seed_iso(
+    work_dir: &Path,
+    output: &Path,
+    hostname: &str,
+    user_data: &str,
+) -> Result<()> {
+    let seed_dir = work_dir.join("seed");
+    tokio::fs::create_dir_all(&seed_dir)
+        .await
+        .context("failed to create seed dir")?;
+
+    let meta_data = format!("instance-id: {hostname}\nlocal-hostname: {hostname}\n");
+    tokio::fs::write(seed_dir.join("meta-data"), &meta_data)
+        .await
+        .context("failed to write meta-data")?;
+
+    tokio::fs::write(seed_dir.join("user-data"), user_data)
         .await
         .context("failed to write user-data")?;
 

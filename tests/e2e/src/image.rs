@@ -25,6 +25,12 @@ impl Distro {
             Distro::Debian13 => "debian-13-generic-arm64.qcow2",
         }
     }
+
+    fn prepared_filename(&self) -> &str {
+        match self {
+            Distro::Debian13 => "debian-13-prepared-arm64.qcow2",
+        }
+    }
 }
 
 impl fmt::Display for Distro {
@@ -47,34 +53,41 @@ impl std::str::FromStr for Distro {
 }
 
 /// Paths to the cached base image and EFI firmware.
+#[allow(dead_code)]
 pub struct Image {
     pub path: PathBuf,
     pub efi_code: PathBuf,
     pub efi_vars_template: PathBuf,
+    /// If true, cloud-init packages are already installed — skip package install.
+    pub prepared: bool,
 }
 
 /// Cache directory for downloaded images.
 fn cache_dir() -> PathBuf {
-    let dir = dirs::cache_dir()
+    dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("ryra-e2e");
-    dir
+        .join("ryra-e2e")
 }
 
-/// Ensure the base cloud image and EFI firmware are available.
-pub async fn ensure_image(distro: &Distro, redownload: bool) -> Result<Image> {
+/// Ensure the base cloud image, prepared image, and EFI firmware are available.
+///
+/// The "prepared" image has all packages pre-installed (podman, nginx, git, etc.)
+/// so VMs boot in ~30s instead of ~6 minutes. It's created by booting the raw
+/// cloud image once with cloud-init, then snapshotting.
+pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> Result<Image> {
     let cache = cache_dir();
     tokio::fs::create_dir_all(&cache)
         .await
         .context("failed to create image cache directory")?;
 
-    let image_path = cache.join(distro.image_filename());
+    let raw_path = cache.join(distro.image_filename());
+    let prepared_path = cache.join(distro.prepared_filename());
 
-    // Download cloud image if needed
-    if redownload || !image_path.exists() {
-        download_image(distro, &image_path).await?;
-    } else {
-        println!("Using cached image: {}", image_path.display());
+    // Download raw cloud image if needed
+    if redownload || !raw_path.exists() {
+        download_image(distro, &raw_path).await?;
+        // Force re-prepare if raw image changed
+        let _ = tokio::fs::remove_file(&prepared_path).await;
     }
 
     // Find EFI firmware
@@ -88,10 +101,27 @@ pub async fn ensure_image(distro: &Distro, redownload: bool) -> Result<Image> {
             .context("failed to copy EFI vars template")?;
     }
 
+    // Build prepared image if it doesn't exist
+    if !prepared_path.exists() {
+        println!("Preparing base image (installing packages — this is a one-time operation)...");
+        prepare_image(
+            &raw_path,
+            &prepared_path,
+            &efi.code,
+            &vars_template,
+            use_kvm,
+        )
+        .await?;
+        println!("Prepared image cached at: {}", prepared_path.display());
+    } else {
+        println!("Using prepared image: {}", prepared_path.display());
+    }
+
     Ok(Image {
-        path: image_path,
+        path: prepared_path,
         efi_code: efi.code,
         efi_vars_template: vars_template,
+        prepared: true,
     })
 }
 
@@ -101,7 +131,6 @@ struct EfiFirmware {
 }
 
 async fn find_efi_firmware() -> Result<EfiFirmware> {
-    // Standard locations on Debian/Ubuntu for aarch64 UEFI
     let candidates = [
         (
             "/usr/share/AAVMF/AAVMF_CODE.fd",
@@ -111,7 +140,6 @@ async fn find_efi_firmware() -> Result<EfiFirmware> {
             "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
             "/usr/share/qemu-efi-aarch64/vars-template-pflash.raw",
         ),
-        // Fedora/RHEL paths
         (
             "/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw",
             "/usr/share/edk2/aarch64/vars-template-pflash.raw",
@@ -162,11 +190,302 @@ async fn download_image(distro: &Distro, dest: &PathBuf) -> Result<()> {
         anyhow::bail!("failed to download cloud image from {url}");
     }
 
-    // Atomic rename
     tokio::fs::rename(&partial, dest)
         .await
         .context("failed to move downloaded image into place")?;
 
     println!("Image cached at: {}", dest.display());
+    Ok(())
+}
+
+/// Boot the raw cloud image, let cloud-init install packages, then snapshot it.
+///
+/// This is a one-time operation. The resulting image has podman, nginx, git, etc.
+/// already installed, so subsequent VMs skip the slow package install step.
+async fn prepare_image(
+    raw_image: &PathBuf,
+    prepared_path: &PathBuf,
+    efi_code: &PathBuf,
+    efi_vars_template: &PathBuf,
+    use_kvm: bool,
+) -> Result<()> {
+    let work_dir = std::env::temp_dir().join("ryra-prepare-base");
+    let _ = tokio::fs::remove_dir_all(&work_dir).await;
+    tokio::fs::create_dir_all(&work_dir)
+        .await
+        .context("failed to create prepare work dir")?;
+
+    // Create a working copy of the raw image (not COW — we want a standalone result)
+    let disk = work_dir.join("disk.qcow2");
+    let status = Command::new("qemu-img")
+        .args([
+            "create",
+            "-f",
+            "qcow2",
+            "-b",
+            &raw_image.to_string_lossy(),
+            "-F",
+            "qcow2",
+            &disk.to_string_lossy(),
+            "20G",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("qemu-img create failed")?;
+    if !status.success() {
+        anyhow::bail!("qemu-img create failed for prepare step");
+    }
+
+    // Copy EFI vars
+    let efi_vars = work_dir.join("efivars.fd");
+    tokio::fs::copy(efi_vars_template, &efi_vars)
+        .await
+        .context("failed to copy EFI vars")?;
+
+    // Generate temp SSH key
+    let key_path = work_dir.join("id_ed25519");
+    let status = Command::new("ssh-keygen")
+        .args([
+            "-t",
+            "ed25519",
+            "-f",
+            &key_path.to_string_lossy(),
+            "-N",
+            "",
+            "-q",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("ssh-keygen failed")?;
+    if !status.success() {
+        anyhow::bail!("ssh-keygen failed");
+    }
+    let pub_key = tokio::fs::read_to_string(format!("{}.pub", key_path.display()))
+        .await
+        .context("failed to read public key")?;
+
+    // Build seed ISO with full package install
+    let seed_iso = work_dir.join("seed.iso");
+    crate::machine::build_seed_iso_full(&work_dir, &seed_iso, "ryra-prepare", pub_key.trim())
+        .await?;
+
+    // Boot VM
+    let ssh_port: u16 = 10099;
+    let serial_log = work_dir.join("serial.log");
+    let memory = "2048";
+    let cpus = "2";
+    let efi_code_arg = format!(
+        "if=pflash,format=raw,file={},readonly=on",
+        efi_code.display()
+    );
+    let efi_vars_arg = format!("if=pflash,format=raw,file={}", efi_vars.display());
+    let disk_arg = format!("if=virtio,file={},format=qcow2", disk.display());
+    let seed_arg = format!("if=virtio,file={},format=raw", seed_iso.display());
+    let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
+    let serial_arg = format!("file:{}", serial_log.display());
+
+    let mut args: Vec<&str> = vec![
+        "-machine",
+        "virt",
+        "-cpu",
+        if use_kvm { "host" } else { "max" },
+        "-m",
+        memory,
+        "-smp",
+        cpus,
+        "-drive",
+        &efi_code_arg,
+        "-drive",
+        &efi_vars_arg,
+        "-drive",
+        &disk_arg,
+        "-drive",
+        &seed_arg,
+        "-nic",
+        &nic_arg,
+        "-nographic",
+        "-serial",
+        &serial_arg,
+        "-monitor",
+        "none",
+    ];
+    if use_kvm {
+        args.push("-enable-kvm");
+    }
+
+    let mut qemu = Command::new("qemu-system-aarch64")
+        .args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to start QEMU for image preparation")?;
+
+    // Wait for SSH
+    let timeout = if use_kvm {
+        std::time::Duration::from_secs(300)
+    } else {
+        std::time::Duration::from_secs(900)
+    };
+    let start = std::time::Instant::now();
+    let port_str = ssh_port.to_string();
+    loop {
+        let result = Command::new("ssh")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ConnectTimeout=3",
+                "-o",
+                "BatchMode=yes",
+                "-i",
+                &key_path.to_string_lossy(),
+                "-p",
+                &port_str,
+                "root@127.0.0.1",
+                "true",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        if let Ok(s) = result {
+            if s.success() {
+                break;
+            }
+        }
+
+        if start.elapsed() > timeout {
+            let _ = qemu.kill().await;
+            anyhow::bail!(
+                "timed out waiting for SSH during image preparation after {}s\n  \
+                 Serial log: {}",
+                timeout.as_secs(),
+                serial_log.display()
+            );
+        }
+
+        if start.elapsed().as_secs() % 30 == 0 && start.elapsed().as_secs() > 0 {
+            println!(
+                "  preparing image... ({:.0}s elapsed)",
+                start.elapsed().as_secs_f64()
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+
+    // Wait for cloud-init to finish
+    println!("  SSH ready, waiting for cloud-init to finish installing packages...");
+    let ci_result = Command::new("ssh")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "BatchMode=yes",
+            "-i",
+            &key_path.to_string_lossy(),
+            "-p",
+            &port_str,
+            "root@127.0.0.1",
+            "cloud-init status --wait",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("cloud-init wait failed")?;
+
+    if !ci_result.success() {
+        let _ = qemu.kill().await;
+        anyhow::bail!("cloud-init failed during image preparation");
+    }
+
+    // Clean up cloud-init state so it runs again on next boot (for per-VM SSH keys)
+    let _ = Command::new("ssh")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "BatchMode=yes",
+            "-i",
+            &key_path.to_string_lossy(),
+            "-p",
+            &port_str,
+            "root@127.0.0.1",
+            "cloud-init clean --logs && rm -f /etc/ssh/ssh_host_*_key*",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+
+    // Shut down gracefully
+    let _ = Command::new("ssh")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "BatchMode=yes",
+            "-i",
+            &key_path.to_string_lossy(),
+            "-p",
+            &port_str,
+            "root@127.0.0.1",
+            "poweroff",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let _ = qemu.kill().await;
+    let _ = qemu.wait().await;
+
+    // Compact the image — squash the COW layer into a standalone file
+    let status = Command::new("qemu-img")
+        .args([
+            "convert",
+            "-O",
+            "qcow2",
+            "-c",
+            &disk.to_string_lossy(),
+            &prepared_path.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("qemu-img convert failed")?;
+    if !status.success() {
+        anyhow::bail!("failed to compact prepared image");
+    }
+
+    // Clean up work dir
+    let _ = tokio::fs::remove_dir_all(&work_dir).await;
+
     Ok(())
 }
