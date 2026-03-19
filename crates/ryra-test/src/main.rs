@@ -247,13 +247,21 @@ async fn main() -> Result<()> {
     if args.list {
         println!("Tests from {}:", registry_path.display());
         for test in &discovered {
-            let svc_list = test.services().join(" + ");
-            println!(
-                "  {:<30} ({} tests, services: {})",
-                test.name(),
-                test.test_count(),
-                svc_list
-            );
+            if test.is_lifecycle() {
+                println!(
+                    "  {:<30} ({} steps, lifecycle)",
+                    test.name(),
+                    test.test_count(),
+                );
+            } else {
+                let svc_list = test.services().join(" + ");
+                println!(
+                    "  {:<30} ({} tests, services: {})",
+                    test.name(),
+                    test.test_count(),
+                    svc_list
+                );
+            }
         }
         return Ok(());
     }
@@ -370,7 +378,14 @@ async fn main() -> Result<()> {
             }
 
             println!("[{name}] running tests...");
-            let result = runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await;
+            let result = match test {
+                registry::DiscoveredTest::Lifecycle { steps, .. } => {
+                    runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry").await
+                }
+                _ => {
+                    runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await
+                }
+            };
 
             // On failure, save serial log to logs dir
             if !result.passed() {

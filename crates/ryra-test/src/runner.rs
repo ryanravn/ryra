@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::machine::Machine;
-use crate::registry::{DiscoveredTest, TestEntry};
+use crate::registry::{DiscoveredTest, StepEntry, TestEntry};
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
 
 fn print_event_result(name: &str, event: &Event) {
@@ -205,6 +205,10 @@ async fn build_env_prefix(vm: &Machine, test: &DiscoveredTest) -> Result<String>
             }
             Ok(lines.join(" && "))
         }
+        DiscoveredTest::Lifecycle { .. } => {
+            // Lifecycle tests handle env sourcing within their step commands
+            Ok(String::new())
+        }
     }
 }
 
@@ -226,6 +230,185 @@ async fn wait_for_service(vm: &Machine, service: &str) -> Event {
         kind: EventKind::Step,
         outcome,
         duration: t.elapsed(),
+    }
+}
+
+/// Execute a lifecycle test — interleaved actions and assertions.
+///
+/// Unlike `run_registry_test`, this processes a sequence of typed steps
+/// (add, remove, reset, wait, run, assert) rather than "add all then test".
+pub async fn run_lifecycle_test(
+    vm: &Machine,
+    name: &str,
+    steps: &[StepEntry],
+    repo_path: &str,
+) -> ScenarioResult {
+    let start = Instant::now();
+    let mut events = Vec::new();
+    let mut failed = false;
+
+    // Init first (all lifecycle tests start with ryra init)
+    println!("[{name}]   ryra init...");
+    let init_event = run_event(
+        vm,
+        EventKind::Init,
+        &format!("ryra init --repo {repo_path}"),
+        30,
+    )
+    .await;
+    print_event_result(name, &init_event);
+    if init_event.outcome.is_fail() {
+        failed = true;
+    }
+    events.push(init_event);
+
+    for step in steps {
+        if failed {
+            let desc = lifecycle_step_description(step);
+            let kind = lifecycle_step_kind(step);
+            events.push(Event {
+                description: desc.clone(),
+                kind,
+                outcome: Outcome::Skipped,
+                duration: Duration::ZERO,
+            });
+            println!("[{name}]   skip  {desc}");
+            continue;
+        }
+
+        match step {
+            StepEntry::Add { service } => {
+                println!("[{name}]   ryra add {service}...");
+                let event = run_event(
+                    vm,
+                    EventKind::Step,
+                    &format!("ryra add {service} --repo {repo_path}"),
+                    300,
+                )
+                .await;
+                print_event_result(name, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+            StepEntry::Remove { service } => {
+                println!("[{name}]   ryra remove {service}...");
+                let event = run_event(
+                    vm,
+                    EventKind::Step,
+                    &format!("ryra remove {service} -y"),
+                    120,
+                )
+                .await;
+                print_event_result(name, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+            StepEntry::Reset => {
+                println!("[{name}]   ryra reset...");
+                let event = run_event(
+                    vm,
+                    EventKind::Step,
+                    "ryra reset -y",
+                    120,
+                )
+                .await;
+                print_event_result(name, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+            StepEntry::Wait { service } => {
+                println!("[{name}]   waiting for {service}...");
+                let event = wait_for_service(vm, service).await;
+                print_event_result(name, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+            StepEntry::Run { name: step_name, run, timeout_secs } => {
+                println!("[{name}]   run: {step_name}...");
+                let event = run_event(
+                    vm,
+                    EventKind::Step,
+                    run,
+                    *timeout_secs,
+                )
+                .await;
+                print_event_result(name, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+            StepEntry::Assert { name: step_name, run, timeout_secs } => {
+                println!("[{name}]   assert: {step_name}...");
+                let t = Instant::now();
+                let timeout = Duration::from_secs(*timeout_secs);
+                let result = tokio::time::timeout(timeout, vm.exec(run)).await;
+
+                let outcome = match result {
+                    Ok(Ok(_)) => Outcome::Passed,
+                    Ok(Err(e)) => Outcome::Failed(format!("{e:#}")),
+                    Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
+                };
+
+                let event = Event {
+                    description: format!("assert: {step_name}"),
+                    kind: EventKind::Assertion,
+                    outcome,
+                    duration: t.elapsed(),
+                };
+                print_event_result(name, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+        }
+    }
+
+    let outcome = if failed {
+        let first_failure = events
+            .iter()
+            .find_map(|e| match &e.outcome {
+                Outcome::Failed(msg) => Some(msg.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "unknown failure".to_string());
+        Outcome::Failed(first_failure)
+    } else {
+        Outcome::Passed
+    };
+
+    ScenarioResult {
+        name: name.to_string(),
+        events,
+        duration: start.elapsed(),
+        outcome,
+    }
+}
+
+fn lifecycle_step_description(step: &StepEntry) -> String {
+    match step {
+        StepEntry::Add { service } => format!("ryra add {service}"),
+        StepEntry::Remove { service } => format!("ryra remove {service}"),
+        StepEntry::Reset => "ryra reset".to_string(),
+        StepEntry::Wait { service } => format!("wait for {service}"),
+        StepEntry::Run { name, .. } => format!("run: {name}"),
+        StepEntry::Assert { name, .. } => format!("assert: {name}"),
+    }
+}
+
+fn lifecycle_step_kind(step: &StepEntry) -> EventKind {
+    match step {
+        StepEntry::Assert { .. } => EventKind::Assertion,
+        _ => EventKind::Step,
     }
 }
 

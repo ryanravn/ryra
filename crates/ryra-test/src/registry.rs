@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// A discovered test suite from the registry — either single-service or multi-service.
+/// A discovered test suite from the registry — either single-service, multi-service, or lifecycle.
 #[derive(Debug, Clone)]
 pub enum DiscoveredTest {
     /// Tests from a `[[tests]]` section inside a `service.toml`.
@@ -10,12 +10,29 @@ pub enum DiscoveredTest {
         service_name: String,
         tests: Vec<TestEntry>,
     },
-    /// Tests from a `tests/*.toml` file in the registry.
+    /// Tests from a `tests/*.toml` file in the registry (services + tests format).
     MultiService {
         name: String,
         services: Vec<String>,
         tests: Vec<TestEntry>,
     },
+    /// Lifecycle tests from a `tests/*.toml` file with `[[steps]]` — interleaved actions and assertions.
+    Lifecycle {
+        name: String,
+        images: Vec<String>,
+        steps: Vec<StepEntry>,
+    },
+}
+
+/// A step in a lifecycle test — either an action or an assertion.
+#[derive(Debug, Clone)]
+pub enum StepEntry {
+    Add { service: String },
+    Remove { service: String },
+    Reset,
+    Wait { service: String },
+    Run { name: String, run: String, timeout_secs: u64 },
+    Assert { name: String, run: String, timeout_secs: u64 },
 }
 
 impl DiscoveredTest {
@@ -23,6 +40,7 @@ impl DiscoveredTest {
         match self {
             DiscoveredTest::SingleService { service_name, .. } => service_name,
             DiscoveredTest::MultiService { name, .. } => name,
+            DiscoveredTest::Lifecycle { name, .. } => name,
         }
     }
 
@@ -32,6 +50,11 @@ impl DiscoveredTest {
             DiscoveredTest::MultiService { services, .. } => {
                 services.iter().map(|s| s.as_str()).collect()
             }
+            DiscoveredTest::Lifecycle { images, .. } => {
+                // Lifecycle tests declare images directly, not services
+                // Return empty — image loading uses images_for_test() which handles this
+                images.iter().map(|s| s.as_str()).collect()
+            }
         }
     }
 
@@ -39,11 +62,16 @@ impl DiscoveredTest {
         match self {
             DiscoveredTest::SingleService { tests, .. } => tests,
             DiscoveredTest::MultiService { tests, .. } => tests,
+            DiscoveredTest::Lifecycle { .. } => &[],
         }
     }
 
     pub fn test_count(&self) -> usize {
-        self.tests().len()
+        match self {
+            DiscoveredTest::SingleService { tests, .. } => tests.len(),
+            DiscoveredTest::MultiService { tests, .. } => tests.len(),
+            DiscoveredTest::Lifecycle { steps, .. } => steps.len(),
+        }
     }
 
     #[allow(dead_code)]
@@ -53,11 +81,18 @@ impl DiscoveredTest {
             DiscoveredTest::MultiService { services, name, .. } => {
                 format!("{} ({})", name, services.join(" + "))
             }
+            DiscoveredTest::Lifecycle { name, steps, .. } => {
+                format!("{} ({} steps)", name, steps.len())
+            }
         }
     }
 
     pub fn is_multi_service(&self) -> bool {
         matches!(self, DiscoveredTest::MultiService { .. })
+    }
+
+    pub fn is_lifecycle(&self) -> bool {
+        matches!(self, DiscoveredTest::Lifecycle { .. })
     }
 }
 
@@ -196,10 +231,15 @@ fn discover_single_service(path: &PathBuf, service_name: &str) -> Result<Option<
     }))
 }
 
-/// Parse a multi-service test file from tests/*.toml.
+/// Parse a test file from tests/*.toml — detects lifecycle vs multi-service format.
 fn discover_multi_service(path: &PathBuf) -> Result<DiscoveredTest> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read {}", path.display()))?;
+
+    // Try lifecycle format first (has [[steps]])
+    if content.contains("[[steps]]") {
+        return discover_lifecycle(path, &content);
+    }
 
     let parsed: MultiServiceToml =
         toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
@@ -229,6 +269,72 @@ fn discover_multi_service(path: &PathBuf) -> Result<DiscoveredTest> {
     })
 }
 
+/// Parse a lifecycle test file with [[steps]].
+fn discover_lifecycle(path: &PathBuf, content: &str) -> Result<DiscoveredTest> {
+    let parsed: LifecycleToml =
+        toml::from_str(content).with_context(|| format!("failed to parse {}", path.display()))?;
+
+    if parsed.steps.is_empty() {
+        anyhow::bail!(
+            "lifecycle test '{}' has no steps defined",
+            parsed.test.name
+        );
+    }
+
+    let mut steps = Vec::new();
+    for s in parsed.steps {
+        let step = match s.action.as_str() {
+            "add" => {
+                let service = s.service.ok_or_else(|| {
+                    anyhow::anyhow!("step 'add' requires a 'service' field in test '{}'", parsed.test.name)
+                })?;
+                StepEntry::Add { service }
+            }
+            "remove" => {
+                let service = s.service.ok_or_else(|| {
+                    anyhow::anyhow!("step 'remove' requires a 'service' field in test '{}'", parsed.test.name)
+                })?;
+                StepEntry::Remove { service }
+            }
+            "reset" => StepEntry::Reset,
+            "wait" => {
+                let service = s.service.ok_or_else(|| {
+                    anyhow::anyhow!("step 'wait' requires a 'service' field in test '{}'", parsed.test.name)
+                })?;
+                StepEntry::Wait { service }
+            }
+            "run" => {
+                let name = s.name.ok_or_else(|| {
+                    anyhow::anyhow!("step 'run' requires a 'name' field in test '{}'", parsed.test.name)
+                })?;
+                let run = s.run.ok_or_else(|| {
+                    anyhow::anyhow!("step 'run' requires a 'run' field in test '{}'", parsed.test.name)
+                })?;
+                StepEntry::Run { name, run, timeout_secs: s.timeout }
+            }
+            "assert" => {
+                let name = s.name.ok_or_else(|| {
+                    anyhow::anyhow!("step 'assert' requires a 'name' field in test '{}'", parsed.test.name)
+                })?;
+                let run = s.run.ok_or_else(|| {
+                    anyhow::anyhow!("step 'assert' requires a 'run' field in test '{}'", parsed.test.name)
+                })?;
+                StepEntry::Assert { name, run, timeout_secs: s.timeout }
+            }
+            other => {
+                anyhow::bail!("unknown step action '{}' in test '{}'", other, parsed.test.name);
+            }
+        };
+        steps.push(step);
+    }
+
+    Ok(DiscoveredTest::Lifecycle {
+        name: parsed.test.name,
+        images: parsed.test.images,
+        steps,
+    })
+}
+
 /// Look up the container image for a service from its service.toml.
 pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<String>> {
     let service_toml = registry_path.join(service_name).join("service.toml");
@@ -245,11 +351,31 @@ pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<
 /// Get all container images needed for a test (including nginx for web services).
 pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<String> {
     let mut images = Vec::new();
-    for service in test.services() {
-        if let Ok(Some(image)) = service_image(registry_path, service) {
-            images.push(image);
+
+    match test {
+        DiscoveredTest::Lifecycle { images: declared, steps, .. } => {
+            // Use explicitly declared images
+            images.extend(declared.iter().cloned());
+            // Also look up images for any services referenced in add steps
+            for step in steps {
+                if let StepEntry::Add { service } = step {
+                    if let Ok(Some(image)) = service_image(registry_path, service) {
+                        if !images.contains(&image) {
+                            images.push(image);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            for service in test.services() {
+                if let Ok(Some(image)) = service_image(registry_path, service) {
+                    images.push(image);
+                }
+            }
         }
     }
+
     // nginx is always needed (ryra deploys it for web services)
     images.push("docker.io/library/nginx:alpine".to_string());
     images
@@ -310,6 +436,34 @@ struct MultiServiceToml {
 struct MultiServiceMeta {
     name: String,
     services: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct LifecycleToml {
+    test: LifecycleMeta,
+    #[serde(default)]
+    steps: Vec<StepToml>,
+}
+
+#[derive(serde::Deserialize)]
+struct LifecycleMeta {
+    name: String,
+    /// Container images to pre-load into the VM.
+    #[serde(default)]
+    images: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct StepToml {
+    action: String,
+    #[serde(default)]
+    service: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    run: Option<String>,
+    #[serde(default = "default_timeout")]
+    timeout: u64,
 }
 
 #[cfg(test)]
@@ -450,5 +604,90 @@ run = "echo ok"
             .unwrap();
         assert!(combo.is_multi_service());
         assert_eq!(combo.services(), vec!["whoami", "postgres"]);
+
+        // Check lifecycle tests are discovered
+        let remove = discovered
+            .iter()
+            .find(|d| d.name() == "remove-whoami")
+            .unwrap();
+        assert!(remove.is_lifecycle());
+        assert!(remove.test_count() > 0);
+
+        let reset = discovered
+            .iter()
+            .find(|d| d.name() == "reset")
+            .unwrap();
+        assert!(reset.is_lifecycle());
+
+        let readd = discovered
+            .iter()
+            .find(|d| d.name() == "re-add-after-remove")
+            .unwrap();
+        assert!(readd.is_lifecycle());
+
+        let idempotent = discovered
+            .iter()
+            .find(|d| d.name() == "idempotent-init")
+            .unwrap();
+        assert!(idempotent.is_lifecycle());
+    }
+
+    #[test]
+    fn parse_lifecycle_toml() {
+        let toml = r#"
+[test]
+name = "remove-test"
+
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "responds"
+run = "curl -sf http://localhost"
+
+[[steps]]
+action = "remove"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "gone"
+run = "! id whoami"
+"#;
+        let parsed: LifecycleToml = toml::from_str(toml).unwrap();
+        assert_eq!(parsed.test.name, "remove-test");
+        assert_eq!(parsed.steps.len(), 5);
+        assert_eq!(parsed.steps[0].action, "add");
+        assert_eq!(parsed.steps[0].service.as_deref(), Some("whoami"));
+        assert_eq!(parsed.steps[2].action, "assert");
+        assert_eq!(parsed.steps[2].name.as_deref(), Some("responds"));
+        assert_eq!(parsed.steps[3].action, "remove");
+    }
+
+    #[test]
+    fn lifecycle_with_images() {
+        let toml = r#"
+[test]
+name = "custom-images"
+images = ["docker.io/custom/image:latest"]
+
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "reset"
+"#;
+        let parsed: LifecycleToml = toml::from_str(toml).unwrap();
+        assert_eq!(parsed.test.images, vec!["docker.io/custom/image:latest"]);
+        assert_eq!(parsed.steps.len(), 2);
+        assert_eq!(parsed.steps[1].action, "reset");
+        assert!(parsed.steps[1].service.is_none());
     }
 }

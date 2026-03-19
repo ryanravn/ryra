@@ -318,6 +318,14 @@ pub async fn init(config: Config) -> Result<InitResult> {
         let _ = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await;
     }
 
+    // Preserve installed services from existing config
+    let mut config = config;
+    if let Ok(existing) = config::load_or_default(&paths.config_file) {
+        if !existing.services.is_empty() {
+            config.services = existing.services;
+        }
+    }
+
     // Write config as a step (needs sudo for /etc/ryra)
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
