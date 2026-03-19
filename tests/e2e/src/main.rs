@@ -74,15 +74,17 @@ pub struct Args {
 }
 
 fn find_ryra_binary() -> Result<PathBuf> {
+    // Workspace root is two levels up from tests/e2e/
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for profile in &["release", "debug"] {
-        let path = PathBuf::from(format!("../../target/{profile}/ryra-cli"));
+        let path = workspace_root.join(format!("target/{profile}/ryra-cli"));
         if path.exists() {
             return Ok(std::fs::canonicalize(&path)?);
         }
     }
     anyhow::bail!(
         "ryra binary not found in target/release or target/debug. \
-         Build with: cargo build --release -p ryra-cli"
+         Build with: cargo build -p ryra-cli"
     )
 }
 
@@ -106,6 +108,45 @@ fn print_summary(results: &[ScenarioResult]) {
         total_duration.as_secs_f64()
     );
     println!("========================================");
+}
+
+fn save_results(results: &[ScenarioResult]) -> Result<()> {
+    let log_dir = PathBuf::from("tests/e2e/logs");
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let log_dir = workspace_root.join(log_dir);
+    std::fs::create_dir_all(&log_dir)?;
+
+    // Write full results to a timestamped log file
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let log_path = log_dir.join(format!("e2e-{timestamp}.log"));
+
+    let mut output = String::new();
+    for result in results {
+        output.push_str(&format!("{result}"));
+    }
+
+    let passed = results.iter().filter(|r| r.passed()).count();
+    let failed = results.len() - passed;
+    let total_duration: std::time::Duration = results.iter().map(|r| r.duration).sum();
+    output.push_str(&format!(
+        "\n{passed} passed, {failed} failed, {} total ({:.1}s)\n",
+        results.len(),
+        total_duration.as_secs_f64()
+    ));
+
+    std::fs::write(&log_path, &output)?;
+
+    // Also write to a stable "latest" symlink
+    let latest = log_dir.join("latest.log");
+    let _ = std::fs::remove_file(&latest);
+    std::fs::write(&latest, &output)?;
+
+    println!("Results saved to: {}", log_path.display());
+
+    Ok(())
 }
 
 fn check_prerequisites(use_kvm: bool) -> Result<()> {
@@ -158,12 +199,25 @@ fn check_prerequisites(use_kvm: bool) -> Result<()> {
         );
     }
 
-    if use_kvm && !std::path::Path::new("/dev/kvm").exists() {
-        anyhow::bail!(
-            "/dev/kvm not found — KVM is not available on this machine.\n\
-             Run with --no-kvm to use software emulation (slower), or \
-             run on a machine with KVM support."
-        );
+    if use_kvm {
+        let kvm = std::path::Path::new("/dev/kvm");
+        if !kvm.exists() {
+            anyhow::bail!(
+                "/dev/kvm not found — KVM is not available on this machine.\n\
+                 Run with --no-kvm to use software emulation (slower), or \
+                 run on a machine with KVM support."
+            );
+        }
+        // Check if the current user can actually access /dev/kvm
+        let accessible = std::fs::File::open(kvm).is_ok();
+        if !accessible {
+            anyhow::bail!(
+                "/dev/kvm exists but is not accessible — permission denied.\n\
+                 Add your user to the kvm group and re-login:\n  \
+                 sudo usermod -aG kvm $USER\n  \
+                 # then log out and back in, or run: newgrp kvm"
+            );
+        }
     }
 
     Ok(())
@@ -489,16 +543,26 @@ async fn run_scenario_mode(args: &Args) -> Result<()> {
 
             let result = scenario.run(&vm).await;
 
-            if !result.passed() && verbose {
+            // On failure, save serial log to logs dir
+            if !result.passed() {
                 let serial_log = vm.work_dir.join("serial.log");
                 if let Ok(content) = tokio::fs::read_to_string(&serial_log).await {
-                    let lines: Vec<&str> = content.lines().collect();
-                    let start_idx = lines.len().saturating_sub(50);
-                    eprintln!("[{name}] --- serial log (last 50 lines) ---");
-                    for line in &lines[start_idx..] {
-                        eprintln!("  {line}");
+                    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+                    let fail_log_dir = workspace_root.join("tests/e2e/logs");
+                    let _ = tokio::fs::create_dir_all(&fail_log_dir).await;
+                    let dest = fail_log_dir.join(format!("{name}-serial.log"));
+                    let _ = tokio::fs::write(&dest, &content).await;
+                    eprintln!("[{name}] serial log saved to: {}", dest.display());
+
+                    if verbose {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let start_idx = lines.len().saturating_sub(50);
+                        eprintln!("[{name}] --- serial log (last 50 lines) ---");
+                        for line in &lines[start_idx..] {
+                            eprintln!("  {line}");
+                        }
+                        eprintln!("[{name}] --- end serial log ---");
                     }
-                    eprintln!("[{name}] --- end serial log ---");
                 }
             }
 
@@ -525,6 +589,7 @@ async fn run_scenario_mode(args: &Args) -> Result<()> {
     }
 
     print_summary(&results);
+    save_results(&results)?;
 
     if results.iter().any(|r| !r.passed()) {
         std::process::exit(1);

@@ -136,6 +136,7 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
     // Build prepared image if it doesn't exist
     if !prepared_path.exists() {
         println!("Preparing base image (installing packages — this is a one-time operation)...");
+        println!("  Serial log: /tmp/ryra-prepare-base/serial.log");
         prepare_image(
             distro,
             &raw_path,
