@@ -229,9 +229,46 @@ fn discover_multi_service(path: &PathBuf) -> Result<DiscoveredTest> {
     })
 }
 
+/// Look up the container image for a service from its service.toml.
+pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<String>> {
+    let service_toml = registry_path.join(service_name).join("service.toml");
+    if !service_toml.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&service_toml)
+        .with_context(|| format!("failed to read {}", service_toml.display()))?;
+    let parsed: ServiceTomlImage = toml::from_str(&content)
+        .with_context(|| format!("failed to parse {}", service_toml.display()))?;
+    Ok(parsed.service.image)
+}
+
+/// Get all container images needed for a test (including nginx for web services).
+pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<String> {
+    let mut images = Vec::new();
+    for service in test.services() {
+        if let Ok(Some(image)) = service_image(registry_path, service) {
+            images.push(image);
+        }
+    }
+    // nginx is always needed (ryra deploys it for web services)
+    images.push("docker.io/library/nginx:alpine".to_string());
+    images
+}
+
 // ---------------------------------------------------------------------------
 // Lightweight TOML structs for parsing (avoids full ServiceDef dependency)
 // ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct ServiceTomlImage {
+    service: ServiceMetaImage,
+}
+
+#[derive(serde::Deserialize)]
+struct ServiceMetaImage {
+    #[serde(default)]
+    image: Option<String>,
+}
 
 #[derive(serde::Deserialize)]
 struct ServiceTomlTests {

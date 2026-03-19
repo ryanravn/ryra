@@ -480,6 +480,122 @@ async fn write_seed_iso(
     Ok(())
 }
 
+/// Cache directory for saved container images on the host.
+fn image_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("ryra-e2e")
+        .join("images")
+}
+
+/// Ensure a container image is pulled on the host and saved as a tar.
+/// Returns the path to the cached tar file.
+pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
+    let cache = image_cache_dir();
+    tokio::fs::create_dir_all(&cache)
+        .await
+        .context("failed to create image cache dir")?;
+
+    // Use a safe filename: replace / and : with -
+    let safe_name = image.replace(['/', ':'], "-");
+    let tar_path = cache.join(format!("{safe_name}.tar"));
+
+    if tar_path.exists() {
+        return Ok(tar_path);
+    }
+
+    // Pull on the host
+    println!("    pulling {image} on host...");
+    let status = Command::new("podman")
+        .args(["pull", image])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("failed to run podman pull")?;
+    if !status.success() {
+        anyhow::bail!("podman pull {image} failed");
+    }
+
+    // Save to tar
+    let partial = tar_path.with_extension("tar.partial");
+    let status = Command::new("podman")
+        .args(["save", "-o", &partial.to_string_lossy(), image])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("failed to run podman save")?;
+    if !status.success() {
+        let _ = tokio::fs::remove_file(&partial).await;
+        anyhow::bail!("podman save {image} failed");
+    }
+
+    tokio::fs::rename(&partial, &tar_path)
+        .await
+        .context("failed to move saved image into cache")?;
+
+    Ok(tar_path)
+}
+
+/// Load cached container images into a VM.
+///
+/// Images are pulled on the host, saved as tars, SCP'd into the VM, and
+/// loaded into root's podman store. Rootless service users can access them
+/// via podman's `additional_image_stores` configured in the VM.
+pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result<()> {
+    if images.is_empty() {
+        return Ok(());
+    }
+
+    // Configure podman so rootless users can see root's image store.
+    // This makes `podman pull` a no-op for images already loaded as root.
+    machine
+        .exec(
+            "mkdir -p /etc/containers/storage.conf.d && \
+             printf '[storage.options]\\nadditionalimagestores = [\"/var/lib/containers/storage\"]\\n' \
+             > /etc/containers/storage.conf.d/shared-cache.conf"
+        )
+        .await
+        .ok(); // best-effort
+
+    let key = machine.ssh_key_path();
+    let port = machine.ssh_port.to_string();
+
+    for image in images {
+        let tar_path = ensure_image_cached(image).await?;
+
+        // SCP the tar into the VM
+        let remote_tar = format!("/tmp/{}.tar", image.replace(['/', ':'], "-"));
+        let status = Command::new("scp")
+            .args([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-i", &key.to_string_lossy(),
+                "-P", &port,
+                &tar_path.to_string_lossy(),
+                &format!("root@127.0.0.1:{remote_tar}"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .context("failed to SCP image tar to VM")?;
+        if !status.success() {
+            anyhow::bail!("SCP of {image} tar failed");
+        }
+
+        // Load into root's podman store
+        machine
+            .exec(&format!("podman load -i {remote_tar} && rm -f {remote_tar}"))
+            .await
+            .context(format!("failed to load {image} in VM"))?;
+    }
+
+    Ok(())
+}
+
 /// Copy the ryra binary into a running VM via SCP.
 pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
     let key = machine.ssh_key_path();

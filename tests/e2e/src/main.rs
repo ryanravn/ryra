@@ -356,6 +356,13 @@ async fn main() -> Result<()> {
                 return fail_result(format!("failed to copy registry to VM: {e:#}"));
             }
 
+            // Load cached container images into VM
+            let images = registry::images_for_test(&registry_path, test);
+            if let Err(e) = machine::load_images_into_vm(&vm, &images).await {
+                let _ = vm.destroy().await;
+                return fail_result(format!("failed to load container images: {e:#}"));
+            }
+
             let result = runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await;
 
             // On failure, save serial log to logs dir
