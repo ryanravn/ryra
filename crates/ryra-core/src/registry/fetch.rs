@@ -1,15 +1,40 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::registry::service_def::ServiceDef;
 
-/// Ensure a repo is cached and return the path to it.
-/// For git URLs: clone or pull. For local paths: symlink.
+/// How a registry source is accessed.
+enum RegistrySource {
+    /// A JSON URL (e.g., `https://registry.ryra.dev/index.json`).
+    Json(String),
+    /// A git repository URL.
+    Git(String),
+    /// A local directory path.
+    Local(PathBuf),
+}
+
+/// Detect the registry source type from a URL/path string.
+fn detect_source(url: &str) -> RegistrySource {
+    let path = Path::new(url);
+    if path.exists() && path.is_dir() {
+        return RegistrySource::Local(path.to_path_buf());
+    }
+
+    if url.ends_with(".json") {
+        return RegistrySource::Json(url.to_string());
+    }
+
+    RegistrySource::Git(url.to_string())
+}
+
+/// Ensure a registry is cached and return the path to it.
+/// Supports JSON URLs, git repos, and local directories.
 pub async fn ensure_repo(url: &str, cache_dir: &Path) -> Result<PathBuf> {
-    let source_path = Path::new(url);
-    if source_path.exists() && source_path.is_dir() {
-        ensure_local_repo(source_path, cache_dir)
-    } else {
-        ensure_git_repo(url, cache_dir).await
+    match detect_source(url) {
+        RegistrySource::Local(path) => ensure_local_repo(&path, cache_dir),
+        RegistrySource::Git(url) => ensure_git_repo(&url, cache_dir).await,
+        RegistrySource::Json(url) => ensure_json_registry(&url, cache_dir).await,
     }
 }
 
@@ -20,6 +45,58 @@ fn repo_cache_name(url: &str) -> String {
         .trim_matches('-')
         .to_string()
 }
+
+// ---------------------------------------------------------------------------
+// JSON registry
+// ---------------------------------------------------------------------------
+
+/// JSON registry format: a map of service names to their definitions.
+#[derive(serde::Deserialize)]
+struct JsonRegistry {
+    services: BTreeMap<String, ServiceDef>,
+}
+
+/// Fetch a JSON registry and write individual service.toml files to cache.
+async fn ensure_json_registry(url: &str, cache_dir: &Path) -> Result<PathBuf> {
+    let dest = cache_dir.join(repo_cache_name(url));
+
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| Error::Registry(format!("failed to fetch registry from {url}: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(Error::Registry(format!(
+            "registry at {url} returned {}",
+            response.status()
+        )));
+    }
+
+    let registry: JsonRegistry = response
+        .json()
+        .await
+        .map_err(|e| Error::Registry(format!("failed to parse registry JSON from {url}: {e}")))?;
+
+    // Write each service as {dest}/{name}/service.toml
+    for (name, def) in &registry.services {
+        let svc_dir = dest.join(name);
+        std::fs::create_dir_all(&svc_dir).map_err(|source| Error::DirCreate {
+            path: svc_dir.clone(),
+            source,
+        })?;
+        let toml_content =
+            toml::to_string_pretty(def).map_err(|e| Error::Registry(format!("failed to serialize {name}: {e}")))?;
+        std::fs::write(svc_dir.join("service.toml"), toml_content).map_err(|source| Error::FileWrite {
+            path: svc_dir.join("service.toml"),
+            source,
+        })?;
+    }
+
+    Ok(dest)
+}
+
+// ---------------------------------------------------------------------------
+// Git registry
+// ---------------------------------------------------------------------------
 
 /// Clone or update a git repo into the cache directory.
 async fn ensure_git_repo(url: &str, cache_dir: &Path) -> Result<PathBuf> {
@@ -67,6 +144,10 @@ async fn pull_repo(dest: &Path) -> Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Local directory
+// ---------------------------------------------------------------------------
 
 /// Symlink a local directory as a repo.
 fn ensure_local_repo(source: &Path, cache_dir: &Path) -> Result<PathBuf> {

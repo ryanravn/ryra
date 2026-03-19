@@ -290,6 +290,8 @@ pub struct ResetResult {
     pub steps: Vec<Step>,
 }
 
+// TODO: Switch to hosted JSON registry (e.g., https://registry.ryra.dev/index.json)
+// once the platform is live. For now, default to the git repo.
 pub const DEFAULT_REPO: &str = "https://github.com/ryanravn/ryra-registry";
 
 /// Resolve which repo to use and ensure it's cached.

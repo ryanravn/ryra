@@ -69,6 +69,8 @@ pub enum Error {
     #[error("invalid exposure mode: {0}")]
     InvalidExposure(String),
 
+    #[error("registry error: {0}")]
+    Registry(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
