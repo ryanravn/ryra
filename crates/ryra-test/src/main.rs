@@ -72,7 +72,7 @@ pub struct Args {
 }
 
 fn find_ryra_binary() -> Result<PathBuf> {
-    // Workspace root is two levels up from tests/e2e/
+    // Workspace root is two levels up from crates/ryra-test/
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for profile in &["release", "debug"] {
         let path = workspace_root.join(format!("target/{profile}/ryra-cli"));
@@ -110,7 +110,7 @@ fn print_summary(results: &[ScenarioResult]) {
 
 fn save_results(results: &[ScenarioResult]) -> Result<()> {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let log_dir = workspace_root.join("tests/e2e/logs");
+    let log_dir = workspace_root.join("crates/ryra-test/logs");
     std::fs::create_dir_all(&log_dir)?;
 
     let timestamp = std::time::SystemTime::now()
@@ -217,7 +217,7 @@ fn check_prerequisites(use_kvm: bool) -> Result<()> {
     Ok(())
 }
 
-/// Find the registry path — explicit arg, or auto-detect from fixtures.
+/// Find the registry path — explicit arg, or auto-detect.
 fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     if let Some(p) = explicit {
         return std::fs::canonicalize(p)
@@ -225,8 +225,7 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     }
 
     let candidates = [
-        PathBuf::from("tests/e2e/fixtures/registry"),
-        PathBuf::from("fixtures/registry"),
+        PathBuf::from("registry"),
     ];
     for c in &candidates {
         if c.exists() {
@@ -339,18 +338,22 @@ async fn main() -> Result<()> {
             };
 
             // Spawn VM
+            println!("[{name}] booting VM...");
             let vm = match Machine::spawn(&base_image, &id, ssh_port, &spawn_opts).await {
                 Ok(vm) => vm,
                 Err(e) => return fail_result(format!("failed to spawn VM: {e:#}")),
             };
+            println!("[{name}] VM ready");
 
             // Copy ryra binary into VM
+            println!("[{name}] copying ryra binary...");
             if let Err(e) = machine::copy_ryra_to_vm(&vm, &ryra_bin).await {
                 let _ = vm.destroy().await;
                 return fail_result(format!("failed to copy ryra to VM: {e:#}"));
             }
 
             // Copy registry into VM
+            println!("[{name}] copying registry...");
             if let Err(e) = machine::copy_fixtures_to_vm(&vm, &registry_path).await {
                 let _ = vm.destroy().await;
                 return fail_result(format!("failed to copy registry to VM: {e:#}"));
@@ -358,11 +361,15 @@ async fn main() -> Result<()> {
 
             // Load cached container images into VM
             let images = registry::images_for_test(&registry_path, test);
+            if !images.is_empty() {
+                println!("[{name}] loading {} container images...", images.len());
+            }
             if let Err(e) = machine::load_images_into_vm(&vm, &images).await {
                 let _ = vm.destroy().await;
                 return fail_result(format!("failed to load container images: {e:#}"));
             }
 
+            println!("[{name}] running tests...");
             let result = runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await;
 
             // On failure, save serial log to logs dir
@@ -370,7 +377,7 @@ async fn main() -> Result<()> {
                 let serial_log = vm.work_dir.join("serial.log");
                 if let Ok(content) = tokio::fs::read_to_string(&serial_log).await {
                     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-                    let fail_log_dir = workspace_root.join("tests/e2e/logs");
+                    let fail_log_dir = workspace_root.join("crates/ryra-test/logs");
                     let _ = tokio::fs::create_dir_all(&fail_log_dir).await;
                     let dest = fail_log_dir.join(format!("{name}-serial.log"));
                     let _ = tokio::fs::write(&dest, &content).await;

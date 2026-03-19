@@ -91,7 +91,7 @@ impl Machine {
         let start = std::time::Instant::now();
         loop {
             let cmd = format!(
-                "systemctl --machine=ryra-{user}@ --user is-active {unit} 2>/dev/null || echo inactive"
+                "systemctl --machine={user}@ --user is-active {unit} 2>/dev/null || echo inactive"
             );
             if let Ok(output) = self.exec(&cmd).await {
                 if output.stdout_trimmed() == "active" {
@@ -101,7 +101,7 @@ impl Machine {
 
             if start.elapsed() > timeout {
                 bail!(
-                    "timed out waiting for {unit} (user ryra-{user}) to become active after {}s",
+                    "timed out waiting for {unit} (user {user}) to become active after {}s",
                     timeout.as_secs()
                 );
             }

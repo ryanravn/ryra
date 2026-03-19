@@ -1032,6 +1032,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryra-test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dirs",
+ "rand",
+ "serde",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"

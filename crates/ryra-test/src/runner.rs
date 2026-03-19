@@ -6,6 +6,15 @@ use crate::machine::Machine;
 use crate::registry::{DiscoveredTest, TestEntry};
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
 
+fn print_event_result(name: &str, event: &Event) {
+    let elapsed = format!("{:.1}s", event.duration.as_secs_f64());
+    match &event.outcome {
+        Outcome::Passed => println!("[{name}]     ok ({elapsed})"),
+        Outcome::Failed(msg) => println!("[{name}]     FAIL ({elapsed}) — {msg}"),
+        Outcome::Skipped => println!("[{name}]     skip"),
+    }
+}
+
 /// Execute a registry-defined test suite inside a VM.
 ///
 /// 1. Runs `ryra init`
@@ -18,10 +27,12 @@ pub async fn run_registry_test(
     repo_path: &str,
 ) -> ScenarioResult {
     let start = Instant::now();
+    let name = test.name();
     let mut events = Vec::new();
     let mut failed = false;
 
     // Init
+    println!("[{name}]   ryra init...");
     let init_event = run_event(
         vm,
         EventKind::Init,
@@ -29,6 +40,7 @@ pub async fn run_registry_test(
         30,
     )
     .await;
+    print_event_result(name, &init_event);
     if init_event.outcome.is_fail() {
         failed = true;
     }
@@ -37,6 +49,7 @@ pub async fn run_registry_test(
     // Deploy each service
     if !failed {
         for service in test.services() {
+            println!("[{name}]   ryra add {service}...");
             let step_event = run_event(
                 vm,
                 EventKind::Step,
@@ -44,6 +57,7 @@ pub async fn run_registry_test(
                 300,
             )
             .await;
+            print_event_result(name, &step_event);
 
             if step_event.outcome.is_fail() {
                 failed = true;
@@ -53,7 +67,9 @@ pub async fn run_registry_test(
             events.push(step_event);
 
             // Wait for service to be active
+            println!("[{name}]   waiting for {service} to start...");
             let wait_event = wait_for_service(vm, service).await;
+            print_event_result(name, &wait_event);
             if wait_event.outcome.is_fail() {
                 failed = true;
                 events.push(wait_event);
@@ -91,10 +107,13 @@ pub async fn run_registry_test(
                 outcome: Outcome::Skipped,
                 duration: Duration::ZERO,
             });
+            println!("[{name}]   skip  {}", test_entry.name);
             continue;
         }
 
+        println!("[{name}]   test  {}...", test_entry.name);
         let event = run_test_entry(vm, test_entry, &env_prefix).await;
+        print_event_result(name, &event);
         if event.outcome.is_fail() {
             failed = true;
         }

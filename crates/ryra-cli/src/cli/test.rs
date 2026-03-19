@@ -262,15 +262,14 @@ async fn run_vm(filter: Option<&str>, verbose: bool) -> Result<()> {
     let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let e2e_bin = ["release", "debug"]
         .iter()
-        .map(|p| workspace_root.join(format!("tests/e2e/target/{p}/ryra-e2e")))
+        .map(|p| workspace_root.join(format!("target/{p}/ryra-test")))
         .find(|p| p.exists());
 
     let e2e_bin = match e2e_bin {
         Some(p) => p,
         None => {
             anyhow::bail!(
-                "E2E test binary not found. Build it first:\n  \
-                 cargo build --manifest-path tests/e2e/Cargo.toml"
+                "ryra-test binary not found. Build with: cargo build -p ryra-test"
             );
         }
     };

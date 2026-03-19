@@ -564,6 +564,7 @@ pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result
 
     for image in images {
         let tar_path = ensure_image_cached(image).await?;
+        println!("    loading {image} into VM...");
 
         // SCP the tar into the VM
         let remote_tar = format!("/tmp/{}.tar", image.replace(['/', ':'], "-"));

@@ -1,0 +1,17 @@
+[package]
+name = "ryra-test"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "ryra-test"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true, features = ["sync", "time", "net", "fs"] }
+serde.workspace = true
+toml.workspace = true
+rand = "0.9"
+dirs = "6"

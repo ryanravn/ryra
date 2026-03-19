@@ -427,12 +427,12 @@ run = "echo ok"
     }
 
     #[test]
-    fn discover_fixture_registry() {
-        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/registry");
-        if !fixtures.exists() {
+    fn discover_registry() {
+        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
+        if !registry.exists() {
             return; // skip if not available
         }
-        let discovered = discover(&fixtures).unwrap();
+        let discovered = discover(&registry).unwrap();
         let names: Vec<&str> = discovered.iter().map(|d| d.name()).collect();
         assert!(names.contains(&"whoami"));
         assert!(names.contains(&"postgres"));
