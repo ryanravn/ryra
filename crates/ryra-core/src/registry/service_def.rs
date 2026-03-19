@@ -175,15 +175,52 @@ pub struct VolumeDef {
     pub mount_path: String,
 }
 
+/// How an env var is presented to the user during `ryra add`.
+///
+/// - `default`: static value or template (e.g. `{{secret.password}}`),
+///   not prompted — user can edit `.env` manually after install
+/// - `prompted`: shown during `ryra add` with a default value — optional
+///   but visible (e.g. API keys that can be left empty)
+/// - `required`: must be provided during `ryra add` — no usable default,
+///   blocks install if not provided. Tests must supply these via `env` overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvKind {
+    /// Not prompted. Value is used as-is (may contain templates like `{{secret.*}}`).
+    #[default]
+    Default,
+    /// Prompted during `ryra add` with a default. User can accept or change.
+    Prompted,
+    /// Must be provided. No usable default — fails in non-interactive mode
+    /// unless supplied via env overrides.
+    Required,
+}
+
+/// Format of an env var's value — used for secret generation and input validation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvFormat {
+    /// Free-form string (default). Secrets generate 32-char alphanumeric.
+    #[default]
+    String,
+    /// Hexadecimal string. Secrets generate 64-char hex.
+    Hex,
+    /// UUID v4.
+    Uuid,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvVar {
     pub name: String,
     pub value: String,
-    /// If set, the CLI prompts the user with this message during `ryra add`.
-    /// The `value` field serves as the default. User input replaces `value`
-    /// before template rendering.
+    #[serde(default)]
+    pub kind: EnvKind,
+    /// Prompt message shown during `ryra add` (for `prompted` and `required` kinds).
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Value format — used to generate secrets and validate user input.
+    #[serde(default)]
+    pub format: EnvFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,11 +326,11 @@ pub struct MultiServiceTestMeta {
 // ---------------------------------------------------------------------------
 
 impl ServiceDef {
-    /// Returns env var names that are required (have a prompt but no default value).
+    /// Returns env var names that are required — must be provided during install.
     pub fn required_env_vars(&self) -> Vec<&str> {
         self.env
             .iter()
-            .filter(|e| e.prompt.is_some() && e.value.is_empty())
+            .filter(|e| e.kind == EnvKind::Required)
             .map(|e| e.name.as_str())
             .collect()
     }

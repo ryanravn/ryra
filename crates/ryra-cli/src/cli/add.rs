@@ -112,28 +112,54 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
         None
     };
 
-    // Prompt for configurable env vars
+    // Prompt for env vars based on their kind
+    use ryra_core::registry::service_def::EnvKind;
+
     let mut env_overrides = BTreeMap::new();
     let promptable: Vec<_> = reg_service
         .def
         .env
         .iter()
-        .filter(|e| e.prompt.is_some())
+        .filter(|e| matches!(e.kind, EnvKind::Prompted | EnvKind::Required))
         .collect();
 
     if !promptable.is_empty() && interactive {
         println!("\nConfigure {service}:");
         for env in &promptable {
             let prompt_text = env.prompt.as_deref().unwrap_or(&env.name);
-            let value: String = Input::new()
-                .with_prompt(format!("  {prompt_text}"))
-                .default(env.value.clone())
-                .interact_text()?;
-            if value != env.value {
+            let is_required = env.kind == EnvKind::Required;
+
+            if is_required {
+                // Required: must provide a value, no default
+                let value: String = Input::new()
+                    .with_prompt(format!("  {prompt_text} (required)"))
+                    .interact_text()?;
                 env_overrides.insert(env.name.clone(), value);
+            } else {
+                // Prompted: has a default, user can accept or change
+                let value: String = Input::new()
+                    .with_prompt(format!("  {prompt_text}"))
+                    .default(env.value.clone())
+                    .interact_text()?;
+                if value != env.value {
+                    env_overrides.insert(env.name.clone(), value);
+                }
             }
         }
         println!();
+    } else if !interactive {
+        // Non-interactive: fail if required env vars are missing
+        let missing_required: Vec<&str> = promptable
+            .iter()
+            .filter(|e| e.kind == EnvKind::Required)
+            .map(|e| e.name.as_str())
+            .collect();
+        if !missing_required.is_empty() {
+            bail!(
+                "required env vars not provided (run interactively or set via test env): {}",
+                missing_required.join(", ")
+            );
+        }
     }
 
     let result = ryra_core::add_service(

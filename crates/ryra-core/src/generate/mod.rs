@@ -256,7 +256,9 @@ fn render_env_vars(
             Ok(EnvVar {
                 name: env.name.clone(),
                 value,
+                kind: Default::default(),
                 prompt: None,
+                format: Default::default(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -268,7 +270,9 @@ fn render_env_vars(
                 rendered.push(EnvVar {
                     name: env_name.clone(),
                     value,
+                    kind: Default::default(),
                     prompt: None,
+                    format: Default::default(),
                 });
             }
         }
@@ -280,7 +284,9 @@ fn render_env_vars(
                 rendered.push(EnvVar {
                     name: env_name.clone(),
                     value,
+                    kind: Default::default(),
                     prompt: None,
+                    format: Default::default(),
                 });
             }
         }

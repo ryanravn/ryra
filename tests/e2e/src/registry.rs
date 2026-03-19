@@ -160,7 +160,7 @@ fn discover_single_service(path: &PathBuf, service_name: &str) -> Result<Option<
     let required: Vec<&str> = parsed
         .env
         .iter()
-        .filter(|e| e.prompt.is_some() && e.value.is_empty())
+        .filter(|e| e.kind.as_deref() == Some("required"))
         .map(|e| e.name.as_str())
         .collect();
 
@@ -245,9 +245,7 @@ struct ServiceTomlTests {
 struct EnvToml {
     name: String,
     #[serde(default)]
-    value: String,
-    #[serde(default)]
-    prompt: Option<String>,
+    kind: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -335,7 +333,7 @@ image = "gitea/gitea"
 
 [[env]]
 name = "GITEA_DOMAIN"
-value = ""
+kind = "required"
 prompt = "Enter domain"
 
 [[tests]]
@@ -346,7 +344,7 @@ run = "curl -sf http://localhost"
         let required: Vec<&str> = parsed
             .env
             .iter()
-            .filter(|e| e.prompt.is_some() && e.value.is_empty())
+            .filter(|e| e.kind.as_deref() == Some("required"))
             .map(|e| e.name.as_str())
             .collect();
         assert_eq!(required, vec!["GITEA_DOMAIN"]);
@@ -365,7 +363,7 @@ image = "gitea/gitea"
 
 [[env]]
 name = "GITEA_DOMAIN"
-value = ""
+kind = "required"
 prompt = "Enter domain"
 
 [[tests]]
