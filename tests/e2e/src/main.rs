@@ -5,7 +5,6 @@ mod ports;
 mod registry;
 mod runner;
 mod scenario;
-mod tests;
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -60,16 +59,15 @@ pub struct Args {
     #[arg(long, short)]
     pub verbose: bool,
 
-    /// Run registry-defined tests instead of built-in scenarios.
-    /// Pass a path to a registry directory, or omit to use the bundled fixtures.
+    /// Path to registry directory (auto-detected if omitted)
     #[arg(long)]
-    pub registry: Option<Option<PathBuf>>,
+    pub registry: Option<PathBuf>,
 
-    /// List available scenarios/tests
+    /// List available tests
     #[arg(long)]
     pub list: bool,
 
-    /// Scenario/test names to run (runs all if empty, supports substring match)
+    /// Test names to run (runs all if empty, supports substring match)
     pub tests: Vec<String>,
 }
 
@@ -111,12 +109,10 @@ fn print_summary(results: &[ScenarioResult]) {
 }
 
 fn save_results(results: &[ScenarioResult]) -> Result<()> {
-    let log_dir = PathBuf::from("tests/e2e/logs");
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let log_dir = workspace_root.join(log_dir);
+    let log_dir = workspace_root.join("tests/e2e/logs");
     std::fs::create_dir_all(&log_dir)?;
 
-    // Write full results to a timestamped log file
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -139,7 +135,6 @@ fn save_results(results: &[ScenarioResult]) -> Result<()> {
 
     std::fs::write(&log_path, &output)?;
 
-    // Also write to a stable "latest" symlink
     let latest = log_dir.join("latest.log");
     let _ = std::fs::remove_file(&latest);
     std::fs::write(&latest, &output)?;
@@ -208,7 +203,6 @@ fn check_prerequisites(use_kvm: bool) -> Result<()> {
                  run on a machine with KVM support."
             );
         }
-        // Check if the current user can actually access /dev/kvm
         let accessible = std::fs::File::open(kvm).is_ok();
         if !accessible {
             anyhow::bail!(
@@ -221,18 +215,6 @@ fn check_prerequisites(use_kvm: bool) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-
-    // Determine if we're running registry tests or built-in scenarios
-    if args.registry.is_some() {
-        run_registry_mode(&args).await
-    } else {
-        run_scenario_mode(&args).await
-    }
 }
 
 /// Find the registry path — explicit arg, or auto-detect from fixtures.
@@ -256,17 +238,15 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     anyhow::bail!("no registry found. Pass --registry <path> or run from the repo root")
 }
 
-/// Run registry-defined tests: discover [[tests]] from service.toml files and tests/*.toml.
-async fn run_registry_mode(args: &Args) -> Result<()> {
-    let registry_arg = match &args.registry {
-        Some(inner) => inner.as_ref(),
-        None => None,
-    };
-    let registry_path = resolve_registry_path(registry_arg)?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    let registry_path = resolve_registry_path(args.registry.as_ref())?;
     let discovered = registry::discover(&registry_path)?;
 
     if args.list {
-        println!("Registry tests from {}:", registry_path.display());
+        println!("Tests from {}:", registry_path.display());
         for test in &discovered {
             let svc_list = test.services().join(" + ");
             println!(
@@ -316,7 +296,7 @@ async fn run_registry_mode(args: &Args) -> Result<()> {
     }
 
     println!(
-        "Running {} registry tests (parallel={})\n",
+        "Running {} tests (parallel={})\n",
         to_run.len(),
         args.parallel
     );
@@ -377,171 +357,6 @@ async fn run_registry_mode(args: &Args) -> Result<()> {
             }
 
             let result = runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await;
-
-            // On failure with --verbose, dump serial log
-            if !result.passed() && verbose {
-                let serial_log = vm.work_dir.join("serial.log");
-                if let Ok(content) = tokio::fs::read_to_string(&serial_log).await {
-                    let lines: Vec<&str> = content.lines().collect();
-                    let start_idx = lines.len().saturating_sub(50);
-                    eprintln!("[{name}] --- serial log (last 50 lines) ---");
-                    for line in &lines[start_idx..] {
-                        eprintln!("  {line}");
-                    }
-                    eprintln!("[{name}] --- end serial log ---");
-                }
-            }
-
-            if !keep_failed || result.passed() {
-                if let Err(e) = vm.destroy().await {
-                    eprintln!("[{name}] warning: failed to destroy VM: {e}");
-                }
-            } else {
-                println!("[{name}] FAILED — keeping VM alive for debugging:");
-                vm.keep_alive();
-            }
-
-            println!(
-                "[{name}] {}",
-                if result.passed() { "passed" } else { "FAILED" }
-            );
-            result
-        }));
-    }
-
-    let mut results = vec![];
-    for handle in handles {
-        results.push(handle.await?);
-    }
-
-    print_summary(&results);
-
-    if results.iter().any(|r| !r.passed()) {
-        std::process::exit(1);
-    }
-
-    Ok(())
-}
-
-/// Run built-in scenarios (the original mode).
-async fn run_scenario_mode(args: &Args) -> Result<()> {
-    let scenarios = tests::all();
-
-    if args.list {
-        println!("Available scenarios:");
-        for s in &scenarios {
-            println!(
-                "  {:<30} ({} steps, {} assertions)",
-                s.summary(),
-                s.step_count(),
-                s.assertion_count()
-            );
-        }
-        return Ok(());
-    }
-
-    let use_kvm = !args.no_kvm;
-    check_prerequisites(use_kvm)?;
-
-    let spawn_opts = std::sync::Arc::new(SpawnOpts {
-        use_kvm,
-        memory_mb: args.memory,
-        cpus: args.cpus,
-    });
-
-    let ryra_bin = match &args.ryra_bin {
-        Some(p) => std::fs::canonicalize(p)?,
-        None => find_ryra_binary()?,
-    };
-
-    let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm).await?;
-    let base_image = std::sync::Arc::new(base_image);
-
-    // Find fixtures directory
-    let fixtures_candidates = [
-        PathBuf::from("tests/e2e/fixtures/registry"),
-        PathBuf::from("fixtures/registry"),
-    ];
-    let fixtures_dir = fixtures_candidates
-        .iter()
-        .find(|p| p.exists())
-        .map(|p| std::fs::canonicalize(p))
-        .transpose()?;
-
-    if fixtures_dir.is_none() {
-        eprintln!("warning: fixtures directory not found, tests may fail");
-    }
-
-    let to_run: Vec<_> = if args.tests.is_empty() {
-        scenarios.iter().collect()
-    } else {
-        scenarios
-            .iter()
-            .filter(|s| args.tests.iter().any(|f| s.name.contains(f.as_str())))
-            .collect()
-    };
-
-    if to_run.is_empty() {
-        anyhow::bail!("no scenarios matched the given filters");
-    }
-
-    println!(
-        "Running {} scenarios (parallel={})\n",
-        to_run.len(),
-        args.parallel
-    );
-
-    let semaphore = std::sync::Arc::new(Semaphore::new(args.parallel));
-    let mut handles = vec![];
-
-    for scenario in to_run {
-        let permit = semaphore.clone().acquire_owned().await?;
-        let base_image = base_image.clone();
-        let spawn_opts = spawn_opts.clone();
-        let ryra_bin = ryra_bin.clone();
-        let fixtures_dir = fixtures_dir.clone();
-        let keep_failed = args.keep_failed;
-        let verbose = args.verbose;
-        let name = scenario.name.to_string();
-
-        handles.push(tokio::spawn(async move {
-            let _permit = permit;
-            let id = machine::random_id();
-            let ssh_port = ports::allocate_ssh_port();
-            let start = std::time::Instant::now();
-            println!("[{name}] spawning VM ryra-test-{id} (ssh port {ssh_port})");
-
-            let fail_result = |msg: String| ScenarioResult {
-                name: name.clone(),
-                events: vec![],
-                duration: start.elapsed(),
-                outcome: scenario::Outcome::Failed(msg),
-            };
-
-            let all = tests::all();
-            let scenario = match all.iter().find(|s| s.name == name) {
-                Some(s) => s,
-                None => return fail_result("scenario not found (internal error)".into()),
-            };
-
-            let vm = match Machine::spawn(&base_image, &id, ssh_port, &spawn_opts).await {
-                Ok(vm) => vm,
-                Err(e) => return fail_result(format!("failed to spawn VM: {e:#}")),
-            };
-
-            if let Err(e) = machine::copy_ryra_to_vm(&vm, &ryra_bin).await {
-                let _ = vm.destroy().await;
-                return fail_result(format!("failed to copy ryra to VM: {e:#}"));
-            }
-
-            if let Some(fixtures) = &fixtures_dir {
-                if let Err(e) = machine::copy_fixtures_to_vm(&vm, fixtures).await {
-                    let _ = vm.destroy().await;
-                    return fail_result(format!("failed to copy fixtures to VM: {e:#}"));
-                }
-            }
-
-            let result = scenario.run(&vm).await;
 
             // On failure, save serial log to logs dir
             if !result.passed() {
@@ -646,8 +461,8 @@ mod cli_tests {
 
     #[test]
     fn parse_test_filters() {
-        let args = Args::parse_from(["ryra-e2e", "add_service", "remove"]);
-        assert_eq!(args.tests, vec!["add_service", "remove"]);
+        let args = Args::parse_from(["ryra-e2e", "whoami", "postgres"]);
+        assert_eq!(args.tests, vec!["whoami", "postgres"]);
     }
 
     #[test]
@@ -663,44 +478,8 @@ mod cli_tests {
     }
 
     #[test]
-    fn all_scenarios_are_registered() {
-        let names: Vec<&str> = tests::all().iter().map(|s| s.name).collect();
-        assert!(names.contains(&"init"));
-        assert!(names.contains(&"idempotent-init"));
-        assert!(names.contains(&"add-whoami"));
-        assert!(names.contains(&"remove-whoami"));
-        assert!(names.contains(&"reset"));
-        assert!(names.contains(&"add-postgres"));
-        assert!(names.contains(&"whoami-plus-postgres"));
-        assert!(names.contains(&"re-add-after-remove"));
-    }
-
-    #[test]
-    fn filter_scenarios_by_substring() {
-        let all = tests::all();
-        let filters = vec!["whoami".to_string()];
-        let filtered: Vec<&str> = all
-            .iter()
-            .filter(|s| filters.iter().any(|f| s.name.contains(f.as_str())))
-            .map(|s| s.name)
-            .collect();
-        assert!(filtered.contains(&"add-whoami"));
-        assert!(filtered.contains(&"remove-whoami"));
-        assert!(!filtered.contains(&"init"));
-    }
-
-    #[test]
-    fn empty_filter_matches_all() {
-        let all = tests::all();
-        let filters: Vec<String> = vec![];
-        let filtered: Vec<&str> = if filters.is_empty() {
-            all.iter().map(|s| s.name).collect()
-        } else {
-            all.iter()
-                .filter(|s| filters.iter().any(|f| s.name.contains(f.as_str())))
-                .map(|s| s.name)
-                .collect()
-        };
-        assert_eq!(filtered.len(), all.len());
+    fn parse_registry_flag() {
+        let args = Args::parse_from(["ryra-e2e", "--registry", "/my/registry"]);
+        assert_eq!(args.registry, Some("/my/registry".into()));
     }
 }
