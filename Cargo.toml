@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ryra-core", "crates/ryra-cli", "crates/ryra-test"]
+members = ["crates/ryra-core", "crates/ryra-cli", "crates/ryra-test", "crates/ryra-dev-tools"]
 resolver = "3"
 
 [workspace.dependencies]

@@ -1032,6 +1032,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ryra-dev-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ryra-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ryra-test"
 version = "0.1.0"
 dependencies = [

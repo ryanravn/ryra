@@ -51,9 +51,27 @@ fn repo_cache_name(url: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// JSON registry format: a map of service names to their definitions.
-#[derive(serde::Deserialize)]
-struct JsonRegistry {
-    services: BTreeMap<String, ServiceDef>,
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct JsonRegistry {
+    pub services: BTreeMap<String, ServiceDef>,
+}
+
+/// Write a JSON registry to disk as individual service.toml files.
+pub fn write_json_registry_to_dir(registry: &JsonRegistry, dest: &Path) -> Result<()> {
+    for (name, def) in &registry.services {
+        let svc_dir = dest.join(name);
+        std::fs::create_dir_all(&svc_dir).map_err(|source| Error::DirCreate {
+            path: svc_dir.clone(),
+            source,
+        })?;
+        let toml_content =
+            toml::to_string_pretty(def).map_err(|e| Error::Registry(format!("failed to serialize {name}: {e}")))?;
+        std::fs::write(svc_dir.join("service.toml"), toml_content).map_err(|source| Error::FileWrite {
+            path: svc_dir.join("service.toml"),
+            source,
+        })?;
+    }
+    Ok(())
 }
 
 /// Fetch a JSON registry and write individual service.toml files to cache.
@@ -76,21 +94,7 @@ async fn ensure_json_registry(url: &str, cache_dir: &Path) -> Result<PathBuf> {
         .await
         .map_err(|e| Error::Registry(format!("failed to parse registry JSON from {url}: {e}")))?;
 
-    // Write each service as {dest}/{name}/service.toml
-    for (name, def) in &registry.services {
-        let svc_dir = dest.join(name);
-        std::fs::create_dir_all(&svc_dir).map_err(|source| Error::DirCreate {
-            path: svc_dir.clone(),
-            source,
-        })?;
-        let toml_content =
-            toml::to_string_pretty(def).map_err(|e| Error::Registry(format!("failed to serialize {name}: {e}")))?;
-        std::fs::write(svc_dir.join("service.toml"), toml_content).map_err(|source| Error::FileWrite {
-            path: svc_dir.join("service.toml"),
-            source,
-        })?;
-    }
-
+    write_json_registry_to_dir(&registry, &dest)?;
     Ok(dest)
 }
 
