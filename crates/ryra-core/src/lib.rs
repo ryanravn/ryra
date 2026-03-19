@@ -1,4 +1,5 @@
 pub mod config;
+pub mod diff;
 pub mod error;
 pub mod generate;
 pub mod integrations;
@@ -801,7 +802,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     })
 }
 
-/// Called after add steps succeed — records the service in config.
+/// Called after add steps succeed — records the service in config and saves a snapshot.
 pub fn finalize_add(
     service_name: &str,
     domain: Option<&str>,
@@ -809,6 +810,7 @@ pub fn finalize_add(
     deploy_mode: InstalledDeployMode,
     repo: &str,
     host_port: Option<u16>,
+    repo_dir: &Path,
 ) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     paths.ensure_dirs()?;
@@ -825,6 +827,12 @@ pub fn finalize_add(
     });
     config::save_config(&paths.config_file, &config)?;
 
+    // Save a snapshot of the service.toml for `ryra diff`
+    let service_toml = repo_dir.join(service_name).join("service.toml");
+    if let Ok(content) = std::fs::read_to_string(&service_toml) {
+        let _ = config::save_snapshot(&paths.snapshots_dir, service_name, &content);
+    }
+
     Ok(())
 }
 
@@ -834,6 +842,7 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
 
     config.services.retain(|s| s.name != service_name);
     config::save_config(&paths.config_file, &config)?;
+    config::remove_snapshot(&paths.snapshots_dir, service_name);
 
     Ok(())
 }

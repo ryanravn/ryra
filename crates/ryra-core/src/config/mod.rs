@@ -11,16 +11,19 @@ pub struct ConfigPaths {
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
     pub cache_dir: PathBuf,
+    pub snapshots_dir: PathBuf,
 }
 
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
         let config_dir = PathBuf::from("/etc/ryra");
         let cache_dir = PathBuf::from("/var/cache/ryra");
+        let snapshots_dir = config_dir.join("snapshots");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
             cache_dir,
             config_dir,
+            snapshots_dir,
         })
     }
 
@@ -103,6 +106,28 @@ fn set_permissions(path: &Path, mode: u32) -> Result<()> {
             source,
         }
     })
+}
+
+/// Save a snapshot of a service.toml at install time.
+pub fn save_snapshot(snapshots_dir: &Path, service_name: &str, content: &str) -> Result<()> {
+    ensure_dir(snapshots_dir)?;
+    let path = snapshots_dir.join(format!("{service_name}.toml"));
+    write_file(&path, content)
+}
+
+/// Load a previously saved service.toml snapshot.
+pub fn load_snapshot(snapshots_dir: &Path, service_name: &str) -> Result<String> {
+    let path = snapshots_dir.join(format!("{service_name}.toml"));
+    if !path.exists() {
+        return Err(Error::ConfigNotFound(path));
+    }
+    std::fs::read_to_string(&path).map_err(|source| Error::FileRead { path, source })
+}
+
+/// Remove a snapshot when a service is removed.
+pub fn remove_snapshot(snapshots_dir: &Path, service_name: &str) {
+    let path = snapshots_dir.join(format!("{service_name}.toml"));
+    let _ = std::fs::remove_file(&path);
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<()> {

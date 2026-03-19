@@ -110,6 +110,14 @@ enum Command {
     },
     /// List installed services
     List,
+    /// Show what changed in a service's registry definition since install
+    Diff {
+        /// Service name
+        service: String,
+        /// Repo to compare against (git URL or local path)
+        #[arg(long)]
+        repo: Option<String>,
+    },
     /// Search available services in a repo
     Search {
         /// Filter by name or description
@@ -202,6 +210,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Status { ref service, ref repo } => {
             cli::status::run(service.as_deref(), repo.as_deref()).await?
+        }
+        Command::Diff { ref service, ref repo } => {
+            cli::diff::run(service, repo.as_deref()).await?
         }
         Command::List => cli::list::run()?,
         Command::Search { ref query, ref repo } => {
