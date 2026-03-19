@@ -5,12 +5,11 @@ use crate::registry::service_def::ServiceDef;
 use crate::system::secret;
 
 /// Build the template context for rendering env var values.
-/// Secrets are generated fresh (not stored anywhere).
+/// Secrets are generated fresh using each env var's format + length.
 pub fn build_context(
     config: &Config,
     service_def: &ServiceDef,
     domain: &str,
-    secret_refs: &[String],
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
 
@@ -32,11 +31,13 @@ pub fn build_context(
         ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
-    // secret.* — generate fresh values
-    for secret_name in secret_refs {
-        let key = format!("secret.{secret_name}");
-        if !ctx.contains_key(&key) {
-            ctx.insert(key, secret::generate_secret());
+    // secret.* — generate fresh values using the env var's format + length
+    for env in &service_def.env {
+        for secret_name in crate::generate::extract_secret_refs(&env.value) {
+            let key = format!("secret.{secret_name}");
+            if !ctx.contains_key(&key) {
+                ctx.insert(key, secret::generate(&env.format, env.length));
+            }
         }
     }
 

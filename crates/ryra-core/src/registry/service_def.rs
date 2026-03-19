@@ -200,10 +200,10 @@ pub enum EnvKind {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum EnvFormat {
-    /// Free-form string (default). Secrets generate 32-char alphanumeric.
+    /// Free-form alphanumeric string (default).
     #[default]
     String,
-    /// Hexadecimal string. Secrets generate 64-char hex.
+    /// Hexadecimal characters only.
     Hex,
     /// UUID v4.
     Uuid,
@@ -221,6 +221,10 @@ pub struct EnvVar {
     /// Value format — used to generate secrets and validate user input.
     #[serde(default)]
     pub format: EnvFormat,
+    /// Length for generated secrets. Ignored for `uuid` format.
+    /// Defaults to 32 for `string`, 64 for `hex`.
+    #[serde(default)]
+    pub length: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

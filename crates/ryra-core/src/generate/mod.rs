@@ -47,16 +47,8 @@ pub fn generate_service(
 ) -> Result<GeneratedService> {
     let name = &service_def.service.name;
 
-    // Collect all secret references from non-overridden env vars
-    let secret_refs: Vec<String> = service_def
-        .env
-        .iter()
-        .filter(|env| !env_overrides.contains_key(&env.name))
-        .flat_map(|env| extract_secret_refs(&env.value))
-        .collect();
-
-    // Build template context (generates fresh secrets inline)
-    let ctx = context::build_context(config, service_def, domain.unwrap_or_default(), &secret_refs);
+    // Build template context (generates fresh secrets based on each env var's format + length)
+    let ctx = context::build_context(config, service_def, domain.unwrap_or_default());
     let rendered_env = render_env_vars(service_def, &ctx, env_overrides)?;
 
     // Build .env file content
@@ -259,6 +251,7 @@ fn render_env_vars(
                 kind: Default::default(),
                 prompt: None,
                 format: Default::default(),
+                length: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -273,6 +266,7 @@ fn render_env_vars(
                     kind: Default::default(),
                     prompt: None,
                     format: Default::default(),
+                    length: None,
                 });
             }
         }
@@ -287,6 +281,7 @@ fn render_env_vars(
                     kind: Default::default(),
                     prompt: None,
                     format: Default::default(),
+                    length: None,
                 });
             }
         }
@@ -337,7 +332,7 @@ pub fn generate_nginx_site(
     }
 }
 
-fn extract_secret_refs(value: &str) -> Vec<String> {
+pub fn extract_secret_refs(value: &str) -> Vec<String> {
     let mut secrets = Vec::new();
     let mut rest = value;
     while let Some(start) = rest.find("{{secret.") {
