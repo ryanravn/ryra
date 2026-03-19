@@ -2,7 +2,7 @@
 
 ## Goal
 
-Test ryra end-to-end inside ephemeral QEMU VMs. Each test gets a fresh Debian install with its own kernel, systemd, podman, and nginx — identical to what a real user would have. Tests can run in parallel.
+Test ryra end-to-end inside ephemeral QEMU VMs. Each test gets a fresh Linux install with its own kernel, systemd, and podman — identical to what a real user would have. Tests can run in parallel. Supports Debian 13 and Fedora 43 via `--distro`.
 
 ## Architecture
 
@@ -20,9 +20,14 @@ The test runner is a standalone Rust binary in `tests/e2e/`. It manages the full
 
 ## Prerequisites on host
 
-```
+```bash
+# Debian/Ubuntu
 sudo apt install qemu-system-arm qemu-utils qemu-efi-aarch64 \
     genisoimage openssh-client curl
+
+# Fedora
+sudo dnf install qemu-system-aarch64 qemu-img edk2-aarch64 \
+    genisoimage openssh-clients curl
 ```
 
 The test runner checks for these and errors with a clear message if missing. KVM (`/dev/kvm`) is required by default; use `--no-kvm` for software emulation (slower).
@@ -52,7 +57,7 @@ tests/
 
 ### Base image (`image.rs`)
 
-Downloads the Debian 13 generic cloud image (qcow2) from `cloud.debian.org` and caches it locally at `~/.cache/ryra-e2e/`. EFI firmware is located from standard system paths (`/usr/share/AAVMF/` or `/usr/share/qemu-efi-aarch64/`).
+Downloads the cloud image (qcow2) for the selected distro and caches it locally at `~/.cache/ryra-e2e/`. EFI firmware is located from standard system paths (`/usr/share/AAVMF/`, `/usr/share/qemu-efi-aarch64/`, or `/usr/share/edk2/aarch64/`).
 
 Re-download with `--redownload`.
 
@@ -63,7 +68,7 @@ Re-download with `--redownload`.
 2. Generate SSH key pair per VM
 3. Build cloud-init seed ISO with:
    - Root SSH key injection
-   - Package install: podman, uidmap, slirp4netns, nginx, curl, systemd-container
+   - Package install: podman, git, systemd-container, curl (+ uidmap on Debian)
    - Enable podman.socket, configure sshd for root login
 4. Boot QEMU with KVM acceleration, port-forwarded SSH
 5. Wait for SSH + cloud-init completion

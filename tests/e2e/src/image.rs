@@ -9,6 +9,7 @@ use tokio::process::Command;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distro {
     Debian13,
+    Fedora43,
 }
 
 impl Distro {
@@ -17,18 +18,45 @@ impl Distro {
             Distro::Debian13 => {
                 "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-arm64.qcow2"
             }
+            Distro::Fedora43 => {
+                "https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/aarch64/images/Fedora-Cloud-Base-Generic-43-1.1.aarch64.qcow2"
+            }
         }
     }
 
     fn image_filename(&self) -> &str {
         match self {
             Distro::Debian13 => "debian-13-generic-arm64.qcow2",
+            Distro::Fedora43 => "fedora-43-cloud-arm64.qcow2",
         }
     }
 
     fn prepared_filename(&self) -> &str {
         match self {
             Distro::Debian13 => "debian-13-prepared-arm64.qcow2",
+            Distro::Fedora43 => "fedora-43-prepared-arm64.qcow2",
+        }
+    }
+
+    /// Packages to install via cloud-init during image preparation.
+    pub fn cloud_init_packages(&self) -> &[&str] {
+        match self {
+            // Runtime: podman, uidmap (rootless namespaces), systemd-container
+            // (machined), git (registry fetch). Test-only: curl (HTTP assertions).
+            Distro::Debian13 => &[
+                "podman",
+                "uidmap",
+                "git",
+                "systemd-container",
+                "curl",
+            ],
+            // Fedora: uidmap is part of shadow-utils (already installed).
+            Distro::Fedora43 => &[
+                "podman",
+                "git",
+                "systemd-container",
+                "curl",
+            ],
         }
     }
 }
@@ -37,6 +65,7 @@ impl fmt::Display for Distro {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Distro::Debian13 => write!(f, "debian-13"),
+            Distro::Fedora43 => write!(f, "fedora-43"),
         }
     }
 }
@@ -47,7 +76,10 @@ impl std::str::FromStr for Distro {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "debian-13" => Ok(Distro::Debian13),
-            other => Err(format!("unknown distro: {other}")),
+            "fedora-43" => Ok(Distro::Fedora43),
+            other => Err(format!(
+                "unknown distro: {other} (available: debian-13, fedora-43)"
+            )),
         }
     }
 }
@@ -105,6 +137,7 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
     if !prepared_path.exists() {
         println!("Preparing base image (installing packages — this is a one-time operation)...");
         prepare_image(
+            distro,
             &raw_path,
             &prepared_path,
             &efi.code,
@@ -203,6 +236,7 @@ async fn download_image(distro: &Distro, dest: &PathBuf) -> Result<()> {
 /// This is a one-time operation. The resulting image has podman, nginx, git, etc.
 /// already installed, so subsequent VMs skip the slow package install step.
 async fn prepare_image(
+    distro: &Distro,
     raw_image: &PathBuf,
     prepared_path: &PathBuf,
     efi_code: &PathBuf,
@@ -270,8 +304,14 @@ async fn prepare_image(
 
     // Build seed ISO with full package install
     let seed_iso = work_dir.join("seed.iso");
-    crate::machine::build_seed_iso_full(&work_dir, &seed_iso, "ryra-prepare", pub_key.trim())
-        .await?;
+    crate::machine::build_seed_iso_full(
+        &work_dir,
+        &seed_iso,
+        "ryra-prepare",
+        pub_key.trim(),
+        distro.cloud_init_packages(),
+    )
+    .await?;
 
     // Boot VM
     let ssh_port: u16 = 10099;

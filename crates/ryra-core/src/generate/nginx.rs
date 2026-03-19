@@ -111,9 +111,9 @@ Description=nginx reverse proxy
 [Container]
 Image=docker.io/library/nginx:alpine
 Network=host
-Volume=/etc/ryra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-Volume=/etc/ryra/nginx/sites:/etc/nginx/conf.d:ro
-Volume=/etc/ryra/certs:/etc/ryra/certs:ro
+Volume=/etc/ryra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro,Z
+Volume=/etc/ryra/nginx/sites:/etc/nginx/conf.d:ro,Z
+Volume=/etc/ryra/certs:/etc/ryra/certs:ro,Z
 
 [Service]
 Restart=always

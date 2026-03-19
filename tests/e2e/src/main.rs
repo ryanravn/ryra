@@ -151,7 +151,9 @@ fn check_prerequisites(use_kvm: bool) -> Result<()> {
             "missing required tools: {}\n\
              Install with:\n  \
              sudo apt install qemu-system-arm qemu-utils qemu-efi-aarch64 \\\n    \
-             genisoimage openssh-client curl",
+             genisoimage openssh-client curl                    # Debian/Ubuntu\n  \
+             sudo dnf install qemu-system-aarch64 qemu-img edk2-aarch64 \\\n    \
+             genisoimage openssh-clients curl                   # Fedora",
             missing.join(", ")
         );
     }
@@ -569,6 +571,12 @@ mod cli_tests {
     fn parse_distro_flag() {
         let args = Args::parse_from(["ryra-e2e", "--distro", "debian-13"]);
         assert_eq!(args.distro, Distro::Debian13);
+    }
+
+    #[test]
+    fn parse_fedora_distro() {
+        let args = Args::parse_from(["ryra-e2e", "--distro", "fedora-43"]);
+        assert_eq!(args.distro, Distro::Fedora43);
     }
 
     #[test]

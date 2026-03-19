@@ -387,7 +387,13 @@ pub async fn build_seed_iso_full(
     output: &Path,
     hostname: &str,
     pub_key: &str,
+    packages: &[&str],
 ) -> Result<()> {
+    let package_list = packages
+        .iter()
+        .map(|p| format!("  - {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let user_data = format!(
         r#"#cloud-config
 disable_root: false
@@ -400,13 +406,7 @@ users:
       - {pub_key}
 
 packages:
-  - podman
-  - uidmap
-  - slirp4netns
-  - nginx
-  - curl
-  - git
-  - systemd-container
+{package_list}
 
 runcmd:
   - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
@@ -469,7 +469,8 @@ async fn write_seed_iso(
     if !created {
         anyhow::bail!(
             "failed to create seed ISO — install genisoimage or mkisofs:\n  \
-             sudo apt install genisoimage"
+             sudo apt install genisoimage    # Debian/Ubuntu\n  \
+             sudo dnf install genisoimage    # Fedora"
         );
     }
 

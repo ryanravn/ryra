@@ -44,13 +44,15 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 
 See `E2E_TEST_PLAN.md` for the full plan. Key points:
 
-- Tests run inside ephemeral QEMU VMs — each test gets a fresh Debian install with its own kernel
+- Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
+- `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image
 - The test runner (`tests/e2e/`) is a standalone Rust binary, not shell scripts
-- VMs use Debian cloud images + cloud-init for setup, SSH for command execution
+- VMs use cloud images + cloud-init for setup, SSH for command execution
 - `--parallel=N` controls concurrency, each VM gets a unique SSH port
 - Test fixtures (service definitions) live in `tests/e2e/fixtures/registry/`
 - Scenarios are defined declaratively with a builder pattern in `tests/e2e/src/tests/mod.rs`
 - KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower)
 - `--keep-failed` keeps VMs alive and prints the SSH command for debugging
 - `--verbose` dumps the serial log on failure
-- Host prerequisites: `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
+- Host prerequisites (Debian/Ubuntu): `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
+- Host prerequisites (Fedora): `qemu-system-aarch64 qemu-img edk2-aarch64 genisoimage openssh-clients curl`
