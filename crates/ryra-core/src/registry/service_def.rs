@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct ServiceDef {
     pub service: ServiceMeta,
     #[serde(default)]
+    pub requirements: Option<Requirements>,
+    #[serde(default)]
     pub ports: Vec<PortDef>,
     #[serde(default)]
     pub volumes: Vec<VolumeDef>,
@@ -23,6 +25,23 @@ pub struct ServiceDef {
     pub integrations: IntegrationFlags,
     #[serde(default)]
     pub tests: Vec<TestDef>,
+}
+
+/// System resource requirements for a service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Requirements {
+    /// RAM requirements in megabytes.
+    pub ram: RamRequirement,
+}
+
+/// RAM requirement with minimum and recommended thresholds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RamRequirement {
+    /// Minimum RAM in MB — service may fail below this.
+    pub min: u64,
+    /// Recommended RAM in MB — service will run well at this level.
+    #[serde(default)]
+    pub recommended: Option<u64>,
 }
 
 impl ServiceDef {

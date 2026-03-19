@@ -238,6 +238,18 @@ pub enum Warning {
         service_name: String,
         ports: Vec<(u16, PortProtocol)>,
     },
+    /// System RAM is below the service's minimum requirement.
+    RamBelowMinimum {
+        service_name: String,
+        min_mb: u64,
+        available_mb: u64,
+    },
+    /// System RAM is below the service's recommended level (but above minimum).
+    RamBelowRecommended {
+        service_name: String,
+        recommended_mb: u64,
+        available_mb: u64,
+    },
 }
 
 // --- Result types ---
@@ -432,6 +444,26 @@ pub fn add_service(
             service_name: service_name.to_string(),
             ports,
         });
+    }
+
+    if let Some(ref reqs) = reg_service.def.requirements {
+        if let Some(total) = system::memory::total_ram_mb() {
+            if total < reqs.ram.min {
+                warnings.push(Warning::RamBelowMinimum {
+                    service_name: service_name.to_string(),
+                    min_mb: reqs.ram.min,
+                    available_mb: total,
+                });
+            } else if let Some(rec) = reqs.ram.recommended {
+                if total < rec {
+                    warnings.push(Warning::RamBelowRecommended {
+                        service_name: service_name.to_string(),
+                        recommended_mb: rec,
+                        available_mb: total,
+                    });
+                }
+            }
+        }
     }
 
     // Build ordered steps

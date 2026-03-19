@@ -146,6 +146,26 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
                         "  WARNING: {service_name} has auth disabled and will be publicly exposed via {exposure}"
                     );
                 }
+                Warning::RamBelowMinimum {
+                    service_name,
+                    min_mb,
+                    available_mb,
+                } => {
+                    println!(
+                        "  WARNING: {service_name} requires at least {min_mb} MB RAM, \
+                         but this system has {available_mb} MB — service may fail to start"
+                    );
+                }
+                Warning::RamBelowRecommended {
+                    service_name,
+                    recommended_mb,
+                    available_mb,
+                } => {
+                    println!(
+                        "  NOTE: {service_name} recommends {recommended_mb} MB RAM, \
+                         but this system has {available_mb} MB — performance may be degraded"
+                    );
+                }
             }
         }
         println!();
