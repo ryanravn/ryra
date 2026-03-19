@@ -118,10 +118,24 @@ enum Command {
         #[arg(long)]
         repo: Option<String>,
     },
-    /// Run tests for an installed service
+    /// Run tests for a service
     Test {
         /// Service name
-        service: String,
+        service: Option<String>,
+        /// Run only a specific test by name
+        test: Option<String>,
+        /// Run a multi-service test suite from the registry
+        #[arg(long)]
+        suite: Option<String>,
+        /// Repo to load test definitions from (git URL or local path)
+        #[arg(long)]
+        repo: Option<String>,
+        /// Run in a fresh VM instead of against live services
+        #[arg(long)]
+        vm: bool,
+        /// Skip confirmation prompts
+        #[arg(long, short)]
+        yes: bool,
         /// Show test command output
         #[arg(long, short)]
         verbose: bool,
@@ -195,8 +209,24 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Test {
             ref service,
+            ref test,
+            ref suite,
+            ref repo,
+            vm,
+            yes,
             verbose,
-        } => cli::test::run(service, verbose).await?,
+        } => {
+            cli::test::run(
+                service.as_deref(),
+                suite.as_deref(),
+                test.as_deref(),
+                repo.as_deref(),
+                vm,
+                yes,
+                verbose,
+            )
+            .await?
+        }
     }
 
     Ok(())

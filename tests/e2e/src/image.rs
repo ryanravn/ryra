@@ -456,6 +456,37 @@ async fn prepare_image(
         anyhow::bail!("cloud-init failed during image preparation");
     }
 
+    // Pre-pull container images used by test services so VMs don't download at runtime
+    let images = [
+        "docker.io/traefik/whoami:latest",
+        "docker.io/library/postgres:17-alpine",
+        "docker.io/library/nginx:alpine",
+    ];
+    for image in &images {
+        println!("  pre-pulling {image}...");
+        let pull_result = Command::new("ssh")
+            .args([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "BatchMode=yes",
+                "-i", &key_path.to_string_lossy(),
+                "-p", &port_str,
+                "root@127.0.0.1",
+                &format!("podman pull {image}"),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        if let Ok(s) = pull_result {
+            if !s.success() {
+                eprintln!("  warning: failed to pre-pull {image}");
+            }
+        }
+    }
+
     // Clean up cloud-init state so it runs again on next boot (for per-VM SSH keys)
     let _ = Command::new("ssh")
         .args([
