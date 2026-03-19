@@ -118,6 +118,14 @@ enum Command {
         #[arg(long)]
         repo: Option<String>,
     },
+    /// Run tests for an installed service
+    Test {
+        /// Service name
+        service: String,
+        /// Show test command output
+        #[arg(long, short)]
+        verbose: bool,
+    },
 }
 
 #[tokio::main]
@@ -185,6 +193,10 @@ async fn main() -> anyhow::Result<()> {
         Command::Search { ref query, ref repo } => {
             cli::search::run(query.as_deref(), repo.as_deref()).await?
         }
+        Command::Test {
+            ref service,
+            verbose,
+        } => cli::test::run(service, verbose).await?,
     }
 
     Ok(())

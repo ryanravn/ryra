@@ -1223,6 +1223,38 @@ pub struct SearchResult {
     pub installed: bool,
 }
 
+/// Get test definitions for an installed service.
+///
+/// Looks up the service in the config, resolves its repo, and returns
+/// the `[[tests]]` from its `service.toml`.
+pub async fn service_tests(service_name: &str) -> Result<ServiceTestInfo> {
+    let paths = ConfigPaths::resolve()?;
+    let config = config::load_config(&paths.config_file)?;
+
+    let installed = config
+        .services
+        .iter()
+        .find(|s| s.name == service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    let repo_dir = registry::fetch::ensure_repo(&installed.repo, &paths.cache_dir).await?;
+    let reg_service = registry::find_service(&repo_dir, service_name)?;
+
+    let env_file = service_home(service_name).join(".env");
+
+    Ok(ServiceTestInfo {
+        service_name: service_name.to_string(),
+        tests: reg_service.def.tests,
+        env_file,
+    })
+}
+
+pub struct ServiceTestInfo {
+    pub service_name: String,
+    pub tests: Vec<registry::service_def::TestDef>,
+    pub env_file: PathBuf,
+}
+
 /// Get detailed info about a service from a repo.
 pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail> {
     let paths = ConfigPaths::resolve()?;

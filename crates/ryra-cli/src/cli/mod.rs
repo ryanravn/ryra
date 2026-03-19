@@ -9,6 +9,7 @@ pub mod remove;
 pub mod reset;
 pub mod search;
 pub mod status;
+pub mod test;
 
 use ryra_core::Step;
 
