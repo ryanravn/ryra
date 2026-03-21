@@ -313,8 +313,22 @@ async fn main() -> Result<()> {
         anyhow::bail!("no tests matched the given filters");
     }
 
+    // Pre-pull all container images before spawning VMs.
+    // This avoids slow image pulls counting against test timeouts.
+    let mut all_images: Vec<String> = to_run
+        .iter()
+        .flat_map(|t| registry::images_for_test(&registry_path, t))
+        .collect();
+    all_images.sort();
+    all_images.dedup();
+
+    println!("Pre-caching {} container images...", all_images.len());
+    for image in &all_images {
+        machine::ensure_image_cached(image).await?;
+    }
+
     println!(
-        "Running {} tests (parallel={})\n",
+        "\nRunning {} tests (parallel={})\n",
         to_run.len(),
         args.parallel
     );
