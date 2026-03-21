@@ -141,6 +141,9 @@ enum Command {
         /// Run in a fresh VM instead of against live services
         #[arg(long)]
         vm: bool,
+        /// Keep VM alive after tests (or boot without tests for interactive use)
+        #[arg(long)]
+        keep_alive: bool,
         /// Skip confirmation prompts
         #[arg(long, short)]
         yes: bool,
@@ -224,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
             ref suite,
             ref repo,
             vm,
+            keep_alive,
             yes,
             verbose,
         } => {
@@ -233,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
                 test.as_deref(),
                 repo.as_deref(),
                 vm,
+                keep_alive,
                 yes,
                 verbose,
             )

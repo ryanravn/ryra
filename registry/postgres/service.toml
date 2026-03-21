@@ -1,0 +1,47 @@
+[service]
+name = "postgres"
+description = "PostgreSQL - open source relational database"
+url = "https://www.postgresql.org/docs/"
+image = "docker.io/library/postgres:17-alpine"
+kind = "infrastructure"
+
+[requirements.ram]
+min = 128
+recommended = 256
+
+[[ports]]
+name = "tcp"
+container_port = 5432
+
+[[volumes]]
+name = "data"
+mount_path = "/var/lib/postgresql/data"
+
+[[env]]
+name = "POSTGRES_USER"
+value = "postgres"
+kind = "prompted"
+prompt = "Database admin username"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "postgres"
+kind = "prompted"
+prompt = "Default database name"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.postgres_password}}"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "accepts-connections"
+run = "for i in $(seq 1 15); do PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -p $RYRA_PORT_TCP -U $POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1"
+timeout = 60
+
+[[tests]]
+name = "user-created"
+run = "id postgres"

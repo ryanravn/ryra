@@ -1,0 +1,56 @@
+[test]
+name = "vaultwarden-lifecycle"
+
+# Inject fake SMTP config so vaultwarden's SMTP mappings render
+[[steps]]
+action = "run"
+name = "inject-smtp-config"
+run = """cat >> /etc/ryra/ryra.toml <<'TOML'
+
+[smtp]
+host = "localhost"
+port = 1025
+username = "test"
+password = "test"
+from = "noreply@test.local"
+TOML"""
+
+[[steps]]
+action = "add"
+service = "vaultwarden"
+
+# Fix DOMAIN env var — in Local mode ryra doesn't set a domain, but vaultwarden requires one
+[[steps]]
+action = "run"
+name = "fix-domain-env"
+run = "sed -i 's|^DOMAIN=.*|DOMAIN=https://vault.test.local|' /var/lib/vaultwarden/.env && systemctl --machine=vaultwarden@ --user restart vaultwarden"
+
+[[steps]]
+action = "wait"
+service = "vaultwarden"
+
+[[steps]]
+action = "assert"
+name = "http-responds"
+run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/vaultwarden/.env | cut -d= -f2) && exit 0; sleep 2; done; exit 1"
+
+[[steps]]
+action = "assert"
+name = "alive-endpoint"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/vaultwarden/.env | cut -d= -f2)/alive"
+
+[[steps]]
+action = "assert"
+name = "user-created"
+run = "id vaultwarden"
+
+# Verify SMTP env vars were rendered correctly from the mappings
+[[steps]]
+action = "assert"
+name = "smtp-host-rendered"
+run = "grep -q 'SMTP_HOST=localhost' /var/lib/vaultwarden/.env"
+
+[[steps]]
+action = "assert"
+name = "smtp-from-rendered"
+run = "grep -q 'SMTP_FROM=noreply@test.local' /var/lib/vaultwarden/.env"

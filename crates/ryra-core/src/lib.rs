@@ -296,13 +296,19 @@ pub const DEFAULT_REPO: &str = "https://github.com/ryanravn/ryra-registry";
 
 /// Resolve which repo to use and ensure it's cached.
 /// Returns (repo_url, repo_dir).
+///
+/// Resolution order:
+/// 1. Explicit `--repo` argument
+/// 2. `default_repo` from ryra.toml config
+/// 3. Legacy `[[registries]]` from config
+/// 4. Local `./registry/` directory (for development)
+/// 5. Hardcoded default (GitHub)
 pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
     let paths = ConfigPaths::resolve()?;
 
     let repo_url = match repo {
         Some(url) => url.to_string(),
         None => {
-            // Try config first, then legacy registries, then hardcoded default
             let config = config::load_or_default(&paths.config_file).ok();
             config
                 .as_ref()
@@ -311,6 +317,15 @@ pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
                     config
                         .as_ref()
                         .and_then(|c| c.registries.first().map(|r| r.url.clone()))
+                })
+                .or_else(|| {
+                    // Auto-detect local registry directory
+                    let local = PathBuf::from("registry");
+                    if local.is_dir() {
+                        Some(local.to_string_lossy().to_string())
+                    } else {
+                        None
+                    }
                 })
                 .unwrap_or_else(|| DEFAULT_REPO.to_string())
         }
@@ -374,6 +389,21 @@ pub fn add_service(
     }
 
     let reg_service = registry::find_service(repo_dir, service_name)?;
+
+    // Validate: all required services must be installed
+    let missing_requires: Vec<&str> = reg_service
+        .def
+        .requires
+        .iter()
+        .filter(|r| !config.services.iter().any(|s| s.name == r.service))
+        .map(|r| r.service.as_str())
+        .collect();
+    if !missing_requires.is_empty() {
+        return Err(Error::MissingRequiredServices {
+            service: service_name.to_string(),
+            missing: missing_requires.iter().map(|s| s.to_string()).collect(),
+        });
+    }
 
     let has_nginx = reg_service.def.nginx.is_some();
     let is_compose = reg_service.def.service.deploy.is_compose();
@@ -812,11 +842,14 @@ pub fn finalize_add(
     deploy_mode: InstalledDeployMode,
     repo: &str,
     host_port: Option<u16>,
+    allocated_ports: &[(String, u16)],
     repo_dir: &Path,
 ) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     paths.ensure_dirs()?;
     let mut config = config::load_or_default(&paths.config_file)?;
+
+    let ports: BTreeMap<String, u16> = allocated_ports.iter().cloned().collect();
 
     config.services.push(InstalledService {
         name: service_name.to_string(),
@@ -826,6 +859,7 @@ pub fn finalize_add(
         deploy_mode,
         repo: repo.to_string(),
         host_port,
+        ports,
     });
     config::save_config(&paths.config_file, &config)?;
 

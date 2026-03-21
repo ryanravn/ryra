@@ -1,0 +1,50 @@
+[test]
+name = "remove-whoami"
+
+# Add whoami, verify it works, remove it, verify cleanup
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "whoami-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/whoami/.env | cut -d= -f2)"
+
+[[steps]]
+action = "assert"
+name = "user-exists"
+run = "id whoami"
+
+[[steps]]
+action = "assert"
+name = "config-has-whoami"
+run = "grep -q whoami /etc/ryra/ryra.toml"
+
+[[steps]]
+action = "remove"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "service-stopped"
+run = "! systemctl --machine=whoami@ --user is-active whoami.service 2>/dev/null"
+
+[[steps]]
+action = "assert"
+name = "user-deleted"
+run = "! id whoami 2>/dev/null"
+
+[[steps]]
+action = "assert"
+name = "config-cleaned"
+run = "! grep -q whoami /etc/ryra/ryra.toml"
+
+[[steps]]
+action = "assert"
+name = "home-dir-removed"
+run = "test ! -d /var/lib/whoami"

@@ -1,0 +1,46 @@
+[service]
+name = "vaultwarden"
+description = "Vaultwarden - lightweight Bitwarden-compatible server"
+url = "https://github.com/dani-garcia/vaultwarden/wiki"
+image = "docker.io/vaultwarden/server:latest"
+
+[requirements.ram]
+min = 128
+recommended = 512
+
+[[ports]]
+name = "http"
+container_port = 80
+
+[[volumes]]
+name = "data"
+mount_path = "/data"
+
+[[env]]
+name = "DOMAIN"
+value = "https://{{service.domain}}"
+
+[[env]]
+name = "SIGNUPS_ALLOWED"
+value = "false"
+
+[[env]]
+name = "WEBSOCKET_ENABLED"
+value = "true"
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = true
+
+[mappings.smtp]
+SMTP_HOST = "{{smtp.host}}"
+SMTP_PORT = "{{smtp.port}}"
+SMTP_USERNAME = "{{smtp.username}}"
+SMTP_PASSWORD = "{{smtp.password}}"
+SMTP_FROM = "{{smtp.from}}"
+SMTP_SECURITY = "starttls"
+
+# Tests are in tests/vaultwarden.toml (lifecycle test with SMTP setup)

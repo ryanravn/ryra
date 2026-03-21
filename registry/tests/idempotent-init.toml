@@ -1,0 +1,44 @@
+[test]
+name = "idempotent-init"
+
+# Init is already run by the lifecycle runner. Run it again and verify config is preserved.
+[[steps]]
+action = "assert"
+name = "config-exists-after-first-init"
+run = "test -f /etc/ryra/ryra.toml"
+
+[[steps]]
+action = "run"
+name = "second-init"
+run = "ryra init --repo /opt/ryra-test-registry"
+timeout = 30
+
+[[steps]]
+action = "assert"
+name = "config-still-exists"
+run = "test -f /etc/ryra/ryra.toml"
+
+# Add a service, then init again — service and config should be preserved
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "run"
+name = "third-init"
+run = "ryra init --repo /opt/ryra-test-registry"
+timeout = 30
+
+[[steps]]
+action = "assert"
+name = "whoami-still-running"
+run = "systemctl --machine=whoami@ --user is-active whoami.service"
+
+[[steps]]
+action = "assert"
+name = "config-has-whoami"
+run = "grep -q whoami /etc/ryra/ryra.toml"

@@ -1,0 +1,49 @@
+[test]
+name = "re-add-after-remove"
+
+# Add whoami, remove it, add it again — verify it works correctly after re-add
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "first-add-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/whoami/.env | cut -d= -f2)"
+
+[[steps]]
+action = "remove"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "removed-cleanly"
+run = "! id whoami 2>/dev/null && test ! -d /var/lib/whoami"
+
+# Re-add the same service
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "re-add-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/whoami/.env | cut -d= -f2)"
+
+[[steps]]
+action = "assert"
+name = "re-add-user-exists"
+run = "id whoami"
+
+[[steps]]
+action = "assert"
+name = "re-add-config-present"
+run = "grep -q whoami /etc/ryra/ryra.toml"

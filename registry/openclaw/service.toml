@@ -1,0 +1,52 @@
+[service]
+name = "openclaw"
+description = "OpenClaw - self-hosted AI assistant gateway"
+url = "https://docs.openclaw.ai/"
+image = "ghcr.io/openclaw/openclaw:latest"
+
+[requirements.ram]
+min = 256
+recommended = 1024
+
+[[ports]]
+name = "gateway"
+container_port = 18789
+
+[[volumes]]
+name = "config"
+mount_path = "/home/node/.openclaw"
+
+[[env]]
+name = "OPENCLAW_GATEWAY_BIND"
+value = "lan"
+
+[[env]]
+name = "OPENCLAW_GATEWAY_TOKEN"
+value = "{{secret.gateway_token}}"
+
+[[env]]
+name = "ANTHROPIC_API_KEY"
+value = ""
+kind = "prompted"
+prompt = "Anthropic API key (leave empty to skip)"
+
+[[env]]
+name = "OPENAI_API_KEY"
+value = ""
+kind = "prompted"
+prompt = "OpenAI API key (leave empty to skip)"
+
+[nginx]
+upstream_port = "gateway"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "http-responds"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_GATEWAY"
+
+[[tests]]
+name = "user-created"
+run = "id openclaw"

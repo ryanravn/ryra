@@ -1,0 +1,28 @@
+[service]
+name = "whoami"
+description = "Traefik whoami - simple HTTP request echo"
+url = "https://github.com/traefik/whoami"
+image = "docker.io/traefik/whoami:latest"
+
+[[ports]]
+name = "http"
+container_port = 80
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "http-responds"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
+
+[[tests]]
+name = "returns-hostname"
+run = "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname"
+
+[[tests]]
+name = "user-created"
+run = "id whoami"

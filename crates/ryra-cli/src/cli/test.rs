@@ -13,12 +13,13 @@ pub async fn run(
     test_filter: Option<&str>,
     repo: Option<&str>,
     vm: bool,
+    keep_alive: bool,
     yes: bool,
     verbose: bool,
 ) -> Result<()> {
-    if vm {
+    if vm || keep_alive {
         let filter = service.or(suite);
-        return run_vm(filter, verbose).await;
+        return run_vm(filter, keep_alive, verbose).await;
     }
 
     match (service, suite) {
@@ -258,7 +259,7 @@ async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) ->
     Ok(())
 }
 
-async fn run_vm(filter: Option<&str>, verbose: bool) -> Result<()> {
+async fn run_vm(filter: Option<&str>, keep_alive: bool, verbose: bool) -> Result<()> {
     let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let e2e_bin = ["release", "debug"]
         .iter()
@@ -277,6 +278,9 @@ async fn run_vm(filter: Option<&str>, verbose: bool) -> Result<()> {
     let mut args = Vec::new();
     if verbose {
         args.push("--verbose");
+    }
+    if keep_alive {
+        args.push("--keep-alive");
     }
     if let Some(name) = filter {
         args.push(name);

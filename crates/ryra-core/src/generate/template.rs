@@ -69,3 +69,24 @@ fn insert_nested(map: &mut BTreeMap<String, Value>, parts: &[&str], val: &str) {
     insert_nested(&mut child, &parts[1..], val);
     map.insert(key, Value::from_object(child));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_four_level_nesting() {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("services.postgres.port.tcp".into(), "5432".into());
+        ctx.insert("services.postgres.env.POSTGRES_PASSWORD".into(), "secret123".into());
+        ctx.insert("services.postgres.domain".into(), "pg.example.com".into());
+
+        let result = render(
+            "postgresql://user:{{ services.postgres.env.POSTGRES_PASSWORD }}@127.0.0.1:{{ services.postgres.port.tcp }}",
+            &ctx,
+        ).unwrap();
+
+        assert_eq!(result, "postgresql://user:secret123@127.0.0.1:5432");
+    }
+
+}

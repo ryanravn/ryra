@@ -31,6 +31,41 @@ pub fn build_context(
         ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
+    // services.* — cross-service references from installed services
+    for installed in &config.services {
+        let name = &installed.name;
+
+        // services.<name>.domain
+        if let Some(ref domain) = installed.domain {
+            ctx.insert(format!("services.{name}.domain"), domain.clone());
+        }
+
+        // services.<name>.port.<port_name> — from stored port mappings
+        for (port_name, port) in &installed.ports {
+            ctx.insert(
+                format!("services.{name}.port.{port_name}"),
+                port.to_string(),
+            );
+        }
+
+        // services.<name>.env.<VAR> — read from the service's .env file
+        let env_file = crate::service_home(name).join(".env");
+        if let Ok(content) = std::fs::read_to_string(&env_file) {
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, val)) = line.split_once('=') {
+                    ctx.insert(
+                        format!("services.{name}.env.{key}"),
+                        val.to_string(),
+                    );
+                }
+            }
+        }
+    }
+
     // secret.* — generate fresh values using the env var's format + length
     for env in &service_def.env {
         for secret_name in crate::generate::extract_secret_refs(&env.value) {

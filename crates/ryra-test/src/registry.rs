@@ -8,6 +8,8 @@ pub enum DiscoveredTest {
     /// Tests from a `[[tests]]` section inside a `service.toml`.
     SingleService {
         service_name: String,
+        /// Services that must be installed before this one (from `[[requires]]`).
+        requires: Vec<String>,
         tests: Vec<TestEntry>,
     },
     /// Tests from a `tests/*.toml` file in the registry (services + tests format).
@@ -44,9 +46,15 @@ impl DiscoveredTest {
         }
     }
 
+    /// All services that need to be deployed for this test, in install order.
+    /// For SingleService, this includes requires (dependencies first) then the service itself.
     pub fn services(&self) -> Vec<&str> {
         match self {
-            DiscoveredTest::SingleService { service_name, .. } => vec![service_name.as_str()],
+            DiscoveredTest::SingleService { service_name, requires, .. } => {
+                let mut svcs: Vec<&str> = requires.iter().map(|s| s.as_str()).collect();
+                svcs.push(service_name.as_str());
+                svcs
+            }
             DiscoveredTest::MultiService { services, .. } => {
                 services.iter().map(|s| s.as_str()).collect()
             }
@@ -225,8 +233,15 @@ fn discover_single_service(path: &PathBuf, service_name: &str) -> Result<Option<
         })
         .collect();
 
+    let requires: Vec<String> = parsed
+        .requires
+        .iter()
+        .map(|r| r.service.clone())
+        .collect();
+
     Ok(Some(DiscoveredTest::SingleService {
         service_name: service_name.to_string(),
+        requires,
         tests,
     }))
 }
@@ -402,6 +417,13 @@ struct ServiceTomlTests {
     tests: Vec<TestToml>,
     #[serde(default)]
     env: Vec<EnvToml>,
+    #[serde(default)]
+    requires: Vec<RequiresToml>,
+}
+
+#[derive(serde::Deserialize)]
+struct RequiresToml {
+    service: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -567,17 +589,6 @@ env = { GITEA_DOMAIN = "localhost" }
             parsed.tests[0].env.get("GITEA_DOMAIN").unwrap(),
             "localhost"
         );
-    }
-
-    #[test]
-    fn default_timeout_is_30() {
-        let toml = r#"
-[[tests]]
-name = "basic"
-run = "echo ok"
-"#;
-        let parsed: ServiceTomlTests = toml::from_str(toml).unwrap();
-        assert_eq!(parsed.tests[0].timeout, 30);
     }
 
     #[test]

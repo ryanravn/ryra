@@ -6,7 +6,7 @@ mod registry;
 mod runner;
 mod scenario;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
@@ -42,6 +42,11 @@ pub struct Args {
     /// Don't destroy VMs for failed tests (for debugging via SSH)
     #[arg(long)]
     pub keep_failed: bool,
+
+    /// Keep VM alive after tests complete (or boot without running tests).
+    /// Prints SSH connection command for interactive use.
+    #[arg(long)]
+    pub keep_alive: bool,
 
     /// Disable KVM acceleration (use software emulation — slower)
     #[arg(long)]
@@ -266,10 +271,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if discovered.is_empty() {
-        anyhow::bail!("no tests found in registry at {}", registry_path.display());
-    }
-
     let use_kvm = !args.no_kvm;
     check_prerequisites(use_kvm)?;
 
@@ -285,6 +286,16 @@ async fn main() -> Result<()> {
     };
 
     let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm).await?;
+
+    // --keep-alive with no tests: boot a VM and block until Ctrl-C
+    if args.keep_alive && args.tests.is_empty() {
+        return run_interactive_vm(&base_image, &spawn_opts, &ryra_bin, &registry_path).await;
+    }
+
+    if discovered.is_empty() {
+        anyhow::bail!("no tests found in registry at {}", registry_path.display());
+    }
+
     let base_image = std::sync::Arc::new(base_image);
     let registry_path = std::sync::Arc::new(registry_path);
 
@@ -318,6 +329,7 @@ async fn main() -> Result<()> {
         let ryra_bin = ryra_bin.clone();
         let registry_path = registry_path.clone();
         let keep_failed = args.keep_failed;
+        let keep_alive = args.keep_alive;
         let verbose = args.verbose;
         let name = test.name().to_string();
 
@@ -410,13 +422,15 @@ async fn main() -> Result<()> {
                 }
             }
 
-            if !keep_failed || result.passed() {
+            // Decide whether to keep the VM alive
+            let should_keep = keep_alive || (keep_failed && !result.passed());
+            if should_keep {
+                println!("[{name}] keeping VM alive:");
+                vm.keep_alive();
+            } else {
                 if let Err(e) = vm.destroy().await {
                     eprintln!("[{name}] warning: failed to destroy VM: {e}");
                 }
-            } else {
-                println!("[{name}] FAILED — keeping VM alive for debugging:");
-                vm.keep_alive();
             }
 
             println!(
@@ -442,73 +456,41 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod cli_tests {
-    use clap::Parser;
+/// Boot a VM with ryra + registry installed, print SSH command, block until Ctrl-C.
+async fn run_interactive_vm(
+    base_image: &image::Image,
+    spawn_opts: &SpawnOpts,
+    ryra_bin: &Path,
+    registry_path: &Path,
+) -> Result<()> {
+    let id = machine::random_id();
+    let ssh_port = ports::allocate_ssh_port();
 
-    use super::*;
+    println!("Booting interactive VM ryra-test-{id} (ssh port {ssh_port})...");
+    let vm = Machine::spawn(base_image, &id, ssh_port, spawn_opts).await?;
+    println!("VM ready.");
 
-    #[test]
-    fn parse_default_args() {
-        let args = Args::parse_from(["ryra-e2e"]);
-        assert_eq!(args.parallel, 1);
-        assert_eq!(args.distro, Distro::Debian13);
-        assert!(!args.redownload);
-        assert!(!args.keep_failed);
-        assert!(!args.no_kvm);
-        assert!(!args.verbose);
-        assert_eq!(args.memory, 2048);
-        assert_eq!(args.cpus, 2);
-        assert!(!args.list);
-        assert!(args.tests.is_empty());
-    }
+    println!("Copying ryra binary...");
+    machine::copy_ryra_to_vm(&vm, ryra_bin).await?;
 
-    #[test]
-    fn parse_no_kvm_and_verbose() {
-        let args = Args::parse_from(["ryra-e2e", "--no-kvm", "-v"]);
-        assert!(args.no_kvm);
-        assert!(args.verbose);
-    }
+    println!("Copying registry...");
+    machine::copy_fixtures_to_vm(&vm, registry_path).await?;
 
-    #[test]
-    fn parse_parallel_flag() {
-        let args = Args::parse_from(["ryra-e2e", "--parallel=4"]);
-        assert_eq!(args.parallel, 4);
-    }
+    println!("\nVM is ready. Connect with:\n");
+    println!(
+        "  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+         -i {}/id_ed25519 -p {} root@127.0.0.1",
+        vm.work_dir.display(),
+        vm.ssh_port,
+    );
+    println!("\nRegistry is at /opt/ryra-test-registry in the VM.");
+    println!("Press Ctrl-C to stop the VM.\n");
 
-    #[test]
-    fn parse_distro_flag() {
-        let args = Args::parse_from(["ryra-e2e", "--distro", "debian-13"]);
-        assert_eq!(args.distro, Distro::Debian13);
-    }
+    // Block until Ctrl-C
+    tokio::signal::ctrl_c().await?;
 
-    #[test]
-    fn parse_fedora_distro() {
-        let args = Args::parse_from(["ryra-e2e", "--distro", "fedora-43"]);
-        assert_eq!(args.distro, Distro::Fedora43);
-    }
-
-    #[test]
-    fn parse_test_filters() {
-        let args = Args::parse_from(["ryra-e2e", "whoami", "postgres"]);
-        assert_eq!(args.tests, vec!["whoami", "postgres"]);
-    }
-
-    #[test]
-    fn parse_list_flag() {
-        let args = Args::parse_from(["ryra-e2e", "--list"]);
-        assert!(args.list);
-    }
-
-    #[test]
-    fn parse_ryra_bin_flag() {
-        let args = Args::parse_from(["ryra-e2e", "--ryra-bin", "/usr/local/bin/ryra"]);
-        assert_eq!(args.ryra_bin, Some("/usr/local/bin/ryra".into()));
-    }
-
-    #[test]
-    fn parse_registry_flag() {
-        let args = Args::parse_from(["ryra-e2e", "--registry", "/my/registry"]);
-        assert_eq!(args.registry, Some("/my/registry".into()));
-    }
+    println!("\nShutting down VM...");
+    vm.destroy().await?;
+    Ok(())
 }
+

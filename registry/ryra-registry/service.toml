@@ -1,0 +1,32 @@
+[service]
+name = "ryra-registry"
+description = "Static file server hosting the ryra service registry"
+url = "https://ryra.dev"
+image = "docker.io/library/nginx:alpine"
+
+[requirements.ram]
+min = 32
+recommended = 64
+
+[[ports]]
+name = "http"
+container_port = 80
+
+[[volumes]]
+name = "data"
+mount_path = "/usr/share/nginx/html"
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "http-responds"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
+
+[[tests]]
+name = "serves-json"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/index.json | grep -q services"

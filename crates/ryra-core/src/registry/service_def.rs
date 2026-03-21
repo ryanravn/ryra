@@ -15,6 +15,8 @@ pub struct ServiceDef {
     #[serde(default)]
     pub env: Vec<EnvVar>,
     #[serde(default)]
+    pub requires: Vec<ServiceRequirement>,
+    #[serde(default)]
     pub dependencies: Vec<DependencyDef>,
     #[serde(default)]
     pub containers: Vec<ContainerDef>,
@@ -244,6 +246,16 @@ pub struct EnvVar {
     /// Defaults to 32 for `string`, 64 for `hex`.
     #[serde(default)]
     pub length: Option<u32>,
+}
+
+/// A service that must already be installed on the system before this one.
+///
+/// Unlike `DependencyDef` (sidecar containers bundled with the service),
+/// `requires` references separately-installed ryra services whose env vars
+/// and ports can be referenced via `{{services.<name>.*}}` templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceRequirement {
+    pub service: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
