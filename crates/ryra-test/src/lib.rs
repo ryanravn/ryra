@@ -2,7 +2,7 @@ mod assert;
 mod image;
 mod machine;
 mod ports;
-mod registry;
+pub mod registry;
 mod runner;
 mod scenario;
 
@@ -52,9 +52,9 @@ pub struct Args {
     #[arg(long)]
     pub no_kvm: bool,
 
-    /// VM memory in MB
-    #[arg(long, default_value_t = 2048)]
-    pub memory: u32,
+    /// VM memory in MB (overrides auto-detection from service requirements)
+    #[arg(long)]
+    pub memory: Option<u32>,
 
     /// VM CPU count
     #[arg(long, default_value_t = 2)]
@@ -147,6 +147,40 @@ fn save_results(results: &[ScenarioResult]) -> Result<()> {
     println!("Results saved to: {}", log_path.display());
 
     Ok(())
+}
+
+/// Read current memory usage from /proc/meminfo. Returns (total_mb, used_mb).
+fn read_host_memory() -> Option<(u64, u64)> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let parse_kb = |key: &str| -> Option<u64> {
+        meminfo.lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok())
+    };
+    let total_kb = parse_kb("MemTotal:")?;
+    let avail_kb = parse_kb("MemAvailable:")?;
+    let total_mb = total_kb / 1024;
+    let used_mb = total_mb.saturating_sub(avail_kb / 1024);
+    Some((total_mb, used_mb))
+}
+
+fn print_memory_summary(max_concurrent_mb: u64) {
+    if let Some((total_mb, used_mb)) = read_host_memory() {
+        let avail_mb = total_mb.saturating_sub(used_mb);
+        println!(
+            "\nHost RAM: {used_mb}MB used / {total_mb}MB total ({avail_mb}MB available)"
+        );
+        println!("Max concurrent VM RAM: {max_concurrent_mb}MB");
+        if max_concurrent_mb > avail_mb {
+            eprintln!(
+                "WARNING: VMs may need up to {max_concurrent_mb}MB but only {avail_mb}MB available — \
+                 reduce --parallel or --memory"
+            );
+        }
+    } else {
+        println!("\nMax concurrent VM RAM: {max_concurrent_mb}MB");
+    }
 }
 
 fn check_prerequisites(use_kvm: bool) -> Result<()> {
@@ -242,10 +276,8 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     anyhow::bail!("no registry found. Pass --registry <path> or run from the repo root")
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
-
+/// Run the E2E test suite with the given arguments.
+pub async fn run(args: Args) -> Result<()> {
     let registry_path = resolve_registry_path(args.registry.as_ref())?;
     let discovered = registry::discover(&registry_path)?;
 
@@ -274,9 +306,10 @@ async fn main() -> Result<()> {
     let use_kvm = !args.no_kvm;
     check_prerequisites(use_kvm)?;
 
+    let memory_override = args.memory;
     let spawn_opts = std::sync::Arc::new(SpawnOpts {
         use_kvm,
-        memory_mb: args.memory,
+        memory_mb: memory_override.unwrap_or(2048), // default for interactive VMs
         cpus: args.cpus,
     });
 
@@ -327,6 +360,19 @@ async fn main() -> Result<()> {
         machine::ensure_image_cached(image).await?;
     }
 
+    // Compute per-test memory and show summary
+    let test_memories: Vec<(&str, u32)> = to_run.iter().map(|t| {
+        let mem = memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t));
+        (t.name(), mem)
+    }).collect();
+    // Worst case: the N largest VMs running concurrently
+    let mut sorted_mems: Vec<u32> = test_memories.iter().map(|(_, m)| *m).collect();
+    sorted_mems.sort_unstable_by(|a, b| b.cmp(a));
+    let max_concurrent_mb: u64 = sorted_mems.iter().take(args.parallel).map(|m| *m as u64).sum();
+    print_memory_summary(max_concurrent_mb);
+    for (name, mem) in &test_memories {
+        println!("  {name}: {mem}MB");
+    }
     println!(
         "\nRunning {} tests (parallel={})\n",
         to_run.len(),
@@ -339,7 +385,13 @@ async fn main() -> Result<()> {
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
         let base_image = base_image.clone();
-        let spawn_opts = spawn_opts.clone();
+        let test_memory = memory_override
+            .unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, test));
+        let spawn_opts = std::sync::Arc::new(SpawnOpts {
+            use_kvm,
+            memory_mb: test_memory,
+            cpus: args.cpus,
+        });
         let ryra_bin = ryra_bin.clone();
         let registry_path = registry_path.clone();
         let keep_failed = args.keep_failed;
@@ -352,7 +404,7 @@ async fn main() -> Result<()> {
             let id = machine::random_id();
             let ssh_port = ports::allocate_ssh_port();
             let start = std::time::Instant::now();
-            println!("[{name}] spawning VM ryra-test-{id} (ssh port {ssh_port})");
+            println!("[{name}] ---- VM START ryra-test-{id} (ssh port {ssh_port}, {test_memory}MB RAM) ----");
 
             let fail_result = |msg: String| ScenarioResult {
                 name: name.clone(),
@@ -438,6 +490,8 @@ async fn main() -> Result<()> {
 
             // Decide whether to keep the VM alive
             let should_keep = keep_alive || (keep_failed && !result.passed());
+            let status = if result.passed() { "PASS" } else { "FAIL" };
+            let elapsed = start.elapsed();
             if should_keep {
                 println!("[{name}] keeping VM alive:");
                 vm.keep_alive();
@@ -447,10 +501,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            println!(
-                "[{name}] {}",
-                if result.passed() { "passed" } else { "FAILED" }
-            );
+            println!("[{name}] ---- VM END ({status}, {:.1}s) ----", elapsed.as_secs_f64());
             result
         }));
     }
@@ -507,4 +558,3 @@ async fn run_interactive_vm(
     vm.destroy().await?;
     Ok(())
 }
-

@@ -56,7 +56,7 @@ impl Machine {
         opts: &SpawnOpts,
     ) -> Result<Self> {
         let name = format!("ryra-test-{test_id}");
-        let work_dir = std::env::temp_dir().join(&name);
+        let work_dir = vm_work_base_dir().join(&name);
         tokio::fs::create_dir_all(&work_dir)
             .await
             .context("failed to create VM work directory")?;
@@ -126,6 +126,15 @@ impl Machine {
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
 
+        // Share the image cache dir with the VM via 9p virtfs — lets the VM
+        // read host-side image tars directly without SCP/network transfer.
+        let image_cache = image_cache_dir();
+        let _ = std::fs::create_dir_all(&image_cache);
+        let virtfs_arg = format!(
+            "local,path={},mount_tag=images,security_model=none,readonly=on",
+            image_cache.display()
+        );
+
         let mut args: Vec<&str> = vec![
             "-machine",
             "virt",
@@ -145,6 +154,8 @@ impl Machine {
             &seed_arg,
             "-nic",
             &nic_arg,
+            "-virtfs",
+            &virtfs_arg,
             "-nographic",
             "-serial",
             &serial_arg,
@@ -488,8 +499,25 @@ fn image_cache_dir() -> PathBuf {
         .join("images")
 }
 
-/// Ensure a container image is pulled on the host and saved as a tar.
-/// Returns the path to the cached tar file.
+/// Base directory for VM work dirs (disk images, keys, logs).
+/// Uses ~/.cache/ryra-e2e/vms/ instead of /tmp so we don't fill
+/// up a RAM-backed tmpfs with multi-GB qcow2 COW disks.
+fn vm_work_base_dir() -> PathBuf {
+    cache_base_dir().join("vms")
+}
+
+/// Shared cache root for all ryra-e2e artifacts.
+fn cache_base_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("ryra-e2e")
+}
+
+/// Ensure a container image is pulled and saved as a tar in the cache.
+///
+/// Uses the host's normal podman store — images pulled for testing are
+/// the same ones ryra deploys, so sharing the store avoids duplicate pulls.
+/// The tar cache (`~/.cache/ryra-e2e/images/`) is what gets shared into VMs.
 pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
     let cache = image_cache_dir();
     tokio::fs::create_dir_all(&cache)
@@ -504,8 +532,8 @@ pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
         return Ok(tar_path);
     }
 
-    // Pull on the host
-    println!("    pulling {image} on host...");
+    // Pull using the host's normal podman store
+    println!("    pulling {image}...");
     let status = Command::new("podman")
         .args(["pull", image])
         .stdout(Stdio::null())
@@ -517,7 +545,7 @@ pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
         anyhow::bail!("podman pull {image} failed");
     }
 
-    // Save to tar
+    // Save to tar for 9p sharing into VMs
     let partial = tar_path.with_extension("tar.partial");
     let status = Command::new("podman")
         .args(["save", "-o", &partial.to_string_lossy(), image])
@@ -540,16 +568,16 @@ pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
 
 /// Load cached container images into a VM.
 ///
-/// Images are pulled on the host, saved as tars, SCP'd into the VM, and
-/// loaded into root's podman store. Rootless service users can access them
-/// via podman's `additional_image_stores` configured in the VM.
+/// Uses QEMU 9p virtfs to share the host image cache directory with the VM.
+/// The VM mounts it and loads tars directly — no network transfer needed.
+/// Rootless service users can access loaded images via podman's
+/// `additional_image_stores`.
 pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result<()> {
     if images.is_empty() {
         return Ok(());
     }
 
     // Configure podman so rootless users can see root's image store.
-    // This makes `podman pull` a no-op for images already loaded as root.
     machine
         .exec(
             "mkdir -p /etc/containers/storage.conf.d && \
@@ -559,37 +587,21 @@ pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result
         .await
         .ok(); // best-effort
 
-    let key = machine.ssh_key_path();
-    let port = machine.ssh_port.to_string();
+    // Mount the 9p shared image cache from the host
+    machine
+        .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
+        .await
+        .context("failed to mount 9p image cache in VM")?;
 
     for image in images {
-        let tar_path = ensure_image_cached(image).await?;
+        // ensure_image_cached returns the host path, but we just need the filename
+        let _ = ensure_image_cached(image).await?;
+        let safe_name = image.replace(['/', ':'], "-");
+        let remote_path = format!("/mnt/images/{safe_name}.tar");
         println!("    loading {image} into VM...");
 
-        // SCP the tar into the VM
-        let remote_tar = format!("/tmp/{}.tar", image.replace(['/', ':'], "-"));
-        let status = Command::new("scp")
-            .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-i", &key.to_string_lossy(),
-                "-P", &port,
-                &tar_path.to_string_lossy(),
-                &format!("root@127.0.0.1:{remote_tar}"),
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .context("failed to SCP image tar to VM")?;
-        if !status.success() {
-            anyhow::bail!("SCP of {image} tar failed");
-        }
-
-        // Load into root's podman store
         machine
-            .exec(&format!("podman load -i {remote_tar} && rm -f {remote_tar}"))
+            .exec(&format!("podman load -i {remote_path}"))
             .await
             .context(format!("failed to load {image} in VM"))?;
     }

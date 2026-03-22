@@ -1013,6 +1013,7 @@ dependencies = [
  "console",
  "dialoguer",
  "ryra-core",
+ "ryra-test",
  "tokio",
 ]
 

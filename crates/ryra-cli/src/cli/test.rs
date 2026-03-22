@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use anyhow::Result;
+use clap::Parser;
 use tokio::process::Command;
 
 use ryra_core::registry::service_def::TestDef;
@@ -260,42 +261,11 @@ async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) ->
 }
 
 async fn run_vm(filter: Option<&str>, keep_alive: bool, verbose: bool) -> Result<()> {
-    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let e2e_bin = ["release", "debug"]
-        .iter()
-        .map(|p| workspace_root.join(format!("target/{p}/ryra-test")))
-        .find(|p| p.exists());
-
-    let e2e_bin = match e2e_bin {
-        Some(p) => p,
-        None => {
-            anyhow::bail!(
-                "ryra-test binary not found. Build with: cargo build -p ryra-test"
-            );
-        }
-    };
-
-    let mut args = Vec::new();
-    if verbose {
-        args.push("--verbose");
-    }
-    if keep_alive {
-        args.push("--keep-alive");
-    }
+    let mut args = ryra_test::Args::parse_from(std::iter::once("ryra-test"));
+    args.verbose = verbose;
+    args.keep_alive = keep_alive;
     if let Some(name) = filter {
-        args.push(name);
+        args.tests.push(name.to_string());
     }
-
-    let status = Command::new(&e2e_bin)
-        .args(&args)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .await?;
-
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-
-    Ok(())
+    ryra_test::run(args).await
 }

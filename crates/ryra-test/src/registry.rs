@@ -95,6 +95,7 @@ impl DiscoveredTest {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_multi_service(&self) -> bool {
         matches!(self, DiscoveredTest::MultiService { .. })
     }
@@ -350,6 +351,45 @@ fn discover_lifecycle(path: &PathBuf, content: &str) -> Result<DiscoveredTest> {
     })
 }
 
+/// Look up the recommended RAM (MB) for a service from its service.toml.
+pub fn service_recommended_ram(registry_path: &Path, service_name: &str) -> Result<Option<u64>> {
+    let service_toml = registry_path.join(service_name).join("service.toml");
+    if !service_toml.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&service_toml)
+        .with_context(|| format!("failed to read {}", service_toml.display()))?;
+    let parsed: ServiceTomlRam = toml::from_str(&content)
+        .with_context(|| format!("failed to parse {}", service_toml.display()))?;
+    Ok(parsed.requirements.and_then(|r| r.ram.recommended))
+}
+
+/// Compute the VM memory (MB) needed for a test based on its services'
+/// recommended RAM. Adds 512MB OS overhead, rounds up to 512MB increments,
+/// with a 1024MB floor.
+pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
+    let services: Vec<&str> = match test {
+        DiscoveredTest::Lifecycle { steps, .. } => {
+            steps.iter().filter_map(|s| match s {
+                StepEntry::Add { service } => Some(service.as_str()),
+                _ => None,
+            }).collect()
+        }
+        _ => test.services(),
+    };
+
+    let service_ram: u64 = services.iter().map(|svc| {
+        service_recommended_ram(registry_path, svc)
+            .ok()
+            .flatten()
+            .unwrap_or(128) // default if not specified
+    }).sum();
+
+    let total = service_ram + 512; // OS/podman overhead
+    let rounded = ((total + 511) / 512) * 512; // round up to 512MB
+    rounded.max(1024) as u32
+}
+
 /// Look up the container image for a service from its service.toml.
 pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<String>> {
     let service_toml = registry_path.join(service_name).join("service.toml");
@@ -409,6 +449,23 @@ struct ServiceTomlImage {
 struct ServiceMetaImage {
     #[serde(default)]
     image: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ServiceTomlRam {
+    #[serde(default)]
+    requirements: Option<RequirementsRam>,
+}
+
+#[derive(serde::Deserialize)]
+struct RequirementsRam {
+    ram: RamFields,
+}
+
+#[derive(serde::Deserialize)]
+struct RamFields {
+    #[serde(default)]
+    recommended: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]

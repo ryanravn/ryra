@@ -185,7 +185,7 @@ async fn run_test_entry(vm: &Machine, entry: &TestEntry, env_prefix: &str) -> Ev
 ///
 /// Single-service: `. /var/lib/<service>/.env` (unprefixed)
 /// Multi-service: reads each .env and exports with SERVICE__ prefix
-async fn build_env_prefix(vm: &Machine, test: &DiscoveredTest) -> Result<String> {
+async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String> {
     match test {
         DiscoveredTest::SingleService { service_name, .. } => {
             Ok(format!(". /var/lib/{service_name}/.env"))

@@ -3,9 +3,9 @@ name = "ryra-test"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "ryra-test"
-path = "src/main.rs"
+[lib]
+name = "ryra_test"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true

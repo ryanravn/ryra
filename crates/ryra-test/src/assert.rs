@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::machine::Machine;
 
+#[allow(dead_code)]
 impl Machine {
     pub async fn assert_service_active(&self, user: &str, unit: &str) -> Result<()> {
         let cmd = format!("systemctl --machine=ryra-{user}@ --user is-active {unit}");

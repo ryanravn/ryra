@@ -245,7 +245,7 @@ async fn prepare_image(
     efi_vars_template: &PathBuf,
     use_kvm: bool,
 ) -> Result<()> {
-    let work_dir = std::env::temp_dir().join("ryra-prepare-base");
+    let work_dir = cache_dir().join("prepare-base");
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
     tokio::fs::create_dir_all(&work_dir)
         .await

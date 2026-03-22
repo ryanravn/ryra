@@ -65,6 +65,13 @@ impl fmt::Display for ScenarioResult {
             self.duration.as_secs_f64()
         )?;
 
+        // Show top-level failure reason when there are no events (setup failure)
+        if self.events.is_empty() {
+            if let Outcome::Failed(msg) = &self.outcome {
+                writeln!(f, "  {msg}")?;
+            }
+        }
+
         for event in &self.events {
             let mark = match &event.outcome {
                 Outcome::Passed => " ok ",
