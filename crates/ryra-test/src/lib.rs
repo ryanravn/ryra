@@ -1,20 +1,16 @@
-mod assert;
-mod image;
-mod machine;
-mod ports;
 pub mod registry;
 mod runner;
 mod scenario;
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::sync::Semaphore;
 
-use image::Distro;
-use machine::{Machine, SpawnOpts};
+use ryra_vm::image::Distro;
+use ryra_vm::machine::{self, Machine, SpawnOpts};
+use ryra_vm::{image, ports};
 use scenario::ScenarioResult;
 
 #[derive(Parser, Debug)]
@@ -149,24 +145,8 @@ fn save_results(results: &[ScenarioResult]) -> Result<()> {
     Ok(())
 }
 
-/// Read current memory usage from /proc/meminfo. Returns (total_mb, used_mb).
-fn read_host_memory() -> Option<(u64, u64)> {
-    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let parse_kb = |key: &str| -> Option<u64> {
-        meminfo.lines()
-            .find(|l| l.starts_with(key))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .and_then(|v| v.parse::<u64>().ok())
-    };
-    let total_kb = parse_kb("MemTotal:")?;
-    let avail_kb = parse_kb("MemAvailable:")?;
-    let total_mb = total_kb / 1024;
-    let used_mb = total_mb.saturating_sub(avail_kb / 1024);
-    Some((total_mb, used_mb))
-}
-
 fn print_memory_summary(max_concurrent_mb: u64) {
-    if let Some((total_mb, used_mb)) = read_host_memory() {
+    if let Some((total_mb, used_mb)) = ryra_vm::read_host_memory() {
         let avail_mb = total_mb.saturating_sub(used_mb);
         println!(
             "\nHost RAM: {used_mb}MB used / {total_mb}MB total ({avail_mb}MB available)"
@@ -181,79 +161,6 @@ fn print_memory_summary(max_concurrent_mb: u64) {
     } else {
         println!("\nMax concurrent VM RAM: {max_concurrent_mb}MB");
     }
-}
-
-fn check_prerequisites(use_kvm: bool) -> Result<()> {
-    let required = [
-        "qemu-system-aarch64",
-        "qemu-img",
-        "ssh",
-        "scp",
-        "ssh-keygen",
-        "curl",
-    ];
-    let mut missing = Vec::new();
-
-    for cmd in &required {
-        let found = std::process::Command::new("which")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !found {
-            missing.push(*cmd);
-        }
-    }
-
-    // Need at least one ISO creation tool
-    let has_iso_tool = ["genisoimage", "mkisofs"].iter().any(|cmd| {
-        std::process::Command::new("which")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    });
-    if !has_iso_tool {
-        missing.push("genisoimage");
-    }
-
-    if !missing.is_empty() {
-        anyhow::bail!(
-            "missing required tools: {}\n\
-             Install with:\n  \
-             sudo apt install qemu-system-arm qemu-utils qemu-efi-aarch64 \\\n    \
-             genisoimage openssh-client curl                    # Debian/Ubuntu\n  \
-             sudo dnf install qemu-system-aarch64 qemu-img edk2-aarch64 \\\n    \
-             genisoimage openssh-clients curl                   # Fedora",
-            missing.join(", ")
-        );
-    }
-
-    if use_kvm {
-        let kvm = std::path::Path::new("/dev/kvm");
-        if !kvm.exists() {
-            anyhow::bail!(
-                "/dev/kvm not found — KVM is not available on this machine.\n\
-                 Run with --no-kvm to use software emulation (slower), or \
-                 run on a machine with KVM support."
-            );
-        }
-        let accessible = std::fs::File::open(kvm).is_ok();
-        if !accessible {
-            anyhow::bail!(
-                "/dev/kvm exists but is not accessible — permission denied.\n\
-                 Add your user to the kvm group and re-login:\n  \
-                 sudo usermod -aG kvm $USER\n  \
-                 # then log out and back in, or run: newgrp kvm"
-            );
-        }
-    }
-
-    Ok(())
 }
 
 /// Find the registry path — explicit arg, or auto-detect.
@@ -304,12 +211,12 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     let use_kvm = !args.no_kvm;
-    check_prerequisites(use_kvm)?;
+    ryra_vm::check_prerequisites(use_kvm)?;
 
     let memory_override = args.memory;
     let spawn_opts = std::sync::Arc::new(SpawnOpts {
         use_kvm,
-        memory_mb: memory_override.unwrap_or(2048), // default for interactive VMs
+        memory_mb: memory_override.unwrap_or(2048),
         cpus: args.cpus,
     });
 
@@ -347,7 +254,6 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     // Pre-pull all container images before spawning VMs.
-    // This avoids slow image pulls counting against test timeouts.
     let mut all_images: Vec<String> = to_run
         .iter()
         .flat_map(|t| registry::images_for_test(&registry_path, t))
@@ -356,8 +262,8 @@ pub async fn run(args: Args) -> Result<()> {
     all_images.dedup();
 
     println!("Pre-caching {} container images...", all_images.len());
-    for image in &all_images {
-        machine::ensure_image_cached(image).await?;
+    for img in &all_images {
+        machine::ensure_image_cached(img).await?;
     }
 
     // Compute per-test memory and show summary
@@ -365,7 +271,6 @@ pub async fn run(args: Args) -> Result<()> {
         let mem = memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t));
         (t.name(), mem)
     }).collect();
-    // Worst case: the N largest VMs running concurrently
     let mut sorted_mems: Vec<u32> = test_memories.iter().map(|(_, m)| *m).collect();
     sorted_mems.sort_unstable_by(|a, b| b.cmp(a));
     let max_concurrent_mb: u64 = sorted_mems.iter().take(args.parallel).map(|m| *m as u64).sum();
@@ -551,7 +456,6 @@ async fn run_interactive_vm(
     println!("\nRegistry is at /opt/ryra-test-registry in the VM.");
     println!("Press Ctrl-C to stop the VM.\n");
 
-    // Block until Ctrl-C
     tokio::signal::ctrl_c().await?;
 
     println!("\nShutting down VM...");

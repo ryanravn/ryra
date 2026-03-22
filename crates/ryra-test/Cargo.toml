@@ -8,10 +8,9 @@ name = "ryra_test"
 path = "src/lib.rs"
 
 [dependencies]
+ryra-vm = { path = "../ryra-vm" }
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal"] }
 serde.workspace = true
 toml.workspace = true
-rand = "0.9"
-dirs = "6"

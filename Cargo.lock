@@ -1048,11 +1048,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "dirs",
- "rand",
+ "ryra-vm",
  "serde",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "ryra-vm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "rand",
+ "tokio",
 ]
 
 [[package]]

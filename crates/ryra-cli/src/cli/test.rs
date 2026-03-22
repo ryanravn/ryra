@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use anyhow::Result;
+#[cfg(feature = "vm")]
 use clap::Parser;
 use tokio::process::Command;
 
@@ -260,6 +261,7 @@ async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) ->
     Ok(())
 }
 
+#[cfg(feature = "vm")]
 async fn run_vm(filter: Option<&str>, keep_alive: bool, verbose: bool) -> Result<()> {
     let mut args = ryra_test::Args::parse_from(std::iter::once("ryra-test"));
     args.verbose = verbose;
@@ -268,4 +270,12 @@ async fn run_vm(filter: Option<&str>, keep_alive: bool, verbose: bool) -> Result
         args.tests.push(name.to_string());
     }
     ryra_test::run(args).await
+}
+
+#[cfg(not(feature = "vm"))]
+async fn run_vm(_filter: Option<&str>, _keep_alive: bool, _verbose: bool) -> Result<()> {
+    anyhow::bail!(
+        "VM support not compiled in.\n\
+         Rebuild with: cargo build --features vm"
+    )
 }

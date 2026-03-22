@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::machine::Machine;
+use ryra_vm::machine::Machine;
 use crate::registry::{DiscoveredTest, StepEntry, TestEntry};
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
 

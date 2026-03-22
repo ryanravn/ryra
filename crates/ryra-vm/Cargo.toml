@@ -1,0 +1,10 @@
+[package]
+name = "ryra-vm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal"] }
+rand = "0.9"
+dirs = "6"

@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["e2e-tests"]
-e2e-tests = ["dep:ryra-test"]
+default = ["vm"]
+vm = ["dep:ryra-test"]
 
 [dependencies]
 ryra-core = { path = "../ryra-core" }
