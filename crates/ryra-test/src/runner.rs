@@ -79,6 +79,36 @@ pub async fn run_registry_test(
         }
     }
 
+    // Wait for declared ports to be reachable (services may need startup time
+    // beyond what systemd "active" indicates).
+    if !failed {
+        for service in test.services() {
+            let port_cmd = format!(
+                "grep RYRA_PORT /var/lib/{service}/.env 2>/dev/null | cut -d= -f2"
+            );
+            if let Ok(out) = vm.exec(&port_cmd).await {
+                for port in out.stdout.trim().lines() {
+                    let port = port.trim();
+                    if port.is_empty() {
+                        continue;
+                    }
+                    println!("[{name}]   waiting for port {port}...");
+                    let port_event = wait_for_port(vm, name, port).await;
+                    print_event_result(name, &port_event);
+                    if port_event.outcome.is_fail() {
+                        failed = true;
+                        events.push(port_event);
+                        break;
+                    }
+                    events.push(port_event);
+                }
+            }
+            if failed {
+                break;
+            }
+        }
+    }
+
     // Build the env sourcing prefix for test commands
     let env_prefix = if !failed {
         match build_env_prefix(vm, test).await {
@@ -118,6 +148,11 @@ pub async fn run_registry_test(
             failed = true;
         }
         events.push(event);
+    }
+
+    // Dump diagnostics on failure
+    if failed {
+        dump_diagnostics(vm, name, &test.services()).await;
     }
 
     let outcome = if failed {
@@ -410,6 +445,131 @@ fn lifecycle_step_kind(step: &StepEntry) -> EventKind {
         StepEntry::Assert { .. } => EventKind::Assertion,
         _ => EventKind::Step,
     }
+}
+
+/// Wait for a port to accept TCP connections (not just be bound by rootlessport).
+///
+/// Uses bash `/dev/tcp` to test actual TCP connectivity through to the
+/// container, not just whether rootlessport is listening on the host side.
+async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
+    let t = Instant::now();
+    let timeout = Duration::from_secs(300);
+    let mut last_log = std::time::Instant::now();
+    // First few seconds: rootlessport is listening but the container app
+    // may not be ready yet. A successful bash /dev/tcp probe means the
+    // connection made it all the way to the container.
+    loop {
+        let cmd = format!(
+            "bash -c 'echo > /dev/tcp/127.0.0.1/{port}' 2>/dev/null"
+        );
+        if let Ok(_) = vm.exec(&cmd).await {
+            return Event {
+                description: format!("port {port} ready"),
+                kind: EventKind::Step,
+                outcome: Outcome::Passed,
+                duration: t.elapsed(),
+            };
+        }
+
+        if t.elapsed() > timeout {
+            return Event {
+                description: format!("port {port} ready"),
+                kind: EventKind::Step,
+                outcome: Outcome::Failed(format!(
+                    "port {port} not responding after {}s",
+                    timeout.as_secs()
+                )),
+                duration: t.elapsed(),
+            };
+        }
+
+        if last_log.elapsed().as_secs() >= 30 {
+            println!(
+                "[{test_name}]     still waiting for port {port}... ({:.0}s)",
+                t.elapsed().as_secs_f64()
+            );
+            last_log = std::time::Instant::now();
+        }
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+/// Dump diagnostic info for each service when a test fails.
+async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
+    println!("[{test_name}] --- diagnostics ---");
+    for svc in services {
+        // Systemd service status
+        let cmd = format!(
+            "systemctl --machine={svc}@ --user status {svc}.service 2>&1 | head -20 || true"
+        );
+        if let Ok(out) = vm.exec(&cmd).await {
+            let trimmed = out.stdout.trim();
+            if !trimmed.is_empty() {
+                println!("[{test_name}]   [{svc}] systemd status:");
+                for line in trimmed.lines() {
+                    println!("[{test_name}]     {line}");
+                }
+            }
+        }
+
+        // Container status
+        let cmd = format!(
+            "cd / && sudo -H -u {svc} podman ps -a --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Ports}}}}' 2>&1 || true"
+        );
+        if let Ok(out) = vm.exec(&cmd).await {
+            let trimmed = out.stdout.trim();
+            if !trimmed.is_empty() {
+                println!("[{test_name}]   [{svc}] containers: {trimmed}");
+            } else {
+                println!("[{test_name}]   [{svc}] containers: (none)");
+            }
+        }
+
+        // Container/journal logs
+        let uid_cmd = format!("id -u {svc} 2>/dev/null || echo 0");
+        let uid = vm.exec(&uid_cmd).await
+            .map(|o| o.stdout.trim().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        let cmd = format!(
+            "sudo -u {svc} XDG_RUNTIME_DIR=/run/user/{uid} journalctl --user -u {svc}.service --no-pager -n 30 2>&1 || true"
+        );
+        if let Ok(out) = vm.exec(&cmd).await {
+            let trimmed = out.stdout.trim();
+            if !trimmed.is_empty() {
+                println!("[{test_name}]   [{svc}] logs:");
+                for line in trimmed.lines().take(30) {
+                    println!("[{test_name}]     {line}");
+                }
+            }
+        }
+
+        // Env file
+        let cmd = format!("cat /var/lib/{svc}/.env 2>&1 | grep RYRA_PORT || true");
+        if let Ok(out) = vm.exec(&cmd).await {
+            let trimmed = out.stdout.trim();
+            if !trimmed.is_empty() {
+                println!("[{test_name}]   [{svc}] ports: {trimmed}");
+            }
+        }
+
+        // Check quadlet, container internals, and network
+        let cmd = format!(
+            "echo '=== quadlet ==='; grep -i exec /var/lib/{svc}/.config/containers/systemd/{svc}.container 2>/dev/null || true; \
+             echo '=== container process ==='; cd / && sudo -H -u {svc} podman exec systemd-{svc} ps aux 2>&1 | head -10 || true; \
+             echo '=== container listeners ==='; cd / && sudo -H -u {svc} podman exec systemd-{svc} cat /proc/net/tcp6 2>&1 | head -10 || true; \
+             echo '=== host listeners ==='; ss -tlnp 2>/dev/null | head -20; \
+             echo '=== curl ==='; curl -sv http://127.0.0.1:18789/ 2>&1 | head -10 || true"
+        );
+        if let Ok(out) = vm.exec(&cmd).await {
+            let trimmed = out.stdout.trim();
+            println!("[{test_name}]   [{svc}] network:");
+            for line in trimmed.lines() {
+                println!("[{test_name}]     {line}");
+            }
+        }
+    }
+    println!("[{test_name}] --- end diagnostics ---");
 }
 
 /// Run a command in the VM and return an Event.

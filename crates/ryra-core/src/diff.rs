@@ -111,11 +111,11 @@ fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
 
     // Image
     let old_image = match &old.service.deploy {
-        crate::registry::service_def::DeployMode::Quadlet { image } => Some(image.as_str()),
+        crate::registry::service_def::DeployMode::Quadlet { image, .. } => Some(image.as_str()),
         _ => None,
     };
     let new_image = match &new.service.deploy {
-        crate::registry::service_def::DeployMode::Quadlet { image } => Some(image.as_str()),
+        crate::registry::service_def::DeployMode::Quadlet { image, .. } => Some(image.as_str()),
         _ => None,
     };
     if let (Some(old_img), Some(new_img)) = (old_image, new_image) {

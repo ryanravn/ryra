@@ -58,7 +58,12 @@ impl ServiceDef {
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum DeployMode {
     /// Single container managed via podman quadlet.
-    Quadlet { image: String },
+    Quadlet {
+        image: String,
+        /// Override the container CMD (maps to quadlet `Exec=`).
+        #[serde(default)]
+        command: Option<String>,
+    },
     /// Multi-service stack managed via podman compose.
     Compose {
         /// Path to compose file relative to the service directory in the registry.
@@ -92,6 +97,8 @@ struct ServiceMetaRaw {
     #[serde(default = "default_quadlet_mode")]
     mode: String,
     image: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
     file: Option<String>,
     #[serde(default)]
     profiles: Vec<ComposeProfile>,
@@ -127,7 +134,7 @@ impl<'de> Deserialize<'de> for ServiceMeta {
                 let image = raw.image.ok_or_else(|| {
                     serde::de::Error::missing_field("image")
                 })?;
-                DeployMode::Quadlet { image }
+                DeployMode::Quadlet { image, command: raw.command }
             }
             "compose" => {
                 let file = raw.file.ok_or_else(|| {

@@ -87,7 +87,7 @@ fn find_ryra_binary() -> Result<PathBuf> {
     )
 }
 
-fn print_summary(results: &[ScenarioResult]) {
+fn print_summary(results: &[ScenarioResult], wall_clock: std::time::Duration) {
     println!("\n========================================");
     println!("  Results");
     println!("========================================\n");
@@ -98,13 +98,12 @@ fn print_summary(results: &[ScenarioResult]) {
 
     let passed = results.iter().filter(|r| r.passed()).count();
     let failed = results.len() - passed;
-    let total_duration: std::time::Duration = results.iter().map(|r| r.duration).sum();
 
     println!("----------------------------------------");
     println!(
-        "{passed} passed, {failed} failed, {} total ({:.1}s)",
+        "{passed} passed, {failed} failed, {} total ({:.0}s wall clock)",
         results.len(),
-        total_duration.as_secs_f64()
+        wall_clock.as_secs_f64()
     );
     println!("========================================");
 }
@@ -284,6 +283,7 @@ pub async fn run(args: Args) -> Result<()> {
         args.parallel
     );
 
+    let wall_clock = std::time::Instant::now();
     let semaphore = std::sync::Arc::new(Semaphore::new(args.parallel));
     let mut handles = vec![];
 
@@ -329,38 +329,41 @@ pub async fn run(args: Args) -> Result<()> {
             };
 
             // Spawn VM
+            let phase = std::time::Instant::now();
             println!("[{name}] booting VM...");
             let vm = match Machine::spawn(&base_image, &id, ssh_port, &spawn_opts).await {
                 Ok(vm) => vm,
                 Err(e) => return fail_result(format!("failed to spawn VM: {e:#}")),
             };
-            println!("[{name}] VM ready");
+            println!("[{name}] VM ready ({:.1}s)", phase.elapsed().as_secs_f64());
 
             // Copy ryra binary into VM
-            println!("[{name}] copying ryra binary...");
+            let phase = std::time::Instant::now();
             if let Err(e) = machine::copy_ryra_to_vm(&vm, &ryra_bin).await {
                 let _ = vm.destroy().await;
                 return fail_result(format!("failed to copy ryra to VM: {e:#}"));
             }
 
             // Copy registry into VM
-            println!("[{name}] copying registry...");
             if let Err(e) = machine::copy_fixtures_to_vm(&vm, &registry_path).await {
                 let _ = vm.destroy().await;
                 return fail_result(format!("failed to copy registry to VM: {e:#}"));
             }
+            println!("[{name}] files copied ({:.1}s)", phase.elapsed().as_secs_f64());
 
             // Load cached container images into VM
             let images = registry::images_for_test(&registry_path, test);
             if !images.is_empty() {
-                println!("[{name}] loading {} container images...", images.len());
-            }
-            if let Err(e) = machine::load_images_into_vm(&vm, &images).await {
-                let _ = vm.destroy().await;
-                return fail_result(format!("failed to load container images: {e:#}"));
+                let phase = std::time::Instant::now();
+                if let Err(e) = machine::load_images_into_vm(&vm, &images).await {
+                    let _ = vm.destroy().await;
+                    return fail_result(format!("failed to load container images: {e:#}"));
+                }
+                println!("[{name}] images loaded ({:.1}s, {} images)", phase.elapsed().as_secs_f64(), images.len());
             }
 
-            println!("[{name}] running tests...");
+            let setup_time = start.elapsed();
+            println!("[{name}] running tests (setup took {:.1}s)...", setup_time.as_secs_f64());
             let result = match test {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
                     runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry").await
@@ -416,7 +419,7 @@ pub async fn run(args: Args) -> Result<()> {
         results.push(handle.await?);
     }
 
-    print_summary(&results);
+    print_summary(&results, wall_clock.elapsed());
     save_results(&results)?;
 
     if results.iter().any(|r| !r.passed()) {

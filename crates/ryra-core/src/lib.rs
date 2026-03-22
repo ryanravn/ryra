@@ -628,7 +628,7 @@ pub fn add_service(
     match generated {
         generate::GeneratedService::Quadlet { files, env_file, nginx_site } => {
             // Pull image
-            if let DeployMode::Quadlet { ref image } = reg_service.def.service.deploy {
+            if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
                 steps.push(Step::PullImage {
                     image: image.clone(),
                     username: Some(username.clone()),

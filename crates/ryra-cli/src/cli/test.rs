@@ -18,10 +18,12 @@ pub async fn run(
     keep_alive: bool,
     yes: bool,
     verbose: bool,
+    list: bool,
+    parallel: Option<usize>,
+    names: &[String],
 ) -> Result<()> {
-    if vm || keep_alive {
-        let filter = service.or(suite);
-        return run_vm(filter, keep_alive, verbose).await;
+    if vm || keep_alive || list {
+        return run_vm(names, keep_alive, verbose, list, parallel).await;
     }
 
     match (service, suite) {
@@ -262,18 +264,32 @@ async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) ->
 }
 
 #[cfg(feature = "vm")]
-async fn run_vm(filter: Option<&str>, keep_alive: bool, verbose: bool) -> Result<()> {
+async fn run_vm(
+    names: &[String],
+    keep_alive: bool,
+    verbose: bool,
+    list: bool,
+    parallel: Option<usize>,
+) -> Result<()> {
     let mut args = ryra_test::Args::parse_from(std::iter::once("ryra-test"));
     args.verbose = verbose;
     args.keep_alive = keep_alive;
-    if let Some(name) = filter {
-        args.tests.push(name.to_string());
+    args.list = list;
+    if let Some(n) = parallel {
+        args.parallel = n;
     }
+    args.tests = names.to_vec();
     ryra_test::run(args).await
 }
 
 #[cfg(not(feature = "vm"))]
-async fn run_vm(_filter: Option<&str>, _keep_alive: bool, _verbose: bool) -> Result<()> {
+async fn run_vm(
+    _names: &[String],
+    _keep_alive: bool,
+    _verbose: bool,
+    _list: bool,
+    _parallel: Option<usize>,
+) -> Result<()> {
     anyhow::bail!(
         "VM support not compiled in.\n\
          Rebuild with: cargo build --features vm"

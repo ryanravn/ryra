@@ -8,7 +8,7 @@ run = "curl -sf http://127.0.0.1:$WHOAMI__RYRA_PORT_HTTP"
 
 [[tests]]
 name = "postgres-accepts-connections"
-run = "PGPASSWORD=$POSTGRES__POSTGRES_PASSWORD psql -h 127.0.0.1 -p $POSTGRES__RYRA_PORT_TCP -U $POSTGRES__POSTGRES_USER -c 'SELECT 1'"
+run = "for i in $(seq 1 5); do PGPASSWORD=$POSTGRES__POSTGRES_PASSWORD psql -h 127.0.0.1 -p $POSTGRES__RYRA_PORT_TCP -U $POSTGRES__POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1"
 timeout = 60
 
 [[tests]]

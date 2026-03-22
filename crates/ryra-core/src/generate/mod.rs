@@ -59,8 +59,8 @@ pub fn generate_service(
     let nginx_site = generate_nginx_site(config, service_def, name, domain, exposure, host_port, nginx_dir)?;
 
     match &service_def.service.deploy {
-        DeployMode::Quadlet { image } => {
-            generate_quadlet(name, image, service_def, exposure, host_port, quadlet_dir, env_file, nginx_site)
+        DeployMode::Quadlet { image, command } => {
+            generate_quadlet(name, image, command.as_deref(), service_def, exposure, host_port, quadlet_dir, env_file, nginx_site)
         }
         DeployMode::Compose { file, .. } => {
             let compose_filename = compose_file_override.unwrap_or(file);
@@ -99,6 +99,7 @@ fn build_env_file(
 fn generate_quadlet(
     name: &str,
     image: &str,
+    command: Option<&str>,
     service_def: &ServiceDef,
     exposure: &ExposureMode,
     host_port: Option<u16>,
@@ -162,7 +163,7 @@ fn generate_quadlet(
         ports: &port_mappings,
         volumes: &volume_refs,
         network: &network_name,
-        command: None,
+        command,
         bind_address: &bind_address,
     };
 

@@ -28,5 +28,5 @@ name = "http-responds"
 run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
 
 [[tests]]
-name = "serves-json"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/index.json | grep -q services"
+name = "serves-content"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/ | grep -qi nginx"

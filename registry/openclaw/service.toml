@@ -3,10 +3,11 @@ name = "openclaw"
 description = "OpenClaw - self-hosted AI assistant gateway"
 url = "https://docs.openclaw.ai/"
 image = "ghcr.io/openclaw/openclaw:latest"
+command = '''sh -c "echo '{\"gateway\":{\"mode\":\"local\",\"bind\":\"lan\",\"controlUi\":{\"dangerouslyAllowHostHeaderOriginFallback\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured"'''
 
 [requirements.ram]
-min = 256
-recommended = 1024
+min = 1024
+recommended = 2048
 
 [[ports]]
 name = "gateway"
@@ -15,10 +16,6 @@ container_port = 18789
 [[volumes]]
 name = "config"
 mount_path = "/home/node/.openclaw"
-
-[[env]]
-name = "OPENCLAW_GATEWAY_BIND"
-value = "lan"
 
 [[env]]
 name = "OPENCLAW_GATEWAY_TOKEN"
@@ -45,7 +42,8 @@ smtp = false
 
 [[tests]]
 name = "http-responds"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_GATEWAY"
+run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_GATEWAY && exit 0; sleep 2; done; exit 1"
+timeout = 90
 
 [[tests]]
 name = "user-created"
