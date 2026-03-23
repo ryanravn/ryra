@@ -8,3 +8,4 @@ anyhow.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal"] }
 rand = "0.9"
 dirs = "6"
+libc = "0.2"

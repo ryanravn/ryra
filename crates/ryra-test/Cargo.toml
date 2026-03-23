@@ -14,3 +14,4 @@ clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal"] }
 serde.workspace = true
 toml.workspace = true
+libc = "0.2"

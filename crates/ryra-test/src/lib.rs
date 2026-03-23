@@ -13,6 +13,25 @@ use ryra_vm::machine::{self, Machine, SpawnOpts};
 use ryra_vm::{image, ports};
 use scenario::ScenarioResult;
 
+/// Install a Ctrl-C handler that kills all active VMs and exits.
+fn install_signal_handler() {
+    // We use the raw libc handler (not tokio::signal) so it works even if
+    // the tokio runtime is blocked or mid-shutdown.
+    unsafe {
+        libc::signal(libc::SIGINT, signal_handler as *const () as libc::sighandler_t);
+    }
+}
+
+extern "C" fn signal_handler(_sig: libc::c_int) {
+    // Write to stderr manually (signal-safe)
+    let msg = b"\nInterrupted - shutting down VMs...\n";
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+    }
+    machine::cleanup_all_vms();
+    std::process::exit(130); // 128 + SIGINT
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "ryra-e2e",
@@ -184,6 +203,8 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
 
 /// Run the E2E test suite with the given arguments.
 pub async fn run(args: Args) -> Result<()> {
+    install_signal_handler();
+
     let registry_path = resolve_registry_path(args.registry.as_ref())?;
     let discovered = registry::discover(&registry_path)?;
 

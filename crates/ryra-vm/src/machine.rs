@@ -1,10 +1,51 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use tokio::process::Command;
 
 use crate::image::Image;
+
+/// Global registry of active VM QEMU PIDs and work dirs, for signal cleanup.
+static ACTIVE_VMS: Mutex<Vec<ActiveVm>> = Mutex::new(Vec::new());
+
+struct ActiveVm {
+    pid: u32,
+    work_dir: PathBuf,
+}
+
+/// Kill all active VMs and clean up their work dirs.
+/// Called from the Ctrl-C handler to ensure no orphaned QEMU processes.
+pub fn cleanup_all_vms() {
+    let vms = {
+        let mut guard = ACTIVE_VMS.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *guard)
+    };
+    for vm in &vms {
+        // Send SIGKILL to the QEMU process
+        unsafe {
+            libc::kill(vm.pid as i32, libc::SIGKILL);
+        }
+        let _ = std::fs::remove_dir_all(&vm.work_dir);
+    }
+    if !vms.is_empty() {
+        eprintln!("\nCleaned up {} VM(s)", vms.len());
+    }
+}
+
+fn register_vm(pid: u32, work_dir: &Path) {
+    let mut guard = ACTIVE_VMS.lock().unwrap_or_else(|e| e.into_inner());
+    guard.push(ActiveVm {
+        pid,
+        work_dir: work_dir.to_path_buf(),
+    });
+}
+
+fn deregister_vm(pid: u32) {
+    let mut guard = ACTIVE_VMS.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|vm| vm.pid != pid);
+}
 
 /// A running QEMU VM for E2E testing.
 pub struct Machine {
@@ -181,6 +222,11 @@ impl Machine {
             qemu,
         };
 
+        // Register for signal cleanup
+        if let Some(pid) = machine.qemu.id() {
+            register_vm(pid, &machine.work_dir);
+        }
+
         // Wait for SSH to come up (cloud-init installs sshd + packages first)
         let boot_timeout = opts.boot_timeout();
         machine.wait_for_ssh(boot_timeout).await?;
@@ -238,6 +284,9 @@ impl Machine {
 
     /// Shut down the VM and clean up files.
     pub async fn destroy(mut self) -> Result<()> {
+        if let Some(pid) = self.qemu.id() {
+            deregister_vm(pid);
+        }
         let _ = self.exec("poweroff").await;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         let _ = self.qemu.kill().await;
@@ -249,6 +298,9 @@ impl Machine {
     /// Print SSH connection info for debugging, then detach.
     /// VM keeps running until the user kills it or the process exits.
     pub fn keep_alive(self) {
+        if let Some(pid) = self.qemu.id() {
+            deregister_vm(pid);
+        }
         println!(
             "  VM still running. Connect with:\n    \
              ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
