@@ -1,4 +1,4 @@
-Copyright (C) 2026 Ryan Ravn <erlendryan@pm.me>
+Copyright (C) 2026 Erlend Ravn Ryan <erlendryan@pm.me>
 
 # GNU AFFERO GENERAL PUBLIC LICENSE
 

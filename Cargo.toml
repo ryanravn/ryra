@@ -9,7 +9,7 @@ description = "A CLI tool that scaffolds self-hosted services on a single Linux 
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/ryanravn/ryra"
 homepage = "https://ryra.dev"
-authors = ["Ryan Ravn <erlendryan@pm.me>"]
+authors = ["Erlend Ravn Ryan <erlendryan@pm.me>"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
