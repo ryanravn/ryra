@@ -188,19 +188,12 @@ enum Command {
 }
 
 impl Command {
-    /// Whether this command requires a Linux host (systemd, podman, sudo).
-    fn requires_linux(&self) -> bool {
+    /// Whether this command works on non-Linux platforms.
+    /// New commands default to Linux-only — add them here explicitly if cross-platform.
+    fn is_cross_platform(&self) -> bool {
         matches!(
             self,
-            Command::Init { .. }
-                | Command::Add { .. }
-                | Command::Remove { .. }
-                | Command::Reset { .. }
-                | Command::Config { .. }
-                | Command::Expose { .. }
-                | Command::Status { .. }
-                | Command::List
-                | Command::Update { .. }
+            Command::Search { .. } | Command::Diff { .. } | Command::Test { .. }
         )
     }
 }
@@ -209,7 +202,7 @@ impl Command {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if cfg!(not(target_os = "linux")) && cli.command.requires_linux() {
+    if cfg!(not(target_os = "linux")) && !cli.command.is_cross_platform() {
         anyhow::bail!(
             "this command requires Linux (systemd + podman).\n\
              \n\
