@@ -292,8 +292,7 @@ pub struct UpdateResult {
     pub username: String,
 }
 
-pub const DEFAULT_REPO: &str =
-    "https://raw.githubusercontent.com/ryanravn/ryra/main/registry.json";
+pub const DEFAULT_REPO: &str = "https://raw.githubusercontent.com/ryanravn/ryra/main/registry.json";
 
 /// Resolve which repo to use and ensure it's cached.
 /// Returns (repo_url, repo_dir).
