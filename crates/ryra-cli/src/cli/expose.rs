@@ -1,10 +1,10 @@
 use std::io::IsTerminal;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
-use ryra_core::config::schema::ExposureMode;
 use ryra_core::Warning;
+use ryra_core::config::schema::ExposureMode;
 
 use super::apply;
 use super::prompts;
@@ -199,10 +199,18 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
             .find(|s| s.name == service)
             .and_then(|s| s.host_port);
 
-        ryra_core::finalize_expose(service, new_exposure.clone(), new_domain.as_deref(), host_port)?;
+        ryra_core::finalize_expose(
+            service,
+            new_exposure.clone(),
+            new_domain.as_deref(),
+            host_port,
+        )?;
 
         if let Some(ref domain) = new_domain {
-            println!("{service} now exposed at https://{domain} via {}", new_exposure.label());
+            println!(
+                "{service} now exposed at https://{domain} via {}",
+                new_exposure.label()
+            );
         } else {
             println!("{service} exposure changed to {}", new_exposure.label());
         }

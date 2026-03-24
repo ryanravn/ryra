@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use dialoguer::Input;
 
 use ryra_core::config::schema::*;

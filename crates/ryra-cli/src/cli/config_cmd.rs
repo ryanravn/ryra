@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use dialoguer::Input;
 
 use super::prompts;
@@ -16,10 +16,9 @@ pub async fn run(section: Option<&str>) -> Result<()> {
             config.cloudflare = prompts::prompt_cloudflare().await?;
         }
         Some("tunnel") => {
-            let cf = config
-                .cloudflare
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Configure cloudflare first: ryra config cloudflare"))?;
+            let cf = config.cloudflare.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("Configure cloudflare first: ryra config cloudflare")
+            })?;
             let tunnel = prompts::prompt_tunnel(&cf.api_token, &cf.zone_id).await?;
             if let Some(ref mut cf) = config.cloudflare {
                 cf.tunnel = tunnel;

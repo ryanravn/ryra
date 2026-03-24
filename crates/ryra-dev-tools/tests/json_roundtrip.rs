@@ -10,8 +10,7 @@ use std::path::PathBuf;
 /// 6. Verify all services survived the round-trip with correct data
 #[test]
 fn json_registry_roundtrip() {
-    let registry_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../registry");
+    let registry_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
 
     // 1. Load all services from TOML files
     let original_services = ryra_core::registry::list_available(&registry_dir)
@@ -26,8 +25,7 @@ fn json_registry_roundtrip() {
 
     let registry = ryra_core::registry::fetch::JsonRegistry { services: map };
 
-    let json = serde_json::to_string_pretty(&registry)
-        .expect("failed to serialize to JSON");
+    let json = serde_json::to_string_pretty(&registry).expect("failed to serialize to JSON");
 
     // 3. Parse JSON back
     let parsed: ryra_core::registry::fetch::JsonRegistry =
@@ -67,16 +65,37 @@ fn json_registry_roundtrip() {
 
         // Key fields match
         assert_eq!(found.def.service.name, original.def.service.name);
-        assert_eq!(found.def.service.description, original.def.service.description);
-        assert_eq!(found.def.ports.len(), original.def.ports.len(), "port count mismatch for {name}");
-        assert_eq!(found.def.volumes.len(), original.def.volumes.len(), "volume count mismatch for {name}");
-        assert_eq!(found.def.env.len(), original.def.env.len(), "env count mismatch for {name}");
+        assert_eq!(
+            found.def.service.description,
+            original.def.service.description
+        );
+        assert_eq!(
+            found.def.ports.len(),
+            original.def.ports.len(),
+            "port count mismatch for {name}"
+        );
+        assert_eq!(
+            found.def.volumes.len(),
+            original.def.volumes.len(),
+            "volume count mismatch for {name}"
+        );
+        assert_eq!(
+            found.def.env.len(),
+            original.def.env.len(),
+            "env count mismatch for {name}"
+        );
 
         // Requirements survived
         match (&original.def.requirements, &found.def.requirements) {
             (Some(orig_req), Some(found_req)) => {
-                assert_eq!(orig_req.ram.min, found_req.ram.min, "ram min mismatch for {name}");
-                assert_eq!(orig_req.ram.recommended, found_req.ram.recommended, "ram recommended mismatch for {name}");
+                assert_eq!(
+                    orig_req.ram.min, found_req.ram.min,
+                    "ram min mismatch for {name}"
+                );
+                assert_eq!(
+                    orig_req.ram.recommended, found_req.ram.recommended,
+                    "ram recommended mismatch for {name}"
+                );
             }
             (None, None) => {}
             _ => panic!("requirements mismatch for {name}"),

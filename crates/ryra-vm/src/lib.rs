@@ -1,7 +1,7 @@
+mod assert;
 pub mod image;
 pub mod machine;
 pub mod ports;
-mod assert;
 
 use std::process::Stdio;
 
@@ -11,7 +11,8 @@ use anyhow::Result;
 pub fn read_host_memory() -> Option<(u64, u64)> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let parse_kb = |key: &str| -> Option<u64> {
-        meminfo.lines()
+        meminfo
+            .lines()
             .find(|l| l.starts_with(key))
             .and_then(|l| l.split_whitespace().nth(1))
             .and_then(|v| v.parse::<u64>().ok())

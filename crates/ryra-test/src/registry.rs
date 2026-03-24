@@ -29,12 +29,26 @@ pub enum DiscoveredTest {
 /// A step in a lifecycle test — either an action or an assertion.
 #[derive(Debug, Clone)]
 pub enum StepEntry {
-    Add { service: String },
-    Remove { service: String },
+    Add {
+        service: String,
+    },
+    Remove {
+        service: String,
+    },
     Reset,
-    Wait { service: String },
-    Run { name: String, run: String, timeout_secs: u64 },
-    Assert { name: String, run: String, timeout_secs: u64 },
+    Wait {
+        service: String,
+    },
+    Run {
+        name: String,
+        run: String,
+        timeout_secs: u64,
+    },
+    Assert {
+        name: String,
+        run: String,
+        timeout_secs: u64,
+    },
 }
 
 impl DiscoveredTest {
@@ -50,7 +64,11 @@ impl DiscoveredTest {
     /// For SingleService, this includes requires (dependencies first) then the service itself.
     pub fn services(&self) -> Vec<&str> {
         match self {
-            DiscoveredTest::SingleService { service_name, requires, .. } => {
+            DiscoveredTest::SingleService {
+                service_name,
+                requires,
+                ..
+            } => {
                 let mut svcs: Vec<&str> = requires.iter().map(|s| s.as_str()).collect();
                 svcs.push(service_name.as_str());
                 svcs
@@ -234,11 +252,7 @@ fn discover_single_service(path: &PathBuf, service_name: &str) -> Result<Option<
         })
         .collect();
 
-    let requires: Vec<String> = parsed
-        .requires
-        .iter()
-        .map(|r| r.service.clone())
-        .collect();
+    let requires: Vec<String> = parsed.requires.iter().map(|r| r.service.clone()).collect();
 
     Ok(Some(DiscoveredTest::SingleService {
         service_name: service_name.to_string(),
@@ -291,10 +305,7 @@ fn discover_lifecycle(path: &PathBuf, content: &str) -> Result<DiscoveredTest> {
         toml::from_str(content).with_context(|| format!("failed to parse {}", path.display()))?;
 
     if parsed.steps.is_empty() {
-        anyhow::bail!(
-            "lifecycle test '{}' has no steps defined",
-            parsed.test.name
-        );
+        anyhow::bail!("lifecycle test '{}' has no steps defined", parsed.test.name);
     }
 
     let mut steps = Vec::new();
@@ -302,43 +313,76 @@ fn discover_lifecycle(path: &PathBuf, content: &str) -> Result<DiscoveredTest> {
         let step = match s.action.as_str() {
             "add" => {
                 let service = s.service.ok_or_else(|| {
-                    anyhow::anyhow!("step 'add' requires a 'service' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'add' requires a 'service' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
                 StepEntry::Add { service }
             }
             "remove" => {
                 let service = s.service.ok_or_else(|| {
-                    anyhow::anyhow!("step 'remove' requires a 'service' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'remove' requires a 'service' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
                 StepEntry::Remove { service }
             }
             "reset" => StepEntry::Reset,
             "wait" => {
                 let service = s.service.ok_or_else(|| {
-                    anyhow::anyhow!("step 'wait' requires a 'service' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'wait' requires a 'service' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
                 StepEntry::Wait { service }
             }
             "run" => {
                 let name = s.name.ok_or_else(|| {
-                    anyhow::anyhow!("step 'run' requires a 'name' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'run' requires a 'name' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
                 let run = s.run.ok_or_else(|| {
-                    anyhow::anyhow!("step 'run' requires a 'run' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'run' requires a 'run' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
-                StepEntry::Run { name, run, timeout_secs: s.timeout }
+                StepEntry::Run {
+                    name,
+                    run,
+                    timeout_secs: s.timeout,
+                }
             }
             "assert" => {
                 let name = s.name.ok_or_else(|| {
-                    anyhow::anyhow!("step 'assert' requires a 'name' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'assert' requires a 'name' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
                 let run = s.run.ok_or_else(|| {
-                    anyhow::anyhow!("step 'assert' requires a 'run' field in test '{}'", parsed.test.name)
+                    anyhow::anyhow!(
+                        "step 'assert' requires a 'run' field in test '{}'",
+                        parsed.test.name
+                    )
                 })?;
-                StepEntry::Assert { name, run, timeout_secs: s.timeout }
+                StepEntry::Assert {
+                    name,
+                    run,
+                    timeout_secs: s.timeout,
+                }
             }
             other => {
-                anyhow::bail!("unknown step action '{}' in test '{}'", other, parsed.test.name);
+                anyhow::bail!(
+                    "unknown step action '{}' in test '{}'",
+                    other,
+                    parsed.test.name
+                );
             }
         };
         steps.push(step);
@@ -369,21 +413,25 @@ pub fn service_recommended_ram(registry_path: &Path, service_name: &str) -> Resu
 /// with a 1024MB floor.
 pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
     let services: Vec<&str> = match test {
-        DiscoveredTest::Lifecycle { steps, .. } => {
-            steps.iter().filter_map(|s| match s {
+        DiscoveredTest::Lifecycle { steps, .. } => steps
+            .iter()
+            .filter_map(|s| match s {
                 StepEntry::Add { service } => Some(service.as_str()),
                 _ => None,
-            }).collect()
-        }
+            })
+            .collect(),
         _ => test.services(),
     };
 
-    let service_ram: u64 = services.iter().map(|svc| {
-        service_recommended_ram(registry_path, svc)
-            .ok()
-            .flatten()
-            .unwrap_or(128) // default if not specified
-    }).sum();
+    let service_ram: u64 = services
+        .iter()
+        .map(|svc| {
+            service_recommended_ram(registry_path, svc)
+                .ok()
+                .flatten()
+                .unwrap_or(128) // default if not specified
+        })
+        .sum();
 
     let total = service_ram + 512; // OS/podman overhead
     let rounded = ((total + 511) / 512) * 512; // round up to 512MB
@@ -425,7 +473,11 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
     let mut images = Vec::new();
 
     match test {
-        DiscoveredTest::Lifecycle { images: declared, steps, .. } => {
+        DiscoveredTest::Lifecycle {
+            images: declared,
+            steps,
+            ..
+        } => {
             // Use explicitly declared images
             images.extend(declared.iter().cloned());
             // Also look up images (+ dependency images) for any services referenced in add steps
@@ -712,10 +764,7 @@ env = { GITEA_DOMAIN = "localhost" }
         assert!(remove.is_lifecycle());
         assert!(remove.test_count() > 0);
 
-        let reset = discovered
-            .iter()
-            .find(|d| d.name() == "reset")
-            .unwrap();
+        let reset = discovered.iter().find(|d| d.name() == "reset").unwrap();
         assert!(reset.is_lifecycle());
 
         let readd = discovered

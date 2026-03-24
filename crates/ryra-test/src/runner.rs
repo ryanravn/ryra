@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use ryra_vm::machine::Machine;
 use crate::registry::{DiscoveredTest, StepEntry, TestEntry};
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
+use ryra_vm::machine::Machine;
 
 fn print_event_result(name: &str, event: &Event) {
     let elapsed = format!("{:.1}s", event.duration.as_secs_f64());
@@ -83,9 +83,8 @@ pub async fn run_registry_test(
     // beyond what systemd "active" indicates).
     if !failed {
         for service in test.services() {
-            let port_cmd = format!(
-                "grep RYRA_PORT /var/lib/{service}/.env 2>/dev/null | cut -d= -f2"
-            );
+            let port_cmd =
+                format!("grep RYRA_PORT /var/lib/{service}/.env 2>/dev/null | cut -d= -f2");
             if let Ok(out) = vm.exec(&port_cmd).await {
                 for port in out.stdout.trim().lines() {
                     let port = port.trim();
@@ -344,13 +343,7 @@ pub async fn run_lifecycle_test(
             }
             StepEntry::Reset => {
                 println!("[{name}]   ryra reset...");
-                let event = run_event(
-                    vm,
-                    EventKind::Step,
-                    "ryra reset -y",
-                    120,
-                )
-                .await;
+                let event = run_event(vm, EventKind::Step, "ryra reset -y", 120).await;
                 print_event_result(name, &event);
                 if event.outcome.is_fail() {
                     failed = true;
@@ -366,22 +359,24 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepEntry::Run { name: step_name, run, timeout_secs } => {
+            StepEntry::Run {
+                name: step_name,
+                run,
+                timeout_secs,
+            } => {
                 println!("[{name}]   run: {step_name}...");
-                let event = run_event(
-                    vm,
-                    EventKind::Step,
-                    run,
-                    *timeout_secs,
-                )
-                .await;
+                let event = run_event(vm, EventKind::Step, run, *timeout_secs).await;
                 print_event_result(name, &event);
                 if event.outcome.is_fail() {
                     failed = true;
                 }
                 events.push(event);
             }
-            StepEntry::Assert { name: step_name, run, timeout_secs } => {
+            StepEntry::Assert {
+                name: step_name,
+                run,
+                timeout_secs,
+            } => {
                 println!("[{name}]   assert: {step_name}...");
                 let t = Instant::now();
                 let timeout = Duration::from_secs(*timeout_secs);
@@ -459,9 +454,7 @@ async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
     // may not be ready yet. A successful bash /dev/tcp probe means the
     // connection made it all the way to the container.
     loop {
-        let cmd = format!(
-            "bash -c 'echo > /dev/tcp/127.0.0.1/{port}' 2>/dev/null"
-        );
+        let cmd = format!("bash -c 'echo > /dev/tcp/127.0.0.1/{port}' 2>/dev/null");
         if let Ok(_) = vm.exec(&cmd).await {
             return Event {
                 description: format!("port {port} ready"),
@@ -528,7 +521,9 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
 
         // Container/journal logs
         let uid_cmd = format!("id -u {svc} 2>/dev/null || echo 0");
-        let uid = vm.exec(&uid_cmd).await
+        let uid = vm
+            .exec(&uid_cmd)
+            .await
             .map(|o| o.stdout.trim().to_string())
             .unwrap_or_else(|_| "0".to_string());
         let cmd = format!(

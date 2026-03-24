@@ -38,10 +38,7 @@ pub fn render_container(params: &QuadletParams) -> String {
     let mut lines = Vec::new();
 
     lines.push("[Unit]".to_string());
-    lines.push(format!(
-        "Description={}",
-        params.service_name
-    ));
+    lines.push(format!("Description={}", params.service_name));
     for dep_unit in params.requires {
         lines.push(format!("Requires={dep_unit}.service"));
         lines.push(format!("After={dep_unit}.service"));
@@ -74,7 +71,10 @@ pub fn render_container(params: &QuadletParams) -> String {
     }
 
     for vol in params.volumes {
-        lines.push(format!("Volume={}.volume:{}", vol.volume_name, vol.mount_path));
+        lines.push(format!(
+            "Volume={}.volume:{}",
+            vol.volume_name, vol.mount_path
+        ));
     }
 
     lines.push(String::new());
@@ -108,7 +108,10 @@ pub fn render_dependency_container(params: &DependencyQuadletParams) -> String {
     let mut lines = Vec::new();
 
     lines.push("[Unit]".to_string());
-    lines.push(format!("Description={} dependency for {}", params.dep_name, params.service_name));
+    lines.push(format!(
+        "Description={} dependency for {}",
+        params.dep_name, params.service_name
+    ));
     lines.push(String::new());
 
     lines.push("[Container]".to_string());
@@ -118,7 +121,10 @@ pub fn render_dependency_container(params: &DependencyQuadletParams) -> String {
     lines.push(format!("EnvironmentFile=%h/.env.{}", params.dep_name));
 
     for vol in params.volumes {
-        lines.push(format!("Volume={}.volume:{}", vol.volume_name, vol.mount_path));
+        lines.push(format!(
+            "Volume={}.volume:{}",
+            vol.volume_name, vol.mount_path
+        ));
     }
 
     lines.push(String::new());

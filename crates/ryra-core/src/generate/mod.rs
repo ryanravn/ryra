@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::schema::{Config, ExposureMode};
 use crate::error::{Error, Result};
-use crate::registry::service_def::{DeployMode, DependencyDef, EnvVar, ServiceDef};
+use crate::registry::service_def::{DependencyDef, DeployMode, EnvVar, ServiceDef};
 
 /// Everything generated for a service, ready to be written to disk.
 pub enum GeneratedService {
@@ -56,15 +56,40 @@ pub fn generate_service(
     let env_file = build_env_file(&home_dir, &rendered_env, service_def, host_port);
 
     // Nginx site config
-    let nginx_site = generate_nginx_site(config, service_def, name, domain, exposure, host_port, nginx_dir)?;
+    let nginx_site = generate_nginx_site(
+        config,
+        service_def,
+        name,
+        domain,
+        exposure,
+        host_port,
+        nginx_dir,
+    )?;
 
     match &service_def.service.deploy {
-        DeployMode::Quadlet { image, command } => {
-            generate_quadlet(name, image, command.as_deref(), service_def, exposure, host_port, quadlet_dir, &ctx, env_overrides, env_file, nginx_site)
-        }
+        DeployMode::Quadlet { image, command } => generate_quadlet(
+            name,
+            image,
+            command.as_deref(),
+            service_def,
+            exposure,
+            host_port,
+            quadlet_dir,
+            &ctx,
+            env_overrides,
+            env_file,
+            nginx_site,
+        ),
         DeployMode::Compose { file, .. } => {
             let compose_filename = compose_file_override.unwrap_or(file);
-            generate_compose(name, service_dir, compose_filename, quadlet_dir, env_file, nginx_site)
+            generate_compose(
+                name,
+                service_dir,
+                compose_filename,
+                quadlet_dir,
+                env_file,
+                nginx_site,
+            )
         }
     }
 }
@@ -114,12 +139,10 @@ fn generate_quadlet(
     let port_mappings: Vec<quadlet::PortMapping> = service_def
         .ports
         .iter()
-        .map(|p| {
-            quadlet::PortMapping {
-                host_port: host_port.unwrap_or(p.container_port),
-                container_port: p.container_port,
-                protocol: p.protocol.clone(),
-            }
+        .map(|p| quadlet::PortMapping {
+            host_port: host_port.unwrap_or(p.container_port),
+            container_port: p.container_port,
+            protocol: p.protocol.clone(),
         })
         .collect();
 
@@ -197,7 +220,12 @@ fn generate_quadlet(
         let dep_volume_mappings: Vec<(String, String)> = dep
             .volumes
             .iter()
-            .map(|v| (format!("{name}-{}-{}", dep.name, v.name), v.mount_path.clone()))
+            .map(|v| {
+                (
+                    format!("{name}-{}-{}", dep.name, v.name),
+                    v.mount_path.clone(),
+                )
+            })
             .collect();
 
         let dep_volume_refs: Vec<quadlet::VolumeMapping> = dep_volume_mappings
@@ -235,7 +263,11 @@ fn generate_quadlet(
         });
     }
 
-    Ok(GeneratedService::Quadlet { files, env_file, nginx_site })
+    Ok(GeneratedService::Quadlet {
+        files,
+        env_file,
+        nginx_site,
+    })
 }
 
 /// Generate compose files + .env for a multi-container stack.
@@ -248,10 +280,11 @@ fn generate_compose(
     nginx_site: Option<GeneratedFile>,
 ) -> Result<GeneratedService> {
     let compose_src = service_dir.join(compose_filename);
-    let compose_content = std::fs::read_to_string(&compose_src).map_err(|source| Error::FileRead {
-        path: compose_src,
-        source,
-    })?;
+    let compose_content =
+        std::fs::read_to_string(&compose_src).map_err(|source| Error::FileRead {
+            path: compose_src,
+            source,
+        })?;
 
     let home_dir = crate::service_home(name);
     let username = crate::service_user(name);
@@ -393,16 +426,21 @@ pub fn generate_nginx_site(
             let mode = match exposure {
                 ExposureMode::Tunnel | ExposureMode::Local => nginx::SiteMode::HttpOnly,
                 ExposureMode::Proxy => {
-                    let (cert_path, key_path) =
-                        crate::integrations::ssl::origin_cert_paths(domain);
-                    nginx::SiteMode::Ssl { cert_path, key_path }
+                    let (cert_path, key_path) = crate::integrations::ssl::origin_cert_paths(domain);
+                    nginx::SiteMode::Ssl {
+                        cert_path,
+                        key_path,
+                    }
                 }
                 ExposureMode::DnsOnly | ExposureMode::Public => {
                     let (cert_path, key_path) = match &config.ssl {
                         Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
                         None => crate::integrations::ssl::letsencrypt_cert_paths(domain),
                     };
-                    nginx::SiteMode::Ssl { cert_path, key_path }
+                    nginx::SiteMode::Ssl {
+                        cert_path,
+                        key_path,
+                    }
                 }
                 ExposureMode::HostPort => nginx::SiteMode::HttpOnly,
             };

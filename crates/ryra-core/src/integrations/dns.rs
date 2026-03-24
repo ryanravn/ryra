@@ -235,9 +235,7 @@ pub async fn create_a_record(
 pub async fn delete_record(api_token: &str, zone_id: &str, record_id: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let resp = client
-        .delete(format!(
-            "{CF_API}/zones/{zone_id}/dns_records/{record_id}"
-        ))
+        .delete(format!("{CF_API}/zones/{zone_id}/dns_records/{record_id}"))
         .bearer_auth(api_token)
         .send()
         .await
@@ -259,11 +257,7 @@ pub async fn delete_record(api_token: &str, zone_id: &str, record_id: &str) -> R
 }
 
 /// Find an A record by domain name.
-pub async fn find_records(
-    api_token: &str,
-    zone_id: &str,
-    domain: &str,
-) -> Result<Vec<DnsRecord>> {
+pub async fn find_records(api_token: &str, zone_id: &str, domain: &str) -> Result<Vec<DnsRecord>> {
     let client = reqwest::Client::new();
     let resp = client
         .get(format!(
@@ -303,11 +297,7 @@ pub async fn find_record(
 }
 
 /// Delete all DNS records for a domain.
-pub async fn delete_all_records(
-    api_token: &str,
-    zone_id: &str,
-    domain: &str,
-) -> Result<()> {
+pub async fn delete_all_records(api_token: &str, zone_id: &str, domain: &str) -> Result<()> {
     let records = find_records(api_token, zone_id, domain).await?;
     for record in records {
         delete_record(api_token, zone_id, &record.id).await?;

@@ -10,9 +10,7 @@ pub async fn reload() -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::NginxReload(format!(
-            "nginx reload failed: {stderr}"
-        )));
+        return Err(Error::NginxReload(format!("nginx reload failed: {stderr}")));
     }
     Ok(())
 }
@@ -27,9 +25,7 @@ pub async fn start() -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::NginxReload(format!(
-            "nginx start failed: {stderr}"
-        )));
+        return Err(Error::NginxReload(format!("nginx start failed: {stderr}")));
     }
     Ok(())
 }

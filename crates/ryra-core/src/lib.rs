@@ -10,11 +10,13 @@ pub mod verbose;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService};
-use registry::service_def::DeployMode;
 use config::ConfigPaths;
+use config::schema::{
+    CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService,
+};
 use error::{Error, Result};
 use generate::GeneratedFile;
+use registry::service_def::DeployMode;
 use registry::service_def::PortProtocol;
 
 // --- Per-service user conventions ---
@@ -40,10 +42,7 @@ pub fn service_quadlet_dir(service_name: &str) -> PathBuf {
 /// every step type is handled — no string parsing or if-chains.
 pub enum Step {
     /// Create a system user for a service.
-    CreateUser {
-        username: String,
-        home_dir: PathBuf,
-    },
+    CreateUser { username: String, home_dir: PathBuf },
     /// Enable systemd linger so user services persist.
     EnableLinger { username: String },
     /// Disable systemd linger.
@@ -53,22 +52,13 @@ pub enum Step {
     /// Write a file (requires sudo — goes to service user home or /etc).
     WriteFile(GeneratedFile),
     /// Set ownership of a path to a user.
-    Chown {
-        path: PathBuf,
-        username: String,
-    },
+    Chown { path: PathBuf, username: String },
     /// Reload systemd for a service user.
     DaemonReload { username: String },
     /// Start a service under a user's systemd.
-    StartService {
-        username: String,
-        unit: String,
-    },
+    StartService { username: String, unit: String },
     /// Stop a service under a user's systemd.
-    StopService {
-        username: String,
-        unit: String,
-    },
+    StopService { username: String, unit: String },
     /// Reload the system-level systemd (for nginx).
     SystemDaemonReload,
     /// Start a system-level service.
@@ -97,9 +87,7 @@ pub enum Step {
         cloudflare_api_token: Option<String>,
     },
     /// Generate a self-signed origin cert (for Cloudflare proxy mode).
-    GenerateOriginCert {
-        domain: String,
-    },
+    GenerateOriginCert { domain: String },
     /// Start the cloudflared tunnel quadlet.
     StartTunnel,
     /// Stop the cloudflared tunnel.
@@ -147,7 +135,6 @@ pub enum Step {
         compose_dir: PathBuf,
     },
 }
-
 
 impl Step {
     /// Render this step as a shell command (for dry-run display).
@@ -209,15 +196,24 @@ impl Step {
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
-            Step::ComposePull { username, compose_dir } => format!(
+            Step::ComposePull {
+                username,
+                compose_dir,
+            } => format!(
                 "cd {} && sudo -H -u {username} podman compose pull",
                 compose_dir.display()
             ),
-            Step::ComposeUp { username, compose_dir } => format!(
+            Step::ComposeUp {
+                username,
+                compose_dir,
+            } => format!(
                 "cd {} && sudo -H -u {username} podman compose up -d",
                 compose_dir.display()
             ),
-            Step::ComposeDown { username, compose_dir } => format!(
+            Step::ComposeDown {
+                username,
+                compose_dir,
+            } => format!(
                 "cd {} && sudo -H -u {username} podman compose down",
                 compose_dir.display()
             ),
@@ -366,12 +362,10 @@ pub async fn init(config: Config) -> Result<InitResult> {
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
 
-    let steps = vec![
-        Step::WriteFile(GeneratedFile {
-            path: paths.config_file.clone(),
-            content: config_content,
-        }),
-    ];
+    let steps = vec![Step::WriteFile(GeneratedFile {
+        path: paths.config_file.clone(),
+        content: config_content,
+    })];
 
     Ok(InitResult { steps })
 }
@@ -536,7 +530,11 @@ pub fn add_service(
         });
 
         // Cloudflared (if tunnel configured and not already running)
-        if let Some(CloudflareCredentials { tunnel: Some(ref ti), .. }) = config.cloudflare {
+        if let Some(CloudflareCredentials {
+            tunnel: Some(ref ti),
+            ..
+        }) = config.cloudflare
+        {
             if !PathBuf::from("/etc/containers/systemd/cloudflared.container").exists() {
                 steps.push(Step::WriteFile(GeneratedFile {
                     path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
@@ -632,7 +630,11 @@ pub fn add_service(
 
     // 4-7: Deploy mode specific steps
     match generated {
-        generate::GeneratedService::Quadlet { files, env_file, nginx_site } => {
+        generate::GeneratedService::Quadlet {
+            files,
+            env_file,
+            nginx_site,
+        } => {
             // Pull main image
             if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
                 steps.push(Step::PullImage {
@@ -920,12 +922,11 @@ pub fn update_service(
 
     // Load snapshot and compute changes
     let snapshot_content = config::load_snapshot(&paths.snapshots_dir, service_name)?;
-    let old: registry::service_def::ServiceDef = toml::from_str(&snapshot_content).map_err(|source| {
-        Error::TomlParse {
+    let old: registry::service_def::ServiceDef =
+        toml::from_str(&snapshot_content).map_err(|source| Error::TomlParse {
             path: paths.snapshots_dir.join(format!("{service_name}.toml")),
             source,
-        }
-    })?;
+        })?;
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
@@ -982,7 +983,11 @@ pub fn update_service(
 
     // 4. Write files and restart
     match generated {
-        generate::GeneratedService::Quadlet { files, env_file, nginx_site } => {
+        generate::GeneratedService::Quadlet {
+            files,
+            env_file,
+            nginx_site,
+        } => {
             for file in files {
                 steps.push(Step::WriteFile(file));
             }
@@ -1158,9 +1163,7 @@ pub fn change_exposure(
     }
 
     // --- Set up new networking ---
-    if new_proxied
-        && let Some(domain) = new_domain
-    {
+    if new_proxied && let Some(domain) = new_domain {
         match &new_exposure {
             ExposureMode::Tunnel => {
                 if let Some(cf) = &config.cloudflare
@@ -1433,9 +1436,10 @@ pub fn status() -> config::status::RyraStatus {
         Err(e) => return config::status::RyraStatus::Error(e.to_string()),
     };
 
-    config::status::RyraStatus::Initialized(
-        config::status::StatusInfo::from_config(paths.config_file, &config),
-    )
+    config::status::RyraStatus::Initialized(config::status::StatusInfo::from_config(
+        paths.config_file,
+        &config,
+    ))
 }
 
 /// List installed services.
@@ -1491,7 +1495,10 @@ pub struct SearchResult {
 /// Looks up the service in the config, resolves its repo, and returns
 /// the `[[tests]]` from its `service.toml`. If `repo_override` is set,
 /// loads tests from that repo instead of the installed service's repo.
-pub async fn service_tests(service_name: &str, repo_override: Option<&str>) -> Result<ServiceTestInfo> {
+pub async fn service_tests(
+    service_name: &str,
+    repo_override: Option<&str>,
+) -> Result<ServiceTestInfo> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
@@ -1529,8 +1536,8 @@ pub async fn suite_tests(suite_name: &str, repo_override: Option<&str>) -> Resul
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
-    let repo_url = repo_override
-        .unwrap_or_else(|| config.default_repo.as_deref().unwrap_or(DEFAULT_REPO));
+    let repo_url =
+        repo_override.unwrap_or_else(|| config.default_repo.as_deref().unwrap_or(DEFAULT_REPO));
     let repo_dir = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
 
     let tests_dir = repo_dir.join("tests");
@@ -1582,8 +1589,16 @@ pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail
         description: def.service.description.clone(),
         url: def.service.url.clone(),
         is_compose: def.service.deploy.is_compose(),
-        ports: def.ports.iter().map(|p| (p.container_port, p.protocol.clone(), p.name.clone())).collect(),
-        env_vars: def.env.iter().map(|e| (e.name.clone(), e.prompt.clone())).collect(),
+        ports: def
+            .ports
+            .iter()
+            .map(|p| (p.container_port, p.protocol.clone(), p.name.clone()))
+            .collect(),
+        env_vars: def
+            .env
+            .iter()
+            .map(|e| (e.name.clone(), e.prompt.clone()))
+            .collect(),
         installed_domain: installed.and_then(|s| s.domain.clone()),
         installed_exposure: installed.map(|s| s.exposure.clone()),
     })
@@ -1599,5 +1614,3 @@ pub struct ServiceDetail {
     pub installed_domain: Option<String>,
     pub installed_exposure: Option<ExposureMode>,
 }
-
-

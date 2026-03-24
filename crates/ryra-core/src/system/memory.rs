@@ -11,7 +11,10 @@ fn total_ram_mb_from(path: &Path) -> Option<u64> {
     for line in contents.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
             let rest = rest.trim();
-            let kb_str = rest.strip_suffix("kB").or_else(|| rest.strip_suffix("KB"))?.trim();
+            let kb_str = rest
+                .strip_suffix("kB")
+                .or_else(|| rest.strip_suffix("KB"))?
+                .trim();
             let kb: u64 = kb_str.parse().ok()?;
             return Some(kb / 1024);
         }
@@ -28,7 +31,11 @@ mod tests {
         let dir = std::env::temp_dir().join("ryra-test-meminfo");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("meminfo");
-        std::fs::write(&path, "MemTotal:        8048752 kB\nMemFree:         1234567 kB\n").unwrap();
+        std::fs::write(
+            &path,
+            "MemTotal:        8048752 kB\nMemFree:         1234567 kB\n",
+        )
+        .unwrap();
         let result = total_ram_mb_from(&path);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(result, Some(7860)); // 8048752 / 1024

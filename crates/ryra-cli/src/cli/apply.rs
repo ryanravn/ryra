@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use ryra_core::Step;
 
@@ -11,10 +11,20 @@ enum Created {
     User(String),
     File(PathBuf),
     Linger(String),
-    StartedService { username: String, unit: String },
+    StartedService {
+        username: String,
+        unit: String,
+    },
     StartedSystemService(String),
-    DnsRecord { api_token: String, zone_id: String, domain: String },
-    ComposeStack { username: String, compose_dir: PathBuf },
+    DnsRecord {
+        api_token: String,
+        zone_id: String,
+        domain: String,
+    },
+    ComposeStack {
+        username: String,
+        compose_dir: PathBuf,
+    },
 }
 
 /// Execute a list of steps with automatic rollback on failure.
@@ -90,15 +100,24 @@ async fn prompt_rollback(created: &[Created]) {
                 eprintln!("  Disabling linger for {username}...");
                 run_quiet(&format!("sudo loginctl disable-linger {username}"))
             }
-            Created::DnsRecord { api_token, zone_id, domain } => {
+            Created::DnsRecord {
+                api_token,
+                zone_id,
+                domain,
+            } => {
                 eprintln!("  Deleting DNS record for {domain}...");
                 let r = ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await;
                 if let Ok(Some(record)) = r {
-                    let _ = ryra_core::integrations::dns::delete_record(api_token, zone_id, &record.id).await;
+                    let _ =
+                        ryra_core::integrations::dns::delete_record(api_token, zone_id, &record.id)
+                            .await;
                 }
                 Ok(())
             }
-            Created::ComposeStack { username, compose_dir } => {
+            Created::ComposeStack {
+                username,
+                compose_dir,
+            } => {
                 eprintln!("  Stopping compose stack...");
                 run_quiet(&format!(
                     "cd {} && sudo -H -u {username} podman compose down",
@@ -140,7 +159,8 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             ))?;
             // Rootless podman needs subordinate UID/GID ranges for user namespaces.
             // Allocate a unique 65536-range based on the user's UID to avoid overlap.
-            let uid_output = Command::new("id").args(["-u", username])
+            let uid_output = Command::new("id")
+                .args(["-u", username])
                 .output()
                 .context("failed to get uid")?;
             let uid: u64 = String::from_utf8_lossy(&uid_output.stdout)
@@ -149,7 +169,9 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 .unwrap_or(1000);
             let sub_start = 100000 + (uid * 65536);
             let sub_end = sub_start + 65535;
-            run(&format!("sudo usermod --add-subuids {sub_start}-{sub_end} --add-subgids {sub_start}-{sub_end} {username}"))?;
+            run(&format!(
+                "sudo usermod --add-subuids {sub_start}-{sub_end} --add-subgids {sub_start}-{sub_end} {username}"
+            ))?;
             created.push(Created::User(username.clone()));
             Ok(())
         }
@@ -158,7 +180,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             // Wait for the user's systemd session to be ready
             for _ in 0..10 {
                 let ready = Command::new("sudo")
-                    .args(["systemctl", &format!("--machine={username}@"), "--user", "is-system-running"])
+                    .args([
+                        "systemctl",
+                        &format!("--machine={username}@"),
+                        "--user",
+                        "is-system-running",
+                    ])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
@@ -211,17 +238,13 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             created.push(Created::File(file.path.clone()));
             Ok(())
         }
-        Step::Chown { path, username } => {
-            run(&format!(
-                "sudo chown -R {username}:{username} {}",
-                path.display()
-            ))
-        }
-        Step::DaemonReload { username } => {
-            run(&format!(
-                "sudo systemctl --machine={username}@ --user daemon-reload"
-            ))
-        }
+        Step::Chown { path, username } => run(&format!(
+            "sudo chown -R {username}:{username} {}",
+            path.display()
+        )),
+        Step::DaemonReload { username } => run(&format!(
+            "sudo systemctl --machine={username}@ --user daemon-reload"
+        )),
         Step::StartService { username, unit } => {
             run(&format!(
                 "sudo systemctl --machine={username}@ --user start --no-block {unit}"
@@ -345,11 +368,11 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             .await;
 
             // Delete CNAME record
-            if let Ok(Some(record)) = ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await {
-                let _ = ryra_core::integrations::dns::delete_record(
-                    api_token, zone_id, &record.id,
-                )
-                .await;
+            if let Ok(Some(record)) =
+                ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await
+            {
+                let _ = ryra_core::integrations::dns::delete_record(api_token, zone_id, &record.id)
+                    .await;
             }
 
             println!("  Tunnel route removed for {domain}");
@@ -379,7 +402,9 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             loop {
                 match machine.advance().await? {
                     Some(CreateRecordAction::ResolveConflict { existing_ip }) => {
-                        eprintln!("  Warning: A record already exists for {domain} -> {existing_ip}");
+                        eprintln!(
+                            "  Warning: A record already exists for {domain} -> {existing_ip}"
+                        );
                         let overwrite = match std::io::stdin().is_terminal() {
                             true => dialoguer::Confirm::new()
                                 .with_prompt("  Overwrite existing record?")
@@ -504,14 +529,20 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("sudo userdel --remove {username}"));
             Ok(())
         }
-        Step::ComposePull { username, compose_dir } => {
+        Step::ComposePull {
+            username,
+            compose_dir,
+        } => {
             println!("  Pulling compose images...");
             run(&format!(
                 "cd {} && sudo -H -u {username} podman compose pull",
                 compose_dir.display()
             ))
         }
-        Step::ComposeUp { username, compose_dir } => {
+        Step::ComposeUp {
+            username,
+            compose_dir,
+        } => {
             println!("  Starting compose stack...");
             run(&format!(
                 "cd {} && sudo -H -u {username} podman compose up -d",
@@ -523,7 +554,10 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             });
             Ok(())
         }
-        Step::ComposeDown { username, compose_dir } => {
+        Step::ComposeDown {
+            username,
+            compose_dir,
+        } => {
             let _ = run(&format!(
                 "cd {} && sudo -H -u {username} podman compose down",
                 compose_dir.display()

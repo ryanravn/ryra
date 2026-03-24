@@ -131,15 +131,18 @@ impl<'de> Deserialize<'de> for ServiceMeta {
         let raw = ServiceMetaRaw::deserialize(deserializer)?;
         let deploy = match raw.mode.as_str() {
             "quadlet" => {
-                let image = raw.image.ok_or_else(|| {
-                    serde::de::Error::missing_field("image")
-                })?;
-                DeployMode::Quadlet { image, command: raw.command }
+                let image = raw
+                    .image
+                    .ok_or_else(|| serde::de::Error::missing_field("image"))?;
+                DeployMode::Quadlet {
+                    image,
+                    command: raw.command,
+                }
             }
             "compose" => {
-                let file = raw.file.ok_or_else(|| {
-                    serde::de::Error::missing_field("file")
-                })?;
+                let file = raw
+                    .file
+                    .ok_or_else(|| serde::de::Error::missing_field("file"))?;
                 DeployMode::Compose {
                     file,
                     profiles: raw.profiles,

@@ -57,10 +57,7 @@ pub fn build_context(
                     continue;
                 }
                 if let Some((key, val)) = line.split_once('=') {
-                    ctx.insert(
-                        format!("services.{name}.env.{key}"),
-                        val.to_string(),
-                    );
+                    ctx.insert(format!("services.{name}.env.{key}"), val.to_string());
                 }
             }
         }
@@ -70,10 +67,12 @@ pub fn build_context(
     // Scan both the service's own env vars and dependency env vars so that
     // shared secret references (e.g., {{secret.db_password}}) resolve to the
     // same generated value across the main service and its sidecars.
-    let all_env_vars = service_def
-        .env
-        .iter()
-        .chain(service_def.dependencies.iter().flat_map(|dep| dep.env.iter()));
+    let all_env_vars = service_def.env.iter().chain(
+        service_def
+            .dependencies
+            .iter()
+            .flat_map(|dep| dep.env.iter()),
+    );
 
     for env in all_env_vars {
         for secret_name in crate::generate::extract_secret_refs(&env.value) {

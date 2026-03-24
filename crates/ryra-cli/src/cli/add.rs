@@ -1,17 +1,22 @@
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
+use ryra_core::Warning;
 use ryra_core::config::schema::ExposureMode;
 use ryra_core::registry::service_def::DeployMode;
-use ryra_core::Warning;
 
 use super::apply;
 use super::prompts;
 
-pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_run: bool) -> Result<()> {
+pub async fn run(
+    service: &str,
+    domain: Option<&str>,
+    repo: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
     let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
 
     let paths = ryra_core::config::ConfigPaths::resolve()?;
@@ -268,7 +273,10 @@ pub async fn run(service: &str, domain: Option<&str>, repo: Option<&str>, dry_ru
             }
         }
         if !result.generated_secrets.is_empty() {
-            println!("  Secrets: {} (auto-generated)", result.generated_secrets.join(", "));
+            println!(
+                "  Secrets: {} (auto-generated)",
+                result.generated_secrets.join(", ")
+            );
         }
         println!("  Config:  {}", home_dir.display());
 

@@ -154,10 +154,12 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
                     source,
                 })?;
             if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(contents.as_bytes()).map_err(|source| Error::FileWrite {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
+                stdin
+                    .write_all(contents.as_bytes())
+                    .map_err(|source| Error::FileWrite {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
             }
             let status = child.wait().map_err(|source| Error::FileWrite {
                 path: path.to_path_buf(),
@@ -166,7 +168,10 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
             if !status.success() {
                 return Err(Error::FileWrite {
                     path: path.to_path_buf(),
-                    source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "sudo tee failed"),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "sudo tee failed",
+                    ),
                 });
             }
             Ok(())

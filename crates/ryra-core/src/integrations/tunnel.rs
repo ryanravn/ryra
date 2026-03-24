@@ -194,18 +194,12 @@ pub struct CreatedTunnel {
 }
 
 /// Create a new Cloudflare Tunnel.
-pub async fn create_tunnel(
-    api_token: &str,
-    account_id: &str,
-    name: &str,
-) -> Result<CreatedTunnel> {
+pub async fn create_tunnel(api_token: &str, account_id: &str, name: &str) -> Result<CreatedTunnel> {
     let client = reqwest::Client::new();
 
     // Create the tunnel
     let resp = client
-        .post(format!(
-            "{CF_API}/accounts/{account_id}/cfd_tunnel"
-        ))
+        .post(format!("{CF_API}/accounts/{account_id}/cfd_tunnel"))
         .bearer_auth(api_token)
         .json(&serde_json::json!({
             "name": name,
@@ -233,10 +227,7 @@ pub async fn create_tunnel(
         .ok_or_else(|| Error::Cloudflare("no tunnel id in response".into()))?
         .to_string();
 
-    let tunnel_name = body["result"]["name"]
-        .as_str()
-        .unwrap_or(name)
-        .to_string();
+    let tunnel_name = body["result"]["name"].as_str().unwrap_or(name).to_string();
 
     // Get the connector token
     let token = get_tunnel_token(api_token, account_id, &id).await?;
@@ -331,9 +322,7 @@ pub async fn create_tunnel_dns(
 
     let client = reqwest::Client::new();
     let resp = client
-        .post(format!(
-            "{CF_API}/zones/{zone_id}/dns_records"
-        ))
+        .post(format!("{CF_API}/zones/{zone_id}/dns_records"))
         .bearer_auth(api_token)
         .json(&serde_json::json!({
             "type": "CNAME",

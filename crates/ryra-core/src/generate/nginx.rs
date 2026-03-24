@@ -23,7 +23,10 @@ pub struct NginxSiteParams<'a> {
 pub fn render_site(params: &NginxSiteParams) -> String {
     match &params.mode {
         SiteMode::HttpOnly => render_http_site(params),
-        SiteMode::Ssl { cert_path, key_path } => render_ssl_site(params, cert_path, key_path),
+        SiteMode::Ssl {
+            cert_path,
+            key_path,
+        } => render_ssl_site(params, cert_path, key_path),
     }
 }
 

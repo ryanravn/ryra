@@ -9,11 +9,7 @@ use super::apply;
 pub async fn run(service: &str, repo: Option<&str>, yes: bool, dry_run: bool) -> Result<()> {
     let (_repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
 
-    let result = ryra_core::update_service(
-        service,
-        &BTreeMap::new(),
-        &repo_dir,
-    )?;
+    let result = ryra_core::update_service(service, &BTreeMap::new(), &repo_dir)?;
 
     if result.changes.is_empty() {
         println!("{service} is already up to date.");

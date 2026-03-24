@@ -22,10 +22,7 @@ pub struct StatusInfo {
 
 pub enum CloudflareStatus {
     None,
-    Configured {
-        zone_name: String,
-        tunnel: bool,
-    },
+    Configured { zone_name: String, tunnel: bool },
 }
 
 pub enum ProviderStatus {

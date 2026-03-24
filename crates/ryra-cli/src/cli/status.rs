@@ -93,10 +93,7 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         println!();
         println!("Configuration (prompted during add):");
         for (name, prompt) in &configurable {
-            println!(
-                "  {name}: {}",
-                prompt.as_deref().unwrap_or("")
-            );
+            println!("  {name}: {}", prompt.as_deref().unwrap_or(""));
         }
     }
 

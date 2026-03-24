@@ -8,21 +8,59 @@ use crate::registry::service_def::ServiceDef;
 /// A single change between the installed snapshot and the current registry.
 #[derive(Debug)]
 pub enum Change {
-    ImageChanged { old: String, new: String },
-    PortAdded { name: String, port: u16 },
-    PortRemoved { name: String, port: u16 },
-    PortChanged { name: String, old: u16, new: u16 },
-    VolumeAdded { name: String, mount_path: String },
-    VolumeRemoved { name: String, mount_path: String },
-    EnvAdded { name: String },
-    EnvRemoved { name: String },
-    EnvDefaultChanged { name: String, old: String, new: String },
+    ImageChanged {
+        old: String,
+        new: String,
+    },
+    PortAdded {
+        name: String,
+        port: u16,
+    },
+    PortRemoved {
+        name: String,
+        port: u16,
+    },
+    PortChanged {
+        name: String,
+        old: u16,
+        new: u16,
+    },
+    VolumeAdded {
+        name: String,
+        mount_path: String,
+    },
+    VolumeRemoved {
+        name: String,
+        mount_path: String,
+    },
+    EnvAdded {
+        name: String,
+    },
+    EnvRemoved {
+        name: String,
+    },
+    EnvDefaultChanged {
+        name: String,
+        old: String,
+        new: String,
+    },
     NginxAdded,
     NginxRemoved,
-    SmtpIntegrationChanged { old: bool, new: bool },
-    AuthIntegrationChanged { old: bool, new: bool },
-    DescriptionChanged { old: String, new: String },
-    RequirementsChanged { description: String },
+    SmtpIntegrationChanged {
+        old: bool,
+        new: bool,
+    },
+    AuthIntegrationChanged {
+        old: bool,
+        new: bool,
+    },
+    DescriptionChanged {
+        old: String,
+        new: String,
+    },
+    RequirementsChanged {
+        description: String,
+    },
 }
 
 impl std::fmt::Display for Change {
@@ -69,12 +107,11 @@ pub async fn diff_service(service_name: &str, repo: Option<&str>) -> Result<Vec<
 
     // Load the snapshot from install time
     let snapshot_content = config::load_snapshot(&paths.snapshots_dir, service_name)?;
-    let old: ServiceDef = toml::from_str(&snapshot_content).map_err(|source| {
-        crate::error::Error::TomlParse {
+    let old: ServiceDef =
+        toml::from_str(&snapshot_content).map_err(|source| crate::error::Error::TomlParse {
             path: paths.snapshots_dir.join(format!("{service_name}.toml")),
             source,
-        }
-    })?;
+        })?;
 
     // Load the current version from the registry
     let (_repo_url, repo_dir) = crate::resolve_repo(repo).await?;
@@ -95,12 +132,11 @@ pub fn diff_service_from_paths(
             path: snapshot_path.to_path_buf(),
             source,
         })?;
-    let old: ServiceDef = toml::from_str(&snapshot_content).map_err(|source| {
-        crate::error::Error::TomlParse {
+    let old: ServiceDef =
+        toml::from_str(&snapshot_content).map_err(|source| crate::error::Error::TomlParse {
             path: snapshot_path.to_path_buf(),
             source,
-        }
-    })?;
+        })?;
 
     let current = registry::find_service(registry_path, service_name)?;
     Ok(compute_changes(&old, &current.def))
@@ -245,10 +281,7 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
                 || old_req.ram.recommended != new_req.ram.recommended
             {
                 changes.push(Change::RequirementsChanged {
-                    description: format!(
-                        "RAM min {}MB → {}MB",
-                        old_req.ram.min, new_req.ram.min
-                    ),
+                    description: format!("RAM min {}MB → {}MB", old_req.ram.min, new_req.ram.min),
                 });
             }
         }

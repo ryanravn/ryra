@@ -3,7 +3,11 @@ mod cli;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ryra", version, about = "Self-hosted service manager using rootless Podman quadlets")]
+#[command(
+    name = "ryra",
+    version,
+    about = "Self-hosted service manager using rootless Podman quadlets"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -196,8 +200,16 @@ async fn main() -> anyhow::Result<()> {
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::init::run(repo, email, cf_token, cf_zone_id, cf_zone_name, tunnel_token, dry_run)
-                .await?
+            cli::init::run(
+                repo,
+                email,
+                cf_token,
+                cf_zone_id,
+                cf_zone_name,
+                tunnel_token,
+                dry_run,
+            )
+            .await?
         }
         Command::Add {
             ref service,
@@ -226,9 +238,7 @@ async fn main() -> anyhow::Result<()> {
             ryra_core::verbose::set(verbose);
             cli::reset::run(yes, dry_run).await?
         }
-        Command::Config { ref section } => {
-            cli::config_cmd::run(section.as_deref()).await?
-        }
+        Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Expose {
             ref service,
             ref domain,
@@ -238,9 +248,10 @@ async fn main() -> anyhow::Result<()> {
             ryra_core::verbose::set(verbose);
             cli::expose::run(service, domain.as_deref(), dry_run).await?
         }
-        Command::Status { ref service, ref repo } => {
-            cli::status::run(service.as_deref(), repo.as_deref()).await?
-        }
+        Command::Status {
+            ref service,
+            ref repo,
+        } => cli::status::run(service.as_deref(), repo.as_deref()).await?,
         Command::Update {
             ref service,
             ref repo,
@@ -251,13 +262,15 @@ async fn main() -> anyhow::Result<()> {
             ryra_core::verbose::set(verbose);
             cli::update::run(service, repo.as_deref(), yes, dry_run).await?
         }
-        Command::Diff { ref service, ref repo } => {
-            cli::diff::run(service, repo.as_deref()).await?
-        }
+        Command::Diff {
+            ref service,
+            ref repo,
+        } => cli::diff::run(service, repo.as_deref()).await?,
         Command::List => cli::list::run()?,
-        Command::Search { ref query, ref repo } => {
-            cli::search::run(query.as_deref(), repo.as_deref()).await?
-        }
+        Command::Search {
+            ref query,
+            ref repo,
+        } => cli::search::run(query.as_deref(), repo.as_deref()).await?,
         Command::Test {
             ref names,
             ref service,

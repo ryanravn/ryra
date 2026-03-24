@@ -18,7 +18,10 @@ fn install_signal_handler() {
     // We use the raw libc handler (not tokio::signal) so it works even if
     // the tokio runtime is blocked or mid-shutdown.
     unsafe {
-        libc::signal(libc::SIGINT, signal_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGINT,
+            signal_handler as *const () as libc::sighandler_t,
+        );
     }
 }
 
@@ -166,9 +169,7 @@ fn save_results(results: &[ScenarioResult]) -> Result<()> {
 fn print_memory_summary(max_concurrent_mb: u64) {
     if let Some((total_mb, used_mb)) = ryra_vm::read_host_memory() {
         let avail_mb = total_mb.saturating_sub(used_mb);
-        println!(
-            "\nHost RAM: {used_mb}MB used / {total_mb}MB total ({avail_mb}MB available)"
-        );
+        println!("\nHost RAM: {used_mb}MB used / {total_mb}MB total ({avail_mb}MB available)");
         println!("Max concurrent VM RAM: {max_concurrent_mb}MB");
         if max_concurrent_mb > avail_mb {
             eprintln!(
@@ -188,9 +189,7 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
             .with_context(|| format!("registry path not found: {}", p.display()));
     }
 
-    let candidates = [
-        PathBuf::from("registry"),
-    ];
+    let candidates = [PathBuf::from("registry")];
     for c in &candidates {
         if c.exists() {
             return std::fs::canonicalize(c)
@@ -287,13 +286,21 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     // Compute per-test memory and show summary
-    let test_memories: Vec<(&str, u32)> = to_run.iter().map(|t| {
-        let mem = memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t));
-        (t.name(), mem)
-    }).collect();
+    let test_memories: Vec<(&str, u32)> = to_run
+        .iter()
+        .map(|t| {
+            let mem =
+                memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t));
+            (t.name(), mem)
+        })
+        .collect();
     let mut sorted_mems: Vec<u32> = test_memories.iter().map(|(_, m)| *m).collect();
     sorted_mems.sort_unstable_by(|a, b| b.cmp(a));
-    let max_concurrent_mb: u64 = sorted_mems.iter().take(args.parallel).map(|m| *m as u64).sum();
+    let max_concurrent_mb: u64 = sorted_mems
+        .iter()
+        .take(args.parallel)
+        .map(|m| *m as u64)
+        .sum();
     print_memory_summary(max_concurrent_mb);
     for (name, mem) in &test_memories {
         println!("  {name}: {mem}MB");
@@ -311,8 +318,8 @@ pub async fn run(args: Args) -> Result<()> {
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
         let base_image = base_image.clone();
-        let test_memory = memory_override
-            .unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, test));
+        let test_memory =
+            memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, test));
         let spawn_opts = std::sync::Arc::new(SpawnOpts {
             use_kvm,
             memory_mb: test_memory,

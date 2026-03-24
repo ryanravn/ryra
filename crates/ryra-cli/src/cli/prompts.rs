@@ -1,8 +1,8 @@
 use anyhow::Result;
 use dialoguer::Input;
 
-use ryra_core::config::schema::*;
 use ryra_core::config::ConfigPaths;
+use ryra_core::config::schema::*;
 
 /// Interactive Cloudflare setup — credentials only.
 pub async fn prompt_cloudflare() -> Result<Option<CloudflareCredentials>> {
@@ -56,25 +56,25 @@ pub async fn prompt_tunnel(api_token: &str, zone_id: &str) -> Result<Option<Tunn
         return Ok(None);
     }
 
-    let account_id =
-        match ryra_core::integrations::tunnel::get_account_id(api_token, zone_id).await {
-            Ok(id) => id,
-            Err(e) => {
-                eprintln!("  Failed to get account ID: {e}");
-                return Ok(None);
-            }
-        };
+    let account_id = match ryra_core::integrations::tunnel::get_account_id(api_token, zone_id).await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("  Failed to get account ID: {e}");
+            return Ok(None);
+        }
+    };
 
     println!("  Fetching tunnels...");
-    let tunnels =
-        match ryra_core::integrations::tunnel::list_tunnels(api_token, &account_id).await {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("  Failed to list tunnels: {e}");
-                eprintln!("  Token needs Account > Cloudflare Tunnel > Edit permission.");
-                return Ok(None);
-            }
-        };
+    let tunnels = match ryra_core::integrations::tunnel::list_tunnels(api_token, &account_id).await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("  Failed to list tunnels: {e}");
+            eprintln!("  Token needs Account > Cloudflare Tunnel > Edit permission.");
+            return Ok(None);
+        }
+    };
 
     if tunnels.is_empty() {
         println!("  No tunnels found.");
@@ -189,19 +189,13 @@ pub fn prompt_smtp() -> Result<Option<SmtpCredentials>> {
         return Ok(None);
     }
 
-    let host: String = Input::new()
-        .with_prompt("SMTP host")
-        .interact_text()?;
+    let host: String = Input::new().with_prompt("SMTP host").interact_text()?;
     let port: u16 = Input::new()
         .with_prompt("SMTP port")
         .default(587)
         .interact_text()?;
-    let username: String = Input::new()
-        .with_prompt("SMTP username")
-        .interact_text()?;
-    let password: String = Input::new()
-        .with_prompt("SMTP password")
-        .interact_text()?;
+    let username: String = Input::new().with_prompt("SMTP username").interact_text()?;
+    let password: String = Input::new().with_prompt("SMTP password").interact_text()?;
     let from: String = Input::new()
         .with_prompt("From address")
         .default(format!("noreply@{host}"))
@@ -229,10 +223,7 @@ pub async fn ensure_config_for_mode(
     }
 
     println!();
-    println!(
-        "  {} mode requires additional setup:",
-        exposure.label()
-    );
+    println!("  {} mode requires additional setup:", exposure.label());
 
     for req in &missing {
         match req {

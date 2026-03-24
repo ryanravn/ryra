@@ -78,7 +78,10 @@ mod tests {
     fn render_four_level_nesting() {
         let mut ctx = BTreeMap::new();
         ctx.insert("services.postgres.port.tcp".into(), "5432".into());
-        ctx.insert("services.postgres.env.POSTGRES_PASSWORD".into(), "secret123".into());
+        ctx.insert(
+            "services.postgres.env.POSTGRES_PASSWORD".into(),
+            "secret123".into(),
+        );
         ctx.insert("services.postgres.domain".into(), "pg.example.com".into());
 
         let result = render(
@@ -88,5 +91,4 @@ mod tests {
 
         assert_eq!(result, "postgresql://user:secret123@127.0.0.1:5432");
     }
-
 }

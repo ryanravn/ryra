@@ -44,7 +44,6 @@ pub enum Error {
     #[error("registry {0} not found")]
     RegistryNotFound(String),
 
-
     #[error("no ports available in range {start}–{end}")]
     PortsExhausted { start: u16, end: u16 },
 

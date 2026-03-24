@@ -64,11 +64,13 @@ pub fn write_json_registry_to_dir(registry: &JsonRegistry, dest: &Path) -> Resul
             path: svc_dir.clone(),
             source,
         })?;
-        let toml_content =
-            toml::to_string_pretty(def).map_err(|e| Error::Registry(format!("failed to serialize {name}: {e}")))?;
-        std::fs::write(svc_dir.join("service.toml"), toml_content).map_err(|source| Error::FileWrite {
-            path: svc_dir.join("service.toml"),
-            source,
+        let toml_content = toml::to_string_pretty(def)
+            .map_err(|e| Error::Registry(format!("failed to serialize {name}: {e}")))?;
+        std::fs::write(svc_dir.join("service.toml"), toml_content).map_err(|source| {
+            Error::FileWrite {
+                path: svc_dir.join("service.toml"),
+                source,
+            }
         })?;
     }
     Ok(())
@@ -155,10 +157,12 @@ async fn pull_repo(dest: &Path) -> Result<()> {
 
 /// Symlink a local directory as a repo.
 fn ensure_local_repo(source: &Path, cache_dir: &Path) -> Result<PathBuf> {
-    let canonical = source.canonicalize().map_err(|source_err| Error::FileRead {
-        path: source.to_path_buf(),
-        source: source_err,
-    })?;
+    let canonical = source
+        .canonicalize()
+        .map_err(|source_err| Error::FileRead {
+            path: source.to_path_buf(),
+            source: source_err,
+        })?;
 
     let dest = cache_dir.join(repo_cache_name(&canonical.to_string_lossy()));
 

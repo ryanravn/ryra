@@ -62,11 +62,10 @@ pub fn list_available(repo_dir: &Path) -> Result<Vec<RegistryService>> {
                     path: service_toml.clone(),
                     source,
                 })?;
-            let def: ServiceDef =
-                toml::from_str(&contents).map_err(|source| Error::TomlParse {
-                    path: service_toml,
-                    source,
-                })?;
+            let def: ServiceDef = toml::from_str(&contents).map_err(|source| Error::TomlParse {
+                path: service_toml,
+                source,
+            })?;
             services.push(RegistryService {
                 def,
                 service_dir: svc_dir,

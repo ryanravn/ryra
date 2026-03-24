@@ -8,11 +8,8 @@ const PORT_RANGE_END: u16 = 11000;
 
 /// Allocate the next available port from the range, checking against installed services.
 pub fn allocate_port(config: &Config) -> Result<u16> {
-    let used: std::collections::HashSet<u16> = config
-        .services
-        .iter()
-        .filter_map(|s| s.host_port)
-        .collect();
+    let used: std::collections::HashSet<u16> =
+        config.services.iter().filter_map(|s| s.host_port).collect();
 
     (PORT_RANGE_START..PORT_RANGE_END)
         .find(|p| !used.contains(p))

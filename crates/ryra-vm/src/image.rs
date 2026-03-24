@@ -52,12 +52,7 @@ impl Distro {
                 "postgresql-client",
             ],
             // Fedora: uidmap is part of shadow-utils (already installed).
-            Distro::Fedora43 => &[
-                "podman",
-                "git",
-                "systemd-container",
-                "curl",
-            ],
+            Distro::Fedora43 => &["podman", "git", "systemd-container", "curl"],
         }
     }
 }

@@ -97,17 +97,30 @@ pub enum ExposureMode {
 impl ExposureMode {
     /// What modes are available given the current Cloudflare config and service capabilities?
     /// `has_nginx` means the service can be proxied (has an HTTP interface).
-    pub fn available_modes(cf: &Option<CloudflareCredentials>, has_nginx: bool) -> Vec<ExposureMode> {
+    pub fn available_modes(
+        cf: &Option<CloudflareCredentials>,
+        has_nginx: bool,
+    ) -> Vec<ExposureMode> {
         if !has_nginx {
             return vec![ExposureMode::Local, ExposureMode::HostPort];
         }
-        let mut modes = vec![ExposureMode::Local, ExposureMode::HostPort, ExposureMode::Public];
+        let mut modes = vec![
+            ExposureMode::Local,
+            ExposureMode::HostPort,
+            ExposureMode::Public,
+        ];
         match cf {
             Some(CloudflareCredentials { tunnel: None, .. }) => {
                 modes.extend([ExposureMode::DnsOnly, ExposureMode::Proxy]);
             }
-            Some(CloudflareCredentials { tunnel: Some(_), .. }) => {
-                modes.extend([ExposureMode::DnsOnly, ExposureMode::Proxy, ExposureMode::Tunnel]);
+            Some(CloudflareCredentials {
+                tunnel: Some(_), ..
+            }) => {
+                modes.extend([
+                    ExposureMode::DnsOnly,
+                    ExposureMode::Proxy,
+                    ExposureMode::Tunnel,
+                ]);
             }
             None => {}
         }
@@ -138,7 +151,10 @@ impl ExposureMode {
     pub fn needs_domain(&self) -> bool {
         matches!(
             self,
-            ExposureMode::Tunnel | ExposureMode::Proxy | ExposureMode::DnsOnly | ExposureMode::Public
+            ExposureMode::Tunnel
+                | ExposureMode::Proxy
+                | ExposureMode::DnsOnly
+                | ExposureMode::Public
         )
     }
 

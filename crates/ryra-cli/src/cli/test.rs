@@ -27,9 +27,7 @@ pub async fn run(
     }
 
     match (service, suite) {
-        (Some(service), None) => {
-            run_live_service(service, test_filter, repo, yes, verbose).await
-        }
+        (Some(service), None) => run_live_service(service, test_filter, repo, yes, verbose).await,
         (None, Some(suite)) => run_live_suite(suite, test_filter, repo, yes, verbose).await,
         (Some(_), Some(_)) => anyhow::bail!("cannot specify both a service and --suite"),
         (None, None) => anyhow::bail!("specify a service name or --suite <name>"),
@@ -46,17 +44,14 @@ fn warn_untrusted_repo(repo_url: &str, yes: bool) -> Result<()> {
         .and_then(|p| ryra_core::config::load_or_default(&p.config_file).ok())
         .and_then(|c| c.default_repo);
 
-    let is_trusted = repo_url == default
-        || configured_default.as_deref() == Some(repo_url);
+    let is_trusted = repo_url == default || configured_default.as_deref() == Some(repo_url);
 
     if is_trusted {
         return Ok(());
     }
 
     if yes {
-        eprintln!(
-            "warning: running test commands from non-default repo: {repo_url}"
-        );
+        eprintln!("warning: running test commands from non-default repo: {repo_url}");
         return Ok(());
     }
 
@@ -68,9 +63,7 @@ fn warn_untrusted_repo(repo_url: &str, yes: bool) -> Result<()> {
         );
     }
 
-    eprintln!(
-        "warning: about to run test commands from non-default repo:\n  {repo_url}\n"
-    );
+    eprintln!("warning: about to run test commands from non-default repo:\n  {repo_url}\n");
     let confirm = dialoguer::Confirm::new()
         .with_prompt("Continue?")
         .default(false)
@@ -213,8 +206,16 @@ async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) ->
         let result = tokio::time::timeout(timeout, async {
             Command::new("sh")
                 .args(["-c", &full_cmd])
-                .stdout(if verbose { Stdio::inherit() } else { Stdio::piped() })
-                .stderr(if verbose { Stdio::inherit() } else { Stdio::piped() })
+                .stdout(if verbose {
+                    Stdio::inherit()
+                } else {
+                    Stdio::piped()
+                })
+                .stderr(if verbose {
+                    Stdio::inherit()
+                } else {
+                    Stdio::piped()
+                })
                 .status()
                 .await
         })

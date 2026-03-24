@@ -98,4 +98,3 @@ impl fmt::Display for ScenarioResult {
         Ok(())
     }
 }
-
