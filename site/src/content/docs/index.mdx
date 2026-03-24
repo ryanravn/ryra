@@ -1,0 +1,57 @@
+---
+title: Ryra
+description: Self-hosted service manager using rootless Podman quadlets.
+template: splash
+hero:
+  tagline: Deploy self-hosted services with one command. Rootless Podman, systemd quadlets, zero Docker Compose.
+  actions:
+    - text: Get Started
+      link: /getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/ryanravn/ryra
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<div class="install-banner">
+  <code id="install-cmd">{"curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh"}</code>
+  <button class="copy-btn" aria-label="Copy install command" onclick="navigator.clipboard.writeText(document.getElementById('install-cmd').textContent)">
+    Copy
+  </button>
+</div>
+
+## Why Ryra?
+
+<CardGrid>
+  <Card title="One command" icon="rocket">
+    `ryra add vaultwarden` — that's it. Ryra handles the container, systemd
+    unit, nginx config, DNS, and SSL.
+  </Card>
+  <Card title="Rootless by default" icon="approve-check">
+    Every service runs as its own Linux user with rootless Podman. No
+    containers running as root (except nginx).
+  </Card>
+  <Card title="Native systemd" icon="setting">
+    Services are Podman quadlets managed by systemd — not a custom daemon. Use
+    `systemctl` and `journalctl` like you normally would.
+  </Card>
+  <Card title="Multi-distro" icon="linux">
+    Works on Debian, Fedora, and Arch. Detects your package manager and adapts
+    automatically.
+  </Card>
+</CardGrid>
+
+## Available services
+
+| Service | Description |
+|---------|-------------|
+| **Vaultwarden** | Bitwarden-compatible password vault |
+| **Forgejo** | Self-hosted Git forge |
+| **Uptime Kuma** | Monitoring and status pages |
+| **OpenClaw** | AI assistant gateway |
+| **PostgreSQL** | Database (standalone or as a dependency) |
+| **Whoami** | Simple HTTP echo for testing |
