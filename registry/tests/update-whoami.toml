@@ -1,0 +1,55 @@
+[test]
+name = "update-whoami"
+
+# Add whoami, verify it works
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "assert"
+name = "responds-before-update"
+run = "curl -sf http://127.0.0.1:10000"
+
+# Simulate upstream change: add an env var
+[[steps]]
+action = "run"
+name = "simulate-upstream-change"
+run = """cat >> /opt/ryra-test-registry/whoami/service.toml <<'TOML'
+
+[[env]]
+name = "NEW_VAR"
+value = "hello"
+TOML"""
+
+# Run update (non-interactive, --yes to confirm)
+[[steps]]
+action = "run"
+name = "run-update"
+run = "ryra update whoami --repo /opt/ryra-test-registry --yes"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+# Verify service still works after update
+[[steps]]
+action = "assert"
+name = "responds-after-update"
+run = "curl -sf http://127.0.0.1:10000"
+
+# Verify the new env var is in the .env file
+[[steps]]
+action = "assert"
+name = "new-env-var-present"
+run = "sudo grep -q 'NEW_VAR=hello' /var/lib/whoami/.env"
+
+# Verify snapshot was updated (diff should show no changes now)
+[[steps]]
+action = "assert"
+name = "snapshot-updated"
+run = "ryra diff whoami --repo /opt/ryra-test-registry 2>&1 | grep -q 'up to date'"
