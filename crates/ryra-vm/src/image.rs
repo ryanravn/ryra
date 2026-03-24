@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
@@ -234,10 +234,10 @@ async fn download_image(distro: &Distro, dest: &PathBuf) -> Result<()> {
 /// already installed, so subsequent VMs skip the slow package install step.
 async fn prepare_image(
     distro: &Distro,
-    raw_image: &PathBuf,
-    prepared_path: &PathBuf,
-    efi_code: &PathBuf,
-    efi_vars_template: &PathBuf,
+    raw_image: &Path,
+    prepared_path: &Path,
+    efi_code: &Path,
+    efi_vars_template: &Path,
     use_kvm: bool,
 ) -> Result<()> {
     let work_dir = cache_dir().join("prepare-base");
@@ -394,10 +394,10 @@ async fn prepare_image(
             .status()
             .await;
 
-        if let Ok(s) = result {
-            if s.success() {
-                break;
-            }
+        if let Ok(s) = result
+            && s.success()
+        {
+            break;
         }
 
         if start.elapsed() > timeout {
@@ -410,7 +410,7 @@ async fn prepare_image(
             );
         }
 
-        if start.elapsed().as_secs() % 30 == 0 && start.elapsed().as_secs() > 0 {
+        if start.elapsed().as_secs().is_multiple_of(30) && start.elapsed().as_secs() > 0 {
             println!(
                 "  preparing image... ({:.0}s elapsed)",
                 start.elapsed().as_secs_f64()

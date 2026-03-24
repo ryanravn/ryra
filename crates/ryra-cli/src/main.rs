@@ -284,11 +284,11 @@ async fn main() -> anyhow::Result<()> {
             list,
             parallel,
         } => {
-            cli::test::run(
-                service.as_deref(),
-                suite.as_deref(),
-                test.as_deref(),
-                repo.as_deref(),
+            cli::test::run(cli::test::TestRunParams {
+                service: service.as_deref(),
+                suite: suite.as_deref(),
+                test_filter: test.as_deref(),
+                repo: repo.as_deref(),
                 vm,
                 keep_alive,
                 yes,
@@ -296,7 +296,7 @@ async fn main() -> anyhow::Result<()> {
                 list,
                 parallel,
                 names,
-            )
+            })
             .await?
         }
     }

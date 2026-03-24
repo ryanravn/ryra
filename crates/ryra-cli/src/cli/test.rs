@@ -9,26 +9,29 @@ use tokio::process::Command;
 
 use ryra_core::registry::service_def::TestDef;
 
-pub async fn run(
-    service: Option<&str>,
-    suite: Option<&str>,
-    test_filter: Option<&str>,
-    repo: Option<&str>,
-    vm: bool,
-    keep_alive: bool,
-    yes: bool,
-    verbose: bool,
-    list: bool,
-    parallel: Option<usize>,
-    names: &[String],
-) -> Result<()> {
-    if vm || keep_alive || list {
-        return run_vm(names, keep_alive, verbose, list, parallel).await;
+/// Parameters for [`run`].
+pub struct TestRunParams<'a> {
+    pub service: Option<&'a str>,
+    pub suite: Option<&'a str>,
+    pub test_filter: Option<&'a str>,
+    pub repo: Option<&'a str>,
+    pub vm: bool,
+    pub keep_alive: bool,
+    pub yes: bool,
+    pub verbose: bool,
+    pub list: bool,
+    pub parallel: Option<usize>,
+    pub names: &'a [String],
+}
+
+pub async fn run(params: TestRunParams<'_>) -> Result<()> {
+    if params.vm || params.keep_alive || params.list {
+        return run_vm(params.names, params.keep_alive, params.verbose, params.list, params.parallel).await;
     }
 
-    match (service, suite) {
-        (Some(service), None) => run_live_service(service, test_filter, repo, yes, verbose).await,
-        (None, Some(suite)) => run_live_suite(suite, test_filter, repo, yes, verbose).await,
+    match (params.service, params.suite) {
+        (Some(service), None) => run_live_service(service, params.test_filter, params.repo, params.yes, params.verbose).await,
+        (None, Some(suite)) => run_live_suite(suite, params.test_filter, params.repo, params.yes, params.verbose).await,
         (Some(_), Some(_)) => anyhow::bail!("cannot specify both a service and --suite"),
         (None, None) => anyhow::bail!("specify a service name or --suite <name>"),
     }

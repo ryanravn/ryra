@@ -8,7 +8,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<30} {}", "SERVICE", "LOCATION", "EXPOSURE");
+    println!("{:<20} {:<30} EXPOSURE", "SERVICE", "LOCATION");
     println!("{}", "-".repeat(70));
 
     for svc in &services {

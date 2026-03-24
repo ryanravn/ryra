@@ -31,62 +31,65 @@ pub struct GeneratedFile {
     pub content: String,
 }
 
+/// Parameters for [`generate_service`].
+pub struct GenerateServiceParams<'a> {
+    pub config: &'a Config,
+    pub service_def: &'a ServiceDef,
+    pub domain: Option<&'a str>,
+    pub exposure: &'a ExposureMode,
+    pub host_port: Option<u16>,
+    pub quadlet_dir: &'a Path,
+    pub nginx_dir: &'a Path,
+    pub env_overrides: &'a BTreeMap<String, String>,
+    pub service_dir: &'a Path,
+    pub compose_file_override: Option<&'a str>,
+}
+
 /// Generate all files for a service based on its deploy mode.
 /// `host_port` is the allocated port for web services (None for non-web).
-pub fn generate_service(
-    config: &Config,
-    service_def: &ServiceDef,
-    domain: Option<&str>,
-    exposure: &ExposureMode,
-    host_port: Option<u16>,
-    quadlet_dir: &Path,
-    nginx_dir: &Path,
-    env_overrides: &BTreeMap<String, String>,
-    service_dir: &Path,
-    compose_file_override: Option<&str>,
-) -> Result<GeneratedService> {
-    let name = &service_def.service.name;
+pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GeneratedService> {
+    let name = &params.service_def.service.name;
 
     // Build template context (generates fresh secrets based on each env var's format + length)
-    let ctx = context::build_context(config, service_def, domain.unwrap_or_default());
-    let rendered_env = render_env_vars(service_def, &ctx, env_overrides)?;
+    let ctx = context::build_context(params.config, params.service_def, params.domain.unwrap_or_default());
+    let rendered_env = render_env_vars(params.service_def, &ctx, params.env_overrides)?;
 
     // Build .env file content
     let home_dir = crate::service_home(name);
-    let env_file = build_env_file(&home_dir, &rendered_env, service_def, host_port);
+    let env_file = build_env_file(&home_dir, &rendered_env, params.service_def, params.host_port);
 
     // Nginx site config
     let nginx_site = generate_nginx_site(
-        config,
-        service_def,
+        params.config,
+        params.service_def,
         name,
-        domain,
-        exposure,
-        host_port,
-        nginx_dir,
+        params.domain,
+        params.exposure,
+        params.host_port,
+        params.nginx_dir,
     )?;
 
-    match &service_def.service.deploy {
-        DeployMode::Quadlet { image, command } => generate_quadlet(
+    match &params.service_def.service.deploy {
+        DeployMode::Quadlet { image, command } => generate_quadlet(GenerateQuadletParams {
             name,
             image,
-            command.as_deref(),
-            service_def,
-            exposure,
-            host_port,
-            quadlet_dir,
-            &ctx,
-            env_overrides,
+            command: command.as_deref(),
+            service_def: params.service_def,
+            exposure: params.exposure,
+            host_port: params.host_port,
+            quadlet_dir: params.quadlet_dir,
+            ctx: &ctx,
+            env_overrides: params.env_overrides,
             env_file,
             nginx_site,
-        ),
+        }),
         DeployMode::Compose { file, .. } => {
-            let compose_filename = compose_file_override.unwrap_or(file);
+            let compose_filename = params.compose_file_override.unwrap_or(file);
             generate_compose(
                 name,
-                service_dir,
+                params.service_dir,
                 compose_filename,
-                quadlet_dir,
+                params.quadlet_dir,
                 env_file,
                 nginx_site,
             )
@@ -120,33 +123,38 @@ fn build_env_file(
     }
 }
 
-/// Generate quadlet files for a single-container service.
-fn generate_quadlet(
-    name: &str,
-    image: &str,
-    command: Option<&str>,
-    service_def: &ServiceDef,
-    exposure: &ExposureMode,
+/// Parameters for [`generate_quadlet`].
+struct GenerateQuadletParams<'a> {
+    name: &'a str,
+    image: &'a str,
+    command: Option<&'a str>,
+    service_def: &'a ServiceDef,
+    exposure: &'a ExposureMode,
     host_port: Option<u16>,
-    quadlet_dir: &Path,
-    ctx: &BTreeMap<String, String>,
-    env_overrides: &BTreeMap<String, String>,
+    quadlet_dir: &'a Path,
+    ctx: &'a BTreeMap<String, String>,
+    env_overrides: &'a BTreeMap<String, String>,
     env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
-) -> Result<GeneratedService> {
+}
+
+/// Generate quadlet files for a single-container service.
+fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedService> {
+    let name = params.name;
     let mut files = Vec::new();
 
-    let port_mappings: Vec<quadlet::PortMapping> = service_def
+    let port_mappings: Vec<quadlet::PortMapping> = params
+        .service_def
         .ports
         .iter()
         .map(|p| quadlet::PortMapping {
-            host_port: host_port.unwrap_or(p.container_port),
+            host_port: params.host_port.unwrap_or(p.container_port),
             container_port: p.container_port,
             protocol: p.protocol.clone(),
         })
         .collect();
 
-    let bind_address = match exposure {
+    let bind_address = match params.exposure {
         ExposureMode::HostPort => quadlet::BindAddress::Any,
         _ => quadlet::BindAddress::Localhost,
     };
@@ -154,20 +162,21 @@ fn generate_quadlet(
     // Network
     let network_name = name.to_string();
     files.push(GeneratedFile {
-        path: quadlet_dir.join(format!("{name}.network")),
+        path: params.quadlet_dir.join(format!("{name}.network")),
         content: quadlet::render_network(&network_name),
     });
 
     // Volumes
-    for vol in &service_def.volumes {
+    for vol in &params.service_def.volumes {
         let vol_name = format!("{name}-{}", vol.name);
         files.push(GeneratedFile {
-            path: quadlet_dir.join(format!("{vol_name}.volume")),
+            path: params.quadlet_dir.join(format!("{vol_name}.volume")),
             content: quadlet::render_volume(&vol_name),
         });
     }
 
-    let owned_volume_mappings: Vec<(String, String)> = service_def
+    let owned_volume_mappings: Vec<(String, String)> = params
+        .service_def
         .volumes
         .iter()
         .map(|v| (format!("{name}-{}", v.name), v.mount_path.clone()))
@@ -182,7 +191,8 @@ fn generate_quadlet(
         .collect();
 
     // Dependency unit names (so the main container starts after them)
-    let dep_units: Vec<String> = service_def
+    let dep_units: Vec<String> = params
+        .service_def
         .dependencies
         .iter()
         .map(|dep| format!("{name}-{}", dep.name))
@@ -191,28 +201,28 @@ fn generate_quadlet(
     // Container
     let container_params = quadlet::QuadletParams {
         service_name: name,
-        image,
+        image: params.image,
         ports: &port_mappings,
         volumes: &volume_refs,
         network: &network_name,
-        command,
+        command: params.command,
         bind_address: &bind_address,
         requires: &dep_units,
     };
 
     files.push(GeneratedFile {
-        path: quadlet_dir.join(format!("{name}.container")),
+        path: params.quadlet_dir.join(format!("{name}.container")),
         content: quadlet::render_container(&container_params),
     });
 
     // Dependency sidecar containers
     let home_dir = crate::service_home(name);
-    for dep in &service_def.dependencies {
+    for dep in &params.service_def.dependencies {
         // Volumes for this dependency
         for vol in &dep.volumes {
             let vol_name = format!("{name}-{}-{}", dep.name, vol.name);
             files.push(GeneratedFile {
-                path: quadlet_dir.join(format!("{vol_name}.volume")),
+                path: params.quadlet_dir.join(format!("{vol_name}.volume")),
                 content: quadlet::render_volume(&vol_name),
             });
         }
@@ -247,12 +257,12 @@ fn generate_quadlet(
 
         let container_name = format!("{name}-{}", dep.name);
         files.push(GeneratedFile {
-            path: quadlet_dir.join(format!("{container_name}.container")),
+            path: params.quadlet_dir.join(format!("{container_name}.container")),
             content: quadlet::render_dependency_container(&dep_params),
         });
 
         // Dependency .env file (rendered with the shared context)
-        let rendered_dep_env = render_env_vars_for_dep(dep, ctx, env_overrides)?;
+        let rendered_dep_env = render_env_vars_for_dep(dep, params.ctx, params.env_overrides)?;
         let mut dep_env_lines = Vec::new();
         for env in &rendered_dep_env {
             dep_env_lines.push(format!("{}={}", env.name, env.value));
@@ -265,8 +275,8 @@ fn generate_quadlet(
 
     Ok(GeneratedService::Quadlet {
         files,
-        env_file,
-        nginx_site,
+        env_file: params.env_file,
+        nginx_site: params.nginx_site,
     })
 }
 

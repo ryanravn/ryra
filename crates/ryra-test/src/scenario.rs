@@ -66,10 +66,10 @@ impl fmt::Display for ScenarioResult {
         )?;
 
         // Show top-level failure reason when there are no events (setup failure)
-        if self.events.is_empty() {
-            if let Outcome::Failed(msg) = &self.outcome {
-                writeln!(f, "  {msg}")?;
-            }
+        if self.events.is_empty()
+            && let Outcome::Failed(msg) = &self.outcome
+        {
+            writeln!(f, "  {msg}")?;
         }
 
         for event in &self.events {

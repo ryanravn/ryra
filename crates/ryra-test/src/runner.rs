@@ -455,7 +455,7 @@ async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
     // connection made it all the way to the container.
     loop {
         let cmd = format!("bash -c 'echo > /dev/tcp/127.0.0.1/{port}' 2>/dev/null");
-        if let Ok(_) = vm.exec(&cmd).await {
+        if vm.exec(&cmd).await.is_ok() {
             return Event {
                 description: format!("port {port} ready"),
                 kind: EventKind::Step,

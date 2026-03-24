@@ -168,10 +168,10 @@ fn ensure_local_repo(source: &Path, cache_dir: &Path) -> Result<PathBuf> {
 
     // Already symlinked to the right place
     if dest.is_symlink() {
-        if let Ok(target) = std::fs::read_link(&dest) {
-            if target == canonical {
-                return Ok(dest);
-            }
+        if let Ok(target) = std::fs::read_link(&dest)
+            && target == canonical
+        {
+            return Ok(dest);
         }
         std::fs::remove_file(&dest).map_err(|source| Error::FileWrite {
             path: dest.clone(),

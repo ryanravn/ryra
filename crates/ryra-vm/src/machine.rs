@@ -366,10 +366,10 @@ impl Machine {
                 .status()
                 .await;
 
-            if let Ok(status) = result {
-                if status.success() {
-                    return Ok(());
-                }
+            if let Ok(status) = result
+                && status.success()
+            {
+                return Ok(());
             }
 
             if start.elapsed() > timeout {
@@ -521,11 +521,11 @@ async fn write_seed_iso(
             .status()
             .await;
 
-        if let Ok(status) = result {
-            if status.success() {
-                created = true;
-                break;
-            }
+        if let Ok(status) = result
+            && status.success()
+        {
+            created = true;
+            break;
         }
     }
 

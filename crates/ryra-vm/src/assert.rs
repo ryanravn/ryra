@@ -94,10 +94,10 @@ impl Machine {
             let cmd = format!(
                 "systemctl --machine={user}@ --user is-active {unit} 2>/dev/null || echo inactive"
             );
-            if let Ok(output) = self.exec(&cmd).await {
-                if output.stdout_trimmed() == "active" {
-                    return Ok(());
-                }
+            if let Ok(output) = self.exec(&cmd).await
+                && output.stdout_trimmed() == "active"
+            {
+                return Ok(());
             }
 
             if start.elapsed() > timeout {

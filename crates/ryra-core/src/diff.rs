@@ -154,13 +154,13 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
         crate::registry::service_def::DeployMode::Quadlet { image, .. } => Some(image.as_str()),
         _ => None,
     };
-    if let (Some(old_img), Some(new_img)) = (old_image, new_image) {
-        if old_img != new_img {
-            changes.push(Change::ImageChanged {
-                old: old_img.to_string(),
-                new: new_img.to_string(),
-            });
-        }
+    if let (Some(old_img), Some(new_img)) = (old_image, new_image)
+        && old_img != new_img
+    {
+        changes.push(Change::ImageChanged {
+            old: old_img.to_string(),
+            new: new_img.to_string(),
+        });
     }
 
     // Description

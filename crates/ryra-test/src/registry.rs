@@ -300,7 +300,7 @@ fn discover_multi_service(path: &PathBuf) -> Result<DiscoveredTest> {
 }
 
 /// Parse a lifecycle test file with [[steps]].
-fn discover_lifecycle(path: &PathBuf, content: &str) -> Result<DiscoveredTest> {
+fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
     let parsed: LifecycleToml =
         toml::from_str(content).with_context(|| format!("failed to parse {}", path.display()))?;
 
@@ -434,7 +434,7 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
         .sum();
 
     let total = service_ram + 512; // OS/podman overhead
-    let rounded = ((total + 511) / 512) * 512; // round up to 512MB
+    let rounded = total.div_ceil(512) * 512; // round up to 512MB
     rounded.max(1024) as u32
 }
 

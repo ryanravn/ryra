@@ -352,10 +352,10 @@ pub async fn init(config: Config) -> Result<InitResult> {
 
     // Preserve installed services from existing config
     let mut config = config;
-    if let Ok(existing) = config::load_or_default(&paths.config_file) {
-        if !existing.services.is_empty() {
-            config.services = existing.services;
-        }
+    if let Ok(existing) = config::load_or_default(&paths.config_file)
+        && !existing.services.is_empty()
+    {
+        config.services = existing.services;
     }
 
     // Write config as a step (needs sudo for /etc/ryra)
@@ -443,18 +443,18 @@ pub fn add_service(
     let quadlet_dir = service_quadlet_dir(service_name);
     let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
-    let generated = generate::generate_service(
-        &config,
-        &reg_service.def,
+    let generated = generate::generate_service(generate::GenerateServiceParams {
+        config: &config,
+        service_def: &reg_service.def,
         domain,
-        &exposure,
+        exposure: &exposure,
         host_port,
-        &quadlet_dir,
+        quadlet_dir: &quadlet_dir,
         nginx_dir,
         env_overrides,
-        &reg_service.service_dir,
+        service_dir: &reg_service.service_dir,
         compose_file_override,
-    )?;
+    })?;
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -479,23 +479,23 @@ pub fn add_service(
         });
     }
 
-    if let Some(ref reqs) = reg_service.def.requirements {
-        if let Some(total) = system::memory::total_ram_mb() {
-            if total < reqs.ram.min {
-                warnings.push(Warning::RamBelowMinimum {
-                    service_name: service_name.to_string(),
-                    min_mb: reqs.ram.min,
-                    available_mb: total,
-                });
-            } else if let Some(rec) = reqs.ram.recommended {
-                if total < rec {
-                    warnings.push(Warning::RamBelowRecommended {
-                        service_name: service_name.to_string(),
-                        recommended_mb: rec,
-                        available_mb: total,
-                    });
-                }
-            }
+    if let Some(ref reqs) = reg_service.def.requirements
+        && let Some(total) = system::memory::total_ram_mb()
+    {
+        if total < reqs.ram.min {
+            warnings.push(Warning::RamBelowMinimum {
+                service_name: service_name.to_string(),
+                min_mb: reqs.ram.min,
+                available_mb: total,
+            });
+        } else if let Some(rec) = reqs.ram.recommended
+            && total < rec
+        {
+            warnings.push(Warning::RamBelowRecommended {
+                service_name: service_name.to_string(),
+                recommended_mb: rec,
+                available_mb: total,
+            });
         }
     }
 
@@ -534,15 +534,14 @@ pub fn add_service(
             tunnel: Some(ref ti),
             ..
         }) = config.cloudflare
+            && !PathBuf::from("/etc/containers/systemd/cloudflared.container").exists()
         {
-            if !PathBuf::from("/etc/containers/systemd/cloudflared.container").exists() {
-                steps.push(Step::WriteFile(GeneratedFile {
-                    path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
-                    content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
-                }));
-                steps.push(Step::SystemDaemonReload);
-                steps.push(Step::StartTunnel);
-            }
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
+                content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
+            }));
+            steps.push(Step::SystemDaemonReload);
+            steps.push(Step::StartTunnel);
         }
     }
 
@@ -550,16 +549,16 @@ pub fn add_service(
     if proxied {
         match (&exposure, domain) {
             (ExposureMode::Tunnel, Some(domain)) => {
-                if let Some(cf) = &config.cloudflare {
-                    if let Some(ti) = &cf.tunnel {
-                        steps.push(Step::AddTunnelRoute {
-                            api_token: cf.api_token.clone(),
-                            account_id: ti.account_id.clone(),
-                            tunnel_id: ti.tunnel_id.clone(),
-                            zone_id: cf.zone_id.clone(),
-                            domain: domain.to_string(),
-                        });
-                    }
+                if let Some(cf) = &config.cloudflare
+                    && let Some(ti) = &cf.tunnel
+                {
+                    steps.push(Step::AddTunnelRoute {
+                        api_token: cf.api_token.clone(),
+                        account_id: ti.account_id.clone(),
+                        tunnel_id: ti.tunnel_id.clone(),
+                        zone_id: cf.zone_id.clone(),
+                        domain: domain.to_string(),
+                    });
                 }
             }
             (ExposureMode::Proxy, Some(domain)) => {
@@ -852,39 +851,42 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     })
 }
 
+/// Parameters for [`finalize_add`].
+pub struct FinalizeAddParams<'a> {
+    pub service_name: &'a str,
+    pub domain: Option<&'a str>,
+    pub exposure: ExposureMode,
+    pub deploy_mode: InstalledDeployMode,
+    pub repo: &'a str,
+    pub host_port: Option<u16>,
+    pub allocated_ports: &'a [(String, u16)],
+    pub repo_dir: &'a Path,
+}
+
 /// Called after add steps succeed — records the service in config and saves a snapshot.
-pub fn finalize_add(
-    service_name: &str,
-    domain: Option<&str>,
-    exposure: ExposureMode,
-    deploy_mode: InstalledDeployMode,
-    repo: &str,
-    host_port: Option<u16>,
-    allocated_ports: &[(String, u16)],
-    repo_dir: &Path,
-) -> Result<()> {
+pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     paths.ensure_dirs()?;
     let mut config = config::load_or_default(&paths.config_file)?;
 
-    let ports: BTreeMap<String, u16> = allocated_ports.iter().cloned().collect();
+    let ports: BTreeMap<String, u16> = params.allocated_ports.iter().cloned().collect();
 
     config.services.push(InstalledService {
-        name: service_name.to_string(),
-        domain: domain.map(|d| d.to_string()),
+        name: params.service_name.to_string(),
+        domain: params.domain.map(|d| d.to_string()),
         version: "0.1.0".to_string(),
-        exposure,
-        deploy_mode,
-        repo: repo.to_string(),
-        host_port,
+        exposure: params.exposure,
+        deploy_mode: params.deploy_mode,
+        repo: params.repo.to_string(),
+        host_port: params.host_port,
         ports,
     });
     config::save_config(&paths.config_file, &config)?;
 
     // Save a snapshot of the service.toml for `ryra diff`
-    let service_toml = repo_dir.join(service_name).join("service.toml");
+    let service_toml = params.repo_dir.join(params.service_name).join("service.toml");
     if let Ok(content) = std::fs::read_to_string(&service_toml) {
-        let _ = config::save_snapshot(&paths.snapshots_dir, service_name, &content);
+        let _ = config::save_snapshot(&paths.snapshots_dir, params.service_name, &content);
     }
 
     Ok(())
@@ -954,18 +956,18 @@ pub fn update_service(
     }
 
     // 2. Regenerate all files from the current registry definition
-    let generated = generate::generate_service(
-        &config,
-        &reg_service.def,
-        service.domain.as_deref(),
-        &service.exposure,
-        service.host_port,
-        &quadlet_dir,
+    let generated = generate::generate_service(generate::GenerateServiceParams {
+        config: &config,
+        service_def: &reg_service.def,
+        domain: service.domain.as_deref(),
+        exposure: &service.exposure,
+        host_port: service.host_port,
+        quadlet_dir: &quadlet_dir,
         nginx_dir,
         env_overrides,
-        &reg_service.service_dir,
-        None,
-    )?;
+        service_dir: &reg_service.service_dir,
+        compose_file_override: None,
+    })?;
 
     // 3. Pull new image if it changed
     if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {

@@ -249,16 +249,16 @@ pub async fn run(
     } else {
         println!("Setting up {service} as user {}...", result.username);
         apply::execute_all(&result.steps).await?;
-        ryra_core::finalize_add(
-            service,
-            domain.as_deref(),
+        ryra_core::finalize_add(ryra_core::FinalizeAddParams {
+            service_name: service,
+            domain: domain.as_deref(),
             exposure,
-            result.deploy_mode,
-            &result.repo_url,
-            result.host_port,
-            &result.allocated_ports,
-            &repo_dir,
-        )?;
+            deploy_mode: result.deploy_mode,
+            repo: &result.repo_url,
+            host_port: result.host_port,
+            allocated_ports: &result.allocated_ports,
+            repo_dir: &repo_dir,
+        })?;
         let home_dir = ryra_core::service_home(service);
         if let Some(ref domain) = result.domain {
             println!("\n{service} is running at https://{domain}");
