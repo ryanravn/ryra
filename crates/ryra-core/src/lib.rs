@@ -292,9 +292,8 @@ pub struct UpdateResult {
     pub username: String,
 }
 
-// TODO: Switch to hosted JSON registry (e.g., https://registry.ryra.dev/index.json)
-// once the platform is live. For now, default to the git repo.
-pub const DEFAULT_REPO: &str = "https://github.com/ryanravn/ryra-registry";
+pub const DEFAULT_REPO: &str =
+    "https://raw.githubusercontent.com/ryanravn/ryra/main/registry.json";
 
 /// Resolve which repo to use and ensure it's cached.
 /// Returns (repo_url, repo_dir).

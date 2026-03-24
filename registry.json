@@ -1,0 +1,564 @@
+{
+  "services": {
+    "forgejo": {
+      "service": {
+        "name": "forgejo",
+        "description": "Forgejo - self-hosted Git forge",
+        "url": "https://forgejo.org/docs/",
+        "mode": "quadlet",
+        "image": "codeberg.org/forgejo/forgejo:11",
+        "command": null,
+        "kind": "application"
+      },
+      "requirements": {
+        "ram": {
+          "min": 256,
+          "recommended": 512
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/data"
+        }
+      ],
+      "env": [
+        {
+          "name": "FORGEJO__database__DB_TYPE",
+          "value": "postgres",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "FORGEJO__database__HOST",
+          "value": "forgejo-postgres:5432",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "FORGEJO__database__NAME",
+          "value": "forgejo",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "FORGEJO__database__USER",
+          "value": "forgejo",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "FORGEJO__database__PASSWD",
+          "value": "{{secret.db_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "dependencies": [
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres:17-alpine",
+          "env": [
+            {
+              "name": "POSTGRES_USER",
+              "value": "forgejo",
+              "kind": "default",
+              "prompt": null,
+              "format": "string",
+              "length": null
+            },
+            {
+              "name": "POSTGRES_PASSWORD",
+              "value": "{{secret.db_password}}",
+              "kind": "default",
+              "prompt": null,
+              "format": "string",
+              "length": null
+            },
+            {
+              "name": "POSTGRES_DB",
+              "value": "forgejo",
+              "kind": "default",
+              "prompt": null,
+              "format": "string",
+              "length": null
+            }
+          ],
+          "volumes": [
+            {
+              "name": "db-data",
+              "mount_path": "/var/lib/postgresql/data"
+            }
+          ]
+        }
+      ],
+      "containers": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "forgejo-responds",
+          "run": "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1",
+          "timeout": 90,
+          "env": {}
+        },
+        {
+          "name": "postgres-not-on-localhost",
+          "run": "! ss -tlnp | grep -q ':5432 '",
+          "timeout": 5,
+          "env": {}
+        },
+        {
+          "name": "user-created",
+          "run": "id forgejo",
+          "timeout": 30,
+          "env": {}
+        }
+      ]
+    },
+    "openclaw": {
+      "service": {
+        "name": "openclaw",
+        "description": "OpenClaw - self-hosted AI assistant gateway",
+        "url": "https://docs.openclaw.ai/",
+        "mode": "quadlet",
+        "image": "ghcr.io/openclaw/openclaw:2026.3.13-1",
+        "command": "sh -c \"echo '{\\\"gateway\\\":{\\\"mode\\\":\\\"local\\\",\\\"bind\\\":\\\"lan\\\",\\\"controlUi\\\":{\\\"dangerouslyAllowHostHeaderOriginFallback\\\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured\"",
+        "kind": "application"
+      },
+      "requirements": {
+        "ram": {
+          "min": 1024,
+          "recommended": 2048
+        }
+      },
+      "ports": [
+        {
+          "name": "gateway",
+          "container_port": 18789,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "config",
+          "mount_path": "/home/node/.openclaw"
+        }
+      ],
+      "env": [
+        {
+          "name": "OPENCLAW_GATEWAY_TOKEN",
+          "value": "{{secret.gateway_token}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "value": "",
+          "kind": "prompted",
+          "prompt": "Anthropic API key (leave empty to skip)",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "value": "",
+          "kind": "prompted",
+          "prompt": "OpenAI API key (leave empty to skip)",
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "dependencies": [],
+      "containers": [],
+      "nginx": {
+        "upstream_port": "gateway"
+      },
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "http-responds",
+          "run": "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_GATEWAY && exit 0; sleep 2; done; exit 1",
+          "timeout": 90,
+          "env": {}
+        },
+        {
+          "name": "user-created",
+          "run": "id openclaw",
+          "timeout": 30,
+          "env": {}
+        }
+      ]
+    },
+    "postgres": {
+      "service": {
+        "name": "postgres",
+        "description": "PostgreSQL - open source relational database",
+        "url": "https://www.postgresql.org/docs/",
+        "mode": "quadlet",
+        "image": "docker.io/library/postgres:17-alpine",
+        "command": null,
+        "kind": "infrastructure"
+      },
+      "requirements": {
+        "ram": {
+          "min": 128,
+          "recommended": 256
+        }
+      },
+      "ports": [
+        {
+          "name": "tcp",
+          "container_port": 5432,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/var/lib/postgresql/data"
+        }
+      ],
+      "env": [
+        {
+          "name": "POSTGRES_USER",
+          "value": "postgres",
+          "kind": "prompted",
+          "prompt": "Database admin username",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_DB",
+          "value": "postgres",
+          "kind": "prompted",
+          "prompt": "Default database name",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_PASSWORD",
+          "value": "{{secret.postgres_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "dependencies": [],
+      "containers": [],
+      "nginx": null,
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "accepts-connections",
+          "run": "for i in $(seq 1 15); do PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -p $RYRA_PORT_TCP -U $POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1",
+          "timeout": 60,
+          "env": {}
+        },
+        {
+          "name": "user-created",
+          "run": "id postgres",
+          "timeout": 30,
+          "env": {}
+        }
+      ]
+    },
+    "ryra-registry": {
+      "service": {
+        "name": "ryra-registry",
+        "description": "Static file server hosting the ryra service registry",
+        "url": "https://ryra.dev",
+        "mode": "quadlet",
+        "image": "docker.io/library/nginx:1.29.6-alpine",
+        "command": null,
+        "kind": "application"
+      },
+      "requirements": {
+        "ram": {
+          "min": 32,
+          "recommended": 64
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/usr/share/nginx/html"
+        }
+      ],
+      "env": [],
+      "requires": [],
+      "dependencies": [],
+      "containers": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "http-responds",
+          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP",
+          "timeout": 30,
+          "env": {}
+        },
+        {
+          "name": "serves-content",
+          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/ | grep -qi nginx",
+          "timeout": 30,
+          "env": {}
+        }
+      ]
+    },
+    "uptime-kuma": {
+      "service": {
+        "name": "uptime-kuma",
+        "description": "Uptime Kuma - self-hosted monitoring tool",
+        "url": "https://github.com/louislam/uptime-kuma",
+        "mode": "quadlet",
+        "image": "docker.io/louislam/uptime-kuma:1",
+        "command": null,
+        "kind": "application"
+      },
+      "requirements": {
+        "ram": {
+          "min": 128,
+          "recommended": 256
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 3001,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/app/data"
+        }
+      ],
+      "env": [],
+      "requires": [],
+      "dependencies": [],
+      "containers": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "http-responds",
+          "run": "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1",
+          "timeout": 60,
+          "env": {}
+        },
+        {
+          "name": "user-created",
+          "run": "id uptime-kuma",
+          "timeout": 30,
+          "env": {}
+        }
+      ]
+    },
+    "vaultwarden": {
+      "service": {
+        "name": "vaultwarden",
+        "description": "Vaultwarden - lightweight Bitwarden-compatible server",
+        "url": "https://github.com/dani-garcia/vaultwarden/wiki",
+        "mode": "quadlet",
+        "image": "docker.io/vaultwarden/server:1.35.4",
+        "command": null,
+        "kind": "application"
+      },
+      "requirements": {
+        "ram": {
+          "min": 128,
+          "recommended": 512
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/data"
+        }
+      ],
+      "env": [
+        {
+          "name": "DOMAIN",
+          "value": "https://{{service.domain}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "SIGNUPS_ALLOWED",
+          "value": "false",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "WEBSOCKET_ENABLED",
+          "value": "true",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "dependencies": [],
+      "containers": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "mappings": {
+        "smtp": {
+          "SMTP_FROM": "{{smtp.from}}",
+          "SMTP_HOST": "{{smtp.host}}",
+          "SMTP_PASSWORD": "{{smtp.password}}",
+          "SMTP_PORT": "{{smtp.port}}",
+          "SMTP_SECURITY": "starttls",
+          "SMTP_USERNAME": "{{smtp.username}}"
+        },
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": true
+      },
+      "tests": []
+    },
+    "whoami": {
+      "service": {
+        "name": "whoami",
+        "description": "Traefik whoami - simple HTTP request echo",
+        "url": "https://github.com/traefik/whoami",
+        "mode": "quadlet",
+        "image": "docker.io/traefik/whoami:v1.11.0",
+        "command": null,
+        "kind": "application"
+      },
+      "requirements": null,
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [],
+      "env": [],
+      "requires": [],
+      "dependencies": [],
+      "containers": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": false,
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "http-responds",
+          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP",
+          "timeout": 30,
+          "env": {}
+        },
+        {
+          "name": "returns-hostname",
+          "run": "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname",
+          "timeout": 30,
+          "env": {}
+        },
+        {
+          "name": "user-created",
+          "run": "id whoami",
+          "timeout": 30,
+          "env": {}
+        }
+      ]
+    }
+  }
+}

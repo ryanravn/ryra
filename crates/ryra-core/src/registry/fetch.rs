@@ -6,7 +6,7 @@ use crate::registry::service_def::ServiceDef;
 
 /// How a registry source is accessed.
 enum RegistrySource {
-    /// A JSON URL (e.g., `https://registry.ryra.dev/index.json`).
+    /// A JSON URL (e.g., `https://raw.githubusercontent.com/ryanravn/ryra/main/registry.json`).
     Json(String),
     /// A git repository URL.
     Git(String),

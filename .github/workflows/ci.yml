@@ -28,3 +28,8 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Registry up to date
+        run: |
+          cargo run -p ryra-dev-tools --bin generate-registry -- registry registry-check.json
+          diff registry.json registry-check.json
