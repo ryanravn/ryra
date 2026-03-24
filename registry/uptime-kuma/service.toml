@@ -1,0 +1,33 @@
+[service]
+name = "uptime-kuma"
+description = "Uptime Kuma - self-hosted monitoring tool"
+url = "https://github.com/louislam/uptime-kuma"
+image = "docker.io/louislam/uptime-kuma:1"
+
+[requirements.ram]
+min = 128
+recommended = 256
+
+[[ports]]
+name = "http"
+container_port = 3001
+
+[[volumes]]
+name = "data"
+mount_path = "/app/data"
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "http-responds"
+run = "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1"
+timeout = 60
+
+[[tests]]
+name = "user-created"
+run = "id uptime-kuma"
