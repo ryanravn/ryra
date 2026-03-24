@@ -1,0 +1,30 @@
+name: Deploy Registry
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "registry/**"
+      - "crates/ryra-core/src/registry/**"
+      - "crates/ryra-dev-tools/src/generate_registry.rs"
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Generate index.json
+        run: cargo run --bin generate-registry -- registry registry-out/index.json
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: pages deploy registry-out --project-name=ryra-registry

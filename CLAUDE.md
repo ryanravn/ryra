@@ -26,12 +26,19 @@ Never use `.unwrap()`, `.expect()`, or `panic!()`. Every fallible operation must
 
 If something truly cannot fail, explain why in a comment and use `unwrap_or_else(|| unreachable!("reason"))` so the reasoning is documented.
 
+## Commits
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Prefix every commit subject with a type: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `ci:`.
+
 ## Architecture
 
 - `ryra-core`: pure library, no CLI deps, no sudo, no side effects beyond file I/O to user-owned config
 - `ryra-cli`: thin shell that calls core and handles sudo/system interaction
+- `ryra-vm`: QEMU/SSH/cloud-init VM orchestration library
+- `ryra-test`: E2E test runner, depends on ryra-vm
+- `ryra-dev-tools`: build tooling (generate-registry)
 - Core returns typed results describing what needs to happen; CLI decides whether to apply or print
-- Each service gets its own Linux user (`ryra-<name>`) running rootless podman
+- Each service gets its own Linux user running rootless podman
 - nginx runs as a root system quadlet with `Network=host` — the only privileged component
 
 ## System Dependencies
@@ -42,15 +49,14 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 
 ## E2E Testing
 
-See `E2E_TEST_PLAN.md` for the full plan. Key points:
+Key points:
 
 - Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
 - `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image
-- The test runner (`tests/e2e/`) is a standalone Rust binary, not shell scripts
+- Test runner lives in `crates/ryra-test/`, VM orchestration in `crates/ryra-vm/`
+- Tests are defined in `registry/` via `[[tests]]` in service.toml and lifecycle test files in `registry/tests/`
 - VMs use cloud images + cloud-init for setup, SSH for command execution
 - `--parallel=N` controls concurrency, each VM gets a unique SSH port
-- Test fixtures (service definitions) live in `tests/e2e/fixtures/registry/`
-- Scenarios are defined declaratively with a builder pattern in `tests/e2e/src/tests/mod.rs`
 - KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower)
 - `--keep-failed` keeps VMs alive and prints the SSH command for debugging
 - `--verbose` dumps the serial log on failure
