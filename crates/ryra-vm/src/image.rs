@@ -190,7 +190,8 @@ async fn find_efi_firmware() -> Result<EfiFirmware> {
     anyhow::bail!(
         "EFI firmware not found. Install it with:\n  \
          sudo apt install qemu-efi-aarch64    # Debian/Ubuntu\n  \
-         sudo dnf install edk2-aarch64        # Fedora"
+         sudo dnf install edk2-aarch64        # Fedora\n  \
+         sudo pacman -S edk2-aarch64          # Arch"
     )
 }
 

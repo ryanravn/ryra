@@ -533,7 +533,8 @@ async fn write_seed_iso(
         anyhow::bail!(
             "failed to create seed ISO — install genisoimage or mkisofs:\n  \
              sudo apt install genisoimage    # Debian/Ubuntu\n  \
-             sudo dnf install genisoimage    # Fedora"
+             sudo dnf install genisoimage    # Fedora\n  \
+             sudo pacman -S cdrtools         # Arch"
         );
     }
 

@@ -70,7 +70,9 @@ pub fn check_prerequisites(use_kvm: bool) -> Result<()> {
              sudo apt install qemu-system-arm qemu-utils qemu-efi-aarch64 \\\n    \
              genisoimage openssh-client curl                    # Debian/Ubuntu\n  \
              sudo dnf install qemu-system-aarch64 qemu-img edk2-aarch64 \\\n    \
-             genisoimage openssh-clients curl                   # Fedora",
+             genisoimage openssh-clients curl                   # Fedora\n  \
+             sudo pacman -S qemu-system-aarch64 qemu-img edk2-aarch64 \\\n    \
+             cdrtools openssh curl                              # Arch",
             missing.join(", ")
         );
     }

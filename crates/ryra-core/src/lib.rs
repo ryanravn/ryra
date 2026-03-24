@@ -141,7 +141,7 @@ impl Step {
     pub fn to_command(&self) -> String {
         match self {
             Step::CreateUser { username, home_dir } => format!(
-                "sudo useradd --system --shell /usr/sbin/nologin --home-dir {} --create-home {username}",
+                "sudo useradd --system --shell $(which nologin) --home-dir {} --create-home {username}",
                 home_dir.display()
             ),
             Step::EnableLinger { username } => format!("sudo loginctl enable-linger {username}"),

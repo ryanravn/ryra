@@ -153,8 +153,18 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 return Ok(());
             }
 
+            // Detect nologin path — varies across distros
+            let nologin = [
+                "/usr/sbin/nologin",
+                "/sbin/nologin",
+                "/bin/nologin",
+                "/usr/bin/nologin",
+            ]
+            .iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .unwrap_or(&"/usr/sbin/nologin");
             run(&format!(
-                "sudo useradd --system --shell /usr/sbin/nologin --home-dir {} --create-home {username}",
+                "sudo useradd --system --shell {nologin} --home-dir {} --create-home {username}",
                 home_dir.display()
             ))?;
             // Rootless podman needs subordinate UID/GID ranges for user namespaces.
