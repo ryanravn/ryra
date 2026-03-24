@@ -162,6 +162,7 @@ struct EfiFirmware {
 
 async fn find_efi_firmware() -> Result<EfiFirmware> {
     let candidates = [
+        // Debian/Ubuntu
         (
             "/usr/share/AAVMF/AAVMF_CODE.fd",
             "/usr/share/AAVMF/AAVMF_VARS.fd",
@@ -170,9 +171,20 @@ async fn find_efi_firmware() -> Result<EfiFirmware> {
             "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
             "/usr/share/qemu-efi-aarch64/vars-template-pflash.raw",
         ),
+        // Fedora / Arch
         (
             "/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw",
             "/usr/share/edk2/aarch64/vars-template-pflash.raw",
+        ),
+        // macOS Homebrew (Apple Silicon)
+        (
+            "/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+            "/opt/homebrew/share/qemu/edk2-arm-vars.fd",
+        ),
+        // macOS Homebrew (Intel)
+        (
+            "/usr/local/share/qemu/edk2-aarch64-code.fd",
+            "/usr/local/share/qemu/edk2-arm-vars.fd",
         ),
     ];
 
@@ -191,7 +203,8 @@ async fn find_efi_firmware() -> Result<EfiFirmware> {
         "EFI firmware not found. Install it with:\n  \
          sudo apt install qemu-efi-aarch64    # Debian/Ubuntu\n  \
          sudo dnf install edk2-aarch64        # Fedora\n  \
-         sudo pacman -S edk2-aarch64          # Arch"
+         sudo pacman -S edk2-aarch64          # Arch\n  \
+         brew install qemu                     # macOS"
     )
 }
 
@@ -352,7 +365,7 @@ async fn prepare_image(
         "none",
     ];
     if use_kvm {
-        args.push("-enable-kvm");
+        args.extend(crate::accel_args().iter().copied());
     }
 
     let mut qemu = Command::new("qemu-system-aarch64")

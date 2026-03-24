@@ -6,28 +6,61 @@ PAGES_URL="https://ryanravn.github.io/ryra"
 BASE_URL="https://github.com/${REPO}/releases/download/latest"
 
 main() {
+    os=$(uname -s)
     arch=$(uname -m)
-    case "$arch" in
-        x86_64)  rust_target="x86_64-unknown-linux-gnu" ;;
-        aarch64) rust_target="aarch64-unknown-linux-gnu" ;;
+
+    case "${os}-${arch}" in
+        Linux-x86_64)   rust_target="x86_64-unknown-linux-gnu" ;;
+        Linux-aarch64)  rust_target="aarch64-unknown-linux-gnu" ;;
+        Darwin-arm64)   rust_target="aarch64-apple-darwin" ;;
+        Darwin-x86_64)  rust_target="x86_64-apple-darwin" ;;
         *)
-            echo "Error: unsupported architecture: $arch"
+            echo "Error: unsupported platform: ${os} ${arch}"
             exit 1
             ;;
     esac
 
-    if command -v apt-get >/dev/null 2>&1; then
-        install_apt
-    elif command -v dnf >/dev/null 2>&1; then
-        install_rpm
-    elif command -v pacman >/dev/null 2>&1; then
-        install_pacman
-    else
-        install_binary
-    fi
+    case "$os" in
+        Darwin)
+            install_macos
+            ;;
+        Linux)
+            if command -v apt-get >/dev/null 2>&1; then
+                install_apt
+            elif command -v dnf >/dev/null 2>&1; then
+                install_rpm
+            elif command -v pacman >/dev/null 2>&1; then
+                install_pacman
+            else
+                install_binary
+            fi
+            ;;
+    esac
 
     echo ""
     echo "ryra installed successfully! Run 'ryra init' to get started."
+}
+
+install_macos() {
+    echo "Detected macOS — installing binary..."
+    echo "Note: on macOS, ryra supports VM-based testing only (not deployment)."
+
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+
+    url="${BASE_URL}/ryra-${rust_target}.tar.gz"
+    echo "Downloading ryra for macOS ${arch}..."
+    curl -fsSL -o "${tmp}/ryra.tar.gz" "$url"
+
+    tar xzf "${tmp}/ryra.tar.gz" -C "${tmp}"
+
+    install_dir="/usr/local/bin"
+    mkdir -p "$install_dir"
+    cp "${tmp}/ryra" "${install_dir}/ryra"
+    chmod 755 "${install_dir}/ryra"
+
+    echo "Installed to ${install_dir}/ryra"
+    echo "To update, re-run this script."
 }
 
 install_apt() {
@@ -36,8 +69,8 @@ install_apt() {
     sudo mkdir -p /etc/apt/keyrings
     curl -fsSL "${PAGES_URL}/gpg.key" | sudo gpg --dearmor -o /etc/apt/keyrings/ryra.gpg
 
-    arch=$(dpkg --print-architecture)
-    echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/ryra.gpg] ${PAGES_URL}/deb stable main" \
+    deb_arch=$(dpkg --print-architecture)
+    echo "deb [arch=${deb_arch} signed-by=/etc/apt/keyrings/ryra.gpg] ${PAGES_URL}/deb stable main" \
         | sudo tee /etc/apt/sources.list.d/ryra.list > /dev/null
 
     sudo apt-get update -o Dir::Etc::sourcelist="/etc/apt/sources.list.d/ryra.list" \
@@ -52,11 +85,11 @@ install_rpm() {
 
     sudo rpm --import "${PAGES_URL}/gpg.key"
 
-    arch=$(uname -m)
+    rpm_arch=$(uname -m)
     cat <<EOF | sudo tee /etc/yum.repos.d/ryra.repo > /dev/null
 [ryra]
 name=ryra
-baseurl=${PAGES_URL}/rpm/${arch}
+baseurl=${PAGES_URL}/rpm/${rpm_arch}
 enabled=1
 gpgcheck=1
 gpgkey=${PAGES_URL}/gpg.key
@@ -72,17 +105,16 @@ install_pacman() {
 
     sudo pacman-key --init
     curl -fsSL "${PAGES_URL}/gpg.key" | sudo pacman-key --add -
-    # Get the GPG key ID and sign it locally
     KEY_ID=$(curl -fsSL "${PAGES_URL}/gpg.key" | gpg --with-colons --import-options show-only --import 2>/dev/null | awk -F: '/^pub/{print $5}')
     sudo pacman-key --lsign-key "$KEY_ID"
 
-    arch=$(uname -m)
+    pac_arch=$(uname -m)
     if ! grep -q '\[ryra\]' /etc/pacman.conf; then
         cat <<EOF | sudo tee -a /etc/pacman.conf > /dev/null
 
 [ryra]
 SigLevel = Required
-Server = ${PAGES_URL}/pacman/${arch}
+Server = ${PAGES_URL}/pacman/${pac_arch}
 EOF
     fi
 

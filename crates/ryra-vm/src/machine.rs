@@ -169,6 +169,7 @@ impl Machine {
 
         // Share the image cache dir with the VM via 9p virtfs — lets the VM
         // read host-side image tars directly without SCP/network transfer.
+        // Only available on Linux — macOS QEMU lacks 9p support.
         let image_cache = image_cache_dir();
         let _ = std::fs::create_dir_all(&image_cache);
         let virtfs_arg = format!(
@@ -195,8 +196,6 @@ impl Machine {
             &seed_arg,
             "-nic",
             &nic_arg,
-            "-virtfs",
-            &virtfs_arg,
             "-nographic",
             "-serial",
             &serial_arg,
@@ -204,8 +203,12 @@ impl Machine {
             "none",
         ];
 
+        if crate::supports_virtfs() {
+            args.extend(["-virtfs", &virtfs_arg]);
+        }
+
         if opts.use_kvm {
-            args.push("-enable-kvm");
+            args.extend(crate::accel_args());
         }
 
         let qemu = Command::new("qemu-system-aarch64")
@@ -534,7 +537,8 @@ async fn write_seed_iso(
             "failed to create seed ISO — install genisoimage or mkisofs:\n  \
              sudo apt install genisoimage    # Debian/Ubuntu\n  \
              sudo dnf install genisoimage    # Fedora\n  \
-             sudo pacman -S cdrtools         # Arch"
+             sudo pacman -S cdrtools         # Arch\n  \
+             brew install genisoimage        # macOS"
         );
     }
 
@@ -640,23 +644,58 @@ pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result
         .await
         .ok(); // best-effort
 
-    // Mount the 9p shared image cache from the host
-    machine
-        .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
-        .await
-        .context("failed to mount 9p image cache in VM")?;
+    if crate::supports_virtfs() {
+        // Mount the 9p shared image cache from the host
+        machine
+            .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
+            .await
+            .context("failed to mount 9p image cache in VM")?;
+    }
 
     for image in images {
-        // ensure_image_cached returns the host path, but we just need the filename
-        let _ = ensure_image_cached(image).await?;
+        let tar_path = ensure_image_cached(image).await?;
         let safe_name = image.replace(['/', ':'], "-");
-        let remote_path = format!("/mnt/images/{safe_name}.tar");
         println!("    loading {image} into VM...");
 
-        machine
-            .exec(&format!("podman load -i {remote_path}"))
-            .await
-            .context(format!("failed to load {image} in VM"))?;
+        if crate::supports_virtfs() {
+            let remote_path = format!("/mnt/images/{safe_name}.tar");
+            machine
+                .exec(&format!("podman load -i {remote_path}"))
+                .await
+                .context(format!("failed to load {image} in VM"))?;
+        } else {
+            // No 9p — SCP the tar into the VM and load it
+            let remote_path = format!("/tmp/{safe_name}.tar");
+            let key = machine.ssh_key_path();
+            let port = machine.ssh_port.to_string();
+            let status = Command::new("scp")
+                .args([
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    "-o",
+                    "LogLevel=ERROR",
+                    "-i",
+                    &key.to_string_lossy(),
+                    "-P",
+                    &port,
+                    &tar_path.to_string_lossy(),
+                    &format!("root@127.0.0.1:{remote_path}"),
+                ])
+                .status()
+                .await
+                .context("failed to SCP image to VM")?;
+            if !status.success() {
+                anyhow::bail!("SCP of {image} tar failed");
+            }
+            machine
+                .exec(&format!(
+                    "podman load -i {remote_path} && rm -f {remote_path}"
+                ))
+                .await
+                .context(format!("failed to load {image} in VM"))?;
+        }
     }
 
     Ok(())

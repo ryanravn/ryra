@@ -39,7 +39,7 @@ jobs:
           cargo run -p ryra-dev-tools --bin generate-registry -- registry registry-check.json
           diff registry.json registry-check.json
 
-  build-release:
+  build-linux:
     needs: check
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     strategy:
@@ -134,8 +134,45 @@ jobs:
             ryra.${{ matrix.rpm_arch }}.rpm
             ryra-*-${{ matrix.rpm_arch }}.pkg.tar.zst
 
+  build-macos:
+    needs: check
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-13
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p ryra-cli
+
+      - name: Package tarball
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ryra-${{ matrix.target }}.tar.gz ryra
+          mv ryra-${{ matrix.target }}.tar.gz "$GITHUB_WORKSPACE/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ryra-${{ matrix.target }}
+          path: ryra-${{ matrix.target }}.tar.gz
+
   release-latest:
-    needs: build-release
+    needs: [build-linux, build-macos]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -157,7 +194,7 @@ jobs:
           makeLatest: false
 
   release-version:
-    needs: build-release
+    needs: [build-linux, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -175,7 +212,7 @@ jobs:
           makeLatest: true
 
   publish-repos:
-    needs: build-release
+    needs: build-linux
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
