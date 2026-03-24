@@ -2,7 +2,7 @@
 name = "vaultwarden"
 description = "Vaultwarden - lightweight Bitwarden-compatible server"
 url = "https://github.com/dani-garcia/vaultwarden/wiki"
-image = "docker.io/vaultwarden/server:latest"
+image = "docker.io/vaultwarden/server:1.35.4"
 
 [requirements.ram]
 min = 128

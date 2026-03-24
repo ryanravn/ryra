@@ -2,7 +2,7 @@
 name = "openclaw"
 description = "OpenClaw - self-hosted AI assistant gateway"
 url = "https://docs.openclaw.ai/"
-image = "ghcr.io/openclaw/openclaw:latest"
+image = "ghcr.io/openclaw/openclaw:2026.3.13-1"
 command = '''sh -c "echo '{\"gateway\":{\"mode\":\"local\",\"bind\":\"lan\",\"controlUi\":{\"dangerouslyAllowHostHeaderOriginFallback\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured"'''
 
 [requirements.ram]
