@@ -106,7 +106,7 @@ pub fn diff_service_from_paths(
     Ok(compute_changes(&old, &current.def))
 }
 
-fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
+pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
     let mut changes = Vec::new();
 
     // Image

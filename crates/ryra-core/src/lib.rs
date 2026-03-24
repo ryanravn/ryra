@@ -290,6 +290,12 @@ pub struct ResetResult {
     pub steps: Vec<Step>,
 }
 
+pub struct UpdateResult {
+    pub steps: Vec<Step>,
+    pub changes: Vec<diff::Change>,
+    pub username: String,
+}
+
 // TODO: Switch to hosted JSON registry (e.g., https://registry.ryra.dev/index.json)
 // once the platform is live. For now, default to the git repo.
 pub const DEFAULT_REPO: &str = "https://github.com/ryanravn/ryra-registry";
@@ -889,6 +895,168 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     config.services.retain(|s| s.name != service_name);
     config::save_config(&paths.config_file, &config)?;
     config::remove_snapshot(&paths.snapshots_dir, service_name);
+
+    Ok(())
+}
+
+/// Re-scaffold a service with the latest registry definition.
+///
+/// This is destructive: the service is stopped, all config files are regenerated
+/// (including env vars and secrets), and the service is restarted. Volumes are
+/// preserved but everything else is rebuilt from scratch.
+pub fn update_service(
+    service_name: &str,
+    env_overrides: &BTreeMap<String, String>,
+    repo_dir: &Path,
+) -> Result<UpdateResult> {
+    let paths = ConfigPaths::resolve()?;
+    let config = config::load_config(&paths.config_file)?;
+
+    let service = config
+        .services
+        .iter()
+        .find(|s| s.name == service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    // Load snapshot and compute changes
+    let snapshot_content = config::load_snapshot(&paths.snapshots_dir, service_name)?;
+    let old: registry::service_def::ServiceDef = toml::from_str(&snapshot_content).map_err(|source| {
+        Error::TomlParse {
+            path: paths.snapshots_dir.join(format!("{service_name}.toml")),
+            source,
+        }
+    })?;
+    let reg_service = registry::find_service(repo_dir, service_name)?;
+    let changes = diff::compute_changes(&old, &reg_service.def);
+
+    let username = service_user(service_name);
+    let home_dir = service_home(service_name);
+    let quadlet_dir = service_quadlet_dir(service_name);
+    let nginx_dir = Path::new("/etc/ryra/nginx/sites");
+
+    let mut steps = Vec::new();
+
+    // 1. Stop the service
+    match &service.deploy_mode {
+        InstalledDeployMode::Quadlet => {
+            steps.push(Step::StopService {
+                username: username.clone(),
+                unit: service_name.to_string(),
+            });
+        }
+        InstalledDeployMode::Compose => {
+            steps.push(Step::ComposeDown {
+                username: username.clone(),
+                compose_dir: home_dir.clone(),
+            });
+        }
+    }
+
+    // 2. Regenerate all files from the current registry definition
+    let generated = generate::generate_service(
+        &config,
+        &reg_service.def,
+        service.domain.as_deref(),
+        &service.exposure,
+        service.host_port,
+        &quadlet_dir,
+        nginx_dir,
+        env_overrides,
+        &reg_service.service_dir,
+        None,
+    )?;
+
+    // 3. Pull new image if it changed
+    if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
+        steps.push(Step::PullImage {
+            image: image.clone(),
+            username: Some(username.clone()),
+        });
+    }
+    for dep in &reg_service.def.dependencies {
+        steps.push(Step::PullImage {
+            image: dep.image.clone(),
+            username: Some(username.clone()),
+        });
+    }
+
+    // 4. Write files and restart
+    match generated {
+        generate::GeneratedService::Quadlet { files, env_file, nginx_site } => {
+            for file in files {
+                steps.push(Step::WriteFile(file));
+            }
+            steps.push(Step::WriteFile(env_file));
+            if let Some(nginx_site) = nginx_site {
+                steps.push(Step::WriteFile(nginx_site));
+            }
+
+            steps.push(Step::Chown {
+                path: home_dir,
+                username: username.clone(),
+            });
+            steps.push(Step::DaemonReload {
+                username: username.clone(),
+            });
+            steps.push(Step::StartService {
+                username: username.clone(),
+                unit: service_name.to_string(),
+            });
+        }
+        generate::GeneratedService::Compose {
+            compose_file,
+            env_file,
+            systemd_unit,
+            nginx_site,
+        } => {
+            steps.push(Step::WriteFile(compose_file));
+            steps.push(Step::WriteFile(env_file));
+            steps.push(Step::WriteFile(systemd_unit));
+            if let Some(nginx_site) = nginx_site {
+                steps.push(Step::WriteFile(nginx_site));
+            }
+
+            steps.push(Step::Chown {
+                path: home_dir.clone(),
+                username: username.clone(),
+            });
+            steps.push(Step::ComposePull {
+                username: username.clone(),
+                compose_dir: home_dir,
+            });
+            steps.push(Step::DaemonReload {
+                username: username.clone(),
+            });
+            steps.push(Step::StartService {
+                username: username.clone(),
+                unit: format!("{service_name}-compose"),
+            });
+        }
+    }
+
+    // Reload nginx if proxied
+    if service.domain.is_some() {
+        steps.push(Step::SystemRestart {
+            unit: "nginx".into(),
+        });
+    }
+
+    Ok(UpdateResult {
+        steps,
+        changes,
+        username,
+    })
+}
+
+/// Called after update steps succeed — updates the snapshot to match the new registry version.
+pub fn finalize_update(service_name: &str, repo_dir: &Path) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+
+    // Update the snapshot
+    let service_toml = repo_dir.join(service_name).join("service.toml");
+    if let Ok(content) = std::fs::read_to_string(&service_toml) {
+        let _ = config::save_snapshot(&paths.snapshots_dir, service_name, &content);
+    }
 
     Ok(())
 }
