@@ -12,6 +12,13 @@ authors.workspace = true
 name = "ryra"
 path = "src/main.rs"
 
+[package.metadata.deb]
+name = "ryra"
+maintainer = "Erlend Ravn Ryan <erlendryan@pm.me>"
+section = "utils"
+priority = "optional"
+assets = [["../../target/release/ryra", "usr/bin/", "755"]]
+
 [features]
 default = ["vm"]
 vm = ["dep:ryra-test"]

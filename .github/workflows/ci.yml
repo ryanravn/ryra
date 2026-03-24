@@ -46,7 +46,9 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            arch: amd64
           - target: aarch64-unknown-linux-gnu
+            arch: arm64
 
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +62,9 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
@@ -69,16 +74,24 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release --target ${{ matrix.target }} -p ryra-cli
 
-      - name: Package
+      - name: Package tarball
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ryra-${{ matrix.target }}.tar.gz ryra
           mv ryra-${{ matrix.target }}.tar.gz "$GITHUB_WORKSPACE/"
 
+      - name: Build deb
+        run: cargo deb -p ryra-cli --no-build --target ${{ matrix.target }}
+
+      - name: Copy deb
+        run: cp target/${{ matrix.target }}/debian/*.deb ./ryra_${{ matrix.arch }}.deb
+
       - uses: actions/upload-artifact@v4
         with:
           name: ryra-${{ matrix.target }}
-          path: ryra-${{ matrix.target }}.tar.gz
+          path: |
+            ryra-${{ matrix.target }}.tar.gz
+            ryra_${{ matrix.arch }}.deb
 
   release-latest:
     needs: build-release
@@ -96,7 +109,7 @@ jobs:
           tag: latest
           name: Latest
           body: Built from the latest commit on main.
-          artifacts: "ryra-*.tar.gz"
+          artifacts: "ryra-*.tar.gz,ryra_*.deb"
           allowUpdates: true
           removeArtifacts: true
           prerelease: true
@@ -117,5 +130,87 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          artifacts: "ryra-*.tar.gz"
+          artifacts: "ryra-*.tar.gz,ryra_*.deb"
           makeLatest: true
+
+  publish-apt:
+    needs: build-release
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages
+        continue-on-error: true
+
+      - name: Init gh-pages if missing
+        run: |
+          if [ ! -d gh-pages/.git ]; then
+            mkdir -p gh-pages
+            cd gh-pages
+            git init
+            git checkout -b gh-pages
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: artifacts
+
+      - name: Import GPG key
+        env:
+          APT_GPG_PRIVATE: ${{ secrets.APT_GPG_PRIVATE }}
+        run: echo "$APT_GPG_PRIVATE" | gpg --batch --import
+
+      - name: Build APT repository
+        run: |
+          mkdir -p gh-pages/pool gh-pages/dists/stable/main/binary-amd64 gh-pages/dists/stable/main/binary-arm64
+
+          # Copy debs to pool
+          cp artifacts/ryra_amd64.deb gh-pages/pool/
+          cp artifacts/ryra_arm64.deb gh-pages/pool/
+
+          cd gh-pages
+
+          # Generate Packages files
+          dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          dpkg-scanpackages --arch arm64 pool > dists/stable/main/binary-arm64/Packages
+          gzip -k -f dists/stable/main/binary-arm64/Packages
+
+          # Generate Release file
+          cd dists/stable
+          cat > Release <<EOF
+          Origin: ryra
+          Label: ryra
+          Suite: stable
+          Codename: stable
+          Architectures: amd64 arm64
+          Components: main
+          EOF
+          # Trim leading whitespace from heredoc
+          sed -i 's/^          //' Release
+
+          # Add hashes
+          apt-ftparchive release . >> Release
+
+          # Sign
+          gpg --batch --yes --armor --detach-sign -o Release.gpg Release
+          gpg --batch --yes --armor --clearsign -o InRelease Release
+
+      - name: Export public key
+        run: gpg --armor --export > gh-pages/gpg.key
+
+      - name: Push to gh-pages
+        run: |
+          cd gh-pages
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Update APT repository"
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
