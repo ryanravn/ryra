@@ -1,0 +1,82 @@
+[service]
+name = "forgejo"
+description = "Forgejo - self-hosted Git forge"
+url = "https://forgejo.org/docs/"
+image = "codeberg.org/forgejo/forgejo:11"
+
+[requirements.ram]
+min = 256
+recommended = 512
+
+[[ports]]
+name = "http"
+container_port = 3000
+
+[[volumes]]
+name = "data"
+mount_path = "/data"
+
+# --- Scoped postgres dependency (sidecar, not shared) ---
+
+[[dependencies]]
+name = "postgres"
+image = "docker.io/library/postgres:17-alpine"
+
+[[dependencies.env]]
+name = "POSTGRES_USER"
+value = "forgejo"
+
+[[dependencies.env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[dependencies.env]]
+name = "POSTGRES_DB"
+value = "forgejo"
+
+[[dependencies.volumes]]
+name = "db-data"
+mount_path = "/var/lib/postgresql/data"
+
+# --- Forgejo env vars ---
+
+[[env]]
+name = "FORGEJO__database__DB_TYPE"
+value = "postgres"
+
+[[env]]
+name = "FORGEJO__database__HOST"
+value = "forgejo-postgres:5432"
+
+[[env]]
+name = "FORGEJO__database__NAME"
+value = "forgejo"
+
+[[env]]
+name = "FORGEJO__database__USER"
+value = "forgejo"
+
+[[env]]
+name = "FORGEJO__database__PASSWD"
+value = "{{secret.db_password}}"
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "forgejo-responds"
+run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1"
+timeout = 90
+
+[[tests]]
+name = "postgres-not-on-localhost"
+run = "! ss -tlnp | grep -q ':5432 '"
+timeout = 5
+
+[[tests]]
+name = "user-created"
+run = "id forgejo"

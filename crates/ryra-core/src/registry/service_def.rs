@@ -273,8 +273,6 @@ pub struct DependencyDef {
     pub env: Vec<EnvVar>,
     #[serde(default)]
     pub volumes: Vec<VolumeDef>,
-    pub port: u16,
-    pub url_template: Option<String>,
 }
 
 /// For multi-container services (e.g., authentik server + worker).

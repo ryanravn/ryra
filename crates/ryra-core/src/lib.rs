@@ -627,10 +627,18 @@ pub fn add_service(
     // 4-7: Deploy mode specific steps
     match generated {
         generate::GeneratedService::Quadlet { files, env_file, nginx_site } => {
-            // Pull image
+            // Pull main image
             if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
                 steps.push(Step::PullImage {
                     image: image.clone(),
+                    username: Some(username.clone()),
+                });
+            }
+
+            // Pull dependency images
+            for dep in &reg_service.def.dependencies {
+                steps.push(Step::PullImage {
+                    image: dep.image.clone(),
                     username: Some(username.clone()),
                 });
             }
@@ -652,6 +660,8 @@ pub fn add_service(
             steps.push(Step::DaemonReload {
                 username: username.clone(),
             });
+
+            // Dependencies start automatically via Requires=/After= in the quadlet
             steps.push(Step::StartService {
                 username: username.clone(),
                 unit: service_name.to_string(),

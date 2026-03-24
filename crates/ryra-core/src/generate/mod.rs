@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::schema::{Config, ExposureMode};
 use crate::error::{Error, Result};
-use crate::registry::service_def::{DeployMode, EnvVar, ServiceDef};
+use crate::registry::service_def::{DeployMode, DependencyDef, EnvVar, ServiceDef};
 
 /// Everything generated for a service, ready to be written to disk.
 pub enum GeneratedService {
@@ -60,7 +60,7 @@ pub fn generate_service(
 
     match &service_def.service.deploy {
         DeployMode::Quadlet { image, command } => {
-            generate_quadlet(name, image, command.as_deref(), service_def, exposure, host_port, quadlet_dir, env_file, nginx_site)
+            generate_quadlet(name, image, command.as_deref(), service_def, exposure, host_port, quadlet_dir, &ctx, env_overrides, env_file, nginx_site)
         }
         DeployMode::Compose { file, .. } => {
             let compose_filename = compose_file_override.unwrap_or(file);
@@ -104,6 +104,8 @@ fn generate_quadlet(
     exposure: &ExposureMode,
     host_port: Option<u16>,
     quadlet_dir: &Path,
+    ctx: &BTreeMap<String, String>,
+    env_overrides: &BTreeMap<String, String>,
     env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
 ) -> Result<GeneratedService> {
@@ -156,6 +158,13 @@ fn generate_quadlet(
         })
         .collect();
 
+    // Dependency unit names (so the main container starts after them)
+    let dep_units: Vec<String> = service_def
+        .dependencies
+        .iter()
+        .map(|dep| format!("{name}-{}", dep.name))
+        .collect();
+
     // Container
     let container_params = quadlet::QuadletParams {
         service_name: name,
@@ -165,12 +174,66 @@ fn generate_quadlet(
         network: &network_name,
         command,
         bind_address: &bind_address,
+        requires: &dep_units,
     };
 
     files.push(GeneratedFile {
         path: quadlet_dir.join(format!("{name}.container")),
         content: quadlet::render_container(&container_params),
     });
+
+    // Dependency sidecar containers
+    let home_dir = crate::service_home(name);
+    for dep in &service_def.dependencies {
+        // Volumes for this dependency
+        for vol in &dep.volumes {
+            let vol_name = format!("{name}-{}-{}", dep.name, vol.name);
+            files.push(GeneratedFile {
+                path: quadlet_dir.join(format!("{vol_name}.volume")),
+                content: quadlet::render_volume(&vol_name),
+            });
+        }
+
+        let dep_volume_mappings: Vec<(String, String)> = dep
+            .volumes
+            .iter()
+            .map(|v| (format!("{name}-{}-{}", dep.name, v.name), v.mount_path.clone()))
+            .collect();
+
+        let dep_volume_refs: Vec<quadlet::VolumeMapping> = dep_volume_mappings
+            .iter()
+            .map(|(vname, path)| quadlet::VolumeMapping {
+                volume_name: vname,
+                mount_path: path,
+            })
+            .collect();
+
+        // Dependency container (no published ports)
+        let dep_params = quadlet::DependencyQuadletParams {
+            service_name: name,
+            dep_name: &dep.name,
+            image: &dep.image,
+            volumes: &dep_volume_refs,
+            network: &network_name,
+        };
+
+        let container_name = format!("{name}-{}", dep.name);
+        files.push(GeneratedFile {
+            path: quadlet_dir.join(format!("{container_name}.container")),
+            content: quadlet::render_dependency_container(&dep_params),
+        });
+
+        // Dependency .env file (rendered with the shared context)
+        let rendered_dep_env = render_env_vars_for_dep(dep, ctx, env_overrides)?;
+        let mut dep_env_lines = Vec::new();
+        for env in &rendered_dep_env {
+            dep_env_lines.push(format!("{}={}", env.name, env.value));
+        }
+        files.push(GeneratedFile {
+            path: home_dir.join(format!(".env.{}", dep.name)),
+            content: dep_env_lines.join("\n") + "\n",
+        });
+    }
 
     Ok(GeneratedService::Quadlet { files, env_file, nginx_site })
 }
@@ -289,6 +352,31 @@ fn render_env_vars(
     }
 
     Ok(rendered)
+}
+
+/// Render env vars for a dependency sidecar using the shared template context.
+fn render_env_vars_for_dep(
+    dep: &DependencyDef,
+    ctx: &BTreeMap<String, String>,
+    env_overrides: &BTreeMap<String, String>,
+) -> Result<Vec<EnvVar>> {
+    dep.env
+        .iter()
+        .map(|env| {
+            let value = match env_overrides.get(&env.name) {
+                Some(override_value) => override_value.clone(),
+                None => template::render(&env.value, ctx)?,
+            };
+            Ok(EnvVar {
+                name: env.name.clone(),
+                value,
+                kind: Default::default(),
+                prompt: None,
+                format: Default::default(),
+                length: None,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
 }
 
 pub fn generate_nginx_site(
