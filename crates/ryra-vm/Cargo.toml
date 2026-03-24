@@ -1,7 +1,13 @@
 [package]
 name = "ryra-vm"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+publish = false
+description = "QEMU VM orchestration library for ryra E2E tests"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true

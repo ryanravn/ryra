@@ -1,7 +1,13 @@
 [package]
 name = "ryra-dev-tools"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+publish = false
+description = "Build tooling for ryra — registry generation and dev utilities"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
 
 [[bin]]
 name = "generate-registry"

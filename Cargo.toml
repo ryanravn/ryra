@@ -3,6 +3,14 @@ members = ["crates/ryra-core", "crates/ryra-cli", "crates/ryra-vm", "crates/ryra
 resolver = "3"
 default-members = ["crates/ryra-cli"]
 
+[workspace.package]
+edition = "2024"
+description = "A CLI tool that scaffolds self-hosted services on a single Linux server using rootless Podman and systemd"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/ryanravn/ryra"
+homepage = "https://ryra.dev"
+authors = ["Ryan Ravn <erlendryan@pm.me>"]
+
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

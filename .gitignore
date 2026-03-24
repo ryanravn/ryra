@@ -1,2 +1,15 @@
 /target
 /crates/ryra-test/logs
+
+# Environment files
+.env
+.env.*
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store

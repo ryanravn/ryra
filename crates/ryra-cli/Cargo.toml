@@ -1,7 +1,16 @@
 [package]
 name = "ryra-cli"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+description = "CLI for ryra — scaffolds self-hosted services with rootless Podman and systemd"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ryra"
+path = "src/main.rs"
 
 [features]
 default = ["vm"]
