@@ -51,12 +51,21 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GeneratedSe
     let name = &params.service_def.service.name;
 
     // Build template context (generates fresh secrets based on each env var's format + length)
-    let ctx = context::build_context(params.config, params.service_def, params.domain.unwrap_or_default());
+    let ctx = context::build_context(
+        params.config,
+        params.service_def,
+        params.domain.unwrap_or_default(),
+    );
     let rendered_env = render_env_vars(params.service_def, &ctx, params.env_overrides)?;
 
     // Build .env file content
     let home_dir = crate::service_home(name);
-    let env_file = build_env_file(&home_dir, &rendered_env, params.service_def, params.host_port);
+    let env_file = build_env_file(
+        &home_dir,
+        &rendered_env,
+        params.service_def,
+        params.host_port,
+    );
 
     // Nginx site config
     let nginx_site = generate_nginx_site(
@@ -257,7 +266,9 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
 
         let container_name = format!("{name}-{}", dep.name);
         files.push(GeneratedFile {
-            path: params.quadlet_dir.join(format!("{container_name}.container")),
+            path: params
+                .quadlet_dir
+                .join(format!("{container_name}.container")),
             content: quadlet::render_dependency_container(&dep_params),
         });
 

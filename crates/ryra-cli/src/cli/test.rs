@@ -26,12 +26,37 @@ pub struct TestRunParams<'a> {
 
 pub async fn run(params: TestRunParams<'_>) -> Result<()> {
     if params.vm || params.keep_alive || params.list {
-        return run_vm(params.names, params.keep_alive, params.verbose, params.list, params.parallel).await;
+        return run_vm(
+            params.names,
+            params.keep_alive,
+            params.verbose,
+            params.list,
+            params.parallel,
+        )
+        .await;
     }
 
     match (params.service, params.suite) {
-        (Some(service), None) => run_live_service(service, params.test_filter, params.repo, params.yes, params.verbose).await,
-        (None, Some(suite)) => run_live_suite(suite, params.test_filter, params.repo, params.yes, params.verbose).await,
+        (Some(service), None) => {
+            run_live_service(
+                service,
+                params.test_filter,
+                params.repo,
+                params.yes,
+                params.verbose,
+            )
+            .await
+        }
+        (None, Some(suite)) => {
+            run_live_suite(
+                suite,
+                params.test_filter,
+                params.repo,
+                params.yes,
+                params.verbose,
+            )
+            .await
+        }
         (Some(_), Some(_)) => anyhow::bail!("cannot specify both a service and --suite"),
         (None, None) => anyhow::bail!("specify a service name or --suite <name>"),
     }

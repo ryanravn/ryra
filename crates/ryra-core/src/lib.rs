@@ -884,7 +884,10 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     config::save_config(&paths.config_file, &config)?;
 
     // Save a snapshot of the service.toml for `ryra diff`
-    let service_toml = params.repo_dir.join(params.service_name).join("service.toml");
+    let service_toml = params
+        .repo_dir
+        .join(params.service_name)
+        .join("service.toml");
     if let Ok(content) = std::fs::read_to_string(&service_toml) {
         let _ = config::save_snapshot(&paths.snapshots_dir, params.service_name, &content);
     }
