@@ -2,14 +2,14 @@
 set -eu
 
 REPO="ryanravn/ryra"
+PAGES_URL="https://ryanravn.github.io/ryra"
 BASE_URL="https://github.com/${REPO}/releases/download/latest"
-APT_URL="https://ryanravn.github.io/ryra"
 
 main() {
     arch=$(uname -m)
     case "$arch" in
-        x86_64)  rust_target="x86_64-unknown-linux-gnu"; deb_arch="amd64" ;;
-        aarch64) rust_target="aarch64-unknown-linux-gnu"; deb_arch="arm64" ;;
+        x86_64)  rust_target="x86_64-unknown-linux-gnu" ;;
+        aarch64) rust_target="aarch64-unknown-linux-gnu" ;;
         *)
             echo "Error: unsupported architecture: $arch"
             exit 1
@@ -34,30 +34,66 @@ install_apt() {
     echo "Detected Debian/Ubuntu — setting up APT repository..."
 
     sudo mkdir -p /etc/apt/keyrings
-    curl -fsSL "${APT_URL}/gpg.key" | sudo gpg --dearmor -o /etc/apt/keyrings/ryra.gpg
-    echo "deb [arch=${deb_arch} signed-by=/etc/apt/keyrings/ryra.gpg] ${APT_URL} stable main" \
+    curl -fsSL "${PAGES_URL}/gpg.key" | sudo gpg --dearmor -o /etc/apt/keyrings/ryra.gpg
+
+    arch=$(dpkg --print-architecture)
+    echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/ryra.gpg] ${PAGES_URL}/deb stable main" \
         | sudo tee /etc/apt/sources.list.d/ryra.list > /dev/null
 
     sudo apt-get update -o Dir::Etc::sourcelist="/etc/apt/sources.list.d/ryra.list" \
         -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
     sudo apt-get install -y ryra
 
-    echo "Future updates will be included in 'sudo apt update && sudo apt upgrade'."
+    echo "Future updates: sudo apt update && sudo apt upgrade"
 }
 
 install_rpm() {
-    echo "Detected Fedora/RHEL — COPR package coming soon."
-    echo "Installing binary directly for now..."
-    install_binary
+    echo "Detected Fedora/RHEL — setting up RPM repository..."
+
+    sudo rpm --import "${PAGES_URL}/gpg.key"
+
+    arch=$(uname -m)
+    cat <<EOF | sudo tee /etc/yum.repos.d/ryra.repo > /dev/null
+[ryra]
+name=ryra
+baseurl=${PAGES_URL}/rpm/${arch}
+enabled=1
+gpgcheck=1
+gpgkey=${PAGES_URL}/gpg.key
+EOF
+
+    sudo dnf install -y ryra
+
+    echo "Future updates: sudo dnf upgrade ryra"
 }
 
 install_pacman() {
-    echo "Detected Arch Linux — AUR package coming soon."
-    echo "Installing binary directly for now..."
-    install_binary
+    echo "Detected Arch Linux — setting up Pacman repository..."
+
+    sudo pacman-key --init
+    curl -fsSL "${PAGES_URL}/gpg.key" | sudo pacman-key --add -
+    # Get the GPG key ID and sign it locally
+    KEY_ID=$(curl -fsSL "${PAGES_URL}/gpg.key" | gpg --with-colons --import-options show-only --import 2>/dev/null | awk -F: '/^pub/{print $5}')
+    sudo pacman-key --lsign-key "$KEY_ID"
+
+    arch=$(uname -m)
+    if ! grep -q '\[ryra\]' /etc/pacman.conf; then
+        cat <<EOF | sudo tee -a /etc/pacman.conf > /dev/null
+
+[ryra]
+SigLevel = Required
+Server = ${PAGES_URL}/pacman/${arch}
+EOF
+    fi
+
+    sudo pacman -Sy --noconfirm ryra
+
+    echo "Future updates: sudo pacman -Syu"
 }
 
 install_binary() {
+    echo "Installing binary directly..."
+
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
 

@@ -46,9 +46,11 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            arch: amd64
+            deb_arch: amd64
+            rpm_arch: x86_64
           - target: aarch64-unknown-linux-gnu
-            arch: arm64
+            deb_arch: arm64
+            rpm_arch: aarch64
 
     runs-on: ubuntu-latest
     steps:
@@ -62,8 +64,11 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
+      - name: Install packaging tools
+        run: |
+          cargo install cargo-deb
+          cargo install cargo-generate-rpm
+          sudo apt-get update && sudo apt-get install -y libarchive-tools zstd
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -81,17 +86,53 @@ jobs:
           mv ryra-${{ matrix.target }}.tar.gz "$GITHUB_WORKSPACE/"
 
       - name: Build deb
-        run: cargo deb -p ryra-cli --no-build --target ${{ matrix.target }}
+        run: |
+          cargo deb -p ryra-cli --no-build --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/debian/*.deb ./ryra_${{ matrix.deb_arch }}.deb
 
-      - name: Copy deb
-        run: cp target/${{ matrix.target }}/debian/*.deb ./ryra_${{ matrix.arch }}.deb
+      - name: Build rpm
+        run: |
+          cargo generate-rpm -p crates/ryra-cli --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/generate-rpm/*.rpm ./ryra.${{ matrix.rpm_arch }}.rpm
+
+      - name: Build pacman package
+        run: |
+          VERSION=$(grep '^version' crates/ryra-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          ARCH="${{ matrix.rpm_arch }}"
+          BINARY="target/${{ matrix.target }}/release/ryra"
+
+          mkdir -p pkgroot/usr/bin
+          cp "$BINARY" pkgroot/usr/bin/ryra
+
+          cat > pkgroot/.PKGINFO <<EOF
+          pkgname = ryra
+          pkgver = ${VERSION}-1
+          pkgdesc = A tool to test and deploy self-hosted services
+          url = https://ryra.dev
+          builddate = $(date +%s)
+          packager = GitHub Actions
+          size = $(stat -c%s "$BINARY")
+          arch = ${ARCH}
+          license = AGPL-3.0-or-later
+          EOF
+          sed -i 's/^          //' pkgroot/.PKGINFO
+
+          cd pkgroot
+          LANG=C bsdtar -czf .MTREE --format=mtree \
+            --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' \
+            .PKGINFO usr/
+          LANG=C bsdtar -cf "../ryra-${VERSION}-1-${ARCH}.pkg.tar.zst" --zstd \
+            .MTREE .PKGINFO usr/
+          cd ..
 
       - uses: actions/upload-artifact@v4
         with:
           name: ryra-${{ matrix.target }}
           path: |
             ryra-${{ matrix.target }}.tar.gz
-            ryra_${{ matrix.arch }}.deb
+            ryra_${{ matrix.deb_arch }}.deb
+            ryra.${{ matrix.rpm_arch }}.rpm
+            ryra-*-${{ matrix.rpm_arch }}.pkg.tar.zst
 
   release-latest:
     needs: build-release
@@ -109,7 +150,7 @@ jobs:
           tag: latest
           name: Latest
           body: Built from the latest commit on main.
-          artifacts: "ryra-*.tar.gz,ryra_*.deb"
+          artifacts: "ryra-*.tar.gz,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
           allowUpdates: true
           removeArtifacts: true
           prerelease: true
@@ -130,10 +171,10 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          artifacts: "ryra-*.tar.gz,ryra_*.deb"
+          artifacts: "ryra-*.tar.gz,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
           makeLatest: true
 
-  publish-apt:
+  publish-repos:
     needs: build-release
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -165,24 +206,26 @@ jobs:
           APT_GPG_PRIVATE: ${{ secrets.APT_GPG_PRIVATE }}
         run: echo "$APT_GPG_PRIVATE" | gpg --batch --import
 
+      - name: Install repo tools
+        run: sudo apt-get update && sudo apt-get install -y createrepo-c
+
       - name: Build APT repository
         run: |
-          mkdir -p gh-pages/pool gh-pages/dists/stable/main/binary-amd64 gh-pages/dists/stable/main/binary-arm64
+          mkdir -p gh-pages/deb/pool \
+            gh-pages/deb/dists/stable/main/binary-amd64 \
+            gh-pages/deb/dists/stable/main/binary-arm64
 
-          # Copy debs to pool
-          cp artifacts/ryra_amd64.deb gh-pages/pool/
-          cp artifacts/ryra_arm64.deb gh-pages/pool/
+          cp artifacts/ryra_amd64.deb gh-pages/deb/pool/
+          cp artifacts/ryra_arm64.deb gh-pages/deb/pool/
 
-          cd gh-pages
+          cd gh-pages/deb
 
-          # Generate Packages files
           dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
           gzip -k -f dists/stable/main/binary-amd64/Packages
 
           dpkg-scanpackages --arch arm64 pool > dists/stable/main/binary-arm64/Packages
           gzip -k -f dists/stable/main/binary-arm64/Packages
 
-          # Generate Release file
           cd dists/stable
           cat > Release <<EOF
           Origin: ryra
@@ -192,15 +235,36 @@ jobs:
           Architectures: amd64 arm64
           Components: main
           EOF
-          # Trim leading whitespace from heredoc
           sed -i 's/^          //' Release
-
-          # Add hashes
           apt-ftparchive release . >> Release
-
-          # Sign
           gpg --batch --yes --armor --detach-sign -o Release.gpg Release
           gpg --batch --yes --armor --clearsign -o InRelease Release
+
+      - name: Build RPM repository
+        run: |
+          mkdir -p gh-pages/rpm/x86_64 gh-pages/rpm/aarch64
+
+          cp artifacts/ryra.x86_64.rpm gh-pages/rpm/x86_64/
+          cp artifacts/ryra.aarch64.rpm gh-pages/rpm/aarch64/
+
+          createrepo_c gh-pages/rpm/x86_64
+          createrepo_c gh-pages/rpm/aarch64
+
+          gpg --batch --yes --armor --detach-sign -o gh-pages/rpm/x86_64/repodata/repomd.xml.asc gh-pages/rpm/x86_64/repodata/repomd.xml
+          gpg --batch --yes --armor --detach-sign -o gh-pages/rpm/aarch64/repodata/repomd.xml.asc gh-pages/rpm/aarch64/repodata/repomd.xml
+
+      - name: Build Pacman repository
+        run: |
+          mkdir -p gh-pages/pacman/x86_64 gh-pages/pacman/aarch64
+
+          cp artifacts/ryra-*-x86_64.pkg.tar.zst gh-pages/pacman/x86_64/
+          cp artifacts/ryra-*-aarch64.pkg.tar.zst gh-pages/pacman/aarch64/
+
+          docker run --rm -v "$PWD/gh-pages/pacman:/repo" archlinux:latest bash -c '
+            pacman -Sy --noconfirm
+            repo-add /repo/x86_64/ryra.db.tar.gz /repo/x86_64/*.pkg.tar.zst
+            repo-add /repo/aarch64/ryra.db.tar.gz /repo/aarch64/*.pkg.tar.zst
+          '
 
       - name: Export public key
         run: gpg --armor --export > gh-pages/gpg.key
@@ -212,5 +276,5 @@ jobs:
           git config user.email "github-actions@github.com"
           git add -A
           git diff --cached --quiet && exit 0
-          git commit -m "Update APT repository"
+          git commit -m "Update package repositories"
           git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages

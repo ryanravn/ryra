@@ -18,6 +18,9 @@ maintainer = "Erlend Ravn Ryan <erlendryan@pm.me>"
 section = "utils"
 priority = "optional"
 
+[package.metadata.generate-rpm]
+assets = [{ source = "target/release/ryra", dest = "/usr/bin/ryra", mode = "0755" }]
+
 [features]
 default = ["vm"]
 vm = ["dep:ryra-test"]
