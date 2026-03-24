@@ -95,10 +95,10 @@ pub struct Image {
 }
 
 /// Cache directory for downloaded images.
-fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("ryra-e2e")
+fn cache_dir() -> Result<PathBuf> {
+    let base = dirs::cache_dir()
+        .context("could not determine cache directory (is $HOME set?)")?;
+    Ok(base.join("ryra-e2e"))
 }
 
 /// Ensure the base cloud image, prepared image, and EFI firmware are available.
@@ -107,7 +107,7 @@ fn cache_dir() -> PathBuf {
 /// so VMs boot in ~30s instead of ~6 minutes. It's created by booting the raw
 /// cloud image once with cloud-init, then snapshotting.
 pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> Result<Image> {
-    let cache = cache_dir();
+    let cache = cache_dir()?;
     tokio::fs::create_dir_all(&cache)
         .await
         .context("failed to create image cache directory")?;
@@ -273,7 +273,7 @@ async fn prepare_image(
     efi_vars_template: &Path,
     use_kvm: bool,
 ) -> Result<()> {
-    let work_dir = cache_dir().join("prepare-base");
+    let work_dir = cache_dir()?.join("prepare-base");
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
     tokio::fs::create_dir_all(&work_dir)
         .await

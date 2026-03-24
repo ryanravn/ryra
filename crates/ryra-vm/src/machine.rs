@@ -114,7 +114,7 @@ impl Machine {
         opts: &SpawnOpts,
     ) -> Result<Self> {
         let name = format!("ryra-test-{test_id}");
-        let work_dir = vm_work_base_dir().join(&name);
+        let work_dir = vm_work_base_dir()?.join(&name);
         tokio::fs::create_dir_all(&work_dir)
             .await
             .context("failed to create VM work directory")?;
@@ -187,8 +187,9 @@ impl Machine {
         // Share the image cache dir with the VM via 9p virtfs — lets the VM
         // read host-side image tars directly without SCP/network transfer.
         // Only available on Linux — macOS QEMU lacks 9p support.
-        let image_cache = image_cache_dir();
-        let _ = std::fs::create_dir_all(&image_cache);
+        let image_cache = image_cache_dir()?;
+        std::fs::create_dir_all(&image_cache)
+            .context("failed to create image cache directory")?;
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
             image_cache.display()
@@ -278,7 +279,7 @@ impl Machine {
         })?;
 
         let name = format!("ryra-test-{test_id}");
-        let work_dir = vm_work_base_dir().join(&name);
+        let work_dir = vm_work_base_dir()?.join(&name);
         tokio::fs::create_dir_all(&work_dir)
             .await
             .context("failed to create VM work directory")?;
@@ -338,8 +339,9 @@ impl Machine {
         );
 
         // Image cache directory for virtio-fs sharing
-        let image_cache = image_cache_dir();
-        let _ = std::fs::create_dir_all(&image_cache);
+        let image_cache = image_cache_dir()?;
+        std::fs::create_dir_all(&image_cache)
+            .context("failed to create image cache directory")?;
 
         // Serial log
         let serial_log = work_dir.join("serial.log");
@@ -812,25 +814,22 @@ async fn wait_for_vm_ip(vminfo_dir: &Path, timeout: std::time::Duration) -> Resu
 }
 
 /// Cache directory for saved container images on the host.
-fn image_cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("ryra-e2e")
-        .join("images")
+fn image_cache_dir() -> Result<PathBuf> {
+    Ok(cache_base_dir()?.join("images"))
 }
 
 /// Base directory for VM work dirs (disk images, keys, logs).
 /// Uses ~/.cache/ryra-e2e/vms/ instead of /tmp so we don't fill
 /// up a RAM-backed tmpfs with multi-GB qcow2 COW disks.
-fn vm_work_base_dir() -> PathBuf {
-    cache_base_dir().join("vms")
+fn vm_work_base_dir() -> Result<PathBuf> {
+    Ok(cache_base_dir()?.join("vms"))
 }
 
 /// Shared cache root for all ryra-e2e artifacts.
-fn cache_base_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("ryra-e2e")
+fn cache_base_dir() -> Result<PathBuf> {
+    let base = dirs::cache_dir()
+        .context("could not determine cache directory (is $HOME set?)")?;
+    Ok(base.join("ryra-e2e"))
 }
 
 /// Ensure a container image is pulled and saved as a tar in the cache.
@@ -839,7 +838,7 @@ fn cache_base_dir() -> PathBuf {
 /// the same ones ryra deploys, so sharing the store avoids duplicate pulls.
 /// The tar cache (`~/.cache/ryra-e2e/images/`) is what gets shared into VMs.
 pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
-    let cache = image_cache_dir();
+    let cache = image_cache_dir()?;
     tokio::fs::create_dir_all(&cache)
         .await
         .context("failed to create image cache dir")?;
