@@ -5,7 +5,7 @@ default-members = ["crates/ryra-cli"]
 
 [workspace.package]
 edition = "2024"
-description = "A CLI tool that scaffolds self-hosted services on a single Linux server using rootless Podman and systemd"
+description = "A tool to test and deploy self-hosted services on a Linux server using rootless Podman and systemd. Built-in VM testing gives AI agents fast feedback loops for building infrastructure and deploying apps."
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/ryanravn/ryra"
 homepage = "https://ryra.dev"

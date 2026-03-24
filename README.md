@@ -2,7 +2,7 @@
 
 [ryra.dev](https://ryra.dev) | [Docs](https://ryra.dev/docs)
 
-A CLI tool that scaffolds self-hosted services on a single Linux server using rootless Podman and systemd.
+A tool to test and deploy self-hosted services on a Linux server using rootless Podman and systemd. Built-in VM testing gives AI agents fast feedback loops for building infrastructure and deploying apps.
 
 Each service gets its own Linux user, container isolation, and systemd lifecycle management. Nginx handles reverse proxying, with optional Cloudflare tunnel/DNS integration.
 

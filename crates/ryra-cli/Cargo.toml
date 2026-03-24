@@ -2,7 +2,7 @@
 name = "ryra-cli"
 version = "0.1.0"
 edition.workspace = true
-description = "CLI for ryra — scaffolds self-hosted services with rootless Podman and systemd"
+description.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
