@@ -15,6 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    // -- Linux-only commands (require systemd, podman, sudo) --
     /// Initialize ryra on this host (optional — `ryra add` works without it)
     Init {
         /// Default repo (git URL or local path)
@@ -131,6 +132,8 @@ enum Command {
         #[arg(long, short)]
         verbose: bool,
     },
+    // -- Cross-platform commands (read-only / VM-based) --
+
     /// Show what changed in a service's registry definition since install
     Diff {
         /// Service name
@@ -184,9 +187,42 @@ enum Command {
     },
 }
 
+impl Command {
+    /// Whether this command requires a Linux host (systemd, podman, sudo).
+    fn requires_linux(&self) -> bool {
+        matches!(
+            self,
+            Command::Init { .. }
+                | Command::Add { .. }
+                | Command::Remove { .. }
+                | Command::Reset { .. }
+                | Command::Config { .. }
+                | Command::Expose { .. }
+                | Command::Status { .. }
+                | Command::List
+                | Command::Update { .. }
+        )
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    if cfg!(not(target_os = "linux")) && cli.command.requires_linux() {
+        anyhow::bail!(
+            "this command requires Linux (systemd + podman).\n\
+             \n\
+             ryra manages services on a Linux host — commands like init, add, and remove\n\
+             need systemd and rootless podman, which aren't available on macOS.\n\
+             \n\
+             On macOS you can:\n  \
+             • ryra search / ryra diff  — browse and inspect the registry\n  \
+             • ryra test --vm           — spin up a Linux VM and test services\n\
+             \n\
+             To manage a remote Linux server, SSH in and run ryra there."
+        );
+    }
 
     match cli.command {
         Command::Init {
