@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::sync::Semaphore;
 
+use ryra_vm::VmBackend;
 use ryra_vm::image::Distro;
 use ryra_vm::machine::{self, Machine, SpawnOpts};
 use ryra_vm::{image, ports};
@@ -38,7 +39,7 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
 #[derive(Parser, Debug)]
 #[command(
     name = "ryra-e2e",
-    about = "E2E test runner for ryra — spins up QEMU VMs"
+    about = "E2E test runner for ryra — spins up VMs (QEMU on Linux, Apple Virtualization on macOS)"
 )]
 pub struct Args {
     /// Max concurrent VMs
@@ -48,6 +49,10 @@ pub struct Args {
     /// Base image distro
     #[arg(long, default_value_t = Distro::Debian13)]
     pub distro: Distro,
+
+    /// VM backend: qemu or apple-vz (default: auto-detect by platform)
+    #[arg(long, default_value_t = VmBackend::default_for_platform())]
+    pub backend: VmBackend,
 
     /// Re-download the base cloud image
     #[arg(long)]
@@ -66,7 +71,7 @@ pub struct Args {
     #[arg(long)]
     pub keep_alive: bool,
 
-    /// Disable KVM acceleration (use software emulation — slower)
+    /// Disable KVM/HVF acceleration (use software emulation — slower)
     #[arg(long)]
     pub no_kvm: bool,
 
@@ -97,16 +102,49 @@ pub struct Args {
 fn find_ryra_binary() -> Result<PathBuf> {
     // Workspace root is two levels up from crates/ryra-test/
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for profile in &["release", "debug"] {
-        let path = workspace_root.join(format!("target/{profile}/ryra-cli"));
+
+    // On macOS, prefer cross-compiled Linux binaries since the VM runs Linux.
+    // On Linux, the native binary works directly.
+    // The binary is named "ryra" (see [[bin]] in ryra-cli/Cargo.toml).
+    let search_paths: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "target/aarch64-unknown-linux-gnu/release/ryra",
+            "target/aarch64-unknown-linux-gnu/debug/ryra",
+            "target/aarch64-unknown-linux-musl/release/ryra",
+            "target/aarch64-unknown-linux-musl/debug/ryra",
+        ]
+    } else {
+        &["target/release/ryra", "target/debug/ryra"]
+    };
+
+    for rel_path in search_paths {
+        let path = workspace_root.join(rel_path);
         if path.exists() {
             return Ok(std::fs::canonicalize(&path)?);
         }
     }
-    anyhow::bail!(
-        "ryra binary not found in target/release or target/debug. \
-         Build with: cargo build -p ryra-cli"
-    )
+
+    if cfg!(target_os = "macos") {
+        anyhow::bail!(
+            "Linux ryra binary not found. VMs run Linux, so you need a cross-compiled binary.\n\
+             \n\
+             Option 1 — cargo-zigbuild (recommended):\n  \
+             brew install zig && cargo install cargo-zigbuild\n  \
+             cargo zigbuild --target aarch64-unknown-linux-gnu -p ryra-cli --release\n\
+             \n\
+             Option 2 — cross (uses Docker):\n  \
+             cargo install cross\n  \
+             cross build --target aarch64-unknown-linux-gnu -p ryra-cli --release\n\
+             \n\
+             Option 3 — provide a pre-built binary:\n  \
+             ryra test --vm --ryra-bin /path/to/linux/ryra whoami"
+        )
+    } else {
+        anyhow::bail!(
+            "ryra binary not found in target/release or target/debug. \
+             Build with: cargo build -p ryra-cli --release"
+        )
+    }
 }
 
 fn print_summary(results: &[ScenarioResult], wall_clock: std::time::Duration) {
@@ -230,10 +268,14 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     let use_kvm = !args.no_kvm;
-    ryra_vm::check_prerequisites(use_kvm)?;
+    let backend = args.backend;
+    ryra_vm::check_prerequisites(use_kvm, backend)?;
+
+    println!("VM backend: {backend}");
 
     let memory_override = args.memory;
     let spawn_opts = std::sync::Arc::new(SpawnOpts {
+        backend,
         use_kvm,
         memory_mb: memory_override.unwrap_or(2048),
         cpus: args.cpus,
@@ -321,6 +363,7 @@ pub async fn run(args: Args) -> Result<()> {
         let test_memory =
             memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, test));
         let spawn_opts = std::sync::Arc::new(SpawnOpts {
+            backend,
             use_kvm,
             memory_mb: test_memory,
             cpus: args.cpus,
@@ -383,7 +426,7 @@ pub async fn run(args: Args) -> Result<()> {
             let images = registry::images_for_test(&registry_path, test);
             if !images.is_empty() {
                 let phase = std::time::Instant::now();
-                if let Err(e) = machine::load_images_into_vm(&vm, &images).await {
+                if let Err(e) = machine::load_images_into_vm(&vm, &images, backend).await {
                     let _ = vm.destroy().await;
                     return fail_result(format!("failed to load container images: {e:#}"));
                 }
@@ -480,9 +523,10 @@ async fn run_interactive_vm(
     println!("\nVM is ready. Connect with:\n");
     println!(
         "  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-         -i {}/id_ed25519 -p {} root@127.0.0.1",
+         -i {}/id_ed25519 -p {} root@{}",
         vm.work_dir.display(),
         vm.ssh_port,
+        vm.ssh_host,
     );
     println!("\nRegistry is at /opt/ryra-test-registry in the VM.");
     println!("Press Ctrl-C to stop the VM.\n");

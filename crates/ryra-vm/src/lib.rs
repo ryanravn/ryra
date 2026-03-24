@@ -3,9 +3,53 @@ pub mod image;
 pub mod machine;
 pub mod ports;
 
+use std::fmt;
 use std::process::Stdio;
 
 use anyhow::Result;
+
+/// VM backend for running test VMs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmBackend {
+    /// QEMU with qcow2 images and port-forwarded SSH.
+    Qemu,
+    /// Apple Virtualization.framework via vfkit with raw images and NAT networking.
+    AppleVz,
+}
+
+impl VmBackend {
+    /// Default backend for the current platform.
+    pub fn default_for_platform() -> Self {
+        if cfg!(target_os = "macos") {
+            VmBackend::AppleVz
+        } else {
+            VmBackend::Qemu
+        }
+    }
+}
+
+impl fmt::Display for VmBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VmBackend::Qemu => write!(f, "qemu"),
+            VmBackend::AppleVz => write!(f, "apple-vz"),
+        }
+    }
+}
+
+impl std::str::FromStr for VmBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "qemu" => Ok(VmBackend::Qemu),
+            "apple-vz" => Ok(VmBackend::AppleVz),
+            other => Err(format!(
+                "unknown backend: {other} (available: qemu, apple-vz)"
+            )),
+        }
+    }
+}
 
 /// Read current memory usage. Returns (total_mb, used_mb).
 pub fn read_host_memory() -> Option<(u64, u64)> {
@@ -65,8 +109,30 @@ pub fn read_host_memory() -> Option<(u64, u64)> {
     }
 }
 
-/// Check that QEMU, SSH, and related tools are installed.
-pub fn check_prerequisites(use_kvm: bool) -> Result<()> {
+/// Check that required tools are installed for the given backend.
+pub fn check_prerequisites(use_kvm: bool, backend: VmBackend) -> Result<()> {
+    match backend {
+        VmBackend::Qemu => check_qemu_prerequisites(use_kvm),
+        VmBackend::AppleVz => check_apple_vz_prerequisites(),
+    }
+}
+
+fn has_command(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn has_any_iso_tool() -> bool {
+    ["genisoimage", "mkisofs"].iter().any(|cmd| has_command(cmd))
+}
+
+/// Check prerequisites for the QEMU backend.
+fn check_qemu_prerequisites(use_kvm: bool) -> Result<()> {
     let required = [
         "qemu-system-aarch64",
         "qemu-img",
@@ -75,32 +141,9 @@ pub fn check_prerequisites(use_kvm: bool) -> Result<()> {
         "ssh-keygen",
         "curl",
     ];
-    let mut missing = Vec::new();
+    let mut missing: Vec<&str> = required.iter().filter(|c| !has_command(c)).copied().collect();
 
-    for cmd in &required {
-        let found = std::process::Command::new("which")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !found {
-            missing.push(*cmd);
-        }
-    }
-
-    // Need at least one ISO creation tool
-    let has_iso_tool = ["genisoimage", "mkisofs"].iter().any(|cmd| {
-        std::process::Command::new("which")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    });
-    if !has_iso_tool {
+    if !has_any_iso_tool() {
         missing.push("genisoimage");
     }
 
@@ -114,7 +157,7 @@ pub fn check_prerequisites(use_kvm: bool) -> Result<()> {
              genisoimage openssh-clients curl                   # Fedora\n  \
              sudo pacman -S qemu-system-aarch64 qemu-img edk2-aarch64 \\\n    \
              cdrtools openssh curl                              # Arch\n  \
-             brew install qemu genisoimage                      # macOS",
+             brew install qemu cdrtools                         # macOS",
             missing.join(", ")
         );
     }
@@ -122,6 +165,47 @@ pub fn check_prerequisites(use_kvm: bool) -> Result<()> {
     if use_kvm {
         check_hw_accel()?;
     }
+
+    Ok(())
+}
+
+/// Check prerequisites for the Apple Virtualization.framework backend (vfkit).
+fn check_apple_vz_prerequisites() -> Result<()> {
+    // vfkit runs test VMs natively via Virtualization.framework.
+    // QEMU is still needed for one-time image preparation (qemu-system-aarch64)
+    // and format conversion (qemu-img). vfkit's --cloud-init flag handles
+    // seed ISO creation, so genisoimage/mkisofs is only needed for image prep.
+    let required = [
+        "vfkit",
+        "qemu-system-aarch64",
+        "qemu-img",
+        "ssh",
+        "scp",
+        "ssh-keygen",
+        "curl",
+    ];
+    let mut missing: Vec<&str> = required.iter().filter(|c| !has_command(c)).copied().collect();
+
+    // ISO tools needed for image preparation (QEMU-based, one-time)
+    if !has_any_iso_tool() {
+        missing.push("genisoimage");
+    }
+
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "missing required tools: {}\n\
+             Install with:\n  \
+             brew install vfkit qemu cdrtools\n\
+             \n\
+             qemu: needed for one-time image preparation and format conversion.\n\
+             vfkit: native Apple Virtualization.framework for fast test VMs.\n\
+             cdrtools: provides mkisofs for cloud-init during image preparation.",
+            missing.join(", ")
+        );
+    }
+
+    // Verify Hypervisor.framework support
+    check_hw_accel()?;
 
     Ok(())
 }
@@ -175,7 +259,13 @@ pub fn accel_args() -> &'static [&'static str] {
     }
 }
 
-/// Whether 9p virtfs is supported (Linux only — macOS QEMU lacks 9p support).
+/// Whether QEMU 9p virtfs is supported (Linux only — macOS QEMU lacks 9p support).
 pub fn supports_virtfs() -> bool {
     cfg!(target_os = "linux")
+}
+
+/// Whether virtio-fs shared directories are supported for the given backend.
+/// Apple Virtualization.framework supports virtio-fs natively.
+pub fn supports_virtiofs(backend: VmBackend) -> bool {
+    backend == VmBackend::AppleVz
 }

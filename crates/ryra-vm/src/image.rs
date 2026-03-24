@@ -83,7 +83,11 @@ impl std::str::FromStr for Distro {
 /// Paths to the cached base image and EFI firmware.
 #[allow(dead_code)]
 pub struct Image {
+    /// Prepared qcow2 image (used by QEMU backend).
     pub path: PathBuf,
+    /// Prepared raw image (used by AppleVz backend). Created on macOS by
+    /// converting the qcow2 image after preparation.
+    pub raw_path: Option<PathBuf>,
     pub efi_code: PathBuf,
     pub efi_vars_template: PathBuf,
     /// If true, cloud-init packages are already installed — skip package install.
@@ -147,8 +151,23 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
         println!("Using prepared image: {}", prepared_path.display());
     }
 
+    // On macOS, convert the prepared qcow2 to raw for the Apple Virtualization
+    // backend (vfkit). The raw image is sparse on APFS so disk usage is similar.
+    let raw_path = if cfg!(target_os = "macos") {
+        let raw = prepared_path.with_extension("raw");
+        if !raw.exists() {
+            println!("Converting prepared image to raw format for Apple Virtualization...");
+            convert_to_raw(&prepared_path, &raw).await?;
+            println!("Raw image cached at: {}", raw.display());
+        }
+        Some(raw)
+    } else {
+        None
+    };
+
     Ok(Image {
         path: prepared_path,
+        raw_path,
         efi_code: efi.code,
         efi_vars_template: vars_template,
         prepared: true,
@@ -537,6 +556,36 @@ async fn prepare_image(
 
     // Clean up work dir
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
+
+    Ok(())
+}
+
+/// Convert a qcow2 image to raw format for use with Apple Virtualization.framework.
+/// The output is sparse on APFS, so actual disk usage is similar to qcow2.
+async fn convert_to_raw(qcow2_path: &Path, raw_path: &Path) -> Result<()> {
+    let partial = raw_path.with_extension("raw.partial");
+    let status = Command::new("qemu-img")
+        .args([
+            "convert",
+            "-O",
+            "raw",
+            &qcow2_path.to_string_lossy(),
+            &partial.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("qemu-img convert to raw failed")?;
+
+    if !status.success() {
+        let _ = tokio::fs::remove_file(&partial).await;
+        anyhow::bail!("failed to convert qcow2 to raw");
+    }
+
+    tokio::fs::rename(&partial, raw_path)
+        .await
+        .context("failed to move raw image into place")?;
 
     Ok(())
 }

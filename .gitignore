@@ -1,4 +1,5 @@
 /target
+/tests/e2e/target
 /crates/ryra-test/logs
 
 # Environment files

@@ -5,9 +5,10 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use tokio::process::Command;
 
+use crate::VmBackend;
 use crate::image::Image;
 
-/// Global registry of active VM QEMU PIDs and work dirs, for signal cleanup.
+/// Global registry of active VM PIDs and work dirs, for signal cleanup.
 static ACTIVE_VMS: Mutex<Vec<ActiveVm>> = Mutex::new(Vec::new());
 
 struct ActiveVm {
@@ -16,7 +17,7 @@ struct ActiveVm {
 }
 
 /// Kill all active VMs and clean up their work dirs.
-/// Called from the Ctrl-C handler to ensure no orphaned QEMU processes.
+/// Called from the Ctrl-C handler to ensure no orphaned processes.
 pub fn cleanup_all_vms() {
     let vms = {
         let mut guard = ACTIVE_VMS.lock().unwrap_or_else(|e| e.into_inner());
@@ -47,16 +48,19 @@ fn deregister_vm(pid: u32) {
     guard.retain(|vm| vm.pid != pid);
 }
 
-/// A running QEMU VM for E2E testing.
+/// A running VM for E2E testing (QEMU or vfkit).
 pub struct Machine {
     pub name: String,
+    /// SSH target host — "127.0.0.1" for QEMU (port-forwarded), VM IP for AppleVz.
+    pub ssh_host: String,
     pub ssh_port: u16,
     pub work_dir: PathBuf,
-    qemu: tokio::process::Child,
+    process: tokio::process::Child,
 }
 
 /// Options that affect how the VM is launched.
 pub struct SpawnOpts {
+    pub backend: VmBackend,
     pub use_kvm: bool,
     pub memory_mb: u32,
     pub cpus: u32,
@@ -76,6 +80,7 @@ impl SpawnOpts {
 impl Default for SpawnOpts {
     fn default() -> Self {
         Self {
+            backend: VmBackend::default_for_platform(),
             use_kvm: true,
             memory_mb: 2048,
             cpus: 2,
@@ -91,6 +96,18 @@ pub fn random_id() -> String {
 
 impl Machine {
     pub async fn spawn(
+        image: &Image,
+        test_id: &str,
+        ssh_port: u16,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        match opts.backend {
+            VmBackend::Qemu => Self::spawn_qemu(image, test_id, ssh_port, opts).await,
+            VmBackend::AppleVz => Self::spawn_apple_vz(image, test_id, opts).await,
+        }
+    }
+
+    async fn spawn_qemu(
         image: &Image,
         test_id: &str,
         ssh_port: u16,
@@ -211,7 +228,7 @@ impl Machine {
             args.extend(crate::accel_args());
         }
 
-        let qemu = Command::new("qemu-system-aarch64")
+        let process = Command::new("qemu-system-aarch64")
             .args(&args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -220,13 +237,14 @@ impl Machine {
 
         let machine = Machine {
             name,
+            ssh_host: "127.0.0.1".to_string(),
             ssh_port,
             work_dir,
-            qemu,
+            process,
         };
 
         // Register for signal cleanup
-        if let Some(pid) = machine.qemu.id() {
+        if let Some(pid) = machine.process.id() {
             register_vm(pid, &machine.work_dir);
         }
 
@@ -244,10 +262,169 @@ impl Machine {
         Ok(machine)
     }
 
+    /// Spawn a VM using Apple Virtualization.framework via vfkit.
+    ///
+    /// Uses NAT networking with IP discovery via a virtio-fs shared directory.
+    /// The VM writes its IP to a file in the shared dir during cloud-init,
+    /// and the host polls for it. Uses vfkit's built-in `--cloud-init` flag
+    /// to inject user-data/meta-data without needing genisoimage.
+    async fn spawn_apple_vz(
+        image: &Image,
+        test_id: &str,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        let raw_image = image.raw_path.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Apple Virtualization backend requires a raw disk image")
+        })?;
+
+        let name = format!("ryra-test-{test_id}");
+        let work_dir = vm_work_base_dir().join(&name);
+        tokio::fs::create_dir_all(&work_dir)
+            .await
+            .context("failed to create VM work directory")?;
+
+        // Shared directory for VM → host communication (IP discovery)
+        let vminfo_dir = work_dir.join("vminfo");
+        tokio::fs::create_dir_all(&vminfo_dir)
+            .await
+            .context("failed to create vminfo directory")?;
+
+        // APFS clone the raw image (instant, near-zero disk cost on APFS)
+        let disk = work_dir.join("disk.raw");
+        if run_cmd("cp", &["-c", &raw_image.to_string_lossy(), &disk.to_string_lossy()])
+            .await
+            .is_err()
+        {
+            // Fallback to regular copy if APFS clone fails (non-APFS filesystem)
+            run_cmd("cp", &[&raw_image.to_string_lossy(), &disk.to_string_lossy()])
+                .await
+                .context("failed to copy raw disk image")?;
+        }
+
+        // Generate SSH key pair
+        let key_path = work_dir.join("id_ed25519");
+        let _ = tokio::fs::remove_file(&key_path).await;
+        run_cmd(
+            "ssh-keygen",
+            &[
+                "-t",
+                "ed25519",
+                "-f",
+                &key_path.to_string_lossy(),
+                "-N",
+                "",
+                "-q",
+            ],
+        )
+        .await
+        .context("ssh-keygen failed")?;
+
+        let pub_key = tokio::fs::read_to_string(format!("{}.pub", key_path.display()))
+            .await
+            .context("failed to read SSH public key")?;
+
+        // Write cloud-init files — vfkit's --cloud-init flag builds the ISO
+        // internally, so no genisoimage/mkisofs needed on macOS.
+        let cloud_init_dir = work_dir.join("cloud-init");
+        tokio::fs::create_dir_all(&cloud_init_dir).await?;
+        write_cloud_init_vz(&cloud_init_dir, &name, pub_key.trim()).await?;
+
+        let user_data_path = cloud_init_dir.join("user-data");
+        let meta_data_path = cloud_init_dir.join("meta-data");
+        let cloud_init_arg = format!(
+            "{},{}",
+            user_data_path.display(),
+            meta_data_path.display()
+        );
+
+        // Image cache directory for virtio-fs sharing
+        let image_cache = image_cache_dir();
+        let _ = std::fs::create_dir_all(&image_cache);
+
+        // Serial log
+        let serial_log = work_dir.join("serial.log");
+
+        // vfkit EFI variable store (created by vfkit on first boot)
+        let nvram_path = work_dir.join("nvram.bin");
+
+        // Build vfkit command
+        let memory_str = opts.memory_mb.to_string();
+        let cpus_str = opts.cpus.to_string();
+        let bootloader_arg = format!(
+            "efi,variable-store={},create",
+            nvram_path.display()
+        );
+        let disk_arg = format!("virtio-blk,path={}", disk.display());
+        let net_arg = "virtio-net,nat";
+        let vminfo_fs_arg = format!(
+            "virtio-fs,sharedDir={},mountTag=vminfo",
+            vminfo_dir.display()
+        );
+        let images_fs_arg = format!(
+            "virtio-fs,sharedDir={},mountTag=images",
+            image_cache.display()
+        );
+        let serial_arg = format!(
+            "virtio-serial,logFilePath={}",
+            serial_log.display()
+        );
+
+        let process = Command::new("vfkit")
+            .args([
+                "--cpus", &cpus_str,
+                "--memory", &memory_str,
+                "--bootloader", &bootloader_arg,
+                "--cloud-init", &cloud_init_arg,
+                "--device", &disk_arg,
+                "--device", net_arg,
+                "--device", &vminfo_fs_arg,
+                "--device", &images_fs_arg,
+                "--device", &serial_arg,
+                "--device", "virtio-rng",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("failed to start vfkit — install with: brew install vfkit")?;
+
+        let machine = Machine {
+            name,
+            ssh_host: String::new(), // will be discovered
+            ssh_port: 22,
+            work_dir,
+            process,
+        };
+
+        // Register for signal cleanup
+        if let Some(pid) = machine.process.id() {
+            register_vm(pid, &machine.work_dir);
+        }
+
+        // Wait for the VM to write its IP to the shared directory
+        let boot_timeout = opts.boot_timeout();
+        let ip = wait_for_vm_ip(&vminfo_dir, boot_timeout).await?;
+        let machine = Machine {
+            ssh_host: ip,
+            ..machine
+        };
+
+        // Wait for SSH to come up
+        machine.wait_for_ssh(boot_timeout).await?;
+
+        // Wait for cloud-init to finish
+        machine
+            .exec("cloud-init status --wait")
+            .await
+            .context("cloud-init did not complete")?;
+
+        Ok(machine)
+    }
+
     /// Run a command inside the VM via SSH.
     pub async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
         let key = self.ssh_key_path();
         let port = self.ssh_port.to_string();
+        let target = format!("root@{}", self.ssh_host);
         let output = Command::new("ssh")
             .args([
                 "-o",
@@ -264,7 +441,7 @@ impl Machine {
                 &key.to_string_lossy(),
                 "-p",
                 &port,
-                "root@127.0.0.1",
+                &target,
                 cmd,
             ])
             .output()
@@ -287,13 +464,13 @@ impl Machine {
 
     /// Shut down the VM and clean up files.
     pub async fn destroy(mut self) -> Result<()> {
-        if let Some(pid) = self.qemu.id() {
+        if let Some(pid) = self.process.id() {
             deregister_vm(pid);
         }
         let _ = self.exec("poweroff").await;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        let _ = self.qemu.kill().await;
-        let _ = self.qemu.wait().await;
+        let _ = self.process.kill().await;
+        let _ = self.process.wait().await;
         let _ = tokio::fs::remove_dir_all(&self.work_dir).await;
         Ok(())
     }
@@ -301,25 +478,25 @@ impl Machine {
     /// Print SSH connection info for debugging, then detach.
     /// VM keeps running until the user kills it or the process exits.
     pub fn keep_alive(self) {
-        if let Some(pid) = self.qemu.id() {
+        if let Some(pid) = self.process.id() {
             deregister_vm(pid);
         }
         println!(
             "  VM still running. Connect with:\n    \
              ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-             -i {}/id_ed25519 -p {} root@127.0.0.1\n  \
+             -i {}/id_ed25519 -p {} root@{}\n  \
              Serial log: {}/serial.log\n  \
              Kill with: kill {}",
             self.work_dir.display(),
             self.ssh_port,
+            self.ssh_host,
             self.work_dir.display(),
-            // QEMU PID — Child.id() returns Option<u32>
-            self.qemu
+            self.process
                 .id()
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "?".to_string()),
         );
-        // Intentionally leak — QEMU process stays alive, cleaned up when parent exits
+        // Intentionally leak — VM process stays alive, cleaned up when parent exits
         std::mem::forget(self);
     }
 
@@ -331,6 +508,7 @@ impl Machine {
         let start = std::time::Instant::now();
         let key = self.ssh_key_path();
         let port = self.ssh_port.to_string();
+        let target = format!("root@{}", self.ssh_host);
         let mut last_log = std::time::Instant::now();
 
         loop {
@@ -361,7 +539,7 @@ impl Machine {
                     &key.to_string_lossy(),
                     "-p",
                     &port,
-                    "root@127.0.0.1",
+                    &target,
                     "true",
                 ])
                 .stdout(Stdio::null())
@@ -377,8 +555,9 @@ impl Machine {
 
             if start.elapsed() > timeout {
                 anyhow::bail!(
-                    "timed out waiting for SSH on port {} after {}s\n  \
+                    "timed out waiting for SSH on {}:{} after {}s\n  \
                      Check serial log: {}/serial.log",
+                    self.ssh_host,
                     self.ssh_port,
                     timeout.as_secs(),
                     self.work_dir.display(),
@@ -538,7 +717,7 @@ async fn write_seed_iso(
              sudo apt install genisoimage    # Debian/Ubuntu\n  \
              sudo dnf install genisoimage    # Fedora\n  \
              sudo pacman -S cdrtools         # Arch\n  \
-             brew install genisoimage        # macOS"
+             brew install cdrtools            # macOS"
         );
     }
 
@@ -546,6 +725,90 @@ async fn write_seed_iso(
     let _ = tokio::fs::remove_dir_all(&seed_dir).await;
 
     Ok(())
+}
+
+/// Write cloud-init user-data and meta-data files for Apple Virtualization VMs.
+///
+/// vfkit's `--cloud-init` flag builds the ISO internally from these files,
+/// so no genisoimage/mkisofs needed. Adds extra runcmd to mount virtio-fs
+/// and write the VM's IP for host-side discovery.
+async fn write_cloud_init_vz(
+    cloud_init_dir: &Path,
+    hostname: &str,
+    pub_key: &str,
+) -> Result<()> {
+    let user_data = format!(
+        r#"#cloud-config
+disable_root: false
+ssh_pwauth: false
+
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {pub_key}
+
+runcmd:
+  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+  - systemctl restart sshd
+  - systemctl enable podman.socket
+  - loginctl enable-linger root
+  - mkdir -p /mnt/vminfo
+  - |
+    for i in $(seq 1 60); do
+      mount -t virtiofs vminfo /mnt/vminfo 2>/dev/null && break
+      sleep 1
+    done
+  - |
+    for i in $(seq 1 30); do
+      IP=$(hostname -I | awk '{{print $1}}')
+      [ -n "$IP" ] && echo "$IP" > /mnt/vminfo/ip && break
+      sleep 1
+    done
+"#
+    );
+
+    let meta_data = format!("instance-id: {hostname}\nlocal-hostname: {hostname}\n");
+
+    tokio::fs::write(cloud_init_dir.join("user-data"), &user_data)
+        .await
+        .context("failed to write cloud-init user-data")?;
+    tokio::fs::write(cloud_init_dir.join("meta-data"), &meta_data)
+        .await
+        .context("failed to write cloud-init meta-data")?;
+
+    Ok(())
+}
+
+/// Poll a shared directory for the VM's IP address file.
+///
+/// The VM's cloud-init writes its IP to `<dir>/ip` via virtio-fs.
+async fn wait_for_vm_ip(vminfo_dir: &Path, timeout: std::time::Duration) -> Result<String> {
+    let ip_file = vminfo_dir.join("ip");
+    let start = std::time::Instant::now();
+
+    loop {
+        if ip_file.exists() {
+            let ip = tokio::fs::read_to_string(&ip_file)
+                .await
+                .context("failed to read VM IP file")?;
+            let ip = ip.trim().to_string();
+            if !ip.is_empty() {
+                return Ok(ip);
+            }
+        }
+
+        if start.elapsed() > timeout {
+            anyhow::bail!(
+                "timed out waiting for VM to report its IP after {}s\n  \
+                 The VM may have failed to boot or cloud-init did not run.\n  \
+                 Check serial log in the VM work directory.",
+                timeout.as_secs()
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
 }
 
 /// Cache directory for saved container images on the host.
@@ -625,11 +888,15 @@ pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
 
 /// Load cached container images into a VM.
 ///
-/// Uses QEMU 9p virtfs to share the host image cache directory with the VM.
-/// The VM mounts it and loads tars directly — no network transfer needed.
-/// Rootless service users can access loaded images via podman's
-/// `additional_image_stores`.
-pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result<()> {
+/// Strategy depends on backend:
+/// - QEMU on Linux: 9p virtfs mount (direct file access, no transfer)
+/// - Apple Virtualization: virtio-fs mount (direct file access, no transfer)
+/// - QEMU on macOS: SCP fallback (no 9p/virtio-fs in QEMU on macOS)
+pub async fn load_images_into_vm(
+    machine: &Machine,
+    images: &[String],
+    backend: VmBackend,
+) -> Result<()> {
     if images.is_empty() {
         return Ok(());
     }
@@ -644,54 +911,43 @@ pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result
         .await
         .ok(); // best-effort
 
-    if crate::supports_virtfs() {
-        // Mount the 9p shared image cache from the host
-        machine
-            .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
-            .await
-            .context("failed to mount 9p image cache in VM")?;
-    }
+    let use_shared_fs = match backend {
+        VmBackend::AppleVz => {
+            // virtio-fs is already available — mount the images share
+            machine
+                .exec("mkdir -p /mnt/images && mount -t virtiofs images /mnt/images")
+                .await
+                .context("failed to mount virtio-fs image cache in VM")?;
+            true
+        }
+        VmBackend::Qemu if crate::supports_virtfs() => {
+            // 9p virtfs on Linux QEMU
+            machine
+                .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
+                .await
+                .context("failed to mount 9p image cache in VM")?;
+            true
+        }
+        _ => false,
+    };
 
     for image in images {
         let tar_path = ensure_image_cached(image).await?;
         let safe_name = image.replace(['/', ':'], "-");
         println!("    loading {image} into VM...");
 
-        if crate::supports_virtfs() {
+        if use_shared_fs {
             let remote_path = format!("/mnt/images/{safe_name}.tar");
             machine
                 .exec(&format!("podman load -i {remote_path}"))
                 .await
                 .context(format!("failed to load {image} in VM"))?;
         } else {
-            // No 9p — SCP the tar into the VM and load it
-            let remote_path = format!("/tmp/{safe_name}.tar");
-            let key = machine.ssh_key_path();
-            let port = machine.ssh_port.to_string();
-            let status = Command::new("scp")
-                .args([
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
-                    "-i",
-                    &key.to_string_lossy(),
-                    "-P",
-                    &port,
-                    &tar_path.to_string_lossy(),
-                    &format!("root@127.0.0.1:{remote_path}"),
-                ])
-                .status()
-                .await
-                .context("failed to SCP image to VM")?;
-            if !status.success() {
-                anyhow::bail!("SCP of {image} tar failed");
-            }
+            // No shared filesystem — SCP the tar into the VM and load it
+            scp_to_vm(machine, &tar_path, &format!("/tmp/{safe_name}.tar")).await?;
             machine
                 .exec(&format!(
-                    "podman load -i {remote_path} && rm -f {remote_path}"
+                    "podman load -i /tmp/{safe_name}.tar && rm -f /tmp/{safe_name}.tar"
                 ))
                 .await
                 .context(format!("failed to load {image} in VM"))?;
@@ -701,10 +957,11 @@ pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result
     Ok(())
 }
 
-/// Copy the ryra binary into a running VM via SCP.
-pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
+/// SCP a local file into the VM at the given remote path.
+async fn scp_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
     let key = machine.ssh_key_path();
     let port = machine.ssh_port.to_string();
+    let dest = format!("root@{}:{remote_path}", machine.ssh_host);
 
     let status = Command::new("scp")
         .args([
@@ -718,16 +975,52 @@ pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
             &key.to_string_lossy(),
             "-P",
             &port,
-            &ryra_bin.to_string_lossy(),
-            "root@127.0.0.1:/usr/local/bin/ryra",
+            &local_path.to_string_lossy(),
+            &dest,
         ])
         .status()
         .await
-        .context("failed to SCP ryra binary to VM")?;
+        .with_context(|| format!("failed to SCP {} to VM", local_path.display()))?;
     if !status.success() {
-        anyhow::bail!("SCP of ryra binary failed");
+        anyhow::bail!("SCP of {} failed", local_path.display());
     }
+    Ok(())
+}
 
+/// SCP a local directory recursively into the VM at the given remote path.
+async fn scp_dir_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
+    let key = machine.ssh_key_path();
+    let port = machine.ssh_port.to_string();
+    let dest = format!("root@{}:{remote_path}", machine.ssh_host);
+
+    let status = Command::new("scp")
+        .args([
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-i",
+            &key.to_string_lossy(),
+            "-P",
+            &port,
+            "-r",
+            &local_path.to_string_lossy(),
+            &dest,
+        ])
+        .status()
+        .await
+        .with_context(|| format!("failed to SCP {} to VM", local_path.display()))?;
+    if !status.success() {
+        anyhow::bail!("SCP of {} failed", local_path.display());
+    }
+    Ok(())
+}
+
+/// Copy the ryra binary into a running VM via SCP.
+pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
+    scp_to_vm(machine, ryra_bin, "/usr/local/bin/ryra").await?;
     machine.exec("chmod +x /usr/local/bin/ryra").await?;
     Ok(())
 }
@@ -742,9 +1035,6 @@ pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Resu
         return Ok(());
     }
 
-    let key = machine.ssh_key_path();
-    let port = machine.ssh_port.to_string();
-
     // Create destination dir first
     machine.exec("mkdir -p /opt/ryra-test-registry").await?;
 
@@ -756,28 +1046,7 @@ pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Resu
 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        let status = Command::new("scp")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                "-i",
-                &key.to_string_lossy(),
-                "-P",
-                &port,
-                "-r",
-                &path.to_string_lossy(),
-                "root@127.0.0.1:/opt/ryra-test-registry/",
-            ])
-            .status()
-            .await
-            .context("failed to SCP fixtures to VM")?;
-        if !status.success() {
-            anyhow::bail!("SCP of {} failed", path.display());
-        }
+        scp_dir_to_vm(machine, &path, "/opt/ryra-test-registry/").await?;
     }
 
     Ok(())
