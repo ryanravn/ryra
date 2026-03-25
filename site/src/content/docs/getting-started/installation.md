@@ -1,6 +1,9 @@
 ---
 title: Installation
 description: How to install Ryra on your server.
+prev:
+  label: Introduction
+  link: /
 ---
 
 ## Quick install
@@ -29,16 +32,7 @@ Ryra installs its own dependencies (`podman`, `systemd-container`, `nginx`, etc.
 - `sudo` access
 - An internet connection (to pull container images)
 
-## Manual install
-
-If you prefer not to use the install script, download the binary directly from the [latest release](https://github.com/ryanravn/ryra/releases/latest):
-
-```bash
-# Example for Debian/Ubuntu amd64
-curl -LO https://github.com/ryanravn/ryra/releases/latest/download/ryra-x86_64-linux.tar.gz
-tar xzf ryra-x86_64-linux.tar.gz
-sudo mv ryra /usr/local/bin/
-```
+On macOS, ryra supports VM-based testing only (not deployment). On Windows, use [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install).
 
 ## Verify installation
 

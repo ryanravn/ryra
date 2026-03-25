@@ -53,4 +53,4 @@ This shows all services available in the registry that you can deploy.
 
 - [Configure DNS, SSL, and SMTP](/guides/configuration/) for production use
 - [Learn about exposure modes](/guides/exposure-modes/) to control how services are accessed
-- [See all CLI commands](/reference/cli/) for the full command reference
+- [Rust Docs](https://docs.rs/ryra) for the full API and command reference

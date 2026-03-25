@@ -1,0 +1,50 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import registry from "../../../../registry.json";
+
+const services = Object.entries(registry.services).map(([id, entry]) => {
+  const svc = entry.service;
+  const ram = entry.requirements?.ram;
+  const ramStr = ram
+    ? ram.min >= 1024
+      ? `${ram.min / 1024} GB`
+      : `${ram.min} MB`
+    : "—";
+  return { id, name: svc.name, description: svc.description, kind: svc.kind, ram: ramStr };
+});
+---
+
+<StarlightPage
+  frontmatter={{
+    title: "Services",
+    description: "Available services in the Ryra registry.",
+    tableOfContents: false,
+  }}
+>
+  <p>
+    Ryra deploys services from a curated registry. Each service is a
+    pre-configured container definition with nginx, systemd, and DNS integration
+    built in.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Service</th>
+        <th>Description</th>
+        <th>Kind</th>
+        <th>Min RAM</th>
+      </tr>
+    </thead>
+    <tbody>
+      {services.map((s) => (
+        <tr>
+          <td><a href={`/services/${s.id}/`}>{s.name}</a></td>
+          <td>{s.description}</td>
+          <td>{s.kind}</td>
+          <td>{s.ram}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</StarlightPage>

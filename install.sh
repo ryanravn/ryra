@@ -9,6 +9,18 @@ main() {
     os=$(uname -s)
     arch=$(uname -m)
 
+    case "$os" in
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            echo "Error: ryra requires Linux and does not run natively on Windows."
+            echo ""
+            echo "To use ryra on Windows, install WSL 2:"
+            echo "  https://learn.microsoft.com/en-us/windows/wsl/install"
+            echo ""
+            echo "Then run this script again from inside your WSL 2 terminal."
+            exit 1
+            ;;
+    esac
+
     case "${os}-${arch}" in
         Linux-x86_64)   rust_target="x86_64-unknown-linux-gnu" ;;
         Linux-aarch64)  rust_target="aarch64-unknown-linux-gnu" ;;

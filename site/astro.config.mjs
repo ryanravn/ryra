@@ -1,14 +1,22 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const registry = require("../registry.json");
+
+const serviceItems = Object.entries(registry.services).map(([id, entry]) => ({
+  label: entry.service.name.charAt(0).toUpperCase() + entry.service.name.slice(1),
+  link: `/services/${id}/`,
+}));
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://ryra.dev",
+  site: "https://docs.ryra.dev",
   integrations: [
     starlight({
       title: "Ryra",
-      customCss: ["./src/styles/custom.css"],
       social: [
         {
           icon: "github",
@@ -17,10 +25,10 @@ export default defineConfig({
         },
       ],
       sidebar: [
+        { label: "Introduction", link: "/" },
         {
           label: "Getting Started",
           items: [
-            { label: "Introduction", slug: "getting-started/introduction" },
             { label: "Installation", slug: "getting-started/installation" },
             { label: "Quick Start", slug: "getting-started/quick-start" },
           ],
@@ -28,12 +36,8 @@ export default defineConfig({
         {
           label: "Services",
           items: [
-            { label: "Overview", slug: "services/overview" },
-            { label: "Vaultwarden", slug: "services/vaultwarden" },
-            { label: "Forgejo", slug: "services/forgejo" },
-            { label: "Uptime Kuma", slug: "services/uptime-kuma" },
-            { label: "OpenClaw", slug: "services/openclaw" },
-            { label: "PostgreSQL", slug: "services/postgres" },
+            { label: "Overview", link: "/services/" },
+            ...serviceItems,
           ],
         },
         {
@@ -45,7 +49,13 @@ export default defineConfig({
         },
         {
           label: "Reference",
-          items: [{ label: "CLI Commands", slug: "reference/cli" }],
+          items: [
+            {
+              label: "Rust Docs",
+              link: "https://docs.rs/ryra",
+              attrs: { target: "_blank" },
+            },
+          ],
         },
       ],
     }),

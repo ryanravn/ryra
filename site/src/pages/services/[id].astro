@@ -1,0 +1,78 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import registry from "../../../../registry.json";
+
+export function getStaticPaths() {
+  return Object.keys(registry.services).map((id) => ({ params: { id } }));
+}
+
+const { id } = Astro.params;
+const entry = registry.services[id];
+const svc = entry.service;
+
+const ports = entry.ports
+  .map((p) => `${p.container_port} (${p.name.toUpperCase()})`)
+  .join(", ");
+
+const volumes = entry.volumes.map((v) => `\`${v.mount_path}\``).join(", ");
+
+const ram = entry.requirements?.ram;
+const ramStr = ram
+  ? `${ram.min >= 1024 ? `${ram.min / 1024} GB` : `${ram.min} MB`}`
+  : "—";
+
+const hasSmtp = entry.integrations?.smtp ?? false;
+const hasAuth = entry.integrations?.auth ?? false;
+const hasDeps = entry.dependencies.length > 0;
+
+---
+
+<StarlightPage
+  frontmatter={{
+    title: svc.name.charAt(0).toUpperCase() + svc.name.slice(1),
+    description: svc.description,
+    tableOfContents: false,
+  }}
+>
+  <p>
+    <a href={svc.url}>{svc.description}</a>
+  </p>
+
+  <h2 id="install">Install</h2>
+  <pre><code>ryra add {svc.name}</code></pre>
+
+  <h2 id="details">Details</h2>
+  <table>
+    <tbody>
+      <tr><td><strong>Image</strong></td><td><code>{svc.image}</code></td></tr>
+      {ports && <tr><td><strong>Port</strong></td><td>{ports}</td></tr>}
+      {volumes && <tr><td><strong>Storage</strong></td><td set:html={volumes} /></tr>}
+      <tr><td><strong>Min RAM</strong></td><td>{ramStr}</td></tr>
+      {hasSmtp && <tr><td><strong>SMTP</strong></td><td>Supported</td></tr>}
+    </tbody>
+  </table>
+
+  {hasDeps && (
+    <>
+      <h2 id="dependencies">Dependencies</h2>
+      <p>This service includes scoped sidecar containers:</p>
+      <ul>
+        {entry.dependencies.map((dep) => (
+          <li>
+            <strong>{dep.name}</strong> — <code>{dep.image}</code>
+          </li>
+        ))}
+      </ul>
+    </>
+  )}
+
+  {(hasSmtp || hasAuth) && (
+    <>
+      <h2 id="integrations">Integrations</h2>
+      <ul>
+        {hasSmtp && <li><strong>SMTP</strong> — configure globally with <code>ryra config smtp</code></li>}
+        {hasAuth && <li><strong>Auth</strong> — configure globally with <code>ryra config auth</code></li>}
+      </ul>
+    </>
+  )}
+</StarlightPage>
