@@ -6,7 +6,6 @@ use dialoguer::{Confirm, Input};
 
 use ryra_core::Warning;
 use ryra_core::config::schema::ExposureMode;
-use ryra_core::registry::service_def::DeployMode;
 
 use super::apply;
 use super::prompts;
@@ -27,28 +26,7 @@ pub async fn run(
     let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
     let has_nginx = reg_service.def.nginx.is_some();
 
-    // Profile selection for compose services
-    let compose_file_override = match &reg_service.def.service.deploy {
-        DeployMode::Compose { profiles, .. } if !profiles.is_empty() && interactive => {
-            let mut items: Vec<String> = vec!["default".to_string()];
-            items.extend(
-                profiles
-                    .iter()
-                    .map(|p| format!("{} — {}", p.name, p.description)),
-            );
-            let selection = dialoguer::Select::new()
-                .with_prompt("Configuration profile")
-                .items(&items)
-                .default(0)
-                .interact()?;
-            if selection == 0 {
-                None
-            } else {
-                Some(profiles[selection - 1].file.clone())
-            }
-        }
-        _ => None,
-    };
+    let compose_file_override: Option<String> = None;
 
     // Show ALL modes the service supports, annotate which need setup
     let supported = ExposureMode::supported_modes(has_nginx);
@@ -153,15 +131,21 @@ pub async fn run(
         }
         println!();
     } else if !interactive {
-        // Non-interactive: fail if required env vars are missing
-        let missing_required: Vec<&str> = promptable
-            .iter()
-            .filter(|e| e.kind == EnvKind::Required)
-            .map(|e| e.name.as_str())
-            .collect();
+        // Non-interactive: read required env vars from the process environment,
+        // fail if any are still missing.
+        let mut missing_required = Vec::new();
+        for env in &promptable {
+            if env.kind == EnvKind::Required {
+                if let Ok(val) = std::env::var(&env.name) {
+                    env_overrides.insert(env.name.clone(), val);
+                } else {
+                    missing_required.push(env.name.as_str());
+                }
+            }
+        }
         if !missing_required.is_empty() {
             bail!(
-                "required env vars not provided (run interactively or set via test env): {}",
+                "required env vars not provided (run interactively or set via env): {}",
                 missing_required.join(", ")
             );
         }

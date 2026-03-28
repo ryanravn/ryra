@@ -41,10 +41,12 @@ impl Distro {
     /// Packages to install via cloud-init during image preparation.
     pub fn cloud_init_packages(&self) -> &[&str] {
         match self {
-            // Runtime: podman, uidmap (rootless namespaces), systemd-container
-            // (machined), git (registry fetch). Test-only: curl (HTTP assertions).
+            // Runtime: podman, podman-compose (compose services), uidmap (rootless
+            // namespaces), systemd-container (machined), git (registry fetch).
+            // Test-only: curl (HTTP assertions), postgresql-client (postgres tests).
             Distro::Debian13 => &[
                 "podman",
+                "podman-compose",
                 "uidmap",
                 "git",
                 "systemd-container",
@@ -52,7 +54,7 @@ impl Distro {
                 "postgresql-client",
             ],
             // Fedora: uidmap is part of shadow-utils (already installed).
-            Distro::Fedora43 => &["podman", "git", "systemd-container", "curl"],
+            Distro::Fedora43 => &["podman", "podman-compose", "git", "systemd-container", "curl"],
         }
     }
 }

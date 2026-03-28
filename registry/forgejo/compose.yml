@@ -1,0 +1,23 @@
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:11
+    ports:
+      - "${RYRA_BIND_ADDRESS}:${RYRA_PORT_HTTP}:3000"
+    volumes:
+      - data:/data
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    env_file: .env
+    restart: unless-stopped
+
+volumes:
+  data:
+  db-data:

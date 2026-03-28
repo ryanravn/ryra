@@ -1,0 +1,103 @@
+[service]
+name = "authentik"
+description = "Authentik - identity provider with SSO and OIDC"
+url = "https://docs.goauthentik.io/"
+mode = "compose"
+file = "compose.yml"
+kind = "infrastructure"
+
+[requirements.ram]
+min = 512
+recommended = 1024
+
+[[ports]]
+name = "http"
+container_port = 9000
+
+[[volumes]]
+name = "media"
+mount_path = "/media"
+
+[[volumes]]
+name = "templates"
+mount_path = "/templates"
+
+# --- Authentik env vars ---
+
+[[env]]
+name = "AUTHENTIK_SECRET_KEY"
+value = "{{secret.secret_key}}"
+format = "hex"
+length = 50
+
+[[env]]
+name = "AUTHENTIK_BOOTSTRAP_TOKEN"
+value = "{{secret.bootstrap_token}}"
+
+[[env]]
+name = "AUTHENTIK_BOOTSTRAP_EMAIL"
+value = ""
+kind = "required"
+prompt = "Admin email"
+
+[[env]]
+name = "AUTHENTIK_BOOTSTRAP_PASSWORD"
+value = ""
+kind = "required"
+prompt = "Admin password"
+
+# --- Internal Postgres ---
+
+[[env]]
+name = "POSTGRES_USER"
+value = "authentik"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "authentik"
+
+# --- Internal Redis ---
+
+[[env]]
+name = "AUTHENTIK_REDIS__HOST"
+value = "redis"
+
+# --- Postgres connection for Authentik ---
+
+[[env]]
+name = "AUTHENTIK_POSTGRESQL__HOST"
+value = "postgres"
+
+[[env]]
+name = "AUTHENTIK_POSTGRESQL__USER"
+value = "authentik"
+
+[[env]]
+name = "AUTHENTIK_POSTGRESQL__NAME"
+value = "authentik"
+
+[[env]]
+name = "AUTHENTIK_POSTGRESQL__PASSWORD"
+value = "{{secret.db_password}}"
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = false
+smtp = false
+
+[[tests]]
+name = "authentik-responds"
+run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/if/flow/initial-setup/ && exit 0; sleep 2; done; exit 1"
+timeout = 180
+env = { AUTHENTIK_BOOTSTRAP_EMAIL = "admin@test.local", AUTHENTIK_BOOTSTRAP_PASSWORD = "testpassword123" }
+
+[[tests]]
+name = "user-created"
+run = "id authentik"
+env = { AUTHENTIK_BOOTSTRAP_EMAIL = "admin@test.local", AUTHENTIK_BOOTSTRAP_PASSWORD = "testpassword123" }

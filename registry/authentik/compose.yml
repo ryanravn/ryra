@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    restart: unless-stopped
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    restart: unless-stopped
+
+  server:
+    image: ghcr.io/goauthentik/server:2025.2
+    command: server
+    env_file: .env
+    ports:
+      - "${RYRA_BIND_ADDRESS}:${RYRA_PORT_HTTP}:9000"
+    volumes:
+      - media:/media
+      - templates:/templates
+      - ./blueprints:/blueprints/custom
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/goauthentik/server:2025.2
+    command: worker
+    env_file: .env
+    volumes:
+      - media:/media
+      - templates:/templates
+      - ./blueprints:/blueprints/custom
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  redis-data:
+  media:
+  templates:

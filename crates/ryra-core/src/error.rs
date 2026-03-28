@@ -74,6 +74,9 @@ pub enum Error {
     #[error("invalid exposure mode: {0}")]
     InvalidExposure(String),
 
+    #[error("auth integration requires authentik to be installed first — run `ryra add authentik`")]
+    AuthNotConfigured,
+
     #[error("registry error: {0}")]
     Registry(String),
 }

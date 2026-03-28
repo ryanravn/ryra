@@ -1,0 +1,103 @@
+[test]
+name = "authentik-oidc-blueprint"
+
+# Install authentik — use a run step to provide required env vars.
+[[steps]]
+action = "run"
+name = "add-authentik"
+run = """AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local \
+AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 \
+ryra add authentik --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authentik"
+
+# Verify auth config was auto-populated in ryra.toml
+[[steps]]
+action = "assert"
+name = "auth-config-populated"
+run = "grep -q 'provider = \"authentik\"' /etc/ryra/ryra.toml"
+
+[[steps]]
+action = "assert"
+name = "auth-mode-managed"
+run = "grep -q 'mode = \"managed\"' /etc/ryra/ryra.toml"
+
+[[steps]]
+action = "assert"
+name = "auth-token-populated"
+run = "grep -q 'api_token' /etc/ryra/ryra.toml"
+
+# Create blueprints directory (normally created by compose, but ensure it exists)
+[[steps]]
+action = "run"
+name = "ensure-blueprints-dir"
+run = "mkdir -p /var/lib/authentik/blueprints"
+
+# Install whoami-auth — has integrations.auth = true, should generate a blueprint
+[[steps]]
+action = "add"
+service = "whoami-auth"
+
+[[steps]]
+action = "wait"
+service = "whoami-auth"
+
+# Verify the blueprint was generated
+[[steps]]
+action = "assert"
+name = "blueprint-exists"
+run = "test -f /var/lib/authentik/blueprints/whoami-auth.yaml"
+
+[[steps]]
+action = "assert"
+name = "blueprint-has-provider"
+run = "grep -q 'authentik_providers_oauth2.oauth2provider' /var/lib/authentik/blueprints/whoami-auth.yaml"
+
+[[steps]]
+action = "assert"
+name = "blueprint-has-application"
+run = "grep -q 'authentik_core.application' /var/lib/authentik/blueprints/whoami-auth.yaml"
+
+[[steps]]
+action = "assert"
+name = "blueprint-has-client-id"
+run = "grep -q 'client_id:' /var/lib/authentik/blueprints/whoami-auth.yaml"
+
+[[steps]]
+action = "assert"
+name = "blueprint-has-client-secret"
+run = "grep -q 'client_secret:' /var/lib/authentik/blueprints/whoami-auth.yaml"
+
+# Verify whoami-auth's .env got the OIDC env vars from mappings.auth
+[[steps]]
+action = "assert"
+name = "oidc-client-id-in-env"
+run = "grep -q 'OIDC_CLIENT_ID=' /var/lib/whoami-auth/.env"
+
+[[steps]]
+action = "assert"
+name = "oidc-issuer-in-env"
+run = "grep -q 'OIDC_ISSUER=.*application/o/whoami-auth' /var/lib/whoami-auth/.env"
+
+# Verify the client_id in the blueprint matches the one in whoami-auth's .env
+[[steps]]
+action = "assert"
+name = "client-id-matches"
+run = """
+BP_ID=$(grep 'client_id:' /var/lib/authentik/blueprints/whoami-auth.yaml | sed 's/.*client_id: "\\(.*\\)"/\\1/')
+ENV_ID=$(grep 'OIDC_CLIENT_ID=' /var/lib/whoami-auth/.env | cut -d= -f2)
+test "$BP_ID" = "$ENV_ID"
+"""
+
+# Remove whoami-auth — should clean up the blueprint
+[[steps]]
+action = "remove"
+service = "whoami-auth"
+
+[[steps]]
+action = "assert"
+name = "blueprint-cleaned-up"
+run = "test ! -f /var/lib/authentik/blueprints/whoami-auth.yaml"

@@ -1,0 +1,74 @@
+[service]
+name = "affine"
+description = "AFFiNE - privacy-focused knowledge base"
+url = "https://affine.pro/"
+mode = "compose"
+file = "compose.yml"
+
+[requirements.ram]
+min = 512
+recommended = 1024
+
+[[ports]]
+name = "http"
+container_port = 3010
+
+[[volumes]]
+name = "config"
+mount_path = "/root/.affine/config"
+
+[[volumes]]
+name = "storage"
+mount_path = "/root/.affine/storage"
+
+# --- Internal Postgres ---
+
+[[env]]
+name = "POSTGRES_USER"
+value = "affine"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "affine"
+
+# --- Internal Redis ---
+
+[[env]]
+name = "REDIS_SERVER_HOST"
+value = "redis"
+
+# --- Affine config ---
+
+[[env]]
+name = "DATABASE_URL"
+value = "postgres://affine:{{secret.db_password}}@postgres:5432/affine"
+
+[[env]]
+name = "AFFINE_SERVER_HOST"
+value = "0.0.0.0"
+
+[[env]]
+name = "AFFINE_SERVER_PORT"
+value = "3010"
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = true
+smtp = false
+
+[mappings.auth]
+OAUTH_OIDC_ENABLED = "true"
+OAUTH_OIDC_ISSUER = "{{auth.url}}/application/o/affine/"
+OAUTH_OIDC_CLIENT_ID = "{{auth.client_id}}"
+OAUTH_OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
+
+[[tests]]
+name = "affine-responds"
+run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1"
+timeout = 90

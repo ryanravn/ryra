@@ -16,10 +16,6 @@ pub struct ServiceDef {
     pub env: Vec<EnvVar>,
     #[serde(default)]
     pub requires: Vec<ServiceRequirement>,
-    #[serde(default)]
-    pub dependencies: Vec<DependencyDef>,
-    #[serde(default)]
-    pub containers: Vec<ContainerDef>,
     pub nginx: Option<NginxDef>,
     #[serde(default)]
     pub mappings: Mappings,
@@ -46,13 +42,6 @@ pub struct RamRequirement {
     pub recommended: Option<u64>,
 }
 
-impl ServiceDef {
-    /// Whether this service uses multiple containers (e.g., server + worker).
-    pub fn is_multi_container(&self) -> bool {
-        !self.containers.is_empty()
-    }
-}
-
 /// How a service is deployed: single container via quadlet, or multi-container via compose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "lowercase")]
@@ -68,9 +57,6 @@ pub enum DeployMode {
     Compose {
         /// Path to compose file relative to the service directory in the registry.
         file: String,
-        /// Named profiles: alternative compose files for different configurations.
-        #[serde(default)]
-        profiles: Vec<ComposeProfile>,
     },
 }
 
@@ -78,13 +64,6 @@ impl DeployMode {
     pub fn is_compose(&self) -> bool {
         matches!(self, DeployMode::Compose { .. })
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComposeProfile {
-    pub name: String,
-    pub description: String,
-    pub file: String,
 }
 
 /// Raw helper for deserializing ServiceMeta — defaults mode to "quadlet" when absent.
@@ -100,8 +79,6 @@ struct ServiceMetaRaw {
     #[serde(default)]
     command: Option<String>,
     file: Option<String>,
-    #[serde(default)]
-    profiles: Vec<ComposeProfile>,
     #[serde(default)]
     kind: ServiceKind,
 }
@@ -143,10 +120,7 @@ impl<'de> Deserialize<'de> for ServiceMeta {
                 let file = raw
                     .file
                     .ok_or_else(|| serde::de::Error::missing_field("file"))?;
-                DeployMode::Compose {
-                    file,
-                    profiles: raw.profiles,
-                }
+                DeployMode::Compose { file }
             }
             other => {
                 return Err(serde::de::Error::unknown_variant(
@@ -260,31 +234,11 @@ pub struct EnvVar {
 
 /// A service that must already be installed on the system before this one.
 ///
-/// Unlike `DependencyDef` (sidecar containers bundled with the service),
-/// `requires` references separately-installed ryra services whose env vars
+/// References separately-installed ryra services whose env vars
 /// and ports can be referenced via `{{services.<name>.*}}` templates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceRequirement {
     pub service: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DependencyDef {
-    pub name: String,
-    pub image: String,
-    #[serde(default)]
-    pub env: Vec<EnvVar>,
-    #[serde(default)]
-    pub volumes: Vec<VolumeDef>,
-}
-
-/// For multi-container services (e.g., authentik server + worker).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContainerDef {
-    pub name: String,
-    pub command: Option<String>,
-    #[serde(default)]
-    pub ports: Vec<PortDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

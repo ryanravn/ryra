@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::config::schema::Config;
-use crate::registry::service_def::ServiceDef;
+use crate::config::schema::{AuthCredentials, Config};
+use crate::registry::service_def::{EnvFormat, ServiceDef};
 use crate::system::secret;
 
 /// Build the template context for rendering env var values.
@@ -29,6 +29,21 @@ pub fn build_context(
         ctx.insert("smtp.username".into(), smtp.username.clone());
         ctx.insert("smtp.password".into(), smtp.password.clone());
         ctx.insert("smtp.from".into(), smtp.from.clone());
+    }
+
+    // auth.* — per-service OIDC credentials (when auth integration is enabled)
+    if service_def.integrations.auth {
+        if let Some(AuthCredentials::Authentik { url, .. }) = &config.auth {
+            ctx.insert("auth.url".into(), url.clone());
+            ctx.insert(
+                "auth.client_id".into(),
+                secret::generate(&EnvFormat::Uuid, None),
+            );
+            ctx.insert(
+                "auth.client_secret".into(),
+                secret::generate(&EnvFormat::String, Some(64)),
+            );
+        }
     }
 
     // services.* — cross-service references from installed services
@@ -64,17 +79,7 @@ pub fn build_context(
     }
 
     // secret.* — generate fresh values using the env var's format + length.
-    // Scan both the service's own env vars and dependency env vars so that
-    // shared secret references (e.g., {{secret.db_password}}) resolve to the
-    // same generated value across the main service and its sidecars.
-    let all_env_vars = service_def.env.iter().chain(
-        service_def
-            .dependencies
-            .iter()
-            .flat_map(|dep| dep.env.iter()),
-    );
-
-    for env in all_env_vars {
+    for env in &service_def.env {
         for secret_name in crate::generate::extract_secret_refs(&env.value) {
             let key = format!("secret.{secret_name}");
             ctx.entry(key)

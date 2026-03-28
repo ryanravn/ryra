@@ -1,0 +1,24 @@
+[service]
+name = "whoami-auth"
+description = "whoami with OIDC auth integration (for testing)"
+image = "docker.io/traefik/whoami:v1.11.0"
+
+[[ports]]
+name = "http"
+container_port = 80
+
+[nginx]
+upstream_port = "http"
+
+[integrations]
+auth = true
+smtp = false
+
+[mappings.auth]
+OIDC_CLIENT_ID = "{{auth.client_id}}"
+OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
+OIDC_ISSUER = "{{auth.url}}/application/o/whoami-auth/"
+
+[[tests]]
+name = "http-responds"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"

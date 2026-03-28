@@ -403,6 +403,14 @@ pub fn add_service(
         });
     }
 
+    // Auth integration implies authentik must be installed and configured
+    if reg_service.def.integrations.auth {
+        let authentik_installed = config.services.iter().any(|s| s.name == "authentik");
+        if !authentik_installed || config.auth.is_none() {
+            return Err(Error::AuthNotConfigured);
+        }
+    }
+
     let has_nginx = reg_service.def.nginx.is_some();
     let is_compose = reg_service.def.service.deploy.is_compose();
     let proxied = exposure.needs_domain();
@@ -441,7 +449,7 @@ pub fn add_service(
     let quadlet_dir = service_quadlet_dir(service_name);
     let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
-    let generated = generate::generate_service(generate::GenerateServiceParams {
+    let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
         service_def: &reg_service.def,
         domain,
@@ -453,6 +461,8 @@ pub fn add_service(
         service_dir: &reg_service.service_dir,
         compose_file_override,
     })?;
+    let generated = output.service;
+    let cross_service_files = output.cross_service_files;
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -640,14 +650,6 @@ pub fn add_service(
                 });
             }
 
-            // Pull dependency images
-            for dep in &reg_service.def.dependencies {
-                steps.push(Step::PullImage {
-                    image: dep.image.clone(),
-                    username: Some(username.clone()),
-                });
-            }
-
             // Write quadlet + .env + nginx files
             for file in files {
                 steps.push(Step::WriteFile(file));
@@ -703,6 +705,11 @@ pub fn add_service(
                 unit: format!("{service_name}-compose"),
             });
         }
+    }
+
+    // Write cross-service files (e.g., auth blueprints to Authentik's directory)
+    for file in cross_service_files {
+        steps.push(Step::WriteFile(file));
     }
 
     // Reload nginx if proxied
@@ -805,6 +812,14 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         username: username.clone(),
     });
 
+    // Clean up auth blueprint if authentik is installed
+    let authentik_blueprint = service_home("authentik")
+        .join("blueprints")
+        .join(format!("{service_name}.yaml"));
+    if authentik_blueprint.exists() {
+        steps.push(Step::RemoveFile(authentik_blueprint));
+    }
+
     // Clean up nginx if service was proxied
     if was_proxied {
         steps.push(Step::RemoveFile(PathBuf::from(format!(
@@ -879,6 +894,30 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         host_port: params.host_port,
         ports,
     });
+
+    // Auto-configure [auth] when authentik is installed (so subsequent services
+    // with integrations.auth = true can reference it without manual setup).
+    if params.service_name == "authentik" {
+        let env_path = service_home("authentik").join(".env");
+        if let Ok(env_content) = std::fs::read_to_string(&env_path) {
+            if let Some(token) = parse_env_var(&env_content, "AUTHENTIK_BOOTSTRAP_TOKEN") {
+                let url = match params.domain {
+                    Some(domain) => format!("https://{domain}"),
+                    None => {
+                        // Local mode — use localhost with the allocated port
+                        let port = params.host_port.unwrap_or(9000);
+                        format!("http://localhost:{port}")
+                    }
+                };
+                config.auth = Some(config::schema::AuthCredentials::Authentik {
+                    mode: config::schema::AuthentikMode::Managed,
+                    url,
+                    api_token: token,
+                });
+            }
+        }
+    }
+
     config::save_config(&paths.config_file, &config)?;
 
     // Save a snapshot of the service.toml for `ryra diff`
@@ -891,6 +930,17 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse a `KEY=VALUE` line from a `.env` file, returning the value if found.
+fn parse_env_var(env_content: &str, key: &str) -> Option<String> {
+    for line in env_content.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) {
+            return Some(val.to_string());
+        }
+    }
+    None
 }
 
 pub fn finalize_remove(service_name: &str) -> Result<()> {
@@ -957,7 +1007,7 @@ pub fn update_service(
     }
 
     // 2. Regenerate all files from the current registry definition
-    let generated = generate::generate_service(generate::GenerateServiceParams {
+    let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
         service_def: &reg_service.def,
         domain: service.domain.as_deref(),
@@ -969,17 +1019,13 @@ pub fn update_service(
         service_dir: &reg_service.service_dir,
         compose_file_override: None,
     })?;
+    let generated = output.service;
+    let cross_service_files = output.cross_service_files;
 
     // 3. Pull new image if it changed
     if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
         steps.push(Step::PullImage {
             image: image.clone(),
-            username: Some(username.clone()),
-        });
-    }
-    for dep in &reg_service.def.dependencies {
-        steps.push(Step::PullImage {
-            image: dep.image.clone(),
             username: Some(username.clone()),
         });
     }
@@ -1040,6 +1086,11 @@ pub fn update_service(
                 unit: format!("{service_name}-compose"),
             });
         }
+    }
+
+    // Write cross-service files (e.g., auth blueprints)
+    for file in cross_service_files {
+        steps.push(Step::WriteFile(file));
     }
 
     // Reload nginx if proxied

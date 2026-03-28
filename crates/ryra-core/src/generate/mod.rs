@@ -1,3 +1,4 @@
+pub mod blueprint;
 pub mod context;
 pub mod nginx;
 pub mod quadlet;
@@ -9,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::schema::{Config, ExposureMode};
 use crate::error::{Error, Result};
-use crate::registry::service_def::{DependencyDef, DeployMode, EnvVar, ServiceDef};
+use crate::registry::service_def::{DeployMode, EnvVar, ServiceDef};
 
 /// Everything generated for a service, ready to be written to disk.
 pub enum GeneratedService {
@@ -31,6 +32,13 @@ pub struct GeneratedFile {
     pub content: String,
 }
 
+/// Everything generated for a service, including files that belong to other services.
+pub struct GenerationOutput {
+    pub service: GeneratedService,
+    /// Files that belong to other services' directories (e.g., auth blueprints).
+    pub cross_service_files: Vec<GeneratedFile>,
+}
+
 /// Parameters for [`generate_service`].
 pub struct GenerateServiceParams<'a> {
     pub config: &'a Config,
@@ -47,7 +55,7 @@ pub struct GenerateServiceParams<'a> {
 
 /// Generate all files for a service based on its deploy mode.
 /// `host_port` is the allocated port for web services (None for non-web).
-pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GeneratedService> {
+pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationOutput> {
     let name = &params.service_def.service.name;
 
     // Build template context (generates fresh secrets based on each env var's format + length)
@@ -78,7 +86,7 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GeneratedSe
         params.nginx_dir,
     )?;
 
-    match &params.service_def.service.deploy {
+    let service = match &params.service_def.service.deploy {
         DeployMode::Quadlet { image, command } => generate_quadlet(GenerateQuadletParams {
             name,
             image,
@@ -87,8 +95,6 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GeneratedSe
             exposure: params.exposure,
             host_port: params.host_port,
             quadlet_dir: params.quadlet_dir,
-            ctx: &ctx,
-            env_overrides: params.env_overrides,
             env_file,
             nginx_site,
         }),
@@ -103,7 +109,26 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GeneratedSe
                 nginx_site,
             )
         }
+    }?;
+
+    // Generate auth blueprint if this service uses auth integration
+    let mut cross_service_files = Vec::new();
+    if params.service_def.integrations.auth {
+        if let (Some(client_id), Some(client_secret)) = (
+            ctx.get("auth.client_id"),
+            ctx.get("auth.client_secret"),
+        ) {
+            let domain = params.domain.unwrap_or("localhost");
+            cross_service_files.push(blueprint::generate_authentik_blueprint(
+                name, domain, client_id, client_secret,
+            ));
+        }
     }
+
+    Ok(GenerationOutput {
+        service,
+        cross_service_files,
+    })
 }
 
 /// Build the .env file for a service (used by both quadlet and compose).
@@ -141,8 +166,6 @@ struct GenerateQuadletParams<'a> {
     exposure: &'a ExposureMode,
     host_port: Option<u16>,
     quadlet_dir: &'a Path,
-    ctx: &'a BTreeMap<String, String>,
-    env_overrides: &'a BTreeMap<String, String>,
     env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
 }
@@ -199,14 +222,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
         })
         .collect();
 
-    // Dependency unit names (so the main container starts after them)
-    let dep_units: Vec<String> = params
-        .service_def
-        .dependencies
-        .iter()
-        .map(|dep| format!("{name}-{}", dep.name))
-        .collect();
-
     // Container
     let container_params = quadlet::QuadletParams {
         service_name: name,
@@ -216,73 +231,12 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
         network: &network_name,
         command: params.command,
         bind_address: &bind_address,
-        requires: &dep_units,
     };
 
     files.push(GeneratedFile {
         path: params.quadlet_dir.join(format!("{name}.container")),
         content: quadlet::render_container(&container_params),
     });
-
-    // Dependency sidecar containers
-    let home_dir = crate::service_home(name);
-    for dep in &params.service_def.dependencies {
-        // Volumes for this dependency
-        for vol in &dep.volumes {
-            let vol_name = format!("{name}-{}-{}", dep.name, vol.name);
-            files.push(GeneratedFile {
-                path: params.quadlet_dir.join(format!("{vol_name}.volume")),
-                content: quadlet::render_volume(&vol_name),
-            });
-        }
-
-        let dep_volume_mappings: Vec<(String, String)> = dep
-            .volumes
-            .iter()
-            .map(|v| {
-                (
-                    format!("{name}-{}-{}", dep.name, v.name),
-                    v.mount_path.clone(),
-                )
-            })
-            .collect();
-
-        let dep_volume_refs: Vec<quadlet::VolumeMapping> = dep_volume_mappings
-            .iter()
-            .map(|(vname, path)| quadlet::VolumeMapping {
-                volume_name: vname,
-                mount_path: path,
-            })
-            .collect();
-
-        // Dependency container (no published ports)
-        let dep_params = quadlet::DependencyQuadletParams {
-            service_name: name,
-            dep_name: &dep.name,
-            image: &dep.image,
-            volumes: &dep_volume_refs,
-            network: &network_name,
-        };
-
-        let container_name = format!("{name}-{}", dep.name);
-        files.push(GeneratedFile {
-            path: params
-                .quadlet_dir
-                .join(format!("{container_name}.container")),
-            content: quadlet::render_dependency_container(&dep_params),
-        });
-
-        // Dependency .env file (rendered with the shared context)
-        let rendered_dep_env = render_env_vars_for_dep(dep, params.ctx, params.env_overrides)?;
-        let mut dep_env_lines = Vec::new();
-        for env in &rendered_dep_env {
-            dep_env_lines.push(format!("{}={}", env.name, env.value));
-        }
-        files.push(GeneratedFile {
-            path: home_dir.join(format!(".env.{}", dep.name)),
-            content: dep_env_lines.join("\n") + "\n",
-        });
-    }
 
     Ok(GeneratedService::Quadlet {
         files,
@@ -296,7 +250,7 @@ fn generate_compose(
     name: &str,
     service_dir: &Path,
     compose_filename: &str,
-    quadlet_dir: &Path,
+    _quadlet_dir: &Path,
     env_file: GeneratedFile,
     nginx_site: Option<GeneratedFile>,
 ) -> Result<GeneratedService> {
@@ -315,8 +269,12 @@ fn generate_compose(
         content: compose_content,
     };
 
+    // Compose units are regular systemd .service files — they go in
+    // ~/.config/systemd/user/, not the quadlet directory (which only
+    // handles .container, .volume, .network, etc.).
+    let systemd_user_dir = home_dir.join(".config").join("systemd").join("user");
     let systemd_unit = GeneratedFile {
-        path: quadlet_dir.join(format!("{name}-compose.service")),
+        path: systemd_user_dir.join(format!("{name}-compose.service")),
         content: render_compose_unit(name, &username, &home_dir),
     };
 
@@ -406,31 +364,6 @@ fn render_env_vars(
     }
 
     Ok(rendered)
-}
-
-/// Render env vars for a dependency sidecar using the shared template context.
-fn render_env_vars_for_dep(
-    dep: &DependencyDef,
-    ctx: &BTreeMap<String, String>,
-    env_overrides: &BTreeMap<String, String>,
-) -> Result<Vec<EnvVar>> {
-    dep.env
-        .iter()
-        .map(|env| {
-            let value = match env_overrides.get(&env.name) {
-                Some(override_value) => override_value.clone(),
-                None => template::render(&env.value, ctx)?,
-            };
-            Ok(EnvVar {
-                name: env.name.clone(),
-                value,
-                kind: Default::default(),
-                prompt: None,
-                format: Default::default(),
-                length: None,
-            })
-        })
-        .collect::<Result<Vec<_>>>()
 }
 
 pub fn generate_nginx_site(

@@ -1,0 +1,43 @@
+services:
+  affine:
+    image: ghcr.io/toeverything/affine-graphql:stable
+    ports:
+      - "${RYRA_BIND_ADDRESS}:${RYRA_PORT_HTTP}:3010"
+    volumes:
+      - config:/root/.affine/config
+      - storage:/root/.affine/storage
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    restart: unless-stopped
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    restart: unless-stopped
+
+volumes:
+  config:
+  storage:
+  db-data:
