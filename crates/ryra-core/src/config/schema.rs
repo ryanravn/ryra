@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::registry::service_def::AuthKind;
+
 /// Top-level ryra.toml configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -280,18 +282,31 @@ pub struct SmtpCredentials {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "provider", rename_all = "lowercase")]
 pub enum AuthCredentials {
+    /// Managed Authentik instance installed via ryra.
     Authentik {
-        mode: AuthentikMode,
         url: String,
         api_token: String,
     },
+    /// External OIDC provider managed by the user.
+    External {
+        url: String,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthentikMode {
-    Managed,
-    External,
+impl AuthCredentials {
+    pub fn url(&self) -> &str {
+        match self {
+            AuthCredentials::Authentik { url, .. } => url,
+            AuthCredentials::External { url } => url,
+        }
+    }
+
+    pub fn provider_name(&self) -> &str {
+        match self {
+            AuthCredentials::Authentik { .. } => "authentik",
+            AuthCredentials::External { .. } => "external",
+        }
+    }
 }
 
 // --- Registry entry ---
@@ -304,23 +319,12 @@ pub struct RegistryEntry {
 
 // --- Installed service record ---
 
-/// How the installed service was deployed (stored in config for removal).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum InstalledDeployMode {
-    #[default]
-    Quadlet,
-    Compose,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledService {
     pub name: String,
     pub domain: Option<String>,
     pub version: String,
     pub exposure: ExposureMode,
-    #[serde(default)]
-    pub deploy_mode: InstalledDeployMode,
     #[serde(default)]
     pub repo: String,
     /// Allocated host port for web services (nginx upstream). None for non-web.
@@ -329,4 +333,7 @@ pub struct InstalledService {
     /// All allocated host ports by name (e.g., "http" → 8080, "tcp" → 5432).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ports: BTreeMap<String, u16>,
+    /// The auth kind the user chose when installing this service, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_kind: Option<AuthKind>,
 }

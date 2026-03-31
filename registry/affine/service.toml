@@ -2,8 +2,8 @@
 name = "affine"
 description = "AFFiNE - privacy-focused knowledge base"
 url = "https://affine.pro/"
-mode = "compose"
-file = "compose.yml"
+image = "ghcr.io/toeverything/affine:stable"
+architecture = ["amd64"]
 
 [requirements.ram]
 min = 512
@@ -18,6 +18,53 @@ name = "config"
 mount_path = "/root/.affine/config"
 
 [[volumes]]
+name = "storage"
+mount_path = "/root/.affine/storage"
+
+# --- Sidecar: postgres (pgvector required by AFFiNE) ---
+
+[[containers]]
+name = "postgres"
+image = "docker.io/pgvector/pgvector:pg16"
+
+[[containers.volumes]]
+name = "db-data"
+mount_path = "/var/lib/postgresql/data"
+
+[containers.healthcheck]
+command = "pg_isready -d $POSTGRES_DB -U $POSTGRES_USER"
+start_period = 20
+interval = 30
+retries = 5
+timeout = 5
+
+# --- Sidecar: redis ---
+
+[[containers]]
+name = "redis"
+image = "docker.io/library/redis:7-alpine"
+
+[containers.healthcheck]
+command = "redis-cli --raw incr ping"
+start_period = 20
+interval = 30
+retries = 5
+timeout = 3
+
+# --- Init: database migration (runs once before app starts) ---
+
+[[containers]]
+name = "migration"
+image = "ghcr.io/toeverything/affine:stable"
+command = "sh -c 'node ./scripts/self-host-predeploy.js'"
+init = true
+depends_on = ["postgres", "redis"]
+
+[[containers.volumes]]
+name = "config"
+mount_path = "/root/.affine/config"
+
+[[containers.volumes]]
 name = "storage"
 mount_path = "/root/.affine/storage"
 
@@ -45,7 +92,7 @@ value = "redis"
 
 [[env]]
 name = "DATABASE_URL"
-value = "postgres://affine:{{secret.db_password}}@postgres:5432/affine"
+value = "postgresql://affine:{{secret.db_password}}@postgres:5432/affine"
 
 [[env]]
 name = "AFFINE_SERVER_HOST"
@@ -55,11 +102,15 @@ value = "0.0.0.0"
 name = "AFFINE_SERVER_PORT"
 value = "3010"
 
+[[env]]
+name = "AFFINE_INDEXER_ENABLED"
+value = "false"
+
 [nginx]
 upstream_port = "http"
 
 [integrations]
-auth = true
+auth = ["oidc"]
 smtp = false
 
 [mappings.auth]

@@ -3,6 +3,7 @@ name = "postgres"
 description = "PostgreSQL - open source relational database"
 url = "https://www.postgresql.org/docs/"
 image = "docker.io/library/postgres:17-alpine"
+architecture = ["amd64", "arm64"]
 kind = "infrastructure"
 
 [requirements.ram]
@@ -34,7 +35,7 @@ name = "POSTGRES_PASSWORD"
 value = "{{secret.postgres_password}}"
 
 [integrations]
-auth = false
+auth = []
 smtp = false
 
 [[tests]]

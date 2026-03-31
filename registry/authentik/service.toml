@@ -2,8 +2,9 @@
 name = "authentik"
 description = "Authentik - identity provider with SSO and OIDC"
 url = "https://docs.goauthentik.io/"
-mode = "compose"
-file = "compose.yml"
+image = "ghcr.io/goauthentik/server:2025.2"
+architecture = ["amd64", "arm64"]
+command = "server"
 kind = "infrastructure"
 
 [requirements.ram]
@@ -21,6 +22,67 @@ mount_path = "/media"
 [[volumes]]
 name = "templates"
 mount_path = "/templates"
+
+[[volumes]]
+name = "blueprints"
+mount_path = "/blueprints/custom"
+host_path = "%h/blueprints"
+
+# --- Sidecar: worker (same image, different command) ---
+
+[[containers]]
+name = "worker"
+image = "ghcr.io/goauthentik/server:2025.2"
+command = "worker"
+depends_on = ["postgres", "redis"]
+
+[[containers.volumes]]
+name = "media"
+mount_path = "/media"
+
+[[containers.volumes]]
+name = "templates"
+mount_path = "/templates"
+
+[[containers.volumes]]
+name = "blueprints"
+mount_path = "/blueprints/custom"
+host_path = "%h/blueprints"
+
+# --- Sidecar: postgres ---
+
+[[containers]]
+name = "postgres"
+image = "docker.io/library/postgres:17-alpine"
+
+[[containers.volumes]]
+name = "db-data"
+mount_path = "/var/lib/postgresql/data"
+
+[containers.healthcheck]
+command = "pg_isready -d $POSTGRES_DB -U $POSTGRES_USER"
+start_period = 20
+interval = 30
+retries = 5
+timeout = 5
+
+# --- Sidecar: redis ---
+
+[[containers]]
+name = "redis"
+image = "docker.io/library/redis:7-alpine"
+command = "--save 60 1 --loglevel warning"
+
+[[containers.volumes]]
+name = "redis-data"
+mount_path = "/data"
+
+[containers.healthcheck]
+command = "redis-cli ping | grep PONG"
+start_period = 20
+interval = 30
+retries = 5
+timeout = 3
 
 # --- Authentik env vars ---
 
@@ -88,7 +150,7 @@ value = "{{secret.db_password}}"
 upstream_port = "http"
 
 [integrations]
-auth = false
+auth = []
 smtp = false
 
 [[tests]]

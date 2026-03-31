@@ -446,52 +446,26 @@ pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<
     }
     let content = std::fs::read_to_string(&service_toml)
         .with_context(|| format!("failed to read {}", service_toml.display()))?;
-    let parsed: ServiceTomlImage = toml::from_str(&content)
+    let parsed: ServiceTomlAllImages = toml::from_str(&content)
         .with_context(|| format!("failed to parse {}", service_toml.display()))?;
-    Ok(parsed.service.image)
+    Ok(Some(parsed.service.image))
 }
 
-/// Get all container images for a service.
-///
-/// For quadlet services, reads the `image` field from service.toml.
-/// For compose services, extracts `image:` lines from the compose file.
+/// Get all container images for a service (primary + sidecars).
 pub fn service_images(registry_path: &Path, service_name: &str) -> Vec<String> {
-    let service_dir = registry_path.join(service_name);
-    let service_toml = service_dir.join("service.toml");
+    let service_toml = registry_path.join(service_name).join("service.toml");
     let mut images = Vec::new();
     if let Ok(content) = std::fs::read_to_string(&service_toml)
-        && let Ok(parsed) = toml::from_str::<ServiceTomlImage>(&content)
+        && let Ok(parsed) = toml::from_str::<ServiceTomlAllImages>(&content)
     {
-        if let Some(image) = parsed.service.image {
-            images.push(image);
-        } else {
-            // Compose service — extract images from compose.yml
-            images.extend(images_from_compose_file(&service_dir));
+        images.push(parsed.service.image);
+        for c in &parsed.containers {
+            if !images.contains(&c.image) {
+                images.push(c.image.clone());
+            }
         }
     }
     images
-}
-
-/// Extract `image:` values from a compose.yml file.
-fn images_from_compose_file(service_dir: &Path) -> Vec<String> {
-    let compose_path = service_dir.join("compose.yml");
-    let content = match std::fs::read_to_string(&compose_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("image:") {
-                let image = rest.trim().trim_matches('"').trim_matches('\'');
-                if !image.is_empty() && !image.starts_with('$') {
-                    return Some(image.to_string());
-                }
-            }
-            None
-        })
-        .collect()
 }
 
 /// Get all container images needed for a test (including nginx for web services).
@@ -538,14 +512,20 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
-struct ServiceTomlImage {
+struct ServiceTomlAllImages {
     service: ServiceMetaImage,
+    #[serde(default)]
+    containers: Vec<ContainerImage>,
 }
 
 #[derive(serde::Deserialize)]
 struct ServiceMetaImage {
-    #[serde(default)]
-    image: Option<String>,
+    image: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ContainerImage {
+    image: String,
 }
 
 #[derive(serde::Deserialize)]

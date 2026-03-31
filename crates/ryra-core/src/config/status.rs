@@ -65,11 +65,8 @@ impl StatusInfo {
             },
             auth: match &config.auth {
                 None => ProviderStatus::None,
-                Some(AuthCredentials::Authentik { mode, url, .. }) => ProviderStatus::Configured {
-                    name: match mode {
-                        AuthentikMode::Managed => format!("authentik (managed, {url})"),
-                        AuthentikMode::External => format!("authentik (external, {url})"),
-                    },
+                Some(auth) => ProviderStatus::Configured {
+                    name: format!("{} ({})", auth.provider_name(), auth.url()),
                 },
             },
             default_repo: config.default_repo.clone(),

@@ -30,6 +30,17 @@ pub async fn run(section: Option<&str>) -> Result<()> {
         Some("smtp") => {
             config.smtp = prompts::prompt_smtp()?;
         }
+        Some("auth") => {
+            match prompts::prompt_auth()? {
+                prompts::AuthSetupChoice::External(auth) => config.auth = Some(auth),
+                prompts::AuthSetupChoice::InstallAuthentik => {
+                    println!();
+                    println!("  Run `ryra add authentik` to install — auth will be configured automatically.");
+                    return Ok(());
+                }
+                prompts::AuthSetupChoice::Skip => return Ok(()),
+            }
+        }
         Some("repo") => {
             let url: String = Input::new()
                 .with_prompt("Default repo")
@@ -43,7 +54,7 @@ pub async fn run(section: Option<&str>) -> Result<()> {
             config.default_repo = Some(url);
         }
         Some(other) => {
-            bail!("Unknown section: {other}. Options: cloudflare, tunnel, ssl, smtp, repo");
+            bail!("Unknown section: {other}. Options: cloudflare, tunnel, ssl, smtp, auth, repo");
         }
     }
 
@@ -91,8 +102,8 @@ fn print_overview(config: &ryra_core::config::schema::Config) {
 
     // Auth
     match &config.auth {
-        Some(ryra_core::config::schema::AuthCredentials::Authentik { url, .. }) => {
-            println!("  auth:       {} (authentik, {})", status_ok(), url);
+        Some(auth) => {
+            println!("  auth:       {} ({}, {})", status_ok(), auth.provider_name(), auth.url());
         }
         None => println!("  auth:       {}", status_none()),
     }
@@ -107,7 +118,7 @@ fn print_overview(config: &ryra_core::config::schema::Config) {
         println!("\n  {} installed service(s)", config.services.len());
     }
 
-    println!("\nEdit a section: ryra config <cloudflare|tunnel|ssl|smtp|repo>");
+    println!("\nEdit a section: ryra config <cloudflare|tunnel|ssl|smtp|auth|repo>");
 }
 
 fn status_ok() -> &'static str {

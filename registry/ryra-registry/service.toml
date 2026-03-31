@@ -3,6 +3,7 @@ name = "ryra-registry"
 description = "Static file server hosting the ryra service registry"
 url = "https://ryra.dev"
 image = "docker.io/library/nginx:1.29.6-alpine"
+architecture = ["amd64", "arm64"]
 
 [requirements.ram]
 min = 32
@@ -20,7 +21,7 @@ mount_path = "/usr/share/nginx/html"
 upstream_port = "http"
 
 [integrations]
-auth = false
+auth = []
 smtp = false
 
 [[tests]]

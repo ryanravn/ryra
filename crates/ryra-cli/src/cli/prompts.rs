@@ -268,3 +268,60 @@ pub async fn ensure_config_for_mode(
     println!("  Config saved to {}", paths.config_file.display());
     Ok(true)
 }
+
+/// What the user chose when prompted for auth setup.
+pub enum AuthSetupChoice {
+    /// Install a managed Authentik instance via ryra.
+    InstallAuthentik,
+    /// Use an external OIDC provider (user provided URL).
+    External(AuthCredentials),
+    /// Skip auth setup.
+    Skip,
+}
+
+/// Prompt for auth provider configuration.
+pub fn prompt_auth() -> Result<AuthSetupChoice> {
+    println!();
+    println!("  Auth protects your services with single sign-on.");
+    println!();
+
+    let items = [
+        "authentik — install a managed Authentik instance via ryra",
+        "external — use your own OIDC provider (Authentik, Keycloak, etc.)",
+        "skip",
+    ];
+    let selection = dialoguer::Select::new()
+        .with_prompt("Auth provider")
+        .items(&items)
+        .default(0)
+        .interact()?;
+
+    match selection {
+        0 => Ok(AuthSetupChoice::InstallAuthentik),
+        1 => {
+            let url: String = Input::new()
+                .with_prompt("OIDC issuer base URL (e.g. https://auth.example.com)")
+                .interact_text()?;
+            Ok(AuthSetupChoice::External(AuthCredentials::External { url }))
+        }
+        _ => Ok(AuthSetupChoice::Skip),
+    }
+}
+
+/// Prompt for auth config, apply if external. Returns true if auth is now configured.
+/// For managed authentik, returns false — caller must handle installing authentik.
+pub async fn ensure_auth_configured(
+    config: &mut Config,
+    paths: &ConfigPaths,
+) -> Result<AuthSetupChoice> {
+    println!();
+    println!("  Auth provider not configured yet.");
+    let choice = prompt_auth()?;
+    if let AuthSetupChoice::External(ref auth) = choice {
+        config.auth = Some(auth.clone());
+        paths.ensure_dirs()?;
+        ryra_core::config::save_config(&paths.config_file, config)?;
+        println!("  Config saved to {}", paths.config_file.display());
+    }
+    Ok(choice)
+}

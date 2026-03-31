@@ -22,11 +22,6 @@ run = "grep -q 'provider = \"authentik\"' /etc/ryra/ryra.toml"
 
 [[steps]]
 action = "assert"
-name = "auth-mode-managed"
-run = "grep -q 'mode = \"managed\"' /etc/ryra/ryra.toml"
-
-[[steps]]
-action = "assert"
 name = "auth-token-populated"
 run = "grep -q 'api_token' /etc/ryra/ryra.toml"
 
@@ -36,7 +31,7 @@ action = "run"
 name = "ensure-blueprints-dir"
 run = "mkdir -p /var/lib/authentik/blueprints"
 
-# Install whoami-auth — has integrations.auth = true, should generate a blueprint
+# Install whoami-auth — supports oidc auth, should auto-enable and generate a blueprint
 [[steps]]
 action = "add"
 service = "whoami-auth"

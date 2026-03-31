@@ -2,8 +2,8 @@
 name = "forgejo"
 description = "Forgejo - self-hosted Git forge"
 url = "https://forgejo.org/docs/"
-mode = "compose"
-file = "compose.yml"
+image = "codeberg.org/forgejo/forgejo:11"
+architecture = ["amd64", "arm64"]
 
 [requirements.ram]
 min = 256
@@ -17,7 +17,17 @@ container_port = 3000
 name = "data"
 mount_path = "/data"
 
-# --- Postgres env vars (shared via .env with the postgres sidecar in compose) ---
+# --- Sidecar: postgres ---
+
+[[containers]]
+name = "postgres"
+image = "docker.io/library/postgres:17-alpine"
+
+[[containers.volumes]]
+name = "db-data"
+mount_path = "/var/lib/postgresql/data"
+
+# --- Postgres env vars (shared via .env with the postgres sidecar) ---
 
 [[env]]
 name = "POSTGRES_USER"
@@ -57,7 +67,7 @@ value = "{{secret.db_password}}"
 upstream_port = "http"
 
 [integrations]
-auth = false
+auth = []
 smtp = false
 
 [[tests]]

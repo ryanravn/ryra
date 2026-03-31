@@ -4,8 +4,12 @@ use std::io::IsTerminal;
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
+use std::path::Path;
+
 use ryra_core::Warning;
-use ryra_core::config::schema::ExposureMode;
+use ryra_core::config::schema::{Config, ExposureMode};
+use ryra_core::config::ConfigPaths;
+use ryra_core::registry::service_def::AuthKind;
 
 use super::apply;
 use super::prompts;
@@ -24,9 +28,13 @@ pub async fn run(
 
     // Look up the service definition
     let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
-    let has_nginx = reg_service.def.nginx.is_some();
 
-    let compose_file_override: Option<String> = None;
+    // Check architecture compatibility before any prompts
+    if let Some(msg) = reg_service.def.check_architecture() {
+        bail!("{msg}");
+    }
+
+    let has_nginx = reg_service.def.nginx.is_some();
 
     // Show ALL modes the service supports, annotate which need setup
     let supported = ExposureMode::supported_modes(has_nginx);
@@ -95,6 +103,61 @@ pub async fn run(
         None
     };
 
+    // Auth — ask user if they want to enable auth (if the service supports it)
+    let auth_kind: Option<AuthKind> = if reg_service.def.integrations.auth.is_empty() {
+        None
+    } else if reg_service.def.integrations.auth.len() == 1 {
+        let kind = &reg_service.def.integrations.auth[0];
+        if interactive {
+            let enable = Confirm::new()
+                .with_prompt(format!("Enable {kind} auth?"))
+                .default(true)
+                .interact()?;
+            if enable {
+                // Ensure auth is configured
+                if config.auth.is_none() {
+                    match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run).await? {
+                        true => {}
+                        false => return Ok(()),
+                    }
+                }
+                Some(kind.clone())
+            } else {
+                None
+            }
+        } else {
+            // Non-interactive: enable auth if configured
+            if config.auth.is_some() {
+                Some(kind.clone())
+            } else {
+                None
+            }
+        }
+    } else if interactive {
+        let items: Vec<String> = std::iter::once("None".to_string())
+            .chain(reg_service.def.integrations.auth.iter().map(|k| k.to_string()))
+            .collect();
+        let selection = dialoguer::Select::new()
+            .with_prompt("Auth mode")
+            .items(&items)
+            .default(1)
+            .interact()?;
+        if selection == 0 {
+            None
+        } else {
+            let kind = reg_service.def.integrations.auth[selection - 1].clone();
+            if config.auth.is_none() {
+                match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run).await? {
+                    true => {}
+                    false => return Ok(()),
+                }
+            }
+            Some(kind)
+        }
+    } else {
+        None
+    };
+
     // Prompt for env vars based on their kind
     use ryra_core::registry::service_def::EnvKind;
 
@@ -155,8 +218,8 @@ pub async fn run(
         service,
         domain.as_deref(),
         exposure.clone(),
+        auth_kind.clone(),
         &env_overrides,
-        compose_file_override.as_deref(),
         &repo_url,
         &repo_dir,
     )?;
@@ -237,11 +300,12 @@ pub async fn run(
             service_name: service,
             domain: domain.as_deref(),
             exposure,
-            deploy_mode: result.deploy_mode,
+            auth_kind,
             repo: &result.repo_url,
             host_port: result.host_port,
             allocated_ports: &result.allocated_ports,
             repo_dir: &repo_dir,
+            env_content: &result.env_content,
         })?;
         let home_dir = ryra_core::service_home(service);
         if let Some(ref domain) = result.domain {
@@ -274,4 +338,95 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// Ensure auth is configured, possibly installing authentik inline.
+/// Returns true if auth is ready, false if user cancelled.
+async fn ensure_auth_for_add(
+    config: &mut Config,
+    paths: &ConfigPaths,
+    repo_url: &str,
+    _repo_dir: &Path,
+    dry_run: bool,
+) -> Result<bool> {
+    match prompts::ensure_auth_configured(config, paths).await? {
+        prompts::AuthSetupChoice::External(_) => Ok(true),
+        prompts::AuthSetupChoice::InstallAuthentik => {
+            // Check if authentik is already installed but auth wasn't configured
+            let authentik_installed = config.services.iter().any(|s| s.name == "authentik");
+            if authentik_installed {
+                println!();
+                println!("Authentik is already installed — configuring auth...");
+                if try_configure_auth_from_installed(config, paths)? {
+                    return Ok(true);
+                }
+                println!("Could not auto-configure auth from installed authentik.");
+                return Ok(false);
+            }
+
+            println!();
+            println!("Installing authentik first...");
+            println!();
+            // Recursively install authentik, then reload config
+            Box::pin(run("authentik", None, Some(repo_url), dry_run)).await?;
+            // Reload config — authentik's finalize_add auto-configures [auth]
+            *config = ryra_core::config::load_or_default(&paths.config_file)?;
+            if config.auth.is_some() {
+                println!();
+                Ok(true)
+            } else {
+                println!("Auth was not configured after installing authentik.");
+                Ok(false)
+            }
+        }
+        prompts::AuthSetupChoice::Skip => {
+            println!("Skipped auth setup.");
+            Ok(false)
+        }
+    }
+}
+
+/// Try to configure auth from an already-installed authentik instance.
+/// Reads the .env via sudo since it's owned by the authentik user.
+fn try_configure_auth_from_installed(
+    config: &mut Config,
+    paths: &ConfigPaths,
+) -> Result<bool> {
+    let env_path = ryra_core::service_home("authentik").join(".env");
+    let output = std::process::Command::new("sudo")
+        .args(["cat", &env_path.to_string_lossy()])
+        .output()?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let env_content = String::from_utf8_lossy(&output.stdout);
+
+    // Find the bootstrap token
+    let token = env_content
+        .lines()
+        .find_map(|line| line.strip_prefix("AUTHENTIK_BOOTSTRAP_TOKEN="))
+        .map(|v| v.to_string());
+
+    let Some(token) = token else {
+        return Ok(false);
+    };
+
+    // Find the URL from the installed service record
+    let service = config.services.iter().find(|s| s.name == "authentik");
+    let url = match service.and_then(|s| s.domain.as_deref()) {
+        Some(domain) => format!("https://{domain}"),
+        None => {
+            let port = service.and_then(|s| s.host_port).unwrap_or(9000);
+            format!("http://localhost:{port}")
+        }
+    };
+
+    config.auth = Some(ryra_core::config::schema::AuthCredentials::Authentik {
+        url,
+        api_token: token,
+    });
+    paths.ensure_dirs()?;
+    ryra_core::config::save_config(&paths.config_file, config)?;
+    println!("  Auth configured. Saved to {}", paths.config_file.display());
+    Ok(true)
 }

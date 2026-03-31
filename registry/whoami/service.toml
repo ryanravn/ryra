@@ -3,6 +3,7 @@ name = "whoami"
 description = "Traefik whoami - simple HTTP request echo"
 url = "https://github.com/traefik/whoami"
 image = "docker.io/traefik/whoami:v1.11.0"
+architecture = ["amd64", "arm64"]
 
 [[ports]]
 name = "http"
@@ -12,7 +13,7 @@ container_port = 80
 upstream_port = "http"
 
 [integrations]
-auth = false
+auth = []
 smtp = false
 
 [[tests]]

@@ -2,6 +2,7 @@
 name = "whoami-auth"
 description = "whoami with OIDC auth integration (for testing)"
 image = "docker.io/traefik/whoami:v1.11.0"
+architecture = ["amd64", "arm64"]
 
 [[ports]]
 name = "http"
@@ -11,7 +12,7 @@ container_port = 80
 upstream_port = "http"
 
 [integrations]
-auth = true
+auth = ["oidc"]
 smtp = false
 
 [mappings.auth]

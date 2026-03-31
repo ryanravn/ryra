@@ -247,25 +247,13 @@ async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String
 }
 
 /// Wait for a service's systemd unit to become active.
-/// Tries `{service}.service` first, then `{service}-compose.service` for
-/// compose-based services.
 async fn wait_for_service(vm: &Machine, service: &str) -> Event {
     let t = Instant::now();
     let timeout = Duration::from_secs(300);
 
-    // Check if the compose unit exists; if so, use it; otherwise use the standard name.
     let unit = format!("{service}.service");
-    let compose_unit = format!("{service}-compose.service");
-    let check = format!(
-        "systemctl --machine={service}@ --user list-unit-files {compose_unit} 2>/dev/null | grep -q {compose_unit}"
-    );
-    let actual_unit = match vm.exec(&check).await {
-        Ok(_) => compose_unit,
-        Err(_) => unit,
-    };
-
     let result = vm
-        .wait_for_service(service, &actual_unit, timeout)
+        .wait_for_service(service, &unit, timeout)
         .await;
 
     let outcome = match result {

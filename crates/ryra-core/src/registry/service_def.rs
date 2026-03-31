@@ -17,6 +17,9 @@ pub struct ServiceDef {
     #[serde(default)]
     pub requires: Vec<ServiceRequirement>,
     pub nginx: Option<NginxDef>,
+    /// Sidecar containers for multi-container services.
+    #[serde(default)]
+    pub containers: Vec<ContainerDef>,
     #[serde(default)]
     pub mappings: Mappings,
     #[serde(default)]
@@ -42,101 +45,66 @@ pub struct RamRequirement {
     pub recommended: Option<u64>,
 }
 
-/// How a service is deployed: single container via quadlet, or multi-container via compose.
+/// A sidecar container that runs alongside the primary container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "lowercase")]
-pub enum DeployMode {
-    /// Single container managed via podman quadlet.
-    Quadlet {
-        image: String,
-        /// Override the container CMD (maps to quadlet `Exec=`).
-        #[serde(default)]
-        command: Option<String>,
-    },
-    /// Multi-service stack managed via podman compose.
-    Compose {
-        /// Path to compose file relative to the service directory in the registry.
-        file: String,
-    },
-}
-
-impl DeployMode {
-    pub fn is_compose(&self) -> bool {
-        matches!(self, DeployMode::Compose { .. })
-    }
-}
-
-/// Raw helper for deserializing ServiceMeta — defaults mode to "quadlet" when absent.
-#[derive(Deserialize)]
-struct ServiceMetaRaw {
-    name: String,
-    description: String,
+pub struct ContainerDef {
+    pub name: String,
+    pub image: String,
     #[serde(default)]
-    url: Option<String>,
-    #[serde(default = "default_quadlet_mode")]
-    mode: String,
-    image: Option<String>,
+    pub command: Option<String>,
+    /// References to top-level [[volumes]] this sidecar also mounts.
     #[serde(default)]
-    command: Option<String>,
-    file: Option<String>,
+    pub volumes: Vec<VolumeDef>,
+    /// Whether this container reads the shared .env file.
+    #[serde(default = "default_true")]
+    pub env_file: bool,
+    /// Names of other containers this one depends on (maps to After=/Requires=).
     #[serde(default)]
-    kind: ServiceKind,
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub healthcheck: Option<HealthcheckDef>,
+    /// If true, this is an init container — runs once, must exit 0 before
+    /// dependent containers start. Maps to Type=oneshot + RemainAfterExit=yes.
+    #[serde(default)]
+    pub init: bool,
 }
 
-fn default_quadlet_mode() -> String {
-    "quadlet".to_string()
+/// Healthcheck configuration for a container.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthcheckDef {
+    pub command: String,
+    /// Start period in seconds.
+    #[serde(default)]
+    pub start_period: Option<u32>,
+    /// Interval in seconds.
+    #[serde(default)]
+    pub interval: Option<u32>,
+    /// Number of retries.
+    #[serde(default)]
+    pub retries: Option<u32>,
+    /// Timeout in seconds.
+    #[serde(default)]
+    pub timeout: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceMeta {
     pub name: String,
     pub description: String,
     /// Optional URL to documentation or project homepage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub url: Option<String>,
-    #[serde(flatten)]
-    pub deploy: DeployMode,
+    /// Container image for the primary container.
+    pub image: String,
+    /// Override the container CMD (maps to quadlet `Exec=`).
+    #[serde(default)]
+    pub command: Option<String>,
     #[serde(default)]
     pub kind: ServiceKind,
-}
-
-impl<'de> Deserialize<'de> for ServiceMeta {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = ServiceMetaRaw::deserialize(deserializer)?;
-        let deploy = match raw.mode.as_str() {
-            "quadlet" => {
-                let image = raw
-                    .image
-                    .ok_or_else(|| serde::de::Error::missing_field("image"))?;
-                DeployMode::Quadlet {
-                    image,
-                    command: raw.command,
-                }
-            }
-            "compose" => {
-                let file = raw
-                    .file
-                    .ok_or_else(|| serde::de::Error::missing_field("file"))?;
-                DeployMode::Compose { file }
-            }
-            other => {
-                return Err(serde::de::Error::unknown_variant(
-                    other,
-                    &["quadlet", "compose"],
-                ));
-            }
-        };
-        Ok(ServiceMeta {
-            name: raw.name,
-            description: raw.description,
-            url: raw.url,
-            deploy,
-            kind: raw.kind,
-        })
-    }
+    /// Supported CPU architectures (e.g. ["amd64", "arm64"]).
+    /// Empty means all architectures are supported.
+    #[serde(default)]
+    pub architecture: Vec<String>,
 }
 
 /// What role this service plays in the system.
@@ -178,6 +146,10 @@ pub struct PortDef {
 pub struct VolumeDef {
     pub name: String,
     pub mount_path: String,
+    /// If set, this is a bind mount from a path relative to the service home dir.
+    /// The volume name is used for identification only.
+    #[serde(default)]
+    pub host_path: Option<String>,
 }
 
 /// How an env var is presented to the user during `ryra add`.
@@ -254,10 +226,30 @@ pub struct Mappings {
     pub auth: BTreeMap<String, String>,
 }
 
+/// What kind of auth integration a service supports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthKind {
+    /// Service handles OIDC auth itself (e.g. affine, forgejo).
+    Oidc,
+    /// Auth is handled by the reverse proxy in front of the service (e.g. whoami).
+    ForwardAuth,
+}
+
+impl std::fmt::Display for AuthKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthKind::Oidc => write!(f, "oidc"),
+            AuthKind::ForwardAuth => write!(f, "forward-auth"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationFlags {
-    #[serde(default = "default_true")]
-    pub auth: bool,
+    /// Auth types this service supports. Empty = no auth support.
+    #[serde(default)]
+    pub auth: Vec<AuthKind>,
     #[serde(default = "default_true")]
     pub smtp: bool,
 }
@@ -265,7 +257,7 @@ pub struct IntegrationFlags {
 impl Default for IntegrationFlags {
     fn default() -> Self {
         Self {
-            auth: true,
+            auth: vec![],
             smtp: true,
         }
     }
@@ -323,6 +315,35 @@ pub struct MultiServiceTestMeta {
 // ---------------------------------------------------------------------------
 
 impl ServiceDef {
+    /// Check if this service supports the current system architecture.
+    /// Returns None if supported (or no restriction), Some(error) if not.
+    pub fn check_architecture(&self) -> Option<String> {
+        if self.service.architecture.is_empty() {
+            return None;
+        }
+        let current = current_architecture();
+        if self.service.architecture.iter().any(|a| a == current) {
+            None
+        } else {
+            Some(format!(
+                "{} only supports {} — this system is {current}",
+                self.service.name,
+                self.service.architecture.join(", "),
+            ))
+        }
+    }
+
+    /// All container images needed by this service (primary + sidecars), deduplicated.
+    pub fn all_images(&self) -> Vec<&str> {
+        let mut images = vec![self.service.image.as_str()];
+        for c in &self.containers {
+            if !images.contains(&c.image.as_str()) {
+                images.push(&c.image);
+            }
+        }
+        images
+    }
+
     /// Returns env var names that are required — must be provided during install.
     pub fn required_env_vars(&self) -> Vec<&str> {
         self.env
@@ -358,5 +379,14 @@ impl ServiceDef {
         } else {
             Err(errors)
         }
+    }
+}
+
+/// Detect the current system architecture using OCI/Docker naming conventions.
+pub fn current_architecture() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
     }
 }

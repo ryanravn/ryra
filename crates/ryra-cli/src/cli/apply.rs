@@ -21,10 +21,6 @@ enum Created {
         zone_id: String,
         domain: String,
     },
-    ComposeStack {
-        username: String,
-        compose_dir: PathBuf,
-    },
 }
 
 /// Execute a list of steps with automatic rollback on failure.
@@ -114,16 +110,6 @@ async fn prompt_rollback(created: &[Created]) {
                 }
                 Ok(())
             }
-            Created::ComposeStack {
-                username,
-                compose_dir,
-            } => {
-                eprintln!("  Stopping compose stack...");
-                run_quiet(&format!(
-                    "cd {} && sudo -H -u {username} podman compose down",
-                    compose_dir.display()
-                ))
-            }
             Created::User(username) => {
                 eprintln!("  Removing user {username}...");
                 run_quiet(&format!("sudo userdel --remove {username}"))
@@ -150,6 +136,10 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
 
             if exists {
                 println!("  User {username} already exists, skipping");
+                // Clean up stale podman storage (broken overlay symlinks from previous installs)
+                let _ = run_quiet(&format!(
+                    "sudo -H -u {username} sh -c 'cd / && podman system reset --force'"
+                ));
                 return Ok(());
             }
 
@@ -537,41 +527,6 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         Step::RemoveUser { username } => {
             // Ignore errors — user may not exist (partial add failure)
             let _ = run(&format!("sudo userdel --remove {username}"));
-            Ok(())
-        }
-        Step::ComposePull {
-            username,
-            compose_dir,
-        } => {
-            println!("  Pulling compose images...");
-            run(&format!(
-                "cd {} && sudo -H -u {username} podman compose pull",
-                compose_dir.display()
-            ))
-        }
-        Step::ComposeUp {
-            username,
-            compose_dir,
-        } => {
-            println!("  Starting compose stack...");
-            run(&format!(
-                "cd {} && sudo -H -u {username} podman compose up -d",
-                compose_dir.display()
-            ))?;
-            created.push(Created::ComposeStack {
-                username: username.clone(),
-                compose_dir: compose_dir.clone(),
-            });
-            Ok(())
-        }
-        Step::ComposeDown {
-            username,
-            compose_dir,
-        } => {
-            let _ = run(&format!(
-                "cd {} && sudo -H -u {username} podman compose down",
-                compose_dir.display()
-            ));
             Ok(())
         }
     }

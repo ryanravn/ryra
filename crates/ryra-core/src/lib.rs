@@ -11,12 +11,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use config::ConfigPaths;
-use config::schema::{
-    CloudflareCredentials, Config, ExposureMode, InstalledDeployMode, InstalledService,
-};
+use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledService};
 use error::{Error, Result};
 use generate::GeneratedFile;
-use registry::service_def::DeployMode;
 use registry::service_def::PortProtocol;
 
 // --- Per-service user conventions ---
@@ -119,21 +116,6 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Remove a Linux user and their home directory.
     RemoveUser { username: String },
-    /// Pull images for a compose stack as a specific user.
-    ComposePull {
-        username: String,
-        compose_dir: PathBuf,
-    },
-    /// Start a compose stack (`podman compose up -d`).
-    ComposeUp {
-        username: String,
-        compose_dir: PathBuf,
-    },
-    /// Stop a compose stack (`podman compose down`).
-    ComposeDown {
-        username: String,
-        compose_dir: PathBuf,
-    },
 }
 
 impl Step {
@@ -196,27 +178,6 @@ impl Step {
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
-            Step::ComposePull {
-                username,
-                compose_dir,
-            } => format!(
-                "cd {} && sudo -H -u {username} podman compose pull",
-                compose_dir.display()
-            ),
-            Step::ComposeUp {
-                username,
-                compose_dir,
-            } => format!(
-                "cd {} && sudo -H -u {username} podman compose up -d",
-                compose_dir.display()
-            ),
-            Step::ComposeDown {
-                username,
-                compose_dir,
-            } => format!(
-                "cd {} && sudo -H -u {username} podman compose down",
-                compose_dir.display()
-            ),
         }
     }
 }
@@ -260,13 +221,14 @@ pub struct AddResult {
     pub domain: Option<String>,
     pub username: String,
     pub warnings: Vec<Warning>,
-    pub deploy_mode: InstalledDeployMode,
     pub repo_url: String,
     pub host_port: Option<u16>,
     /// Allocated ports for this service (port_name, host_port).
     pub allocated_ports: Vec<(String, u16)>,
     /// Names of auto-generated secrets (values are in .env).
     pub generated_secrets: Vec<String>,
+    /// The generated .env content (for post-install processing without needing sudo).
+    pub env_content: String,
 }
 
 pub struct RemoveResult {
@@ -292,7 +254,7 @@ pub struct UpdateResult {
     pub username: String,
 }
 
-pub const DEFAULT_REPO: &str = "https://raw.githubusercontent.com/ryanravn/ryra/main/registry.json";
+pub const DEFAULT_REPO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry");
 
 /// Resolve which repo to use and ensure it's cached.
 /// Returns (repo_url, repo_dir).
@@ -374,8 +336,8 @@ pub fn add_service(
     service_name: &str,
     domain: Option<&str>,
     exposure: ExposureMode,
+    auth_kind: Option<registry::service_def::AuthKind>,
     env_overrides: &BTreeMap<String, String>,
-    compose_file_override: Option<&str>,
     repo_url: &str,
     repo_dir: &Path,
 ) -> Result<AddResult> {
@@ -387,6 +349,11 @@ pub fn add_service(
     }
 
     let reg_service = registry::find_service(repo_dir, service_name)?;
+
+    // Validate: architecture compatibility
+    if let Some(msg) = reg_service.def.check_architecture() {
+        return Err(Error::UnsupportedArchitecture(msg));
+    }
 
     // Validate: all required services must be installed
     let missing_requires: Vec<&str> = reg_service
@@ -403,16 +370,12 @@ pub fn add_service(
         });
     }
 
-    // Auth integration implies authentik must be installed and configured
-    if reg_service.def.integrations.auth {
-        let authentik_installed = config.services.iter().any(|s| s.name == "authentik");
-        if !authentik_installed || config.auth.is_none() {
-            return Err(Error::AuthNotConfigured);
-        }
+    // If the user chose to enable auth, an auth provider must be configured
+    if auth_kind.is_some() && config.auth.is_none() {
+        return Err(Error::AuthNotConfigured);
     }
 
     let has_nginx = reg_service.def.nginx.is_some();
-    let is_compose = reg_service.def.service.deploy.is_compose();
     let proxied = exposure.needs_domain();
 
     // Validate: proxied modes require nginx config
@@ -454,12 +417,12 @@ pub fn add_service(
         service_def: &reg_service.def,
         domain,
         exposure: &exposure,
+        auth_kind: auth_kind.as_ref(),
         host_port,
         quadlet_dir: &quadlet_dir,
         nginx_dir,
         env_overrides,
         service_dir: &reg_service.service_dir,
-        compose_file_override,
     })?;
     let generated = output.service;
     let cross_service_files = output.cross_service_files;
@@ -467,7 +430,7 @@ pub fn add_service(
     // Generate warnings
     let mut warnings = Vec::new();
 
-    if proxied && !reg_service.def.integrations.auth {
+    if proxied && auth_kind.is_none() {
         warnings.push(Warning::NoAuthPublicExposure {
             service_name: service_name.to_string(),
             exposure: exposure.clone(),
@@ -635,77 +598,63 @@ pub fn add_service(
         username: username.clone(),
     });
 
-    // 4-7: Deploy mode specific steps
-    match generated {
-        generate::GeneratedService::Quadlet {
-            files,
-            env_file,
-            nginx_site,
-        } => {
-            // Pull main image
-            if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
-                steps.push(Step::PullImage {
-                    image: image.clone(),
-                    username: Some(username.clone()),
-                });
-            }
+    // Capture env content before it's moved into steps
+    let env_content = generated.env_file.content.clone();
 
-            // Write quadlet + .env + nginx files
-            for file in files {
-                steps.push(Step::WriteFile(file));
-            }
-            steps.push(Step::WriteFile(env_file));
-            if let Some(nginx_site) = nginx_site {
-                steps.push(Step::WriteFile(nginx_site));
-            }
+    // 4. Pull all images (primary + sidecars, deduplicated)
+    for image in reg_service.def.all_images() {
+        steps.push(Step::PullImage {
+            image: image.to_string(),
+            username: Some(username.clone()),
+        });
+    }
 
-            // Fix ownership, start via systemd
-            steps.push(Step::Chown {
-                path: home_dir,
-                username: username.clone(),
-            });
-            steps.push(Step::DaemonReload {
-                username: username.clone(),
-            });
+    // 5. Write quadlet + .env + nginx files
+    let generate::GeneratedService {
+        files,
+        env_file,
+        nginx_site,
+    } = generated;
 
-            // Dependencies start automatically via Requires=/After= in the quadlet
-            steps.push(Step::StartService {
-                username: username.clone(),
-                unit: service_name.to_string(),
-            });
-        }
-        generate::GeneratedService::Compose {
-            compose_file,
-            env_file,
-            systemd_unit,
-            nginx_site,
-        } => {
-            // Write compose file, .env, systemd unit
-            steps.push(Step::WriteFile(compose_file));
-            steps.push(Step::WriteFile(env_file));
-            steps.push(Step::WriteFile(systemd_unit));
-            if let Some(nginx_site) = nginx_site {
-                steps.push(Step::WriteFile(nginx_site));
-            }
+    for file in files {
+        steps.push(Step::WriteFile(file));
+    }
+    steps.push(Step::WriteFile(env_file));
+    if let Some(nginx_site) = nginx_site {
+        steps.push(Step::WriteFile(nginx_site));
+    }
 
-            // Fix ownership, pull images, start compose stack
-            steps.push(Step::Chown {
-                path: home_dir.clone(),
-                username: username.clone(),
-            });
-            steps.push(Step::ComposePull {
-                username: username.clone(),
-                compose_dir: home_dir,
-            });
-            steps.push(Step::DaemonReload {
-                username: username.clone(),
-            });
-            steps.push(Step::StartService {
-                username: username.clone(),
-                unit: format!("{service_name}-compose"),
-            });
+    // 6. Create bind mount directories (must exist before container starts)
+    let all_volumes = reg_service
+        .def
+        .volumes
+        .iter()
+        .chain(reg_service.def.containers.iter().flat_map(|c| c.volumes.iter()));
+    for vol in all_volumes {
+        if let Some(ref host_path) = vol.host_path {
+            // Replace %h with actual home dir path
+            let resolved = host_path.replace("%h", &home_dir.to_string_lossy());
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: PathBuf::from(resolved).join(".keep"),
+                content: String::new(),
+            }));
         }
     }
+
+    // 7. Fix ownership, start via systemd
+    steps.push(Step::Chown {
+        path: home_dir,
+        username: username.clone(),
+    });
+    steps.push(Step::DaemonReload {
+        username: username.clone(),
+    });
+
+    // 7. Start — dependencies start automatically via Requires=/After= in the quadlet
+    steps.push(Step::StartService {
+        username: username.clone(),
+        unit: service_name.to_string(),
+    });
 
     // Write cross-service files (e.g., auth blueprints to Authentik's directory)
     for file in cross_service_files {
@@ -718,12 +667,6 @@ pub fn add_service(
             unit: "nginx".into(),
         });
     }
-
-    let deploy_mode = if is_compose {
-        InstalledDeployMode::Compose
-    } else {
-        InstalledDeployMode::Quadlet
-    };
 
     // Collect post-install info
     let allocated_ports: Vec<(String, u16)> = reg_service
@@ -763,11 +706,11 @@ pub fn add_service(
         domain: domain.map(|d| d.to_string()),
         username,
         warnings,
-        deploy_mode,
         repo_url: repo_url.to_string(),
         host_port,
         allocated_ports,
         generated_secrets,
+        env_content,
     })
 }
 
@@ -786,22 +729,12 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let domain = service.domain.clone();
     let was_proxied = domain.is_some();
 
-    // Stop the service based on deploy mode
+    // Stop the service
     let mut steps = Vec::new();
-    match &service.deploy_mode {
-        InstalledDeployMode::Quadlet => {
-            steps.push(Step::StopService {
-                username: username.clone(),
-                unit: service_name.to_string(),
-            });
-        }
-        InstalledDeployMode::Compose => {
-            steps.push(Step::ComposeDown {
-                username: username.clone(),
-                compose_dir: service_home(service_name),
-            });
-        }
-    }
+    steps.push(Step::StopService {
+        username: username.clone(),
+        unit: service_name.to_string(),
+    });
     steps.push(Step::DisableLinger {
         username: username.clone(),
     });
@@ -812,12 +745,14 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         username: username.clone(),
     });
 
-    // Clean up auth blueprint if authentik is installed
-    let authentik_blueprint = service_home("authentik")
-        .join("blueprints")
-        .join(format!("{service_name}.yaml"));
-    if authentik_blueprint.exists() {
-        steps.push(Step::RemoveFile(authentik_blueprint));
+    // Clean up auth blueprint if using managed authentik
+    if let Some(config::schema::AuthCredentials::Authentik { .. }) = &config.auth {
+        let authentik_blueprint = service_home("authentik")
+            .join("blueprints")
+            .join(format!("{service_name}.yaml"));
+        if authentik_blueprint.exists() {
+            steps.push(Step::RemoveFile(authentik_blueprint));
+        }
     }
 
     // Clean up nginx if service was proxied
@@ -869,11 +804,13 @@ pub struct FinalizeAddParams<'a> {
     pub service_name: &'a str,
     pub domain: Option<&'a str>,
     pub exposure: ExposureMode,
-    pub deploy_mode: InstalledDeployMode,
+    pub auth_kind: Option<registry::service_def::AuthKind>,
     pub repo: &'a str,
     pub host_port: Option<u16>,
     pub allocated_ports: &'a [(String, u16)],
     pub repo_dir: &'a Path,
+    /// The generated .env content, used for post-install config (e.g., auth auto-setup).
+    pub env_content: &'a str,
 }
 
 /// Called after add steps succeed — records the service in config and saves a snapshot.
@@ -889,32 +826,28 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         domain: params.domain.map(|d| d.to_string()),
         version: "0.1.0".to_string(),
         exposure: params.exposure,
-        deploy_mode: params.deploy_mode,
         repo: params.repo.to_string(),
         host_port: params.host_port,
         ports,
+        auth_kind: params.auth_kind,
     });
 
     // Auto-configure [auth] when authentik is installed (so subsequent services
-    // with integrations.auth = true can reference it without manual setup).
+    // can use it for auth without manual setup).
     if params.service_name == "authentik" {
-        let env_path = service_home("authentik").join(".env");
-        if let Ok(env_content) = std::fs::read_to_string(&env_path) {
-            if let Some(token) = parse_env_var(&env_content, "AUTHENTIK_BOOTSTRAP_TOKEN") {
-                let url = match params.domain {
-                    Some(domain) => format!("https://{domain}"),
-                    None => {
-                        // Local mode — use localhost with the allocated port
-                        let port = params.host_port.unwrap_or(9000);
-                        format!("http://localhost:{port}")
-                    }
-                };
-                config.auth = Some(config::schema::AuthCredentials::Authentik {
-                    mode: config::schema::AuthentikMode::Managed,
-                    url,
-                    api_token: token,
-                });
-            }
+        if let Some(token) = parse_env_var(params.env_content, "AUTHENTIK_BOOTSTRAP_TOKEN") {
+            let url = match params.domain {
+                Some(domain) => format!("https://{domain}"),
+                None => {
+                    // Local mode — use localhost with the allocated port
+                    let port = params.host_port.unwrap_or(9000);
+                    format!("http://localhost:{port}")
+                }
+            };
+            config.auth = Some(config::schema::AuthCredentials::Authentik {
+                url,
+                api_token: token,
+            });
         }
     }
 
@@ -991,20 +924,10 @@ pub fn update_service(
     let mut steps = Vec::new();
 
     // 1. Stop the service
-    match &service.deploy_mode {
-        InstalledDeployMode::Quadlet => {
-            steps.push(Step::StopService {
-                username: username.clone(),
-                unit: service_name.to_string(),
-            });
-        }
-        InstalledDeployMode::Compose => {
-            steps.push(Step::ComposeDown {
-                username: username.clone(),
-                compose_dir: home_dir.clone(),
-            });
-        }
-    }
+    steps.push(Step::StopService {
+        username: username.clone(),
+        unit: service_name.to_string(),
+    });
 
     // 2. Regenerate all files from the current registry definition
     let output = generate::generate_service(generate::GenerateServiceParams {
@@ -1012,81 +935,50 @@ pub fn update_service(
         service_def: &reg_service.def,
         domain: service.domain.as_deref(),
         exposure: &service.exposure,
+        auth_kind: service.auth_kind.as_ref(),
         host_port: service.host_port,
         quadlet_dir: &quadlet_dir,
         nginx_dir,
         env_overrides,
         service_dir: &reg_service.service_dir,
-        compose_file_override: None,
     })?;
     let generated = output.service;
     let cross_service_files = output.cross_service_files;
 
-    // 3. Pull new image if it changed
-    if let DeployMode::Quadlet { ref image, .. } = reg_service.def.service.deploy {
+    // 3. Pull all images (primary + sidecars)
+    for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
-            image: image.clone(),
+            image: image.to_string(),
             username: Some(username.clone()),
         });
     }
 
     // 4. Write files and restart
-    match generated {
-        generate::GeneratedService::Quadlet {
-            files,
-            env_file,
-            nginx_site,
-        } => {
-            for file in files {
-                steps.push(Step::WriteFile(file));
-            }
-            steps.push(Step::WriteFile(env_file));
-            if let Some(nginx_site) = nginx_site {
-                steps.push(Step::WriteFile(nginx_site));
-            }
+    let generate::GeneratedService {
+        files,
+        env_file,
+        nginx_site,
+    } = generated;
 
-            steps.push(Step::Chown {
-                path: home_dir,
-                username: username.clone(),
-            });
-            steps.push(Step::DaemonReload {
-                username: username.clone(),
-            });
-            steps.push(Step::StartService {
-                username: username.clone(),
-                unit: service_name.to_string(),
-            });
-        }
-        generate::GeneratedService::Compose {
-            compose_file,
-            env_file,
-            systemd_unit,
-            nginx_site,
-        } => {
-            steps.push(Step::WriteFile(compose_file));
-            steps.push(Step::WriteFile(env_file));
-            steps.push(Step::WriteFile(systemd_unit));
-            if let Some(nginx_site) = nginx_site {
-                steps.push(Step::WriteFile(nginx_site));
-            }
-
-            steps.push(Step::Chown {
-                path: home_dir.clone(),
-                username: username.clone(),
-            });
-            steps.push(Step::ComposePull {
-                username: username.clone(),
-                compose_dir: home_dir,
-            });
-            steps.push(Step::DaemonReload {
-                username: username.clone(),
-            });
-            steps.push(Step::StartService {
-                username: username.clone(),
-                unit: format!("{service_name}-compose"),
-            });
-        }
+    for file in files {
+        steps.push(Step::WriteFile(file));
     }
+    steps.push(Step::WriteFile(env_file));
+    if let Some(nginx_site) = nginx_site {
+        steps.push(Step::WriteFile(nginx_site));
+    }
+
+    steps.push(Step::Chown {
+        path: home_dir,
+        username: username.clone(),
+    });
+    steps.push(Step::DaemonReload {
+        username: username.clone(),
+    });
+    steps.push(Step::StartService {
+        username: username.clone(),
+        unit: service_name.to_string(),
+    });
 
     // Write cross-service files (e.g., auth blueprints)
     for file in cross_service_files {
@@ -1527,7 +1419,7 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
                 name: name.clone(),
                 description: reg_svc.def.service.description,
                 is_web: reg_svc.def.nginx.is_some(),
-                is_compose: reg_svc.def.service.deploy.is_compose(),
+                has_sidecars: !reg_svc.def.containers.is_empty(),
                 installed,
             }
         })
@@ -1540,7 +1432,7 @@ pub struct SearchResult {
     pub name: String,
     pub description: String,
     pub is_web: bool,
-    pub is_compose: bool,
+    pub has_sidecars: bool,
     pub installed: bool,
 }
 
@@ -1642,7 +1534,7 @@ pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail
         name: def.service.name.clone(),
         description: def.service.description.clone(),
         url: def.service.url.clone(),
-        is_compose: def.service.deploy.is_compose(),
+        has_sidecars: !def.containers.is_empty(),
         ports: def
             .ports
             .iter()
@@ -1662,7 +1554,7 @@ pub struct ServiceDetail {
     pub name: String,
     pub description: String,
     pub url: Option<String>,
-    pub is_compose: bool,
+    pub has_sidecars: bool,
     pub ports: Vec<(u16, PortProtocol, String)>,
     pub env_vars: Vec<(String, Option<String>)>,
     pub installed_domain: Option<String>,

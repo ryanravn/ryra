@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use crate::config::schema::{AuthCredentials, Config};
-use crate::registry::service_def::{EnvFormat, ServiceDef};
+use crate::config::schema::Config;
+use crate::registry::service_def::{AuthKind, EnvFormat, ServiceDef};
 use crate::system::secret;
 
 /// Build the template context for rendering env var values.
@@ -10,6 +10,7 @@ pub fn build_context(
     config: &Config,
     service_def: &ServiceDef,
     domain: &str,
+    auth_kind: Option<&AuthKind>,
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
 
@@ -31,10 +32,10 @@ pub fn build_context(
         ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
-    // auth.* — per-service OIDC credentials (when auth integration is enabled)
-    if service_def.integrations.auth {
-        if let Some(AuthCredentials::Authentik { url, .. }) = &config.auth {
-            ctx.insert("auth.url".into(), url.clone());
+    // auth.* — per-service OIDC credentials (when user chose to enable auth)
+    if auth_kind.is_some() {
+        if let Some(auth) = &config.auth {
+            ctx.insert("auth.url".into(), auth.url().to_string());
             ctx.insert(
                 "auth.client_id".into(),
                 secret::generate(&EnvFormat::Uuid, None),

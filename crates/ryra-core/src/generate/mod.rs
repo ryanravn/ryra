@@ -8,23 +8,15 @@ pub mod tunnel;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::schema::{Config, ExposureMode};
-use crate::error::{Error, Result};
-use crate::registry::service_def::{DeployMode, EnvVar, ServiceDef};
+use crate::config::schema::{AuthCredentials, Config, ExposureMode};
+use crate::error::Result;
+use crate::registry::service_def::{AuthKind, EnvVar, ServiceDef};
 
 /// Everything generated for a service, ready to be written to disk.
-pub enum GeneratedService {
-    Quadlet {
-        files: Vec<GeneratedFile>,
-        env_file: GeneratedFile,
-        nginx_site: Option<GeneratedFile>,
-    },
-    Compose {
-        compose_file: GeneratedFile,
-        env_file: GeneratedFile,
-        systemd_unit: GeneratedFile,
-        nginx_site: Option<GeneratedFile>,
-    },
+pub struct GeneratedService {
+    pub files: Vec<GeneratedFile>,
+    pub env_file: GeneratedFile,
+    pub nginx_site: Option<GeneratedFile>,
 }
 
 pub struct GeneratedFile {
@@ -45,12 +37,13 @@ pub struct GenerateServiceParams<'a> {
     pub service_def: &'a ServiceDef,
     pub domain: Option<&'a str>,
     pub exposure: &'a ExposureMode,
+    /// The auth kind the user chose to enable, if any.
+    pub auth_kind: Option<&'a AuthKind>,
     pub host_port: Option<u16>,
     pub quadlet_dir: &'a Path,
     pub nginx_dir: &'a Path,
     pub env_overrides: &'a BTreeMap<String, String>,
     pub service_dir: &'a Path,
-    pub compose_file_override: Option<&'a str>,
 }
 
 /// Generate all files for a service based on its deploy mode.
@@ -63,8 +56,9 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         params.config,
         params.service_def,
         params.domain.unwrap_or_default(),
+        params.auth_kind,
     );
-    let rendered_env = render_env_vars(params.service_def, &ctx, params.env_overrides)?;
+    let rendered_env = render_env_vars(params.service_def, &ctx, params.env_overrides, params.auth_kind)?;
 
     // Build .env file content
     let home_dir = crate::service_home(name);
@@ -86,42 +80,29 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         params.nginx_dir,
     )?;
 
-    let service = match &params.service_def.service.deploy {
-        DeployMode::Quadlet { image, command } => generate_quadlet(GenerateQuadletParams {
-            name,
-            image,
-            command: command.as_deref(),
-            service_def: params.service_def,
-            exposure: params.exposure,
-            host_port: params.host_port,
-            quadlet_dir: params.quadlet_dir,
-            env_file,
-            nginx_site,
-        }),
-        DeployMode::Compose { file, .. } => {
-            let compose_filename = params.compose_file_override.unwrap_or(file);
-            generate_compose(
-                name,
-                params.service_dir,
-                compose_filename,
-                params.quadlet_dir,
-                env_file,
-                nginx_site,
-            )
-        }
-    }?;
+    let service = generate_quadlet(GenerateQuadletParams {
+        name,
+        service_def: params.service_def,
+        exposure: params.exposure,
+        host_port: params.host_port,
+        quadlet_dir: params.quadlet_dir,
+        env_file,
+        nginx_site,
+    })?;
 
-    // Generate auth blueprint if this service uses auth integration
+    // Generate auth blueprint for OIDC + managed Authentik
     let mut cross_service_files = Vec::new();
-    if params.service_def.integrations.auth {
-        if let (Some(client_id), Some(client_secret)) = (
-            ctx.get("auth.client_id"),
-            ctx.get("auth.client_secret"),
-        ) {
-            let domain = params.domain.unwrap_or("localhost");
-            cross_service_files.push(blueprint::generate_authentik_blueprint(
-                name, domain, client_id, client_secret,
-            ));
+    if let Some(AuthKind::Oidc) = params.auth_kind {
+        if let Some(AuthCredentials::Authentik { .. }) = &params.config.auth {
+            if let (Some(client_id), Some(client_secret)) = (
+                ctx.get("auth.client_id"),
+                ctx.get("auth.client_secret"),
+            ) {
+                let domain = params.domain.unwrap_or("localhost");
+                cross_service_files.push(blueprint::generate_authentik_blueprint(
+                    name, domain, client_id, client_secret,
+                ));
+            }
         }
     }
 
@@ -160,8 +141,6 @@ fn build_env_file(
 /// Parameters for [`generate_quadlet`].
 struct GenerateQuadletParams<'a> {
     name: &'a str,
-    image: &'a str,
-    command: Option<&'a str>,
     service_def: &'a ServiceDef,
     exposure: &'a ExposureMode,
     host_port: Option<u16>,
@@ -170,13 +149,60 @@ struct GenerateQuadletParams<'a> {
     nginx_site: Option<GeneratedFile>,
 }
 
-/// Generate quadlet files for a single-container service.
+/// Generate quadlet files for a service (primary + sidecar containers).
 fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedService> {
     let name = params.name;
+    let service_def = params.service_def;
     let mut files = Vec::new();
 
-    let port_mappings: Vec<quadlet::PortMapping> = params
-        .service_def
+    let bind_address = match params.exposure {
+        ExposureMode::HostPort => quadlet::BindAddress::Any,
+        _ => quadlet::BindAddress::Localhost,
+    };
+
+    // Network — shared by all containers
+    let network_name = name.to_string();
+    files.push(GeneratedFile {
+        path: params.quadlet_dir.join(format!("{name}.network")),
+        content: quadlet::render_network(&network_name),
+    });
+
+    // Volumes — primary container
+    for vol in &service_def.volumes {
+        if vol.host_path.is_none() {
+            let vol_name = format!("{name}-{}", vol.name);
+            files.push(GeneratedFile {
+                path: params.quadlet_dir.join(format!("{vol_name}.volume")),
+                content: quadlet::render_volume(&vol_name),
+            });
+        }
+    }
+
+    // Volumes — sidecar containers
+    for container in &service_def.containers {
+        for vol in &container.volumes {
+            if vol.host_path.is_none() {
+                let vol_name = format!("{name}-{}", vol.name);
+                // Avoid duplicating volume files
+                let vol_path = params.quadlet_dir.join(format!("{vol_name}.volume"));
+                if !files.iter().any(|f| f.path == vol_path) {
+                    files.push(GeneratedFile {
+                        path: vol_path,
+                        content: quadlet::render_volume(&vol_name),
+                    });
+                }
+            }
+        }
+    }
+
+    // Primary container — depends on all sidecars
+    let sidecar_units: Vec<String> = service_def
+        .containers
+        .iter()
+        .map(|c| format!("{name}-{}", c.name))
+        .collect();
+
+    let port_mappings: Vec<quadlet::PortMapping> = service_def
         .ports
         .iter()
         .map(|p| quadlet::PortMapping {
@@ -186,124 +212,83 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
         })
         .collect();
 
-    let bind_address = match params.exposure {
-        ExposureMode::HostPort => quadlet::BindAddress::Any,
-        _ => quadlet::BindAddress::Localhost,
-    };
-
-    // Network
-    let network_name = name.to_string();
-    files.push(GeneratedFile {
-        path: params.quadlet_dir.join(format!("{name}.network")),
-        content: quadlet::render_network(&network_name),
-    });
-
-    // Volumes
-    for vol in &params.service_def.volumes {
-        let vol_name = format!("{name}-{}", vol.name);
-        files.push(GeneratedFile {
-            path: params.quadlet_dir.join(format!("{vol_name}.volume")),
-            content: quadlet::render_volume(&vol_name),
-        });
-    }
-
-    let owned_volume_mappings: Vec<(String, String)> = params
-        .service_def
-        .volumes
-        .iter()
-        .map(|v| (format!("{name}-{}", v.name), v.mount_path.clone()))
-        .collect();
-
-    let volume_refs: Vec<quadlet::VolumeMapping> = owned_volume_mappings
-        .iter()
-        .map(|(name, path)| quadlet::VolumeMapping {
-            volume_name: name,
-            mount_path: path,
-        })
-        .collect();
-
-    // Container
-    let container_params = quadlet::QuadletParams {
-        service_name: name,
-        image: params.image,
-        ports: &port_mappings,
-        volumes: &volume_refs,
-        network: &network_name,
-        command: params.command,
-        bind_address: &bind_address,
-    };
+    let primary_volumes = build_volume_mappings(name, &service_def.volumes);
 
     files.push(GeneratedFile {
         path: params.quadlet_dir.join(format!("{name}.container")),
-        content: quadlet::render_container(&container_params),
+        content: quadlet::render_container(&quadlet::QuadletParams {
+            service_name: name,
+            image: &service_def.service.image,
+            ports: &port_mappings,
+            volumes: &primary_volumes,
+            network: &network_name,
+            command: service_def.service.command.as_deref(),
+            bind_address: &bind_address,
+            depends_on: &sidecar_units,
+            healthcheck: None,
+            env_file: true,
+            container_name: None,
+            init: false,
+        }),
     });
 
-    Ok(GeneratedService::Quadlet {
+    // Sidecar containers
+    for container in &service_def.containers {
+        let container_name = format!("{name}-{}", container.name);
+
+        // Resolve dependencies to unit names
+        let deps: Vec<String> = container
+            .depends_on
+            .iter()
+            .map(|d| format!("{name}-{d}"))
+            .collect();
+
+        let sidecar_volumes = build_volume_mappings(name, &container.volumes);
+
+        files.push(GeneratedFile {
+            path: params.quadlet_dir.join(format!("{container_name}.container")),
+            content: quadlet::render_container(&quadlet::QuadletParams {
+                service_name: &container_name,
+                image: &container.image,
+                ports: &[],
+                volumes: &sidecar_volumes,
+                network: &network_name,
+                command: container.command.as_deref(),
+                bind_address: &quadlet::BindAddress::Localhost,
+                depends_on: &deps,
+                healthcheck: container.healthcheck.as_ref(),
+                env_file: container.env_file,
+                container_name: Some(&container.name),
+                init: container.init,
+            }),
+        });
+    }
+
+    Ok(GeneratedService {
         files,
         env_file: params.env_file,
         nginx_site: params.nginx_site,
     })
 }
 
-/// Generate compose files + .env for a multi-container stack.
-fn generate_compose(
-    name: &str,
-    service_dir: &Path,
-    compose_filename: &str,
-    _quadlet_dir: &Path,
-    env_file: GeneratedFile,
-    nginx_site: Option<GeneratedFile>,
-) -> Result<GeneratedService> {
-    let compose_src = service_dir.join(compose_filename);
-    let compose_content =
-        std::fs::read_to_string(&compose_src).map_err(|source| Error::FileRead {
-            path: compose_src,
-            source,
-        })?;
-
-    let home_dir = crate::service_home(name);
-    let username = crate::service_user(name);
-
-    let compose_file = GeneratedFile {
-        path: home_dir.join("docker-compose.yml"),
-        content: compose_content,
-    };
-
-    // Compose units are regular systemd .service files — they go in
-    // ~/.config/systemd/user/, not the quadlet directory (which only
-    // handles .container, .volume, .network, etc.).
-    let systemd_user_dir = home_dir.join(".config").join("systemd").join("user");
-    let systemd_unit = GeneratedFile {
-        path: systemd_user_dir.join(format!("{name}-compose.service")),
-        content: render_compose_unit(name, &username, &home_dir),
-    };
-
-    Ok(GeneratedService::Compose {
-        compose_file,
-        env_file,
-        systemd_unit,
-        nginx_site,
-    })
-}
-
-fn render_compose_unit(name: &str, _username: &str, home_dir: &Path) -> String {
-    let dir = home_dir.display();
-    format!(
-        "[Unit]\n\
-         Description={name}\n\
-         \n\
-         [Service]\n\
-         Type=oneshot\n\
-         RemainAfterExit=yes\n\
-         WorkingDirectory={dir}\n\
-         ExecStart=/usr/bin/podman compose up -d\n\
-         ExecStop=/usr/bin/podman compose down\n\
-         Restart=no\n\
-         TimeoutStartSec=300\n\
-         \n\
-         [Install]\n\
-         WantedBy=default.target\n"
-    )
+/// Build volume mappings for quadlet container rendering.
+fn build_volume_mappings(service_name: &str, volumes: &[crate::registry::service_def::VolumeDef]) -> Vec<quadlet::VolumeMapping> {
+    volumes
+        .iter()
+        .map(|v| {
+            if let Some(ref host_path) = v.host_path {
+                quadlet::VolumeMapping::Bind {
+                    host_path: host_path.clone(),
+                    mount_path: v.mount_path.clone(),
+                }
+            } else {
+                quadlet::VolumeMapping::Named {
+                    volume_name: format!("{service_name}-{}", v.name),
+                    mount_path: v.mount_path.clone(),
+                }
+            }
+        })
+        .collect()
 }
 
 // --- Shared helpers ---
@@ -312,6 +297,7 @@ fn render_env_vars(
     service_def: &ServiceDef,
     ctx: &BTreeMap<String, String>,
     env_overrides: &BTreeMap<String, String>,
+    auth_kind: Option<&AuthKind>,
 ) -> Result<Vec<EnvVar>> {
     let mut rendered: Vec<EnvVar> = service_def
         .env
@@ -347,7 +333,7 @@ fn render_env_vars(
             }
         }
     }
-    if service_def.integrations.auth {
+    if auth_kind.is_some() {
         for (env_name, value_template) in &service_def.mappings.auth {
             let value = template::render(value_template, ctx)?;
             if !value.is_empty() {

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::config::{self, ConfigPaths};
 use crate::error::Result;
 use crate::registry;
-use crate::registry::service_def::ServiceDef;
+use crate::registry::service_def::{AuthKind, ServiceDef};
 
 /// A single change between the installed snapshot and the current registry.
 #[derive(Debug)]
@@ -51,8 +51,8 @@ pub enum Change {
         new: bool,
     },
     AuthIntegrationChanged {
-        old: bool,
-        new: bool,
+        old: Vec<AuthKind>,
+        new: Vec<AuthKind>,
     },
     DescriptionChanged {
         old: String,
@@ -89,7 +89,14 @@ impl std::fmt::Display for Change {
                 write!(f, "smtp integration: {old} → {new}")
             }
             Change::AuthIntegrationChanged { old, new } => {
-                write!(f, "auth integration: {old} → {new}")
+                let fmt = |kinds: &[AuthKind]| {
+                    if kinds.is_empty() {
+                        "none".to_string()
+                    } else {
+                        kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(", ")
+                    }
+                };
+                write!(f, "auth integration: {} → {}", fmt(old), fmt(new))
             }
             Change::DescriptionChanged { old, new } => {
                 write!(f, "description: \"{old}\" → \"{new}\"")
@@ -146,20 +153,10 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
     let mut changes = Vec::new();
 
     // Image
-    let old_image = match &old.service.deploy {
-        crate::registry::service_def::DeployMode::Quadlet { image, .. } => Some(image.as_str()),
-        _ => None,
-    };
-    let new_image = match &new.service.deploy {
-        crate::registry::service_def::DeployMode::Quadlet { image, .. } => Some(image.as_str()),
-        _ => None,
-    };
-    if let (Some(old_img), Some(new_img)) = (old_image, new_image)
-        && old_img != new_img
-    {
+    if old.service.image != new.service.image {
         changes.push(Change::ImageChanged {
-            old: old_img.to_string(),
-            new: new_img.to_string(),
+            old: old.service.image.clone(),
+            new: new.service.image.clone(),
         });
     }
 
@@ -259,8 +256,8 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
     }
     if old.integrations.auth != new.integrations.auth {
         changes.push(Change::AuthIntegrationChanged {
-            old: old.integrations.auth,
-            new: new.integrations.auth,
+            old: old.integrations.auth.clone(),
+            new: new.integrations.auth.clone(),
         });
     }
 
