@@ -578,29 +578,30 @@ pub fn add_service(
     // 0b. Ensure the auth provider has an internal nginx site for inter-service traffic.
     // Other services' containers reach auth via http://host.containers.internal:<port>.
     let auth_internal_site = PathBuf::from("/etc/ryra/nginx/sites/auth-internal.conf");
-    if needs_auth_proxy && !auth_internal_site.exists() {
-        if let Some(config::schema::AuthCredentials::Authentik { url, .. }) = &config.auth {
-            // Extract the port from the auth URL (e.g., "http://localhost:9000" → 9000)
-            let auth_port = url
-                .rsplit(':')
-                .next()
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(9000);
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: auth_internal_site,
-                content: generate::nginx::render_internal_site(
-                    "authentik",
-                    auth_port,
-                    system::port::AUTH_INTERNAL_PORT,
-                ),
-            }));
-            // Restart nginx to pick up the new site. When nginx is being installed
-            // in the same `ryra add` call, the quadlet doesn't exist at planning time
-            // but will be running by the time this step executes.
-            steps.push(Step::SystemRestart {
-                unit: "nginx".into(),
-            });
-        }
+    if needs_auth_proxy
+        && !auth_internal_site.exists()
+        && let Some(config::schema::AuthCredentials::Authentik { url, .. }) = &config.auth
+    {
+        // Extract the port from the auth URL (e.g., "http://localhost:9000" → 9000)
+        let auth_port = url
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(9000);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: auth_internal_site,
+            content: generate::nginx::render_internal_site(
+                "authentik",
+                auth_port,
+                system::port::AUTH_INTERNAL_PORT,
+            ),
+        }));
+        // Restart nginx to pick up the new site. When nginx is being installed
+        // in the same `ryra add` call, the quadlet doesn't exist at planning time
+        // but will be running by the time this step executes.
+        steps.push(Step::SystemRestart {
+            unit: "nginx".into(),
+        });
     }
 
     // 1. Networking: only for proxied modes
@@ -860,21 +861,22 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let domain = service.domain.clone();
     let was_proxied = domain.is_some();
 
-    // Stop the service
-    let mut steps = Vec::new();
-    steps.push(Step::StopService {
-        username: username.clone(),
-        unit: service_name.to_string(),
-    });
-    steps.push(Step::DisableLinger {
-        username: username.clone(),
-    });
-    steps.push(Step::TerminateUserSession {
-        username: username.clone(),
-    });
-    steps.push(Step::RemoveUser {
-        username: username.clone(),
-    });
+    // Stop the service and remove the user
+    let mut steps = vec![
+        Step::StopService {
+            username: username.clone(),
+            unit: service_name.to_string(),
+        },
+        Step::DisableLinger {
+            username: username.clone(),
+        },
+        Step::TerminateUserSession {
+            username: username.clone(),
+        },
+        Step::RemoveUser {
+            username: username.clone(),
+        },
+    ];
 
     // Remove OAuth provider from authentik
     if let Some(config::schema::AuthCredentials::Authentik { url, api_token }) = &config.auth {
@@ -971,21 +973,20 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
 
     // Auto-configure [auth] when authentik is installed (so subsequent services
     // can use it for auth without manual setup).
-    if params.service_name == "authentik" {
-        if let Some(token) = parse_env_var(params.env_content, "AUTHENTIK_BOOTSTRAP_TOKEN") {
-            let url = match params.domain {
-                Some(domain) => format!("https://{domain}"),
-                None => {
-                    // Local mode — use localhost with the allocated port
-                    let port = params.host_port.unwrap_or(9000);
-                    format!("http://localhost:{port}")
-                }
-            };
-            config.auth = Some(config::schema::AuthCredentials::Authentik {
-                url,
-                api_token: token,
-            });
-        }
+    if params.service_name == "authentik"
+        && let Some(token) = parse_env_var(params.env_content, "AUTHENTIK_BOOTSTRAP_TOKEN")
+    {
+        let url = match params.domain {
+            Some(domain) => format!("https://{domain}"),
+            None => {
+                let port = params.host_port.unwrap_or(9000);
+                format!("http://localhost:{port}")
+            }
+        };
+        config.auth = Some(config::schema::AuthCredentials::Authentik {
+            url,
+            api_token: token,
+        });
     }
 
     config::save_config(&paths.config_file, &config)?;

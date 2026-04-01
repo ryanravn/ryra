@@ -809,16 +809,15 @@ async fn remove_auth_provider(
                &format!("{api}/providers/oauth2/?name={service_name}")])
         .output()
         .ok();
-    if let Some(output) = output {
-        if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-            if let Some(pk) = body["results"][0]["pk"].as_i64() {
-                let _ = Command::new("curl")
-                    .args(["-sS", "-X", "DELETE",
-                           "-H", &format!("Authorization: {auth}"),
-                           &format!("{api}/providers/oauth2/{pk}/")])
-                    .output();
-            }
-        }
+    if let Some(output) = output
+        && let Ok(body) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        && let Some(pk) = body["results"][0]["pk"].as_i64()
+    {
+        let _ = Command::new("curl")
+            .args(["-sS", "-X", "DELETE",
+                   "-H", &format!("Authorization: {auth}"),
+                   &format!("{api}/providers/oauth2/{pk}/")])
+            .output();
     }
 
     Ok(())
