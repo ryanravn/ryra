@@ -1,201 +1,5 @@
 {
   "services": {
-    "affine": {
-      "service": {
-        "name": "affine",
-        "description": "AFFiNE - privacy-focused knowledge base",
-        "url": "https://affine.pro/",
-        "image": "ghcr.io/toeverything/affine:stable",
-        "command": null,
-        "kind": "application",
-        "architecture": [
-          "amd64"
-        ]
-      },
-      "requirements": {
-        "ram": {
-          "min": 512,
-          "recommended": 1024
-        }
-      },
-      "ports": [
-        {
-          "name": "http",
-          "container_port": 3010,
-          "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "config",
-          "mount_path": "/root/.affine/config",
-          "host_path": null
-        },
-        {
-          "name": "storage",
-          "mount_path": "/root/.affine/storage",
-          "host_path": null
-        }
-      ],
-      "env": [
-        {
-          "name": "POSTGRES_USER",
-          "value": "affine",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "POSTGRES_PASSWORD",
-          "value": "{{secret.db_password}}",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "POSTGRES_DB",
-          "value": "affine",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "REDIS_SERVER_HOST",
-          "value": "redis",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "DATABASE_URL",
-          "value": "postgresql://affine:{{secret.db_password}}@postgres:5432/affine",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "AFFINE_SERVER_HOST",
-          "value": "0.0.0.0",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "AFFINE_SERVER_PORT",
-          "value": "3010",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        },
-        {
-          "name": "AFFINE_INDEXER_ENABLED",
-          "value": "false",
-          "kind": "default",
-          "prompt": null,
-          "format": "string",
-          "length": null
-        }
-      ],
-      "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
-      "containers": [
-        {
-          "name": "postgres",
-          "image": "docker.io/library/postgres:17-alpine",
-          "command": null,
-          "volumes": [
-            {
-              "name": "db-data",
-              "mount_path": "/var/lib/postgresql/data",
-              "host_path": null
-            }
-          ],
-          "env_file": true,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "pg_isready -d $POSTGRES_DB -U $POSTGRES_USER",
-            "start_period": 20,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 5
-          },
-          "init": false
-        },
-        {
-          "name": "redis",
-          "image": "docker.io/library/redis:7-alpine",
-          "command": null,
-          "volumes": [],
-          "env_file": true,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "redis-cli --raw incr ping",
-            "start_period": 20,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 3
-          },
-          "init": false
-        },
-        {
-          "name": "migration",
-          "image": "ghcr.io/toeverything/affine:stable",
-          "command": "sh -c 'node ./scripts/self-host-predeploy.js'",
-          "volumes": [
-            {
-              "name": "config",
-              "mount_path": "/root/.affine/config",
-              "host_path": null
-            },
-            {
-              "name": "storage",
-              "mount_path": "/root/.affine/storage",
-              "host_path": null
-            }
-          ],
-          "env_file": true,
-          "depends_on": [
-            "postgres",
-            "redis"
-          ],
-          "healthcheck": null,
-          "init": true
-        }
-      ],
-      "mappings": {
-        "smtp": {},
-        "auth": {
-          "OAUTH_OIDC_CLIENT_ID": "{{auth.client_id}}",
-          "OAUTH_OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
-          "OAUTH_OIDC_ENABLED": "true",
-          "OAUTH_OIDC_ISSUER": "{{auth.url}}/application/o/affine/"
-        }
-      },
-      "integrations": {
-        "auth": [
-          "oidc"
-        ],
-        "smtp": false
-      },
-      "tests": [
-        {
-          "name": "affine-responds",
-          "run": "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1",
-          "timeout": 90,
-          "env": {}
-        }
-      ],
-      "post_start": []
-    },
     "authentik": {
       "service": {
         "name": "authentik",
@@ -427,8 +231,8 @@
       "tests": [
         {
           "name": "authentik-responds",
-          "run": "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/if/flow/initial-setup/ && exit 0; sleep 2; done; exit 1",
-          "timeout": 180,
+          "run": "for i in $(seq 1 120); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/if/flow/initial-setup/ && exit 0; sleep 3; done; exit 1",
+          "timeout": 420,
           "env": {
             "AUTHENTIK_BOOTSTRAP_EMAIL": "admin@test.local",
             "AUTHENTIK_BOOTSTRAP_PASSWORD": "testpassword123"
@@ -902,7 +706,7 @@
         },
         {
           "name": "SEAFILE_SERVER_HOSTNAME",
-          "value": "{% if service.domain %}{{service.domain}}{% else %}localhost{% endif %}",
+          "value": "{{service.domain}}",
           "kind": "default",
           "prompt": null,
           "format": "string",
@@ -996,10 +800,12 @@
       "mappings": {
         "smtp": {},
         "auth": {
+          "OAUTHLIB_INSECURE_TRANSPORT": "1",
           "OAUTH_CLIENT_ID": "{{auth.client_id}}",
           "OAUTH_CLIENT_SECRET": "{{auth.client_secret}}",
+          "OAUTH_INTERNAL_DOMAIN": "{{auth.internal_url}}",
           "OAUTH_PROVIDER_DOMAIN": "{{auth.url}}",
-          "OAUTH_REDIRECT_URL": "https://{{service.domain}}/oauth/callback/"
+          "OAUTH_REDIRECT_URL": "{{service.url}}/oauth/callback/"
         }
       },
       "integrations": {
@@ -1015,8 +821,7 @@
           "timeout": 660,
           "env": {
             "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
-            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123",
-            "SEAFILE_SERVER_HOSTNAME": "seafile.test.local"
+            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123"
           }
         },
         {
@@ -1025,16 +830,15 @@
           "timeout": 30,
           "env": {
             "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
-            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123",
-            "SEAFILE_SERVER_HOSTNAME": "seafile.test.local"
+            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123"
           }
         }
       ],
       "post_start": [
         {
           "name": "inject-seafile-oauth",
-          "run": "[ -z \"$OAUTH_CLIENT_ID\" ] && exit 0\n\nCONF=/var/lib/seafile/shared/seafile/conf\n\n# Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume\necho \"Waiting for Seafile to initialize...\"\nfor i in $(seq 1 180); do\n  [ -f \"$CONF/seahub_settings.py\" ] && break\n  sleep 2\ndone\n[ -f \"$CONF/seahub_settings.py\" ] || { echo \"seahub_settings.py not found after 360s\"; exit 1; }\n\n# Write the OAuth Python config alongside seahub_settings.py\ncat > \"$CONF/seahub_settings_oauth.py\" << EOF\nENABLE_OAUTH = True\nOAUTH_CREATE_UNKNOWN_USER = True\nOAUTH_ACTIVATE_USER_AFTER_CREATION = True\nOAUTH_CLIENT_ID = \"$OAUTH_CLIENT_ID\"\nOAUTH_CLIENT_SECRET = \"$OAUTH_CLIENT_SECRET\"\nOAUTH_REDIRECT_URL = \"$OAUTH_REDIRECT_URL\"\nOAUTH_PROVIDER_DOMAIN = \"$OAUTH_PROVIDER_DOMAIN\"\nOAUTH_PROVIDER = \"authentik\"\nOAUTH_AUTHORIZATION_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/authorize/\"\nOAUTH_TOKEN_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/token/\"\nOAUTH_USER_INFO_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/userinfo/\"\nOAUTH_SCOPE = [\"openid\", \"profile\", \"email\"]\nOAUTH_ATTRIBUTE_MAP = {\"email\": (True, \"contact_email\"), \"name\": (False, \"name\"), \"sub\": (False, \"uid\")}\nEOF\nchown seafile:seafile \"$CONF/seahub_settings_oauth.py\"\n\n# Append import line if not already present\ngrep -q seahub_settings_oauth \"$CONF/seahub_settings.py\" || echo \"exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())\" >> \"$CONF/seahub_settings.py\"\n\necho \"OAuth config injected into seahub_settings.py\"\n",
-          "timeout": 420
+          "run": "[ -z \"$OAUTH_CLIENT_ID\" ] && exit 0\n\nCONF=/var/lib/seafile/shared/seafile/conf\n\n# Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume\necho \"Waiting for $CONF/seahub_settings.py to appear (Seafile creates it on first boot)...\"\nfor i in $(seq 1 60); do\n  [ -f \"$CONF/seahub_settings.py\" ] && break\n  ELAPSED=$((i * 10))\n  echo \"  not yet — retrying in 10s (${ELAPSED}s elapsed)\"\n  sleep 10\ndone\n[ -f \"$CONF/seahub_settings.py\" ] || { echo \"ERROR: $CONF/seahub_settings.py not found after 600s — check: sudo -H -u seafile sh -c 'cd / && podman logs systemd-seafile'\"; exit 1; }\n\n# Write the OAuth Python config alongside seahub_settings.py\ncat > \"$CONF/seahub_settings_oauth.py\" << EOF\nENABLE_OAUTH = True\nOAUTH_CREATE_UNKNOWN_USER = True\nOAUTH_ACTIVATE_USER_AFTER_CREATION = True\nOAUTH_CLIENT_ID = \"$OAUTH_CLIENT_ID\"\nOAUTH_CLIENT_SECRET = \"$OAUTH_CLIENT_SECRET\"\nOAUTH_REDIRECT_URL = \"$OAUTH_REDIRECT_URL\"\nOAUTH_PROVIDER_DOMAIN = \"$OAUTH_PROVIDER_DOMAIN\"\nOAUTH_PROVIDER = \"authentik\"\nOAUTH_AUTHORIZATION_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/authorize/\"\nOAUTH_TOKEN_URL = \"${OAUTH_INTERNAL_DOMAIN}/application/o/token/\"\nOAUTH_USER_INFO_URL = \"${OAUTH_INTERNAL_DOMAIN}/application/o/userinfo/\"\nOAUTH_SCOPE = [\"openid\", \"profile\", \"email\"]\nOAUTH_ATTRIBUTE_MAP = {\"email\": (True, \"contact_email\"), \"name\": (False, \"name\"), \"sub\": (False, \"uid\")}\nEOF\nchown seafile:seafile \"$CONF/seahub_settings_oauth.py\"\n\n# Append import line if not already present\ngrep -q seahub_settings_oauth \"$CONF/seahub_settings.py\" || echo \"exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())\" >> \"$CONF/seahub_settings.py\"\n\necho \"OAuth config injected into seahub_settings.py\"\n",
+          "timeout": 660
         }
       ]
     },
@@ -1137,7 +941,7 @@
       "env": [
         {
           "name": "DOMAIN",
-          "value": "https://{{service.domain}}",
+          "value": "{{service.url}}",
           "kind": "default",
           "prompt": null,
           "format": "string",
