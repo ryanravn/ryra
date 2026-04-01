@@ -29,6 +29,8 @@ pub struct GenerationOutput {
     pub service: GeneratedService,
     /// Files that belong to other services' directories (e.g., auth blueprints).
     pub cross_service_files: Vec<GeneratedFile>,
+    /// The template context used during generation (for auth registration, etc.).
+    pub ctx: std::collections::BTreeMap<String, String>,
 }
 
 /// Parameters for [`generate_service`].
@@ -98,13 +100,13 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
     let mut cross_service_files = Vec::new();
     if let Some(AuthKind::Oidc) = params.auth_kind {
         if let Some(AuthCredentials::Authentik { .. }) = &params.config.auth {
-            if let (Some(client_id), Some(client_secret)) = (
+            if let (Some(client_id), Some(client_secret), Some(base_url)) = (
                 ctx.get("auth.client_id"),
                 ctx.get("auth.client_secret"),
+                ctx.get("service.url"),
             ) {
-                let domain = params.domain.unwrap_or("localhost");
                 cross_service_files.push(blueprint::generate_authentik_blueprint(
-                    name, domain, client_id, client_secret,
+                    name, base_url, client_id, client_secret,
                 ));
             }
         }
@@ -113,6 +115,7 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
     Ok(GenerationOutput {
         service,
         cross_service_files,
+        ctx,
     })
 }
 

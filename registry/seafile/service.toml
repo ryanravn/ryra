@@ -124,6 +124,9 @@ OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
 OAUTH_REDIRECT_URL = "{{service.url}}/oauth/callback/"
 OAUTH_PROVIDER_DOMAIN = "{{auth.url}}"
+OAUTH_INTERNAL_DOMAIN = "{{auth.internal_url}}"
+# oauthlib refuses http:// by default — allow it for local mode
+OAUTHLIB_INSECURE_TRANSPORT = "1"
 
 # --- Post-start: inject OAuth into seahub_settings.py ---
 # Seafile's bootstrap creates seahub_settings.py at runtime inside the container.
@@ -158,8 +161,8 @@ OAUTH_REDIRECT_URL = "$OAUTH_REDIRECT_URL"
 OAUTH_PROVIDER_DOMAIN = "$OAUTH_PROVIDER_DOMAIN"
 OAUTH_PROVIDER = "authentik"
 OAUTH_AUTHORIZATION_URL = "${OAUTH_PROVIDER_DOMAIN}/application/o/authorize/"
-OAUTH_TOKEN_URL = "${OAUTH_PROVIDER_DOMAIN}/application/o/token/"
-OAUTH_USER_INFO_URL = "${OAUTH_PROVIDER_DOMAIN}/application/o/userinfo/"
+OAUTH_TOKEN_URL = "${OAUTH_INTERNAL_DOMAIN}/application/o/token/"
+OAUTH_USER_INFO_URL = "${OAUTH_INTERNAL_DOMAIN}/application/o/userinfo/"
 OAUTH_SCOPE = ["openid", "profile", "email"]
 OAUTH_ATTRIBUTE_MAP = {"email": (True, "contact_email"), "name": (False, "name"), "sub": (False, "uid")}
 EOF

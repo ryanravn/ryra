@@ -7,7 +7,7 @@ use super::GeneratedFile;
 /// on startup / reconciliation — no API calls needed.
 pub fn generate_authentik_blueprint(
     service_name: &str,
-    domain: &str,
+    base_url: &str,
     client_id: &str,
     client_secret: &str,
 ) -> GeneratedFile {
@@ -34,7 +34,7 @@ entries:
       client_type: confidential
       client_id: "{client_id}"
       client_secret: "{client_secret}"
-      redirect_uris: "https://{domain}/.*"
+      redirect_uris: "{base_url}/.*"
       property_mappings:
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
         - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
@@ -46,7 +46,7 @@ entries:
       name: {service_name}
       slug: {service_name}
       provider: !KeyOf provider-{service_name}
-      meta_launch_url: "https://{domain}"
+      meta_launch_url: "{base_url}"
 "#
     );
 
@@ -61,7 +61,7 @@ mod tests {
     fn blueprint_contains_client_credentials() {
         let bp = generate_authentik_blueprint(
             "affine",
-            "affine.example.com",
+            "https://affine.example.com",
             "test-client-id",
             "test-client-secret",
         );
@@ -78,7 +78,7 @@ mod tests {
     fn blueprint_is_valid_yaml_structure() {
         let bp = generate_authentik_blueprint(
             "myapp",
-            "myapp.example.com",
+            "https://myapp.example.com",
             "cid",
             "csecret",
         );

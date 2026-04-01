@@ -1014,6 +1014,7 @@ dependencies = [
  "dialoguer",
  "ryra-core",
  "ryra-test",
+ "serde_json",
  "tokio",
 ]
 

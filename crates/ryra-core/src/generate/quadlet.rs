@@ -101,13 +101,13 @@ pub fn render_container(params: &QuadletParams) -> String {
                 volume_name,
                 mount_path,
             } => {
-                lines.push(format!("Volume={volume_name}.volume:{mount_path}"));
+                lines.push(format!("Volume={volume_name}.volume:{mount_path}:U"));
             }
             VolumeMapping::Bind {
                 host_path,
                 mount_path,
             } => {
-                lines.push(format!("Volume={host_path}:{mount_path}"));
+                lines.push(format!("Volume={host_path}:{mount_path}:U"));
             }
         }
     }

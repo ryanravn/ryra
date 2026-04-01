@@ -48,8 +48,10 @@ pub enum Step {
     EnableLinger { username: String },
     /// Disable systemd linger.
     DisableLinger { username: String },
-    /// Terminate a user's systemd session (so userdel can succeed).
+    /// Terminate a user's systemd session.
     TerminateUserSession { username: String },
+    /// Kill all processes owned by a user (SIGKILL). Ensures userdel can succeed.
+    KillUserProcesses { username: String },
     /// Write a file (requires sudo — goes to service user home or /etc).
     WriteFile(GeneratedFile),
     /// Set ownership of a path to a user.
@@ -120,6 +122,23 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Remove a Linux user and their home directory.
     RemoveUser { username: String },
+    /// Register an OAuth2 provider + application in authentik via its API.
+    /// Replaces blueprints which silently fail on newer authentik versions.
+    RegisterAuthProvider {
+        service_name: String,
+        api_url: String,
+        api_token: String,
+        client_id: String,
+        client_secret: String,
+        redirect_uri: String,
+        launch_url: String,
+    },
+    /// Remove an OAuth2 application + provider from authentik via API.
+    RemoveAuthProvider {
+        service_name: String,
+        api_url: String,
+        api_token: String,
+    },
     /// Run a post-start hook — a shell command on the host after the service is active.
     /// The service's .env is sourced before the command runs.
     PostStartHook {
@@ -144,6 +163,9 @@ impl Step {
             Step::DisableLinger { username } => format!("sudo loginctl disable-linger {username}"),
             Step::TerminateUserSession { username } => {
                 format!("sudo loginctl terminate-user {username}")
+            }
+            Step::KillUserProcesses { username } => {
+                format!("sudo pkill -9 -u {username} || true")
             }
             Step::WriteFile(file) => format!("write {}", file.path.display()),
             Step::Chown { path, username } => {
@@ -192,6 +214,12 @@ impl Step {
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
+            Step::RegisterAuthProvider { service_name, .. } => {
+                format!("authentik: register OAuth2 provider for {service_name}")
+            }
+            Step::RemoveAuthProvider { service_name, .. } => {
+                format!("authentik: remove OAuth2 provider for {service_name}")
+            }
             Step::PostStartHook {
                 name,
                 service_name,
@@ -498,8 +526,15 @@ pub fn add_service(
     // Build ordered steps
     let mut steps = Vec::new();
 
-    // 0. Ensure nginx is set up (first proxied service triggers this)
-    if proxied && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
+    // nginx is needed when:
+    // - a service is proxied (has a domain), OR
+    // - a service uses auth with managed authentik (inter-service communication)
+    let needs_auth_proxy = auth_kind.is_some()
+        && matches!(config.auth, Some(config::schema::AuthCredentials::Authentik { .. }));
+    let needs_nginx = proxied || needs_auth_proxy;
+
+    // 0. Ensure nginx is set up
+    if needs_nginx && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
         steps.push(Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
             content: String::new(),
@@ -538,6 +573,34 @@ pub fn add_service(
             }));
             steps.push(Step::SystemDaemonReload);
             steps.push(Step::StartTunnel);
+        }
+    }
+
+    // 0b. Ensure the auth provider has an internal nginx site for inter-service traffic.
+    // Other services' containers reach auth via http://host.containers.internal:<port>.
+    let auth_internal_site = PathBuf::from("/etc/ryra/nginx/sites/auth-internal.conf");
+    if needs_auth_proxy && !auth_internal_site.exists() {
+        if let Some(config::schema::AuthCredentials::Authentik { url, .. }) = &config.auth {
+            // Extract the port from the auth URL (e.g., "http://localhost:9000" → 9000)
+            let auth_port = url
+                .rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(9000);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: auth_internal_site,
+                content: generate::nginx::render_internal_site(
+                    "authentik",
+                    auth_port,
+                    system::port::AUTH_INTERNAL_PORT,
+                ),
+            }));
+            // Restart nginx to pick up the new site. When nginx is being installed
+            // in the same `ryra add` call, the quadlet doesn't exist at planning time
+            // but will be running by the time this step executes.
+            steps.push(Step::SystemRestart {
+                unit: "nginx".into(),
+            });
         }
     }
 
@@ -682,9 +745,29 @@ pub fn add_service(
         unit: service_name.to_string(),
     });
 
-    // Write cross-service files (e.g., auth blueprints to Authentik's directory)
-    for file in cross_service_files {
-        steps.push(Step::WriteFile(file));
+    // Register OAuth provider in authentik via API
+    if let (
+        Some(registry::service_def::AuthKind::Oidc),
+        Some(config::schema::AuthCredentials::Authentik { url, api_token }),
+        Some(client_id),
+        Some(client_secret),
+        Some(service_url),
+    ) = (
+        auth_kind.as_ref(),
+        config.auth.as_ref(),
+        output.ctx.get("auth.client_id"),
+        output.ctx.get("auth.client_secret"),
+        output.ctx.get("service.url"),
+    ) {
+        steps.push(Step::RegisterAuthProvider {
+            service_name: service_name.to_string(),
+            api_url: url.clone(),
+            api_token: api_token.clone(),
+            client_id: client_id.clone(),
+            client_secret: client_secret.clone(),
+            redirect_uri: format!("{service_url}/.*"),
+            launch_url: service_url.clone(),
+        });
     }
 
     // Reload nginx if proxied
@@ -695,12 +778,25 @@ pub fn add_service(
     }
 
     // 8. Post-start hooks — run after service is active
+    let has_hooks = !reg_service.def.post_start.is_empty();
     for hook in &reg_service.def.post_start {
         steps.push(Step::PostStartHook {
             name: hook.name.clone(),
             service_name: service_name.to_string(),
             run: hook.run.clone(),
             timeout: hook.timeout,
+        });
+    }
+
+    // Restart the service after post-start hooks so it picks up injected config
+    if has_hooks {
+        steps.push(Step::StopService {
+            username: username.clone(),
+            unit: service_name.to_string(),
+        });
+        steps.push(Step::StartService {
+            username: username.clone(),
+            unit: service_name.to_string(),
         });
     }
 
@@ -781,13 +877,19 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         username: username.clone(),
     });
 
-    // Clean up auth blueprint if using managed authentik
-    if let Some(config::schema::AuthCredentials::Authentik { .. }) = &config.auth {
-        let authentik_blueprint = service_home("authentik")
+    // Remove OAuth provider from authentik
+    if let Some(config::schema::AuthCredentials::Authentik { url, api_token }) = &config.auth {
+        steps.push(Step::RemoveAuthProvider {
+            service_name: service_name.to_string(),
+            api_url: url.clone(),
+            api_token: api_token.clone(),
+        });
+        // Also clean up legacy blueprint file if it exists
+        let blueprint = service_home("authentik")
             .join("blueprints")
             .join(format!("{service_name}.yaml"));
-        if authentik_blueprint.exists() {
-            steps.push(Step::RemoveFile(authentik_blueprint));
+        if blueprint.exists() {
+            steps.push(Step::RemoveFile(blueprint));
         }
     }
 
@@ -1413,6 +1515,9 @@ fn push_service_teardown(steps: &mut Vec<Step>, username: &str, service_name: &s
         username: username.to_string(),
     });
     steps.push(Step::TerminateUserSession {
+        username: username.to_string(),
+    });
+    steps.push(Step::KillUserProcesses {
         username: username.to_string(),
     });
     steps.push(Step::RemoveUser {
