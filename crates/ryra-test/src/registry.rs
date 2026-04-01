@@ -417,6 +417,14 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
             .iter()
             .filter_map(|s| match s {
                 StepEntry::Add { service } => Some(service.as_str()),
+                // Also detect `ryra add <service>` in run steps
+                StepEntry::Run { run, .. } => {
+                    run.split_whitespace()
+                        .collect::<Vec<_>>()
+                        .windows(3)
+                        .find(|w| w[0] == "ryra" && w[1] == "add")
+                        .map(|w| w[2])
+                }
                 _ => None,
             })
             .collect(),
@@ -480,9 +488,22 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
         } => {
             // Use explicitly declared images
             images.extend(declared.iter().cloned());
-            // Also look up images (+ dependency images) for any services referenced in add steps
+            // Look up images for services referenced in add steps or run steps
+            // that call `ryra add <service>`
             for step in steps {
-                if let StepEntry::Add { service } = step {
+                let service_name = match step {
+                    StepEntry::Add { service } => Some(service.as_str()),
+                    StepEntry::Run { run, .. } => {
+                        // Parse "ryra add <service>" from run commands
+                        run.split_whitespace()
+                            .collect::<Vec<_>>()
+                            .windows(3)
+                            .find(|w| w[0] == "ryra" && w[1] == "add")
+                            .map(|w| w[2])
+                    }
+                    _ => None,
+                };
+                if let Some(service) = service_name {
                     for image in service_images(registry_path, service) {
                         if !images.contains(&image) {
                             images.push(image);

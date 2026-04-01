@@ -566,10 +566,11 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             }
             // For rootless users: copy from root's store if available (avoids network pull)
             if let Some(u) = &username {
-                if Command::new("sh").args(["-c", &format!("sudo podman image exists {image}")])
+                let root_check = format!("sudo podman image exists {image}");
+                let root_has = Command::new("sh").args(["-c", &root_check])
                     .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().map(|s| s.success()).unwrap_or(false)
-                {
+                    .status().map(|s| s.success()).unwrap_or(false);
+                if root_has {
                     println!("  Copying {image} from system store...");
                     if run_quiet(&format!("sudo podman save {image} | sudo -H -u {u} sh -c 'cd / && podman load'")).is_ok() {
                         return Ok(());

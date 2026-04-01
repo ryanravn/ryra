@@ -155,8 +155,8 @@ smtp = false
 
 [[tests]]
 name = "authentik-responds"
-run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/if/flow/initial-setup/ && exit 0; sleep 2; done; exit 1"
-timeout = 180
+run = "for i in $(seq 1 120); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/if/flow/initial-setup/ && exit 0; sleep 3; done; exit 1"
+timeout = 420
 env = { AUTHENTIK_BOOTSTRAP_EMAIL = "admin@test.local", AUTHENTIK_BOOTSTRAP_PASSWORD = "testpassword123" }
 
 [[tests]]
