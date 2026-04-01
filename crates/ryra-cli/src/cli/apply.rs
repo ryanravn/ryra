@@ -553,21 +553,28 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             Ok(())
         }
         Step::PullImage { image, username } => {
-            // Skip pull if image already exists (e.g. pre-cached in shared store)
-            let exists_cmd = match &username {
+            // Skip if already in user's store
+            let check = match &username {
                 Some(u) => format!("cd / && sudo -H -u {u} podman image exists {image}"),
                 None => format!("sudo podman image exists {image}"),
             };
-            let exists = Command::new("sh")
-                .args(["-c", &exists_cmd])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if exists {
+            if Command::new("sh").args(["-c", &check]).stdout(Stdio::null()).stderr(Stdio::null())
+                .status().map(|s| s.success()).unwrap_or(false)
+            {
                 println!("  {image} already available, skipping pull");
                 return Ok(());
+            }
+            // For rootless users: copy from root's store if available (avoids network pull)
+            if let Some(u) = &username {
+                if Command::new("sh").args(["-c", &format!("sudo podman image exists {image}")])
+                    .stdout(Stdio::null()).stderr(Stdio::null())
+                    .status().map(|s| s.success()).unwrap_or(false)
+                {
+                    println!("  Copying {image} from system store...");
+                    if run_quiet(&format!("sudo podman save {image} | sudo -H -u {u} sh -c 'cd / && podman load'")).is_ok() {
+                        return Ok(());
+                    }
+                }
             }
             println!("  Pulling {image}...");
             match username {

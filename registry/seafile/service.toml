@@ -142,13 +142,13 @@ CONF=/var/lib/seafile/shared/seafile/conf
 
 # Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume
 echo "Waiting for $CONF/seahub_settings.py to appear (Seafile creates it on first boot)..."
-for i in $(seq 1 36); do
+for i in $(seq 1 60); do
   [ -f "$CONF/seahub_settings.py" ] && break
   ELAPSED=$((i * 10))
   echo "  not yet — retrying in 10s (${ELAPSED}s elapsed)"
   sleep 10
 done
-[ -f "$CONF/seahub_settings.py" ] || { echo "ERROR: $CONF/seahub_settings.py not found after 360s — check: sudo -H -u seafile sh -c 'cd / && podman logs systemd-seafile'"; exit 1; }
+[ -f "$CONF/seahub_settings.py" ] || { echo "ERROR: $CONF/seahub_settings.py not found after 600s — check: sudo -H -u seafile sh -c 'cd / && podman logs systemd-seafile'"; exit 1; }
 
 # Write the OAuth Python config alongside seahub_settings.py
 cat > "$CONF/seahub_settings_oauth.py" << EOF
@@ -174,7 +174,7 @@ grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
 
 echo "OAuth config injected into seahub_settings.py"
 """
-timeout = 420
+timeout = 660
 
 [[tests]]
 name = "seafile-responds"

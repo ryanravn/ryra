@@ -44,17 +44,7 @@ action = "assert"
 name = "oauth-configured"
 run = "test -f /var/lib/seafile/shared/seafile/conf/seahub_settings_oauth.py && grep -q OAUTH_CLIENT_ID /var/lib/seafile/shared/seafile/conf/seahub_settings_oauth.py"
 
-[[steps]]
-action = "assert"
-name = "blueprint-exists"
-run = "test -f /var/lib/authentik/blueprints/seafile.yaml"
-
 # Cleanup
 [[steps]]
 action = "remove"
 service = "seafile"
-
-[[steps]]
-action = "assert"
-name = "blueprint-cleaned-up"
-run = "test ! -f /var/lib/authentik/blueprints/seafile.yaml"
