@@ -133,7 +133,6 @@ enum Command {
         verbose: bool,
     },
     // -- Cross-platform commands (read-only / VM-based) --
-
     /// Show what changed in a service's registry definition since install
     Diff {
         /// Service name

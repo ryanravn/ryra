@@ -58,10 +58,7 @@ pub async fn run_registry_test(
             }
         }
         if !combined.is_empty() {
-            let exports: Vec<String> = combined
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect();
+            let exports: Vec<String> = combined.iter().map(|(k, v)| format!("{k}={v}")).collect();
             add_env_prefix = exports.join(" ") + " ";
         }
     }
@@ -272,9 +269,7 @@ async fn wait_for_service(vm: &Machine, service: &str) -> Event {
     let timeout = Duration::from_secs(300);
 
     let unit = format!("{service}.service");
-    let result = vm
-        .wait_for_service(service, &unit, timeout)
-        .await;
+    let result = vm.wait_for_service(service, &unit, timeout).await;
 
     let outcome = match result {
         Ok(()) => Outcome::Passed,
@@ -304,7 +299,11 @@ pub async fn run_lifecycle_test(
     let start = Instant::now();
     let mut events = Vec::new();
     let mut failed = false;
-    let p = if single_test { String::new() } else { format!("[{name}] ") };
+    let p = if single_test {
+        String::new()
+    } else {
+        format!("[{name}] ")
+    };
     let stream_prefix = if single_test { "" } else { name };
 
     // Init first (all lifecycle tests start with ryra init)
@@ -392,7 +391,8 @@ pub async fn run_lifecycle_test(
             } => {
                 println!("{p}  run: {step_name}...");
                 let event = if verbose {
-                    run_event_streaming(vm, stream_prefix, EventKind::Step, run, *timeout_secs).await
+                    run_event_streaming(vm, stream_prefix, EventKind::Step, run, *timeout_secs)
+                        .await
                 } else {
                     run_event(vm, EventKind::Step, run, *timeout_secs).await
                 };

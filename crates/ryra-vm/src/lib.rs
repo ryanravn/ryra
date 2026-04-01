@@ -128,7 +128,9 @@ fn has_command(cmd: &str) -> bool {
 }
 
 fn has_any_iso_tool() -> bool {
-    ["genisoimage", "mkisofs"].iter().any(|cmd| has_command(cmd))
+    ["genisoimage", "mkisofs"]
+        .iter()
+        .any(|cmd| has_command(cmd))
 }
 
 /// Check prerequisites for the QEMU backend.
@@ -141,7 +143,11 @@ fn check_qemu_prerequisites(use_kvm: bool) -> Result<()> {
         "ssh-keygen",
         "curl",
     ];
-    let mut missing: Vec<&str> = required.iter().filter(|c| !has_command(c)).copied().collect();
+    let mut missing: Vec<&str> = required
+        .iter()
+        .filter(|c| !has_command(c))
+        .copied()
+        .collect();
 
     if !has_any_iso_tool() {
         missing.push("genisoimage");
@@ -184,7 +190,11 @@ fn check_apple_vz_prerequisites() -> Result<()> {
         "ssh-keygen",
         "curl",
     ];
-    let mut missing: Vec<&str> = required.iter().filter(|c| !has_command(c)).copied().collect();
+    let mut missing: Vec<&str> = required
+        .iter()
+        .filter(|c| !has_command(c))
+        .copied()
+        .collect();
 
     // ISO tools needed for image preparation (QEMU-based, one-time)
     if !has_any_iso_tool() {

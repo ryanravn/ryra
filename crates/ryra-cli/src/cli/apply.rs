@@ -558,8 +558,13 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 Some(u) => format!("cd / && sudo -H -u {u} podman image exists {image}"),
                 None => format!("sudo podman image exists {image}"),
             };
-            if Command::new("sh").args(["-c", &check]).stdout(Stdio::null()).stderr(Stdio::null())
-                .status().map(|s| s.success()).unwrap_or(false)
+            if Command::new("sh")
+                .args(["-c", &check])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
             {
                 println!("  {image} already available, skipping pull");
                 return Ok(());
@@ -567,12 +572,20 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             // For rootless users: copy from root's store if available (avoids network pull)
             if let Some(u) = &username {
                 let root_check = format!("sudo podman image exists {image}");
-                let root_has = Command::new("sh").args(["-c", &root_check])
-                    .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().map(|s| s.success()).unwrap_or(false);
+                let root_has = Command::new("sh")
+                    .args(["-c", &root_check])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
                 if root_has {
                     println!("  Copying {image} from system store...");
-                    if run_quiet(&format!("sudo podman save {image} | sudo -H -u {u} sh -c 'cd / && podman load'")).is_ok() {
+                    if run_quiet(&format!(
+                        "sudo podman save {image} | sudo -H -u {u} sh -c 'cd / && podman load'"
+                    ))
+                    .is_ok()
+                    {
                         return Ok(());
                     }
                 }
@@ -601,9 +614,15 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         } => {
             println!("  Registering OAuth provider in authentik for {service_name}...");
             register_auth_provider(
-                api_url, api_token, service_name, client_id, client_secret,
-                redirect_uri, launch_url,
-            ).await
+                api_url,
+                api_token,
+                service_name,
+                client_id,
+                client_secret,
+                redirect_uri,
+                launch_url,
+            )
+            .await
         }
         Step::RemoveAuthProvider {
             service_name,
@@ -686,9 +705,16 @@ async fn register_auth_provider(
     println!("    waiting for authentik API (up to {max_wait}s)...");
     for i in 1..=(max_wait / 10) {
         let probe = Command::new("curl")
-            .args(["-sS", "-o", "/dev/null", "-w", "%{http_code}",
-                   "-H", &format!("Authorization: {auth}"),
-                   &format!("{api}/core/users/me/")])
+            .args([
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-H",
+                &format!("Authorization: {auth}"),
+                &format!("{api}/core/users/me/"),
+            ])
             .output();
         if let Ok(out) = probe {
             let code = String::from_utf8_lossy(&out.stdout);
@@ -698,7 +724,9 @@ async fn register_auth_provider(
             }
         }
         if i == max_wait / 10 {
-            bail!("authentik API not ready after {max_wait}s — check: sudo journalctl _SYSTEMD_USER_UNIT=authentik.service");
+            bail!(
+                "authentik API not ready after {max_wait}s — check: sudo journalctl _SYSTEMD_USER_UNIT=authentik.service"
+            );
         }
         println!("    not yet — retrying in 10s ({}s elapsed)", i * 10);
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
@@ -707,12 +735,16 @@ async fn register_auth_provider(
     // Helper: GET a flow PK by slug
     let flow_pk = |slug: &str| -> Result<String> {
         let output = Command::new("curl")
-            .args(["-sS", "-H", &format!("Authorization: {auth}"),
-                   &format!("{api}/flows/instances/?slug={slug}")])
+            .args([
+                "-sS",
+                "-H",
+                &format!("Authorization: {auth}"),
+                &format!("{api}/flows/instances/?slug={slug}"),
+            ])
             .output()
             .context("curl failed")?;
-        let body: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .context("failed to parse flows response")?;
+        let body: serde_json::Value =
+            serde_json::from_slice(&output.stdout).context("failed to parse flows response")?;
         body["results"][0]["pk"]
             .as_str()
             .map(|s| s.to_string())
@@ -725,12 +757,16 @@ async fn register_auth_provider(
 
     // Get scope mapping PKs
     let scope_output = Command::new("curl")
-        .args(["-sS", "-H", &format!("Authorization: {auth}"),
-               &format!("{api}/propertymappings/provider/scope/")])
+        .args([
+            "-sS",
+            "-H",
+            &format!("Authorization: {auth}"),
+            &format!("{api}/propertymappings/provider/scope/"),
+        ])
         .output()
         .context("failed to fetch scope mappings")?;
-    let scope_body: serde_json::Value = serde_json::from_slice(&scope_output.stdout)
-        .context("failed to parse scope mappings")?;
+    let scope_body: serde_json::Value =
+        serde_json::from_slice(&scope_output.stdout).context("failed to parse scope mappings")?;
     let scope_pks: Vec<String> = scope_body["results"]
         .as_array()
         .unwrap_or(&vec![])
@@ -750,11 +786,18 @@ async fn register_auth_provider(
         scopes = scope_pks.join(","),
     );
     let provider_output = Command::new("curl")
-        .args(["-sS", "-X", "POST",
-               "-H", &format!("Authorization: {auth}"),
-               "-H", "Content-Type: application/json",
-               "-d", &provider_json,
-               &format!("{api}/providers/oauth2/")])
+        .args([
+            "-sS",
+            "-X",
+            "POST",
+            "-H",
+            &format!("Authorization: {auth}"),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &provider_json,
+            &format!("{api}/providers/oauth2/"),
+        ])
         .output()
         .context("failed to create OAuth2 provider")?;
     if !provider_output.status.success() {
@@ -772,11 +815,18 @@ async fn register_auth_provider(
         r#"{{"name":"{service_name}","slug":"{service_name}","provider":{provider_pk},"meta_launch_url":"{launch_url}"}}"#,
     );
     let app_output = Command::new("curl")
-        .args(["-sS", "-X", "POST",
-               "-H", &format!("Authorization: {auth}"),
-               "-H", "Content-Type: application/json",
-               "-d", &app_json,
-               &format!("{api}/core/applications/")])
+        .args([
+            "-sS",
+            "-X",
+            "POST",
+            "-H",
+            &format!("Authorization: {auth}"),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &app_json,
+            &format!("{api}/core/applications/"),
+        ])
         .output()
         .context("failed to create application")?;
     if !app_output.status.success() {
@@ -788,25 +838,30 @@ async fn register_auth_provider(
 }
 
 /// Remove an OAuth2 application + provider from authentik via API.
-async fn remove_auth_provider(
-    api_url: &str,
-    api_token: &str,
-    service_name: &str,
-) -> Result<()> {
+async fn remove_auth_provider(api_url: &str, api_token: &str, service_name: &str) -> Result<()> {
     let api = format!("{api_url}/api/v3");
     let auth = format!("Bearer {api_token}");
 
     // Delete application (by slug)
     let _ = Command::new("curl")
-        .args(["-sS", "-X", "DELETE",
-               "-H", &format!("Authorization: {auth}"),
-               &format!("{api}/core/applications/{service_name}/")])
+        .args([
+            "-sS",
+            "-X",
+            "DELETE",
+            "-H",
+            &format!("Authorization: {auth}"),
+            &format!("{api}/core/applications/{service_name}/"),
+        ])
         .output();
 
     // Find and delete provider (by name)
     let output = Command::new("curl")
-        .args(["-sS", "-H", &format!("Authorization: {auth}"),
-               &format!("{api}/providers/oauth2/?name={service_name}")])
+        .args([
+            "-sS",
+            "-H",
+            &format!("Authorization: {auth}"),
+            &format!("{api}/providers/oauth2/?name={service_name}"),
+        ])
         .output()
         .ok();
     if let Some(output) = output
@@ -814,9 +869,14 @@ async fn remove_auth_provider(
         && let Some(pk) = body["results"][0]["pk"].as_i64()
     {
         let _ = Command::new("curl")
-            .args(["-sS", "-X", "DELETE",
-                   "-H", &format!("Authorization: {auth}"),
-                   &format!("{api}/providers/oauth2/{pk}/")])
+            .args([
+                "-sS",
+                "-X",
+                "DELETE",
+                "-H",
+                &format!("Authorization: {auth}"),
+                &format!("{api}/providers/oauth2/{pk}/"),
+            ])
             .output();
     }
 

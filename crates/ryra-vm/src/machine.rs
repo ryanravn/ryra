@@ -188,8 +188,7 @@ impl Machine {
         // read host-side image tars directly without SCP/network transfer.
         // Only available on Linux — macOS QEMU lacks 9p support.
         let image_cache = image_cache_dir()?;
-        std::fs::create_dir_all(&image_cache)
-            .context("failed to create image cache directory")?;
+        std::fs::create_dir_all(&image_cache).context("failed to create image cache directory")?;
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
             image_cache.display()
@@ -269,11 +268,7 @@ impl Machine {
     /// The VM writes its IP to a file in the shared dir during cloud-init,
     /// and the host polls for it. Uses vfkit's built-in `--cloud-init` flag
     /// to inject user-data/meta-data without needing genisoimage.
-    async fn spawn_apple_vz(
-        image: &Image,
-        test_id: &str,
-        opts: &SpawnOpts,
-    ) -> Result<Self> {
+    async fn spawn_apple_vz(image: &Image, test_id: &str, opts: &SpawnOpts) -> Result<Self> {
         let raw_image = image.raw_path.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Apple Virtualization backend requires a raw disk image")
         })?;
@@ -292,14 +287,20 @@ impl Machine {
 
         // APFS clone the raw image (instant, near-zero disk cost on APFS)
         let disk = work_dir.join("disk.raw");
-        if run_cmd("cp", &["-c", &raw_image.to_string_lossy(), &disk.to_string_lossy()])
-            .await
-            .is_err()
+        if run_cmd(
+            "cp",
+            &["-c", &raw_image.to_string_lossy(), &disk.to_string_lossy()],
+        )
+        .await
+        .is_err()
         {
             // Fallback to regular copy if APFS clone fails (non-APFS filesystem)
-            run_cmd("cp", &[&raw_image.to_string_lossy(), &disk.to_string_lossy()])
-                .await
-                .context("failed to copy raw disk image")?;
+            run_cmd(
+                "cp",
+                &[&raw_image.to_string_lossy(), &disk.to_string_lossy()],
+            )
+            .await
+            .context("failed to copy raw disk image")?;
         }
 
         // Generate SSH key pair
@@ -332,16 +333,11 @@ impl Machine {
 
         let user_data_path = cloud_init_dir.join("user-data");
         let meta_data_path = cloud_init_dir.join("meta-data");
-        let cloud_init_arg = format!(
-            "{},{}",
-            user_data_path.display(),
-            meta_data_path.display()
-        );
+        let cloud_init_arg = format!("{},{}", user_data_path.display(), meta_data_path.display());
 
         // Image cache directory for virtio-fs sharing
         let image_cache = image_cache_dir()?;
-        std::fs::create_dir_all(&image_cache)
-            .context("failed to create image cache directory")?;
+        std::fs::create_dir_all(&image_cache).context("failed to create image cache directory")?;
 
         // Serial log
         let serial_log = work_dir.join("serial.log");
@@ -352,10 +348,7 @@ impl Machine {
         // Build vfkit command
         let memory_str = opts.memory_mb.to_string();
         let cpus_str = opts.cpus.to_string();
-        let bootloader_arg = format!(
-            "efi,variable-store={},create",
-            nvram_path.display()
-        );
+        let bootloader_arg = format!("efi,variable-store={},create", nvram_path.display());
         let disk_arg = format!("virtio-blk,path={}", disk.display());
         let net_arg = "virtio-net,nat";
         let vminfo_fs_arg = format!(
@@ -366,23 +359,30 @@ impl Machine {
             "virtio-fs,sharedDir={},mountTag=images",
             image_cache.display()
         );
-        let serial_arg = format!(
-            "virtio-serial,logFilePath={}",
-            serial_log.display()
-        );
+        let serial_arg = format!("virtio-serial,logFilePath={}", serial_log.display());
 
         let process = Command::new("vfkit")
             .args([
-                "--cpus", &cpus_str,
-                "--memory", &memory_str,
-                "--bootloader", &bootloader_arg,
-                "--cloud-init", &cloud_init_arg,
-                "--device", &disk_arg,
-                "--device", net_arg,
-                "--device", &vminfo_fs_arg,
-                "--device", &images_fs_arg,
-                "--device", &serial_arg,
-                "--device", "virtio-rng",
+                "--cpus",
+                &cpus_str,
+                "--memory",
+                &memory_str,
+                "--bootloader",
+                &bootloader_arg,
+                "--cloud-init",
+                &cloud_init_arg,
+                "--device",
+                &disk_arg,
+                "--device",
+                net_arg,
+                "--device",
+                &vminfo_fs_arg,
+                "--device",
+                &images_fs_arg,
+                "--device",
+                &serial_arg,
+                "--device",
+                "virtio-rng",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -475,13 +475,20 @@ impl Machine {
         let target = format!("root@{}", self.ssh_host);
         let mut child = TokioCommand::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-o", "ConnectTimeout=10",
-                "-o", "BatchMode=yes",
-                "-i", &key.to_string_lossy(),
-                "-p", &port,
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "BatchMode=yes",
+                "-i",
+                &key.to_string_lossy(),
+                "-p",
+                &port,
                 &target,
                 cmd,
             ])
@@ -818,11 +825,7 @@ async fn write_seed_iso(
 /// vfkit's `--cloud-init` flag builds the ISO internally from these files,
 /// so no genisoimage/mkisofs needed. Adds extra runcmd to mount virtio-fs
 /// and write the VM's IP for host-side discovery.
-async fn write_cloud_init_vz(
-    cloud_init_dir: &Path,
-    hostname: &str,
-    pub_key: &str,
-) -> Result<()> {
+async fn write_cloud_init_vz(cloud_init_dir: &Path, hostname: &str, pub_key: &str) -> Result<()> {
     let user_data = format!(
         r#"#cloud-config
 disable_root: false
@@ -911,8 +914,7 @@ fn vm_work_base_dir() -> Result<PathBuf> {
 
 /// Shared cache root for all ryra-e2e artifacts.
 fn cache_base_dir() -> Result<PathBuf> {
-    let base = dirs::cache_dir()
-        .context("could not determine cache directory (is $HOME set?)")?;
+    let base = dirs::cache_dir().context("could not determine cache directory (is $HOME set?)")?;
     Ok(base.join("ryra-e2e"))
 }
 

@@ -55,7 +55,10 @@ pub fn build_context(
         // internal port. Containers reach it via host.containers.internal.
         let internal_url = match auth {
             crate::config::schema::AuthCredentials::Authentik { .. } => {
-                format!("http://host.containers.internal:{}", crate::system::port::AUTH_INTERNAL_PORT)
+                format!(
+                    "http://host.containers.internal:{}",
+                    crate::system::port::AUTH_INTERNAL_PORT
+                )
             }
             _ => url.clone(),
         };

@@ -30,17 +30,17 @@ pub async fn run(section: Option<&str>) -> Result<()> {
         Some("smtp") => {
             config.smtp = prompts::prompt_smtp()?;
         }
-        Some("auth") => {
-            match prompts::prompt_auth()? {
-                prompts::AuthSetupChoice::External(auth) => config.auth = Some(auth),
-                prompts::AuthSetupChoice::InstallAuthentik => {
-                    println!();
-                    println!("  Run `ryra add authentik` to install — auth will be configured automatically.");
-                    return Ok(());
-                }
-                prompts::AuthSetupChoice::Skip => return Ok(()),
+        Some("auth") => match prompts::prompt_auth()? {
+            prompts::AuthSetupChoice::External(auth) => config.auth = Some(auth),
+            prompts::AuthSetupChoice::InstallAuthentik => {
+                println!();
+                println!(
+                    "  Run `ryra add authentik` to install — auth will be configured automatically."
+                );
+                return Ok(());
             }
-        }
+            prompts::AuthSetupChoice::Skip => return Ok(()),
+        },
         Some("repo") => {
             let url: String = Input::new()
                 .with_prompt("Default repo")
@@ -103,7 +103,12 @@ fn print_overview(config: &ryra_core::config::schema::Config) {
     // Auth
     match &config.auth {
         Some(auth) => {
-            println!("  auth:       {} ({}, {})", status_ok(), auth.provider_name(), auth.url());
+            println!(
+                "  auth:       {} ({}, {})",
+                status_ok(),
+                auth.provider_name(),
+                auth.url()
+            );
         }
         None => println!("  auth:       {}", status_none()),
     }

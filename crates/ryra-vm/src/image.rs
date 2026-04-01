@@ -54,7 +54,13 @@ impl Distro {
                 "postgresql-client",
             ],
             // Fedora: uidmap is part of shadow-utils (already installed).
-            Distro::Fedora43 => &["podman", "podman-compose", "git", "systemd-container", "curl"],
+            Distro::Fedora43 => &[
+                "podman",
+                "podman-compose",
+                "git",
+                "systemd-container",
+                "curl",
+            ],
         }
     }
 }
@@ -98,8 +104,7 @@ pub struct Image {
 
 /// Cache directory for downloaded images.
 fn cache_dir() -> Result<PathBuf> {
-    let base = dirs::cache_dir()
-        .context("could not determine cache directory (is $HOME set?)")?;
+    let base = dirs::cache_dir().context("could not determine cache directory (is $HOME set?)")?;
     Ok(base.join("ryra-e2e"))
 }
 

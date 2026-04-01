@@ -529,7 +529,10 @@ pub fn add_service(
     // - a service is proxied (has a domain), OR
     // - a service uses auth with managed authentik (inter-service communication)
     let needs_auth_proxy = auth_kind.is_some()
-        && matches!(config.auth, Some(config::schema::AuthCredentials::Authentik { .. }));
+        && matches!(
+            config.auth,
+            Some(config::schema::AuthCredentials::Authentik { .. })
+        );
     let needs_nginx = proxied || needs_auth_proxy;
 
     // 0. Ensure nginx is set up
@@ -714,11 +717,13 @@ pub fn add_service(
     }
 
     // 6. Create bind mount directories (must exist before container starts)
-    let all_volumes = reg_service
-        .def
-        .volumes
-        .iter()
-        .chain(reg_service.def.containers.iter().flat_map(|c| c.volumes.iter()));
+    let all_volumes = reg_service.def.volumes.iter().chain(
+        reg_service
+            .def
+            .containers
+            .iter()
+            .flat_map(|c| c.volumes.iter()),
+    );
     for vol in all_volumes {
         if let Some(ref host_path) = vol.host_path {
             // Replace %h with actual home dir path
@@ -1007,7 +1012,10 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
 fn parse_env_var(env_content: &str, key: &str) -> Option<String> {
     for line in env_content.lines() {
         let line = line.trim();
-        if let Some(val) = line.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) {
+        if let Some(val) = line
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
             return Some(val.to_string());
         }
     }

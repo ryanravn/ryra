@@ -7,8 +7,8 @@ use dialoguer::{Confirm, Input};
 use std::path::Path;
 
 use ryra_core::Warning;
-use ryra_core::config::schema::{Config, ExposureMode};
 use ryra_core::config::ConfigPaths;
+use ryra_core::config::schema::{Config, ExposureMode};
 use ryra_core::registry::service_def::AuthKind;
 
 use super::apply;
@@ -116,7 +116,9 @@ pub async fn run(
             if enable {
                 // Ensure auth is configured
                 if config.auth.is_none() {
-                    match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run).await? {
+                    match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run)
+                        .await?
+                    {
                         true => {}
                         false => return Ok(()),
                     }
@@ -135,7 +137,14 @@ pub async fn run(
         }
     } else if interactive {
         let items: Vec<String> = std::iter::once("None".to_string())
-            .chain(reg_service.def.integrations.auth.iter().map(|k| k.to_string()))
+            .chain(
+                reg_service
+                    .def
+                    .integrations
+                    .auth
+                    .iter()
+                    .map(|k| k.to_string()),
+            )
             .collect();
         let selection = dialoguer::Select::new()
             .with_prompt("Auth mode")
@@ -147,7 +156,9 @@ pub async fn run(
         } else {
             let kind = reg_service.def.integrations.auth[selection - 1].clone();
             if config.auth.is_none() {
-                match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run).await? {
+                match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run)
+                    .await?
+                {
                     true => {}
                     false => return Ok(()),
                 }
@@ -388,10 +399,7 @@ async fn ensure_auth_for_add(
 
 /// Try to configure auth from an already-installed authentik instance.
 /// Reads the .env via sudo since it's owned by the authentik user.
-fn try_configure_auth_from_installed(
-    config: &mut Config,
-    paths: &ConfigPaths,
-) -> Result<bool> {
+fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
     let env_path = ryra_core::service_home("authentik").join(".env");
     let output = std::process::Command::new("sudo")
         .args(["cat", &env_path.to_string_lossy()])
@@ -427,6 +435,9 @@ fn try_configure_auth_from_installed(
     });
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, config)?;
-    println!("  Auth configured. Saved to {}", paths.config_file.display());
+    println!(
+        "  Auth configured. Saved to {}",
+        paths.config_file.display()
+    );
     Ok(true)
 }

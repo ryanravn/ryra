@@ -418,13 +418,12 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
             .filter_map(|s| match s {
                 StepEntry::Add { service } => Some(service.as_str()),
                 // Also detect `ryra add <service>` in run steps
-                StepEntry::Run { run, .. } => {
-                    run.split_whitespace()
-                        .collect::<Vec<_>>()
-                        .windows(3)
-                        .find(|w| w[0] == "ryra" && w[1] == "add")
-                        .map(|w| w[2])
-                }
+                StepEntry::Run { run, .. } => run
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .windows(3)
+                    .find(|w| w[0] == "ryra" && w[1] == "add")
+                    .map(|w| w[2]),
                 _ => None,
             })
             .collect(),

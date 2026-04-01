@@ -283,14 +283,9 @@ pub struct SmtpCredentials {
 #[serde(tag = "provider", rename_all = "lowercase")]
 pub enum AuthCredentials {
     /// Managed Authentik instance installed via ryra.
-    Authentik {
-        url: String,
-        api_token: String,
-    },
+    Authentik { url: String, api_token: String },
     /// External OIDC provider managed by the user.
-    External {
-        url: String,
-    },
+    External { url: String },
 }
 
 impl AuthCredentials {

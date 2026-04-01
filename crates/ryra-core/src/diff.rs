@@ -93,7 +93,11 @@ impl std::fmt::Display for Change {
                     if kinds.is_empty() {
                         "none".to_string()
                     } else {
-                        kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(", ")
+                        kinds
+                            .iter()
+                            .map(|k| k.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     }
                 };
                 write!(f, "auth integration: {} → {}", fmt(old), fmt(new))

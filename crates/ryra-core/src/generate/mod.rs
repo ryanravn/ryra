@@ -61,7 +61,12 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         params.host_port,
         params.auth_kind,
     );
-    let rendered_env = render_env_vars(params.service_def, &ctx, params.env_overrides, params.auth_kind)?;
+    let rendered_env = render_env_vars(
+        params.service_def,
+        &ctx,
+        params.env_overrides,
+        params.auth_kind,
+    )?;
 
     // Build .env file content
     let home_dir = crate::service_home(name);
@@ -230,7 +235,9 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
         let sidecar_volumes = build_volume_mappings(name, &container.volumes);
 
         files.push(GeneratedFile {
-            path: params.quadlet_dir.join(format!("{container_name}.container")),
+            path: params
+                .quadlet_dir
+                .join(format!("{container_name}.container")),
             content: quadlet::render_container(&quadlet::QuadletParams {
                 service_name: &container_name,
                 image: &container.image,
@@ -256,7 +263,10 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
 }
 
 /// Build volume mappings for quadlet container rendering.
-fn build_volume_mappings(service_name: &str, volumes: &[crate::registry::service_def::VolumeDef]) -> Vec<quadlet::VolumeMapping> {
+fn build_volume_mappings(
+    service_name: &str,
+    volumes: &[crate::registry::service_def::VolumeDef],
+) -> Vec<quadlet::VolumeMapping> {
     volumes
         .iter()
         .map(|v| {

@@ -74,7 +74,9 @@ pub enum Error {
     #[error("invalid exposure mode: {0}")]
     InvalidExposure(String),
 
-    #[error("auth integration requires an auth provider to be configured first — run `ryra config auth`")]
+    #[error(
+        "auth integration requires an auth provider to be configured first — run `ryra config auth`"
+    )]
     AuthNotConfigured,
 
     #[error("{0}")]

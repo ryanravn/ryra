@@ -17,10 +17,7 @@ pub struct ConfigPaths {
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
         let (config_dir, cache_dir) = if cfg!(target_os = "linux") {
-            (
-                PathBuf::from("/etc/ryra"),
-                PathBuf::from("/var/cache/ryra"),
-            )
+            (PathBuf::from("/etc/ryra"), PathBuf::from("/var/cache/ryra"))
         } else {
             // macOS / other: use user-local directories (no sudo needed).
             // ~/Library/Application Support/ryra and ~/Library/Caches/ryra (or XDG equivalent).
