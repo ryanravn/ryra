@@ -1,4 +1,3 @@
-pub mod blueprint;
 pub mod context;
 pub mod nginx;
 pub mod quadlet;
@@ -8,7 +7,7 @@ pub mod tunnel;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::schema::{AuthCredentials, Config, ExposureMode};
+use crate::config::schema::{Config, ExposureMode};
 use crate::error::Result;
 use crate::registry::service_def::{AuthKind, EnvVar, ServiceDef};
 
@@ -24,11 +23,9 @@ pub struct GeneratedFile {
     pub content: String,
 }
 
-/// Everything generated for a service, including files that belong to other services.
+/// Everything generated for a service.
 pub struct GenerationOutput {
     pub service: GeneratedService,
-    /// Files that belong to other services' directories (e.g., auth blueprints).
-    pub cross_service_files: Vec<GeneratedFile>,
     /// The template context used during generation (for auth registration, etc.).
     pub ctx: std::collections::BTreeMap<String, String>,
 }
@@ -96,27 +93,7 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         nginx_site,
     })?;
 
-    // Generate auth blueprint for OIDC + managed Authentik
-    let mut cross_service_files = Vec::new();
-    if let Some(AuthKind::Oidc) = params.auth_kind {
-        if let Some(AuthCredentials::Authentik { .. }) = &params.config.auth {
-            if let (Some(client_id), Some(client_secret), Some(base_url)) = (
-                ctx.get("auth.client_id"),
-                ctx.get("auth.client_secret"),
-                ctx.get("service.url"),
-            ) {
-                cross_service_files.push(blueprint::generate_authentik_blueprint(
-                    name, base_url, client_id, client_secret,
-                ));
-            }
-        }
-    }
-
-    Ok(GenerationOutput {
-        service,
-        cross_service_files,
-        ctx,
-    })
+    Ok(GenerationOutput { service, ctx })
 }
 
 /// Build the .env file for a service (used by both quadlet and compose).

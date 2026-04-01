@@ -478,7 +478,6 @@ pub fn add_service(
         service_dir: &reg_service.service_dir,
     })?;
     let generated = output.service;
-    let cross_service_files = output.cross_service_files;
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -1081,7 +1080,6 @@ pub fn update_service(
         service_dir: &reg_service.service_dir,
     })?;
     let generated = output.service;
-    let cross_service_files = output.cross_service_files;
 
     // 3. Pull all images (primary + sidecars)
     for image in reg_service.def.all_images() {
@@ -1117,11 +1115,6 @@ pub fn update_service(
         username: username.clone(),
         unit: service_name.to_string(),
     });
-
-    // Write cross-service files (e.g., auth blueprints)
-    for file in cross_service_files {
-        steps.push(Step::WriteFile(file));
-    }
 
     // Reload nginx if proxied
     if service.domain.is_some() {

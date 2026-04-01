@@ -48,29 +48,27 @@ pub fn build_context(
     }
 
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
-    if auth_kind.is_some() {
-        if let Some(auth) = &config.auth {
-            let url = auth.url().to_string();
-            // auth.internal_url is how containers reach the auth provider.
-            // nginx (Network=host) proxies the auth provider on a dedicated
-            // internal port. Containers reach it via host.containers.internal.
-            let internal_url = match &config.auth {
-                Some(crate::config::schema::AuthCredentials::Authentik { .. }) => {
-                    format!("http://host.containers.internal:{}", crate::system::port::AUTH_INTERNAL_PORT)
-                }
-                _ => url.clone(),
-            };
-            ctx.insert("auth.url".into(), url);
-            ctx.insert("auth.internal_url".into(), internal_url);
-            ctx.insert(
-                "auth.client_id".into(),
-                secret::generate(&EnvFormat::Uuid, None),
-            );
-            ctx.insert(
-                "auth.client_secret".into(),
-                secret::generate(&EnvFormat::String, Some(64)),
-            );
-        }
+    if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
+        let url = auth.url().to_string();
+        // auth.internal_url is how containers reach the auth provider.
+        // nginx (Network=host) proxies the auth provider on a dedicated
+        // internal port. Containers reach it via host.containers.internal.
+        let internal_url = match auth {
+            crate::config::schema::AuthCredentials::Authentik { .. } => {
+                format!("http://host.containers.internal:{}", crate::system::port::AUTH_INTERNAL_PORT)
+            }
+            _ => url.clone(),
+        };
+        ctx.insert("auth.url".into(), url);
+        ctx.insert("auth.internal_url".into(), internal_url);
+        ctx.insert(
+            "auth.client_id".into(),
+            secret::generate(&EnvFormat::Uuid, None),
+        );
+        ctx.insert(
+            "auth.client_secret".into(),
+            secret::generate(&EnvFormat::String, Some(64)),
+        );
     }
 
     // services.* — cross-service references from installed services
