@@ -464,6 +464,90 @@ impl Machine {
         Ok(ExecOutput { stdout, stderr })
     }
 
+    /// Run a command inside the VM via SSH, streaming stdout/stderr to the terminal.
+    /// Returns the exit status (Ok if success, Err if non-zero).
+    pub async fn exec_streaming(&self, cmd: &str, prefix: &str) -> Result<ExecOutput> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::process::Command as TokioCommand;
+
+        let key = self.ssh_key_path();
+        let port = self.ssh_port.to_string();
+        let target = format!("root@{}", self.ssh_host);
+        let mut child = TokioCommand::new("ssh")
+            .args([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=10",
+                "-o", "BatchMode=yes",
+                "-i", &key.to_string_lossy(),
+                "-p", &port,
+                &target,
+                cmd,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| format!("failed to SSH exec in {}: {cmd}", self.name))?;
+
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+
+        let prefix_out = prefix.to_string();
+        let prefix_err = prefix.to_string();
+
+        let stdout_handle = tokio::spawn(async move {
+            let mut lines = String::new();
+            if let Some(pipe) = stdout_pipe {
+                let mut reader = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if prefix_out.is_empty() {
+                        println!("    {line}");
+                    } else {
+                        println!("[{prefix_out}]     {line}");
+                    }
+                    lines.push_str(&line);
+                    lines.push('\n');
+                }
+            }
+            lines
+        });
+
+        let stderr_handle = tokio::spawn(async move {
+            let mut lines = String::new();
+            if let Some(pipe) = stderr_pipe {
+                let mut reader = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if prefix_err.is_empty() {
+                        eprintln!("    {line}");
+                    } else {
+                        eprintln!("[{prefix_err}]     {line}");
+                    }
+                    lines.push_str(&line);
+                    lines.push('\n');
+                }
+            }
+            lines
+        });
+
+        let status = child.wait().await?;
+        let stdout_buf = stdout_handle.await.unwrap_or_default();
+        let stderr_buf = stderr_handle.await.unwrap_or_default();
+
+        if !status.success() {
+            anyhow::bail!(
+                "command failed in VM {} (exit {}): {cmd}\nstdout: {stdout_buf}\nstderr: {stderr_buf}",
+                self.name,
+                status,
+            );
+        }
+
+        Ok(ExecOutput {
+            stdout: stdout_buf,
+            stderr: stderr_buf,
+        })
+    }
+
     /// Shut down the VM and clean up files.
     pub async fn destroy(mut self) -> Result<()> {
         if let Some(pid) = self.process.id() {

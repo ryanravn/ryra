@@ -356,6 +356,7 @@ pub async fn run(args: Args) -> Result<()> {
     let wall_clock = std::time::Instant::now();
     let semaphore = std::sync::Arc::new(Semaphore::new(args.parallel));
     let mut handles = vec![];
+    let total_tests = to_run.len();
 
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
@@ -373,6 +374,7 @@ pub async fn run(args: Args) -> Result<()> {
         let keep_failed = args.keep_failed;
         let keep_alive = args.keep_alive;
         let verbose = args.verbose;
+        let single_test = total_tests == 1;
         let name = test.name().to_string();
 
         handles.push(tokio::spawn(async move {
@@ -437,7 +439,7 @@ pub async fn run(args: Args) -> Result<()> {
             println!("[{name}] running tests (setup took {:.1}s)...", setup_time.as_secs_f64());
             let result = match test {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
-                    runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry").await
+                    runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry", verbose, single_test).await
                 }
                 _ => {
                     runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await

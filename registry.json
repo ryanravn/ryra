@@ -1,14 +1,463 @@
 {
   "services": {
+    "affine": {
+      "service": {
+        "name": "affine",
+        "description": "AFFiNE - privacy-focused knowledge base",
+        "url": "https://affine.pro/",
+        "image": "ghcr.io/toeverything/affine:stable",
+        "command": null,
+        "kind": "application",
+        "architecture": [
+          "amd64"
+        ]
+      },
+      "requirements": {
+        "ram": {
+          "min": 512,
+          "recommended": 1024
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 3010,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "config",
+          "mount_path": "/root/.affine/config",
+          "host_path": null
+        },
+        {
+          "name": "storage",
+          "mount_path": "/root/.affine/storage",
+          "host_path": null
+        }
+      ],
+      "env": [
+        {
+          "name": "POSTGRES_USER",
+          "value": "affine",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_PASSWORD",
+          "value": "{{secret.db_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_DB",
+          "value": "affine",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "REDIS_SERVER_HOST",
+          "value": "redis",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "DATABASE_URL",
+          "value": "postgresql://affine:{{secret.db_password}}@postgres:5432/affine",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AFFINE_SERVER_HOST",
+          "value": "0.0.0.0",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AFFINE_SERVER_PORT",
+          "value": "3010",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AFFINE_INDEXER_ENABLED",
+          "value": "false",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "containers": [
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres:17-alpine",
+          "command": null,
+          "volumes": [
+            {
+              "name": "db-data",
+              "mount_path": "/var/lib/postgresql/data",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "pg_isready -d $POSTGRES_DB -U $POSTGRES_USER",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 5
+          },
+          "init": false
+        },
+        {
+          "name": "redis",
+          "image": "docker.io/library/redis:7-alpine",
+          "command": null,
+          "volumes": [],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "redis-cli --raw incr ping",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 3
+          },
+          "init": false
+        },
+        {
+          "name": "migration",
+          "image": "ghcr.io/toeverything/affine:stable",
+          "command": "sh -c 'node ./scripts/self-host-predeploy.js'",
+          "volumes": [
+            {
+              "name": "config",
+              "mount_path": "/root/.affine/config",
+              "host_path": null
+            },
+            {
+              "name": "storage",
+              "mount_path": "/root/.affine/storage",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [
+            "postgres",
+            "redis"
+          ],
+          "healthcheck": null,
+          "init": true
+        }
+      ],
+      "mappings": {
+        "smtp": {},
+        "auth": {
+          "OAUTH_OIDC_CLIENT_ID": "{{auth.client_id}}",
+          "OAUTH_OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
+          "OAUTH_OIDC_ENABLED": "true",
+          "OAUTH_OIDC_ISSUER": "{{auth.url}}/application/o/affine/"
+        }
+      },
+      "integrations": {
+        "auth": [
+          "oidc"
+        ],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "affine-responds",
+          "run": "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1",
+          "timeout": 90,
+          "env": {}
+        }
+      ],
+      "post_start": []
+    },
+    "authentik": {
+      "service": {
+        "name": "authentik",
+        "description": "Authentik - identity provider with SSO and OIDC",
+        "url": "https://docs.goauthentik.io/",
+        "image": "ghcr.io/goauthentik/server:2025.2",
+        "command": "server",
+        "kind": "infrastructure",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
+      },
+      "requirements": {
+        "ram": {
+          "min": 512,
+          "recommended": 1024
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 9000,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "media",
+          "mount_path": "/media",
+          "host_path": null
+        },
+        {
+          "name": "templates",
+          "mount_path": "/templates",
+          "host_path": null
+        },
+        {
+          "name": "blueprints",
+          "mount_path": "/blueprints/custom",
+          "host_path": "%h/blueprints"
+        }
+      ],
+      "env": [
+        {
+          "name": "AUTHENTIK_SECRET_KEY",
+          "value": "{{secret.secret_key}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "hex",
+          "length": 50
+        },
+        {
+          "name": "AUTHENTIK_BOOTSTRAP_TOKEN",
+          "value": "{{secret.bootstrap_token}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_BOOTSTRAP_EMAIL",
+          "value": "",
+          "kind": "required",
+          "prompt": "Admin email",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_BOOTSTRAP_PASSWORD",
+          "value": "",
+          "kind": "required",
+          "prompt": "Admin password",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_USER",
+          "value": "authentik",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_PASSWORD",
+          "value": "{{secret.db_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_DB",
+          "value": "authentik",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_REDIS__HOST",
+          "value": "redis",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_POSTGRESQL__HOST",
+          "value": "postgres",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_POSTGRESQL__USER",
+          "value": "authentik",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_POSTGRESQL__NAME",
+          "value": "authentik",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHENTIK_POSTGRESQL__PASSWORD",
+          "value": "{{secret.db_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "containers": [
+        {
+          "name": "worker",
+          "image": "ghcr.io/goauthentik/server:2025.2",
+          "command": "worker",
+          "volumes": [
+            {
+              "name": "media",
+              "mount_path": "/media",
+              "host_path": null
+            },
+            {
+              "name": "templates",
+              "mount_path": "/templates",
+              "host_path": null
+            },
+            {
+              "name": "blueprints",
+              "mount_path": "/blueprints/custom",
+              "host_path": "%h/blueprints"
+            }
+          ],
+          "env_file": true,
+          "depends_on": [
+            "postgres",
+            "redis"
+          ],
+          "healthcheck": null,
+          "init": false
+        },
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres:17-alpine",
+          "command": null,
+          "volumes": [
+            {
+              "name": "db-data",
+              "mount_path": "/var/lib/postgresql/data",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "pg_isready -d $POSTGRES_DB -U $POSTGRES_USER",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 5
+          },
+          "init": false
+        },
+        {
+          "name": "redis",
+          "image": "docker.io/library/redis:7-alpine",
+          "command": "--save 60 1 --loglevel warning",
+          "volumes": [
+            {
+              "name": "redis-data",
+              "mount_path": "/data",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "redis-cli ping | grep PONG",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 3
+          },
+          "init": false
+        }
+      ],
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": [],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "authentik-responds",
+          "run": "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/if/flow/initial-setup/ && exit 0; sleep 2; done; exit 1",
+          "timeout": 180,
+          "env": {
+            "AUTHENTIK_BOOTSTRAP_EMAIL": "admin@test.local",
+            "AUTHENTIK_BOOTSTRAP_PASSWORD": "testpassword123"
+          }
+        },
+        {
+          "name": "user-created",
+          "run": "id authentik",
+          "timeout": 30,
+          "env": {
+            "AUTHENTIK_BOOTSTRAP_EMAIL": "admin@test.local",
+            "AUTHENTIK_BOOTSTRAP_PASSWORD": "testpassword123"
+          }
+        }
+      ],
+      "post_start": []
+    },
     "forgejo": {
       "service": {
         "name": "forgejo",
         "description": "Forgejo - self-hosted Git forge",
         "url": "https://forgejo.org/docs/",
-        "mode": "quadlet",
         "image": "codeberg.org/forgejo/forgejo:11",
         "command": null,
-        "kind": "application"
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": {
         "ram": {
@@ -26,10 +475,35 @@
       "volumes": [
         {
           "name": "data",
-          "mount_path": "/data"
+          "mount_path": "/data",
+          "host_path": null
         }
       ],
       "env": [
+        {
+          "name": "POSTGRES_USER",
+          "value": "forgejo",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_PASSWORD",
+          "value": "{{secret.db_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "POSTGRES_DB",
+          "value": "forgejo",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
         {
           "name": "FORGEJO__database__DB_TYPE",
           "value": "postgres",
@@ -40,7 +514,7 @@
         },
         {
           "name": "FORGEJO__database__HOST",
-          "value": "forgejo-postgres:5432",
+          "value": "postgres:5432",
           "kind": "default",
           "prompt": null,
           "format": "string",
@@ -72,54 +546,33 @@
         }
       ],
       "requires": [],
-      "dependencies": [
-        {
-          "name": "postgres",
-          "image": "docker.io/library/postgres:17-alpine",
-          "env": [
-            {
-              "name": "POSTGRES_USER",
-              "value": "forgejo",
-              "kind": "default",
-              "prompt": null,
-              "format": "string",
-              "length": null
-            },
-            {
-              "name": "POSTGRES_PASSWORD",
-              "value": "{{secret.db_password}}",
-              "kind": "default",
-              "prompt": null,
-              "format": "string",
-              "length": null
-            },
-            {
-              "name": "POSTGRES_DB",
-              "value": "forgejo",
-              "kind": "default",
-              "prompt": null,
-              "format": "string",
-              "length": null
-            }
-          ],
-          "volumes": [
-            {
-              "name": "db-data",
-              "mount_path": "/var/lib/postgresql/data"
-            }
-          ]
-        }
-      ],
-      "containers": [],
       "nginx": {
         "upstream_port": "http"
       },
+      "containers": [
+        {
+          "name": "postgres",
+          "image": "docker.io/library/postgres:17-alpine",
+          "command": null,
+          "volumes": [
+            {
+              "name": "db-data",
+              "mount_path": "/var/lib/postgresql/data",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": null,
+          "init": false
+        }
+      ],
       "mappings": {
         "smtp": {},
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": false
       },
       "tests": [
@@ -141,17 +594,21 @@
           "timeout": 30,
           "env": {}
         }
-      ]
+      ],
+      "post_start": []
     },
     "openclaw": {
       "service": {
         "name": "openclaw",
         "description": "OpenClaw - self-hosted AI assistant gateway",
         "url": "https://docs.openclaw.ai/",
-        "mode": "quadlet",
         "image": "ghcr.io/openclaw/openclaw:2026.3.13-1",
         "command": "sh -c \"echo '{\\\"gateway\\\":{\\\"mode\\\":\\\"local\\\",\\\"bind\\\":\\\"lan\\\",\\\"controlUi\\\":{\\\"dangerouslyAllowHostHeaderOriginFallback\\\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured\"",
-        "kind": "application"
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": {
         "ram": {
@@ -169,7 +626,8 @@
       "volumes": [
         {
           "name": "config",
-          "mount_path": "/home/node/.openclaw"
+          "mount_path": "/home/node/.openclaw",
+          "host_path": null
         }
       ],
       "env": [
@@ -199,17 +657,16 @@
         }
       ],
       "requires": [],
-      "dependencies": [],
-      "containers": [],
       "nginx": {
         "upstream_port": "gateway"
       },
+      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": false
       },
       "tests": [
@@ -225,17 +682,21 @@
           "timeout": 30,
           "env": {}
         }
-      ]
+      ],
+      "post_start": []
     },
     "postgres": {
       "service": {
         "name": "postgres",
         "description": "PostgreSQL - open source relational database",
         "url": "https://www.postgresql.org/docs/",
-        "mode": "quadlet",
         "image": "docker.io/library/postgres:17-alpine",
         "command": null,
-        "kind": "infrastructure"
+        "kind": "infrastructure",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": {
         "ram": {
@@ -253,7 +714,8 @@
       "volumes": [
         {
           "name": "data",
-          "mount_path": "/var/lib/postgresql/data"
+          "mount_path": "/var/lib/postgresql/data",
+          "host_path": null
         }
       ],
       "env": [
@@ -283,15 +745,14 @@
         }
       ],
       "requires": [],
-      "dependencies": [],
-      "containers": [],
       "nginx": null,
+      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": false
       },
       "tests": [
@@ -307,17 +768,21 @@
           "timeout": 30,
           "env": {}
         }
-      ]
+      ],
+      "post_start": []
     },
     "ryra-registry": {
       "service": {
         "name": "ryra-registry",
         "description": "Static file server hosting the ryra service registry",
         "url": "https://ryra.dev",
-        "mode": "quadlet",
         "image": "docker.io/library/nginx:1.29.6-alpine",
         "command": null,
-        "kind": "application"
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": {
         "ram": {
@@ -335,22 +800,22 @@
       "volumes": [
         {
           "name": "data",
-          "mount_path": "/usr/share/nginx/html"
+          "mount_path": "/usr/share/nginx/html",
+          "host_path": null
         }
       ],
       "env": [],
       "requires": [],
-      "dependencies": [],
-      "containers": [],
       "nginx": {
         "upstream_port": "http"
       },
+      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": false
       },
       "tests": [
@@ -366,6 +831,211 @@
           "timeout": 30,
           "env": {}
         }
+      ],
+      "post_start": []
+    },
+    "seafile": {
+      "service": {
+        "name": "seafile",
+        "description": "Seafile - file sync and share server",
+        "url": "https://www.seafile.com/",
+        "image": "docker.io/seafileltd/seafile-mc:12.0-latest",
+        "command": null,
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
+      },
+      "requirements": {
+        "ram": {
+          "min": 512,
+          "recommended": 1024
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/shared",
+          "host_path": "%h/shared"
+        }
+      ],
+      "env": [
+        {
+          "name": "MYSQL_ROOT_PASSWORD",
+          "value": "{{secret.mysql_root_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "MYSQL_LOG_CONSOLE",
+          "value": "true",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "DB_HOST",
+          "value": "mariadb",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "DB_ROOT_PASSWD",
+          "value": "{{secret.mysql_root_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "SEAFILE_SERVER_HOSTNAME",
+          "value": "{% if service.domain %}{{service.domain}}{% else %}localhost{% endif %}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "SEAFILE_SERVER_PROTOCOL",
+          "value": "https",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "JWT_PRIVATE_KEY",
+          "value": "{{secret.jwt_key}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "hex",
+          "length": 32
+        },
+        {
+          "name": "INIT_SEAFILE_ADMIN_EMAIL",
+          "value": "",
+          "kind": "required",
+          "prompt": "Seafile admin email",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "INIT_SEAFILE_ADMIN_PASSWORD",
+          "value": "",
+          "kind": "required",
+          "prompt": "Seafile admin password",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "CACHE_PROVIDER",
+          "value": "redis",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "containers": [
+        {
+          "name": "mariadb",
+          "image": "docker.io/library/mariadb:10.11",
+          "command": null,
+          "volumes": [
+            {
+              "name": "db-data",
+              "mount_path": "/var/lib/mysql",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "healthcheck.sh --connect --innodb_initialized",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 5
+          },
+          "init": false
+        },
+        {
+          "name": "redis",
+          "image": "docker.io/library/redis:7-alpine",
+          "command": null,
+          "volumes": [],
+          "env_file": false,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "redis-cli ping | grep PONG",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 3
+          },
+          "init": false
+        }
+      ],
+      "mappings": {
+        "smtp": {},
+        "auth": {
+          "OAUTH_CLIENT_ID": "{{auth.client_id}}",
+          "OAUTH_CLIENT_SECRET": "{{auth.client_secret}}",
+          "OAUTH_PROVIDER_DOMAIN": "{{auth.url}}",
+          "OAUTH_REDIRECT_URL": "https://{{service.domain}}/oauth/callback/"
+        }
+      },
+      "integrations": {
+        "auth": [
+          "oidc"
+        ],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "seafile-responds",
+          "run": "for i in $(seq 1 120); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1",
+          "timeout": 660,
+          "env": {
+            "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
+            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123",
+            "SEAFILE_SERVER_HOSTNAME": "seafile.test.local"
+          }
+        },
+        {
+          "name": "user-created",
+          "run": "id seafile",
+          "timeout": 30,
+          "env": {
+            "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
+            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123",
+            "SEAFILE_SERVER_HOSTNAME": "seafile.test.local"
+          }
+        }
+      ],
+      "post_start": [
+        {
+          "name": "inject-seafile-oauth",
+          "run": "[ -z \"$OAUTH_CLIENT_ID\" ] && exit 0\n\nCONF=/var/lib/seafile/shared/seafile/conf\n\n# Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume\necho \"Waiting for Seafile to initialize...\"\nfor i in $(seq 1 180); do\n  [ -f \"$CONF/seahub_settings.py\" ] && break\n  sleep 2\ndone\n[ -f \"$CONF/seahub_settings.py\" ] || { echo \"seahub_settings.py not found after 360s\"; exit 1; }\n\n# Write the OAuth Python config alongside seahub_settings.py\ncat > \"$CONF/seahub_settings_oauth.py\" << EOF\nENABLE_OAUTH = True\nOAUTH_CREATE_UNKNOWN_USER = True\nOAUTH_ACTIVATE_USER_AFTER_CREATION = True\nOAUTH_CLIENT_ID = \"$OAUTH_CLIENT_ID\"\nOAUTH_CLIENT_SECRET = \"$OAUTH_CLIENT_SECRET\"\nOAUTH_REDIRECT_URL = \"$OAUTH_REDIRECT_URL\"\nOAUTH_PROVIDER_DOMAIN = \"$OAUTH_PROVIDER_DOMAIN\"\nOAUTH_PROVIDER = \"authentik\"\nOAUTH_AUTHORIZATION_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/authorize/\"\nOAUTH_TOKEN_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/token/\"\nOAUTH_USER_INFO_URL = \"${OAUTH_PROVIDER_DOMAIN}/application/o/userinfo/\"\nOAUTH_SCOPE = [\"openid\", \"profile\", \"email\"]\nOAUTH_ATTRIBUTE_MAP = {\"email\": (True, \"contact_email\"), \"name\": (False, \"name\"), \"sub\": (False, \"uid\")}\nEOF\nchown seafile:seafile \"$CONF/seahub_settings_oauth.py\"\n\n# Append import line if not already present\ngrep -q seahub_settings_oauth \"$CONF/seahub_settings.py\" || echo \"exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())\" >> \"$CONF/seahub_settings.py\"\n\necho \"OAuth config injected into seahub_settings.py\"\n",
+          "timeout": 420
+        }
       ]
     },
     "uptime-kuma": {
@@ -373,10 +1043,13 @@
         "name": "uptime-kuma",
         "description": "Uptime Kuma - self-hosted monitoring tool",
         "url": "https://github.com/louislam/uptime-kuma",
-        "mode": "quadlet",
         "image": "docker.io/louislam/uptime-kuma:1",
         "command": null,
-        "kind": "application"
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": {
         "ram": {
@@ -394,22 +1067,22 @@
       "volumes": [
         {
           "name": "data",
-          "mount_path": "/app/data"
+          "mount_path": "/app/data",
+          "host_path": null
         }
       ],
       "env": [],
       "requires": [],
-      "dependencies": [],
-      "containers": [],
       "nginx": {
         "upstream_port": "http"
       },
+      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": false
       },
       "tests": [
@@ -425,17 +1098,21 @@
           "timeout": 30,
           "env": {}
         }
-      ]
+      ],
+      "post_start": []
     },
     "vaultwarden": {
       "service": {
         "name": "vaultwarden",
         "description": "Vaultwarden - lightweight Bitwarden-compatible server",
         "url": "https://github.com/dani-garcia/vaultwarden/wiki",
-        "mode": "quadlet",
         "image": "docker.io/vaultwarden/server:1.35.4",
         "command": null,
-        "kind": "application"
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": {
         "ram": {
@@ -453,7 +1130,8 @@
       "volumes": [
         {
           "name": "data",
-          "mount_path": "/data"
+          "mount_path": "/data",
+          "host_path": null
         }
       ],
       "env": [
@@ -483,11 +1161,10 @@
         }
       ],
       "requires": [],
-      "dependencies": [],
-      "containers": [],
       "nginx": {
         "upstream_port": "http"
       },
+      "containers": [],
       "mappings": {
         "smtp": {
           "SMTP_FROM": "{{smtp.from}}",
@@ -500,20 +1177,24 @@
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": true
       },
-      "tests": []
+      "tests": [],
+      "post_start": []
     },
     "whoami": {
       "service": {
         "name": "whoami",
         "description": "Traefik whoami - simple HTTP request echo",
         "url": "https://github.com/traefik/whoami",
-        "mode": "quadlet",
         "image": "docker.io/traefik/whoami:v1.11.0",
         "command": null,
-        "kind": "application"
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
       },
       "requirements": null,
       "ports": [
@@ -526,17 +1207,16 @@
       "volumes": [],
       "env": [],
       "requires": [],
-      "dependencies": [],
-      "containers": [],
       "nginx": {
         "upstream_port": "http"
       },
+      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
       },
       "integrations": {
-        "auth": false,
+        "auth": [],
         "smtp": false
       },
       "tests": [
@@ -558,7 +1238,60 @@
           "timeout": 30,
           "env": {}
         }
-      ]
+      ],
+      "post_start": []
+    },
+    "whoami-auth": {
+      "service": {
+        "name": "whoami-auth",
+        "description": "whoami with OIDC auth integration (for testing)",
+        "url": null,
+        "image": "docker.io/traefik/whoami:v1.11.0",
+        "command": null,
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
+      },
+      "requirements": null,
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 80,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [],
+      "env": [],
+      "requires": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "containers": [],
+      "mappings": {
+        "smtp": {},
+        "auth": {
+          "OIDC_CLIENT_ID": "{{auth.client_id}}",
+          "OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
+          "OIDC_ISSUER": "{{auth.url}}/application/o/whoami-auth/"
+        }
+      },
+      "integrations": {
+        "auth": [
+          "oidc"
+        ],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "http-responds",
+          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP",
+          "timeout": 30,
+          "env": {}
+        }
+      ],
+      "post_start": []
     }
   }
 }

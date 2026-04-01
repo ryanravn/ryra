@@ -152,8 +152,11 @@ enum Command {
     },
     /// Run tests for a service
     Test {
-        /// Test name filters (positional, used with --vm)
+        /// Test name filters
         names: Vec<String>,
+        /// Run against live services instead of a fresh VM
+        #[arg(long)]
+        live: bool,
         /// Service to test (live mode)
         #[arg(long)]
         service: Option<String>,
@@ -166,19 +169,16 @@ enum Command {
         /// Repo to load test definitions from (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
-        /// Run in a fresh VM instead of against live services
-        #[arg(long)]
-        vm: bool,
         /// Keep VM alive after tests (or boot without tests for interactive use)
         #[arg(long)]
         keep_alive: bool,
         /// Skip confirmation prompts
         #[arg(long, short)]
         yes: bool,
-        /// Show test command output
+        /// Show real-time output from VM commands
         #[arg(long, short)]
         verbose: bool,
-        /// List available VM tests
+        /// List available tests
         #[arg(long)]
         list: bool,
         /// Max concurrent VMs (default: 1)
@@ -302,11 +302,11 @@ async fn main() -> anyhow::Result<()> {
         } => cli::search::run(query.as_deref(), repo.as_deref()).await?,
         Command::Test {
             ref names,
+            live,
             ref service,
             ref suite,
             ref test,
             ref repo,
-            vm,
             keep_alive,
             yes,
             verbose,
@@ -318,7 +318,7 @@ async fn main() -> anyhow::Result<()> {
                 suite: suite.as_deref(),
                 test_filter: test.as_deref(),
                 repo: repo.as_deref(),
-                vm,
+                vm: !live,
                 keep_alive,
                 yes,
                 verbose,
