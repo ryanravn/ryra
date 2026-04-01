@@ -10,6 +10,7 @@ pub fn build_context(
     config: &Config,
     service_def: &ServiceDef,
     domain: &str,
+    host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
@@ -17,6 +18,20 @@ pub fn build_context(
     // service.*
     ctx.insert("service.name".into(), service_def.service.name.clone());
     ctx.insert("service.domain".into(), domain.to_string());
+    if let Some(port) = host_port {
+        ctx.insert("service.port".into(), port.to_string());
+    }
+    // service.url — the full base URL for this service.
+    // Local mode (*.localhost) uses http + port; proxied mode uses https.
+    let url = if domain.ends_with(".localhost") || domain == "localhost" {
+        match host_port {
+            Some(port) => format!("http://localhost:{port}"),
+            None => format!("http://{domain}"),
+        }
+    } else {
+        format!("https://{domain}")
+    };
+    ctx.insert("service.url".into(), url);
 
     // host.*
     if let Some(base_domain) = config.base_domain() {

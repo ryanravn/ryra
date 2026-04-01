@@ -1,0 +1,60 @@
+[test]
+name = "seafile-oidc-lifecycle"
+
+# Install authentik (OIDC provider)
+[[steps]]
+action = "run"
+name = "add-authentik"
+run = """AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local \
+AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 \
+ryra add authentik --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authentik"
+
+[[steps]]
+action = "run"
+name = "ensure-blueprints-dir"
+run = "mkdir -p /var/lib/authentik/blueprints"
+
+# Install seafile — auth auto-enables, post_start hook injects OAuth config
+[[steps]]
+action = "run"
+name = "add-seafile"
+run = """INIT_SEAFILE_ADMIN_EMAIL=admin@test.local \
+INIT_SEAFILE_ADMIN_PASSWORD=testpassword123 \
+ryra add seafile --repo /opt/ryra-test-registry"""
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "seafile"
+
+# Verify it all works
+[[steps]]
+action = "assert"
+name = "http-responds"
+run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/seafile/.env | cut -d= -f2) 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+[[steps]]
+action = "assert"
+name = "oauth-configured"
+run = "test -f /var/lib/seafile/shared/seafile/conf/seahub_settings_oauth.py && grep -q OAUTH_CLIENT_ID /var/lib/seafile/shared/seafile/conf/seahub_settings_oauth.py"
+
+[[steps]]
+action = "assert"
+name = "blueprint-exists"
+run = "test -f /var/lib/authentik/blueprints/seafile.yaml"
+
+# Cleanup
+[[steps]]
+action = "remove"
+service = "seafile"
+
+[[steps]]
+action = "assert"
+name = "blueprint-cleaned-up"
+run = "test ! -f /var/lib/authentik/blueprints/seafile.yaml"

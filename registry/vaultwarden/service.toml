@@ -19,7 +19,7 @@ mount_path = "/data"
 
 [[env]]
 name = "DOMAIN"
-value = "https://{{service.domain}}"
+value = "{{service.url}}"
 
 [[env]]
 name = "SIGNUPS_ALLOWED"

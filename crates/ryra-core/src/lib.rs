@@ -38,7 +38,11 @@ pub fn service_quadlet_dir(service_name: &str) -> PathBuf {
 /// A discrete operation that the CLI executes. Pattern matching ensures
 /// every step type is handled — no string parsing or if-chains.
 pub enum Step {
-    /// Create a system user for a service.
+    /// Ensure the `ryra` system group exists (idempotent).
+    EnsureGroup,
+    /// Remove the `ryra` system group.
+    RemoveGroup,
+    /// Create a system user for a service and add it to the `ryra` group.
     CreateUser { username: String, home_dir: PathBuf },
     /// Enable systemd linger so user services persist.
     EnableLinger { username: String },
@@ -116,14 +120,24 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Remove a Linux user and their home directory.
     RemoveUser { username: String },
+    /// Run a post-start hook — a shell command on the host after the service is active.
+    /// The service's .env is sourced before the command runs.
+    PostStartHook {
+        name: String,
+        service_name: String,
+        run: String,
+        timeout: u64,
+    },
 }
 
 impl Step {
     /// Render this step as a shell command (for dry-run display).
     pub fn to_command(&self) -> String {
         match self {
+            Step::EnsureGroup => "sudo groupadd --system ryra 2>/dev/null || true".into(),
+            Step::RemoveGroup => "sudo groupdel ryra 2>/dev/null || true".into(),
             Step::CreateUser { username, home_dir } => format!(
-                "sudo useradd --system --shell $(which nologin) --home-dir {} --create-home {username}",
+                "sudo useradd --system --shell $(which nologin) --home-dir {} --create-home {username} && sudo usermod -aG ryra {username}",
                 home_dir.display()
             ),
             Step::EnableLinger { username } => format!("sudo loginctl enable-linger {username}"),
@@ -178,6 +192,14 @@ impl Step {
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
+            Step::PostStartHook {
+                name,
+                service_name,
+                run,
+                ..
+            } => format!(
+                "# post-start hook '{name}' for {service_name}\nsudo sh -c '. /var/lib/{service_name}/.env && {run}'"
+            ),
         }
     }
 }
@@ -322,10 +344,13 @@ pub async fn init(config: Config) -> Result<InitResult> {
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
 
-    let steps = vec![Step::WriteFile(GeneratedFile {
-        path: paths.config_file.clone(),
-        content: config_content,
-    })];
+    let steps = vec![
+        Step::EnsureGroup,
+        Step::WriteFile(GeneratedFile {
+            path: paths.config_file.clone(),
+            content: config_content,
+        }),
+    ];
 
     Ok(InitResult { steps })
 }
@@ -589,7 +614,8 @@ pub fn add_service(
         }
     }
 
-    // 3. Create service user
+    // 3. Ensure ryra group exists, then create service user
+    steps.push(Step::EnsureGroup);
     steps.push(Step::CreateUser {
         username: username.clone(),
         home_dir: home_dir.clone(),
@@ -665,6 +691,16 @@ pub fn add_service(
     if proxied {
         steps.push(Step::SystemRestart {
             unit: "nginx".into(),
+        });
+    }
+
+    // 8. Post-start hooks — run after service is active
+    for hook in &reg_service.def.post_start {
+        steps.push(Step::PostStartHook {
+            name: hook.name.clone(),
+            service_name: service_name.to_string(),
+            run: hook.run.clone(),
+            timeout: hook.timeout,
         });
     }
 
@@ -1250,19 +1286,26 @@ pub fn finalize_expose(
 }
 
 /// Reset ryra: tear down all services, infrastructure, and config.
-/// Always produces steps — discovers system artifacts even without config.
-pub fn reset(system_ryra_users: &[String]) -> ResetResult {
+/// Discovers service users from the `ryra` system group so orphaned users
+/// (from partial installs) are always found — even without a config file.
+pub fn reset() -> ResetResult {
     let config = ConfigPaths::resolve()
         .ok()
         .and_then(|p| config::load_config(&p.config_file).ok());
 
     let mut steps = Vec::new();
 
-    // 1. Clean up services known from config (includes DNS/tunnel cleanup)
+    // 1. Discover all ryra-managed users from the system group.
+    //    This catches orphaned users that the config file doesn't know about.
+    let group_users = ryra_group_members();
+
+    // 2. Clean up services known from config (includes DNS/tunnel cleanup)
+    let mut handled_users = Vec::new();
     if let Some(ref config) = config {
         for service in &config.services {
             let username = service_user(&service.name);
             push_service_teardown(&mut steps, &username, &service.name);
+            handled_users.push(username);
 
             // Clean up networking based on stored exposure (web services only)
             if let (Some(cf), Some(domain)) = (&config.cloudflare, &service.domain) {
@@ -1291,21 +1334,15 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
         }
     }
 
-    // 2. Discover orphaned ryra-* users not tracked in config
-    let known_users: Vec<String> = config
-        .as_ref()
-        .map(|c| c.services.iter().map(|s| service_user(&s.name)).collect())
-        .unwrap_or_default();
-
-    for username in system_ryra_users {
-        if known_users.contains(username) {
-            continue; // Already handled above
+    // 3. Tear down orphaned users in the ryra group but not in config
+    for username in &group_users {
+        if handled_users.contains(username) {
+            continue;
         }
-        let service_name = username.as_str();
-        push_service_teardown(&mut steps, username, service_name);
+        push_service_teardown(&mut steps, username, username);
     }
 
-    // 3. Stop and remove cloudflared tunnel
+    // 4. Stop and remove cloudflared tunnel
     let has_tunnel = config
         .as_ref()
         .and_then(|c| c.cloudflare.as_ref())
@@ -1318,7 +1355,7 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
         )));
     }
 
-    // 4. Stop and remove nginx
+    // 5. Stop and remove nginx
     if PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
         steps.push(Step::SystemStop {
             unit: "nginx".into(),
@@ -1329,12 +1366,41 @@ pub fn reset(system_ryra_users: &[String]) -> ResetResult {
         steps.push(Step::SystemDaemonReload);
     }
 
-    // 5. Remove system-level directories
+    // 6. Remove system-level directories
     if PathBuf::from("/etc/ryra").exists() {
         steps.push(Step::RemoveDir(PathBuf::from("/etc/ryra")));
     }
 
+    // 7. Remove the ryra group itself (after all users are deleted)
+    if !group_users.is_empty() || config.is_some() {
+        steps.push(Step::RemoveGroup);
+    }
+
     ResetResult { steps }
+}
+
+/// Read members of the `ryra` system group from /etc/group.
+/// Returns an empty vec if the group doesn't exist.
+fn ryra_group_members() -> Vec<String> {
+    let output = std::process::Command::new("getent")
+        .args(["group", "ryra"])
+        .output()
+        .ok();
+
+    let Some(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    // getent group ryra => "ryra:x:999:authentik,seafile,forgejo"
+    let line = String::from_utf8_lossy(&output.stdout);
+    let members = line.trim().split(':').nth(3).unwrap_or("");
+    if members.is_empty() {
+        return Vec::new();
+    }
+    members.split(',').map(|s| s.to_string()).collect()
 }
 
 /// Push the standard teardown steps for a single service user.

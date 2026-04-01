@@ -26,6 +26,12 @@ pub struct ServiceDef {
     pub integrations: IntegrationFlags,
     #[serde(default)]
     pub tests: Vec<TestDef>,
+    /// Commands that run on the host after the service is started and ports are reachable.
+    /// Useful for services that need config injection into files created at runtime
+    /// (e.g. Seafile writes OAuth config to seahub_settings.py after bootstrap).
+    /// The service's .env is sourced before each hook runs.
+    #[serde(default)]
+    pub post_start: Vec<PostStartHookDef>,
 }
 
 /// System resource requirements for a service.
@@ -291,6 +297,25 @@ pub struct TestDef {
 
 fn default_test_timeout() -> u64 {
     30
+}
+
+fn default_hook_timeout() -> u64 {
+    300
+}
+
+/// A command that runs on the host after the service is started.
+///
+/// The service's `.env` file is sourced before the command runs, so all
+/// env vars (including auth mappings like `OAUTH_CLIENT_ID`) are available.
+/// The command runs as root with the service's home dir as working directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostStartHookDef {
+    pub name: String,
+    /// Shell command to run on the host.
+    pub run: String,
+    /// Timeout in seconds (default: 300).
+    #[serde(default = "default_hook_timeout")]
+    pub timeout: u64,
 }
 
 /// A multi-service test file from the `tests/` directory in a registry.

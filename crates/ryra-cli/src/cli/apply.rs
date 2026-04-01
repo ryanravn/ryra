@@ -125,6 +125,15 @@ async fn prompt_rollback(created: &[Created]) {
 /// Execute a single step, recording what was created for rollback.
 async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
     match step {
+        Step::EnsureGroup => {
+            // Idempotent — succeeds if group already exists
+            let _ = run_quiet("sudo groupadd --system ryra 2>/dev/null");
+            Ok(())
+        }
+        Step::RemoveGroup => {
+            let _ = run_quiet("sudo groupdel ryra 2>/dev/null");
+            Ok(())
+        }
         Step::CreateUser { username, home_dir } => {
             let exists = Command::new("id")
                 .arg(username)
@@ -136,6 +145,8 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
 
             if exists {
                 println!("  User {username} already exists, skipping");
+                // Ensure user is in the ryra group (may be missing from older installs)
+                let _ = run_quiet(&format!("sudo usermod -aG ryra {username}"));
                 // Clean up stale podman storage (broken overlay symlinks from previous installs)
                 let _ = run_quiet(&format!(
                     "sudo -H -u {username} sh -c 'cd / && podman system reset --force'"
@@ -170,7 +181,7 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let sub_start = 100000 + (uid * 65536);
             let sub_end = sub_start + 65535;
             run(&format!(
-                "sudo usermod --add-subuids {sub_start}-{sub_end} --add-subgids {sub_start}-{sub_end} {username}"
+                "sudo usermod -aG ryra --add-subuids {sub_start}-{sub_end} --add-subgids {sub_start}-{sub_end} {username}"
             ))?;
             created.push(Created::User(username.clone()));
             Ok(())
@@ -516,6 +527,22 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             Ok(())
         }
         Step::PullImage { image, username } => {
+            // Skip pull if image already exists (e.g. pre-cached in shared store)
+            let exists_cmd = match &username {
+                Some(u) => format!("cd / && sudo -H -u {u} podman image exists {image}"),
+                None => format!("sudo podman image exists {image}"),
+            };
+            let exists = Command::new("sh")
+                .args(["-c", &exists_cmd])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if exists {
+                println!("  {image} already available, skipping pull");
+                return Ok(());
+            }
             println!("  Pulling {image}...");
             match username {
                 Some(u) => run(&format!("cd / && sudo -H -u {u} podman pull {image}")),
@@ -529,7 +556,33 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("sudo userdel --remove {username}"));
             Ok(())
         }
+        Step::PostStartHook {
+            name,
+            service_name,
+            run: hook_cmd,
+            timeout,
+        } => {
+            println!("  Running post-start hook: {name}...");
+            let home = format!("/var/lib/{service_name}");
+            // Run via sudo — the service home dir (e.g. /var/lib/seafile) is mode 700,
+            // only accessible to root or the service user.
+            let full_cmd = format!(
+                "sudo sh -c {cmd}",
+                cmd = shell_escape(&format!(
+                    "set -a && . {home}/.env && set +a && timeout {timeout} sh -c {inner}",
+                    inner = shell_escape(hook_cmd),
+                )),
+            );
+            run(&full_cmd)
+        }
     }
+}
+
+/// Escape a string for use as a single sh -c argument.
+fn shell_escape(s: &str) -> String {
+    // Use single quotes, escaping any embedded single quotes
+    let escaped = s.replace('\'', "'\"'\"'");
+    format!("'{escaped}'")
 }
 
 fn run(cmd: &str) -> Result<()> {

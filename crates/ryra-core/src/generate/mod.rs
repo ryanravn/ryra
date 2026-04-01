@@ -52,10 +52,14 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
     let name = &params.service_def.service.name;
 
     // Build template context (generates fresh secrets based on each env var's format + length)
+    // Local mode has no domain — use <service>.localhost as a valid FQDN fallback.
+    let fallback_domain = format!("{name}.localhost");
+    let domain = params.domain.unwrap_or(&fallback_domain);
     let ctx = context::build_context(
         params.config,
         params.service_def,
-        params.domain.unwrap_or_default(),
+        domain,
+        params.host_port,
         params.auth_kind,
     );
     let rendered_env = render_env_vars(params.service_def, &ctx, params.env_overrides, params.auth_kind)?;
