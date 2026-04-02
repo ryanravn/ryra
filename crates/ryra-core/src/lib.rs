@@ -525,15 +525,9 @@ pub fn add_service(
     // Build ordered steps
     let mut steps = Vec::new();
 
-    // nginx is needed when:
-    // - a service is proxied (has a domain), OR
-    // - a service uses auth with managed authentik (inter-service communication)
-    let needs_auth_proxy = auth_kind.is_some()
-        && matches!(
-            config.auth,
-            Some(config::schema::AuthCredentials::Authentik { .. })
-        );
-    let needs_nginx = proxied || needs_auth_proxy;
+    // nginx is needed when a service is proxied (has a domain).
+    // Auth inter-service communication goes directly via host.containers.internal.
+    let needs_nginx = proxied;
 
     // 0. Ensure nginx is set up
     if needs_nginx && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
@@ -578,34 +572,8 @@ pub fn add_service(
         }
     }
 
-    // 0b. Ensure the auth provider has an internal nginx site for inter-service traffic.
-    // Other services' containers reach auth via http://host.containers.internal:<port>.
-    let auth_internal_site = PathBuf::from("/etc/ryra/nginx/sites/auth-internal.conf");
-    if needs_auth_proxy
-        && !auth_internal_site.exists()
-        && let Some(config::schema::AuthCredentials::Authentik { url, .. }) = &config.auth
-    {
-        // Extract the port from the auth URL (e.g., "http://localhost:9000" → 9000)
-        let auth_port = url
-            .rsplit(':')
-            .next()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or(9000);
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: auth_internal_site,
-            content: generate::nginx::render_internal_site(
-                "authentik",
-                auth_port,
-                system::port::AUTH_INTERNAL_PORT,
-            ),
-        }));
-        // Restart nginx to pick up the new site. When nginx is being installed
-        // in the same `ryra add` call, the quadlet doesn't exist at planning time
-        // but will be running by the time this step executes.
-        steps.push(Step::SystemRestart {
-            unit: "nginx".into(),
-        });
-    }
+    // Auth inter-service communication: containers reach authentik directly
+    // via host.containers.internal:{authentik_host_port} — no nginx proxy needed.
 
     // 1. Networking: only for proxied modes
     if proxied {

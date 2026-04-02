@@ -51,14 +51,17 @@ pub fn build_context(
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let url = auth.url().to_string();
         // auth.internal_url is how containers reach the auth provider.
-        // nginx (Network=host) proxies the auth provider on a dedicated
-        // internal port. Containers reach it via host.containers.internal.
+        // Containers can reach host-published ports directly via
+        // host.containers.internal — no nginx proxy needed.
         let internal_url = match auth {
-            crate::config::schema::AuthCredentials::Authentik { .. } => {
-                format!(
-                    "http://host.containers.internal:{}",
-                    crate::system::port::AUTH_INTERNAL_PORT
-                )
+            crate::config::schema::AuthCredentials::Authentik { url: auth_url, .. } => {
+                // Extract port from auth URL (e.g., "http://localhost:9000" → 9000)
+                let port = auth_url
+                    .rsplit(':')
+                    .next()
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .unwrap_or(9000);
+                format!("http://host.containers.internal:{port}")
             }
             _ => url.clone(),
         };

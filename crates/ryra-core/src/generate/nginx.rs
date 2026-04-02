@@ -128,35 +128,6 @@ WantedBy=multi-user.target
     .to_string()
 }
 
-/// Render an nginx site that exposes a service on a dedicated port for
-/// inter-service communication. Containers reach it via host.containers.internal:<port>.
-/// No server_name matching — just a plain TCP listener.
-pub fn render_internal_site(service_name: &str, upstream_port: u16, listen_port: u16) -> String {
-    format!(
-        r#"# Managed by ryra — internal proxy for inter-service communication
-upstream {service_name}-internal {{
-    server 127.0.0.1:{upstream_port};
-}}
-
-server {{
-    listen {listen_port};
-
-    location / {{
-        proxy_pass http://{service_name}-internal;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }}
-}}
-"#,
-    )
-}
-
 /// Render the base nginx.conf that includes sites.
 pub fn render_nginx_base_conf() -> String {
     r#"worker_processes auto;

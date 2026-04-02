@@ -6,10 +6,6 @@ use crate::error::{Error, Result};
 const PORT_RANGE_START: u16 = 10000;
 const PORT_RANGE_END: u16 = 11000;
 
-/// Dedicated nginx port for inter-service auth communication.
-/// Containers reach the auth provider at http://host.containers.internal:<port>.
-pub const AUTH_INTERNAL_PORT: u16 = 9080;
-
 /// Allocate the next available port from the range, checking against installed services.
 pub fn allocate_port(config: &Config) -> Result<u16> {
     let used: std::collections::HashSet<u16> =
