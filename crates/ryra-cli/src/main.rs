@@ -45,8 +45,9 @@ enum Command {
     },
     /// Add and start a service
     Add {
-        /// Service name from repo
-        service: String,
+        /// Service name(s) from repo
+        #[arg(required = true, num_args = 1..)]
+        services: Vec<String>,
         /// Domain for this service (defaults to <service>.<zone>)
         #[arg(long)]
         domain: Option<String>,
@@ -62,8 +63,9 @@ enum Command {
     },
     /// Remove a service
     Remove {
-        /// Service name to remove
-        service: String,
+        /// Service name(s) to remove
+        #[arg(required = true, num_args = 1..)]
+        services: Vec<String>,
         /// Skip confirmation prompt
         #[arg(long, short = 'y')]
         yes: bool,
@@ -240,23 +242,23 @@ async fn main() -> anyhow::Result<()> {
             .await?
         }
         Command::Add {
-            ref service,
+            ref services,
             ref domain,
             ref repo,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(service, domain.as_deref(), repo.as_deref(), dry_run).await?
+            cli::add::run(services, domain.as_deref(), repo.as_deref(), dry_run).await?
         }
         Command::Remove {
-            ref service,
+            ref services,
             yes,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::remove::run(service, yes, dry_run).await?
+            cli::remove::run(services, yes, dry_run).await?
         }
         Command::Reset {
             yes,

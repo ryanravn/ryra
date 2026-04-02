@@ -15,13 +15,18 @@ use super::apply;
 use super::prompts;
 
 pub async fn run(
-    service: &str,
+    services: &[String],
     domain: Option<&str>,
     repo: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
+    if domain.is_some() && services.len() > 1 {
+        bail!("--domain can only be used when adding a single service");
+    }
+
     let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
 
+    for service in services {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     let interactive = std::io::stdin().is_terminal();
@@ -348,6 +353,8 @@ pub async fn run(
         println!("  sudo systemctl --machine={u}@ --user restart {service}");
     }
 
+    } // end for service in services
+
     Ok(())
 }
 
@@ -379,7 +386,7 @@ async fn ensure_auth_for_add(
             println!("Installing authentik first...");
             println!();
             // Recursively install authentik, then reload config
-            Box::pin(run("authentik", None, Some(repo_url), dry_run)).await?;
+            Box::pin(run(&["authentik".to_string()], None, Some(repo_url), dry_run)).await?;
             // Reload config — authentik's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.auth.is_some() {

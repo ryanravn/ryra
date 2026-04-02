@@ -6,7 +6,8 @@ use ryra_core::config::schema::ExposureMode;
 
 use super::apply;
 
-pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
+pub async fn run(services: &[String], yes: bool, dry_run: bool) -> Result<()> {
+    for service in services {
     let result = ryra_core::remove_service(service)?;
 
     if !yes && !dry_run {
@@ -30,7 +31,7 @@ pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
                 .with_prompt(format!("Type \"{service}\" to confirm removal"))
                 .interact_text()?;
 
-            if input != service {
+            if input != *service {
                 println!("Cancelled.");
                 return Ok(());
             }
@@ -47,6 +48,8 @@ pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
         ryra_core::finalize_remove(&result.service_name)?;
         println!("\n{service} removed.");
     }
+
+    } // end for service in services
 
     Ok(())
 }
