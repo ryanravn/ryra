@@ -401,6 +401,215 @@
       ],
       "post_start": []
     },
+    "immich": {
+      "service": {
+        "name": "immich",
+        "description": "Immich - self-hosted photo & video management",
+        "url": "https://immich.app/",
+        "image": "ghcr.io/immich-app/immich-server:release",
+        "command": null,
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ]
+      },
+      "requirements": {
+        "ram": {
+          "min": 1024,
+          "recommended": 2048
+        }
+      },
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 2283,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "upload",
+          "mount_path": "/data",
+          "host_path": "%h/upload"
+        }
+      ],
+      "env": [
+        {
+          "name": "DB_PASSWORD",
+          "value": "{{secret.db_password}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "DB_USERNAME",
+          "value": "postgres",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "DB_DATABASE_NAME",
+          "value": "immich",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "DB_HOSTNAME",
+          "value": "postgres",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "REDIS_HOSTNAME",
+          "value": "valkey",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "IMMICH_MACHINE_LEARNING_URL",
+          "value": "http://machine-learning:3003",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "INIT_IMMICH_ADMIN_EMAIL",
+          "value": "",
+          "kind": "required",
+          "prompt": "Immich admin email",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "INIT_IMMICH_ADMIN_PASSWORD",
+          "value": "",
+          "kind": "required",
+          "prompt": "Immich admin password",
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "nginx": {
+        "upstream_port": "http"
+      },
+      "containers": [
+        {
+          "name": "machine-learning",
+          "image": "ghcr.io/immich-app/immich-machine-learning:release",
+          "command": null,
+          "volumes": [
+            {
+              "name": "model-cache",
+              "mount_path": "/cache",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "python3 -c 'import requests; requests.get(\"http://localhost:3003/ping\")' || exit 1",
+            "start_period": 60,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 10
+          },
+          "init": false
+        },
+        {
+          "name": "postgres",
+          "image": "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0",
+          "command": null,
+          "volumes": [
+            {
+              "name": "db-data",
+              "mount_path": "/var/lib/postgresql/data",
+              "host_path": null
+            }
+          ],
+          "env_file": true,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "pg_isready -d $${DB_DATABASE_NAME:-immich} -U $${DB_USERNAME:-postgres}",
+            "start_period": 30,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 5
+          },
+          "init": false
+        },
+        {
+          "name": "valkey",
+          "image": "docker.io/valkey/valkey:9",
+          "command": null,
+          "volumes": [],
+          "env_file": false,
+          "depends_on": [],
+          "healthcheck": {
+            "command": "redis-cli ping | grep PONG",
+            "start_period": 20,
+            "interval": 30,
+            "retries": 5,
+            "timeout": 3
+          },
+          "init": false
+        }
+      ],
+      "mappings": {
+        "smtp": {},
+        "auth": {
+          "OAUTHLIB_INSECURE_TRANSPORT": "1",
+          "OAUTH_CLIENT_ID": "{{auth.client_id}}",
+          "OAUTH_CLIENT_SECRET": "{{auth.client_secret}}",
+          "OAUTH_ISSUER_URL": "{{auth.internal_url}}/application/o/immich/",
+          "OAUTH_REDIRECT_URL": "{{service.url}}/auth/login"
+        }
+      },
+      "integrations": {
+        "auth": [
+          "oidc"
+        ],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "immich-responds",
+          "run": "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping && exit 0; sleep 5; done; exit 1",
+          "timeout": 360,
+          "env": {
+            "INIT_IMMICH_ADMIN_EMAIL": "admin@test.local",
+            "INIT_IMMICH_ADMIN_PASSWORD": "testpassword123"
+          }
+        },
+        {
+          "name": "user-created",
+          "run": "id immich",
+          "timeout": 30,
+          "env": {
+            "INIT_IMMICH_ADMIN_EMAIL": "admin@test.local",
+            "INIT_IMMICH_ADMIN_PASSWORD": "testpassword123"
+          }
+        }
+      ],
+      "post_start": [
+        {
+          "name": "configure-immich-oidc",
+          "run": "[ -z \"$OAUTH_CLIENT_ID\" ] && exit 0\n\nIMMICH_URL=\"http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/immich/.env | cut -d= -f2)\"\nADMIN_EMAIL=$(grep INIT_IMMICH_ADMIN_EMAIL /var/lib/immich/.env | cut -d= -f2)\nADMIN_PASSWORD=$(grep INIT_IMMICH_ADMIN_PASSWORD /var/lib/immich/.env | cut -d= -f2)\n\n# Wait for Immich to be ready\necho \"Waiting for Immich API to be ready (up to 5 min)...\"\nfor i in $(seq 1 30); do\n  CODE=$(curl -so /dev/null -w '%{http_code}' \"$IMMICH_URL/api/server/ping\" 2>/dev/null)\n  [ \"$CODE\" = \"200\" ] && break\n  echo \"  not yet — retrying in 10s (${i}0s elapsed)\"\n  sleep 10\ndone\n[ \"$CODE\" = \"200\" ] || { echo \"ERROR: Immich not ready after 300s\"; exit 1; }\necho \"Immich API ready\"\n\n# Create admin user (ignore error if already exists)\ncurl -sf -X POST \"$IMMICH_URL/api/auth/admin-sign-up\" -H \"Content-Type: application/json\" -d \"{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\",\"name\":\"Admin\"}\" >/dev/null 2>&1 || true\n\n# Write a helper script to avoid shell quoting issues with inline python\ncat > /tmp/immich-oidc-setup.py << PYEOF\nimport sys, json, urllib.request\n\nimmich_url = sys.argv[1]\nadmin_email = sys.argv[2]\nadmin_password = sys.argv[3]\nclient_id = sys.argv[4]\nclient_secret = sys.argv[5]\nissuer_url = sys.argv[6]\n\ndef api(method, path, data=None, token=None):\n    headers = {\"Content-Type\": \"application/json\"}\n    if token:\n        headers[\"Authorization\"] = f\"Bearer {token}\"\n    body = json.dumps(data).encode() if data else None\n    req = urllib.request.Request(f\"{immich_url}/api{path}\", data=body, headers=headers, method=method)\n    with urllib.request.urlopen(req) as resp:\n        return json.loads(resp.read())\n\n# Create admin user (ignore if exists)\ntry:\n    api(\"POST\", \"/auth/admin-sign-up\", {\"email\": admin_email, \"password\": admin_password, \"name\": \"Admin\"})\nexcept Exception:\n    pass\n\n# Login\nresp = api(\"POST\", \"/auth/login\", {\"email\": admin_email, \"password\": admin_password})\ntoken = resp[\"accessToken\"]\n\n# Get config, update OAuth, apply\nconfig = api(\"GET\", \"/system-config\", token=token)\nconfig[\"oauth\"][\"enabled\"] = True\nconfig[\"oauth\"][\"autoRegister\"] = True\nconfig[\"oauth\"][\"autoLaunch\"] = False\nconfig[\"oauth\"][\"clientId\"] = client_id\nconfig[\"oauth\"][\"clientSecret\"] = client_secret\nconfig[\"oauth\"][\"issuerUrl\"] = issuer_url\nconfig[\"oauth\"][\"scope\"] = \"openid email profile\"\nconfig[\"oauth\"][\"buttonText\"] = \"Login with SSO\"\napi(\"PUT\", \"/system-config\", data=config, token=token)\nprint(\"Immich OIDC configured successfully\")\nPYEOF\n\npython3 /tmp/immich-oidc-setup.py \"$IMMICH_URL\" \"$ADMIN_EMAIL\" \"$ADMIN_PASSWORD\" \"$OAUTH_CLIENT_ID\" \"$OAUTH_CLIENT_SECRET\" \"$OAUTH_ISSUER_URL\"\n",
+          "timeout": 420
+        }
+      ]
+    },
     "openclaw": {
       "service": {
         "name": "openclaw",

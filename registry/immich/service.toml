@@ -1,0 +1,215 @@
+[service]
+name = "immich"
+description = "Immich - self-hosted photo & video management"
+url = "https://immich.app/"
+image = "ghcr.io/immich-app/immich-server:release"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 1024
+recommended = 2048
+
+[[ports]]
+name = "http"
+container_port = 2283
+
+[[volumes]]
+name = "upload"
+mount_path = "/data"
+host_path = "%h/upload"
+
+# --- Sidecar: machine-learning ---
+
+[[containers]]
+name = "machine-learning"
+image = "ghcr.io/immich-app/immich-machine-learning:release"
+env_file = true
+
+[[containers.volumes]]
+name = "model-cache"
+mount_path = "/cache"
+
+[containers.healthcheck]
+command = "python3 -c 'import requests; requests.get(\"http://localhost:3003/ping\")' || exit 1"
+start_period = 60
+interval = 30
+retries = 5
+timeout = 10
+
+# --- Sidecar: postgres (custom image with vector extensions) ---
+
+[[containers]]
+name = "postgres"
+image = "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0"
+env_file = true
+
+[[containers.volumes]]
+name = "db-data"
+mount_path = "/var/lib/postgresql/data"
+
+[containers.healthcheck]
+command = "pg_isready -d $${DB_DATABASE_NAME:-immich} -U $${DB_USERNAME:-postgres}"
+start_period = 30
+interval = 30
+retries = 5
+timeout = 5
+
+# --- Sidecar: valkey (redis-compatible) ---
+
+[[containers]]
+name = "valkey"
+image = "docker.io/valkey/valkey:9"
+env_file = false
+
+[containers.healthcheck]
+command = "redis-cli ping | grep PONG"
+start_period = 20
+interval = 30
+retries = 5
+timeout = 3
+
+# --- Environment variables ---
+
+[[env]]
+name = "DB_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "DB_USERNAME"
+value = "postgres"
+
+[[env]]
+name = "DB_DATABASE_NAME"
+value = "immich"
+
+[[env]]
+name = "DB_HOSTNAME"
+value = "postgres"
+
+[[env]]
+name = "REDIS_HOSTNAME"
+value = "valkey"
+
+[[env]]
+name = "IMMICH_MACHINE_LEARNING_URL"
+value = "http://machine-learning:3003"
+
+[[env]]
+name = "INIT_IMMICH_ADMIN_EMAIL"
+value = ""
+kind = "required"
+prompt = "Immich admin email"
+
+[[env]]
+name = "INIT_IMMICH_ADMIN_PASSWORD"
+value = ""
+kind = "required"
+prompt = "Immich admin password"
+
+[nginx]
+upstream_port = "http"
+
+# --- Auth integration ---
+# Immich configures OIDC via its admin API (PUT /system-config), not env vars.
+# The post_start hook waits for Immich to boot, creates the admin user,
+# then configures OAuth settings via the API.
+
+[integrations]
+auth = ["oidc"]
+smtp = false
+
+[mappings.auth]
+OAUTH_CLIENT_ID = "{{auth.client_id}}"
+OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
+OAUTH_ISSUER_URL = "{{auth.internal_url}}/application/o/immich/"
+OAUTH_REDIRECT_URL = "{{service.url}}/auth/login"
+OAUTHLIB_INSECURE_TRANSPORT = "1"
+
+[[post_start]]
+name = "configure-immich-oidc"
+run = """
+[ -z "$OAUTH_CLIENT_ID" ] && exit 0
+
+IMMICH_URL="http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/immich/.env | cut -d= -f2)"
+ADMIN_EMAIL=$(grep INIT_IMMICH_ADMIN_EMAIL /var/lib/immich/.env | cut -d= -f2)
+ADMIN_PASSWORD=$(grep INIT_IMMICH_ADMIN_PASSWORD /var/lib/immich/.env | cut -d= -f2)
+
+# Wait for Immich to be ready
+echo "Waiting for Immich API to be ready (up to 5 min)..."
+for i in $(seq 1 30); do
+  CODE=$(curl -so /dev/null -w '%{http_code}' "$IMMICH_URL/api/server/ping" 2>/dev/null)
+  [ "$CODE" = "200" ] && break
+  echo "  not yet — retrying in 10s (${i}0s elapsed)"
+  sleep 10
+done
+[ "$CODE" = "200" ] || { echo "ERROR: Immich not ready after 300s"; exit 1; }
+echo "Immich API ready"
+
+# Create admin user (ignore error if already exists)
+curl -sf -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\",\"name\":\"Admin\"}" \
+  >/dev/null 2>&1 || true
+
+# Write a helper script to avoid shell quoting issues with inline python
+cat > /tmp/immich-oidc-setup.py << PYEOF
+import sys, json, urllib.request
+
+immich_url = sys.argv[1]
+admin_email = sys.argv[2]
+admin_password = sys.argv[3]
+client_id = sys.argv[4]
+client_secret = sys.argv[5]
+issuer_url = sys.argv[6]
+
+def api(method, path, data=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(f"{immich_url}/api{path}", data=body, headers=headers, method=method)
+    with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
+
+# Create admin user (ignore if exists)
+try:
+    api("POST", "/auth/admin-sign-up", {"email": admin_email, "password": admin_password, "name": "Admin"})
+except Exception:
+    pass
+
+# Login
+resp = api("POST", "/auth/login", {"email": admin_email, "password": admin_password})
+token = resp["accessToken"]
+
+# Get config, update OAuth, apply
+config = api("GET", "/system-config", token=token)
+config["oauth"]["enabled"] = True
+config["oauth"]["autoRegister"] = True
+config["oauth"]["autoLaunch"] = False
+config["oauth"]["clientId"] = client_id
+config["oauth"]["clientSecret"] = client_secret
+config["oauth"]["issuerUrl"] = issuer_url
+config["oauth"]["scope"] = "openid email profile"
+config["oauth"]["buttonText"] = "Login with SSO"
+api("PUT", "/system-config", data=config, token=token)
+print("Immich OIDC configured successfully")
+PYEOF
+
+python3 /tmp/immich-oidc-setup.py \
+  "$IMMICH_URL" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
+  "$OAUTH_CLIENT_ID" "$OAUTH_CLIENT_SECRET" "$OAUTH_ISSUER_URL"
+"""
+timeout = 420
+
+# --- Tests ---
+
+[[tests]]
+name = "immich-responds"
+run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping && exit 0; sleep 5; done; exit 1"
+timeout = 360
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
+
+[[tests]]
+name = "user-created"
+run = "id immich"
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }

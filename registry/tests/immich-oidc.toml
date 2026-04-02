@@ -1,0 +1,63 @@
+[test]
+name = "immich-oidc-lifecycle"
+
+# Install authentik (OIDC provider)
+[[steps]]
+action = "run"
+name = "add-authentik"
+run = """AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local \
+AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 \
+ryra add authentik --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authentik"
+
+# Install immich with OIDC auth
+[[steps]]
+action = "run"
+name = "add-immich"
+run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
+INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
+ryra add immich --repo /opt/ryra-test-registry"""
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "immich"
+
+# Verify Immich responds
+[[steps]]
+action = "assert"
+name = "http-responds"
+run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+# Verify OIDC was configured via Immich API
+[[steps]]
+action = "assert"
+name = "oidc-configured"
+run = """
+PORT=$(sudo grep RYRA_PORT_HTTP /var/lib/immich/.env | cut -d= -f2)
+EMAIL=$(sudo grep INIT_IMMICH_ADMIN_EMAIL /var/lib/immich/.env | cut -d= -f2)
+PASS=$(sudo grep INIT_IMMICH_ADMIN_PASSWORD /var/lib/immich/.env | cut -d= -f2)
+python3 -c "
+import json, urllib.request
+url = 'http://127.0.0.1:' + '$PORT'
+body = json.dumps({'email': '$EMAIL', 'password': '$PASS'}).encode()
+req = urllib.request.Request(url + '/api/auth/login', data=body, headers={'Content-Type': 'application/json'})
+token = json.loads(urllib.request.urlopen(req).read())['accessToken']
+req2 = urllib.request.Request(url + '/api/system-config', headers={'Authorization': 'Bearer ' + token})
+config = json.loads(urllib.request.urlopen(req2).read())
+assert config['oauth']['enabled'] == True, 'OAuth not enabled'
+assert config['oauth']['clientId'] != '', 'No client ID'
+print('OIDC verified: enabled with client_id=' + config['oauth']['clientId'][:8] + '...')
+"
+"""
+timeout = 30
+
+# Cleanup
+[[steps]]
+action = "remove"
+service = "immich"
