@@ -90,11 +90,20 @@ pub async fn run(
         }
     }
 
-    // Domain — only for proxied modes (tunnel/proxy/dns-only)
+    // Domain — only for proxied modes (tunnel/proxy/dns-only/tailscale)
     let domain = if exposure.needs_domain() {
-        let default_domain = match config.base_domain() {
-            Some(d) => format!("{service}.{d}"),
-            None => format!("{service}.localhost"),
+        let default_domain = if exposure == ExposureMode::Tailscale {
+            match ryra_core::integrations::tailscale::detect_fqdn() {
+                Some(fqdn) => fqdn,
+                None => {
+                    bail!("Tailscale is not running or has no FQDN. Is tailscaled active?");
+                }
+            }
+        } else {
+            match config.base_domain() {
+                Some(d) => format!("{service}.{d}"),
+                None => format!("{service}.localhost"),
+            }
         };
         Some(match domain {
             Some(d) => d.to_string(),
@@ -305,7 +314,15 @@ pub async fn run(
     if dry_run {
         super::print_dry_run(&result.steps);
         if let Some(ref domain) = result.domain {
-            println!("{service} will be available at https://{domain}");
+            if domain.ends_with(".ts.net") {
+                if let Some(port) = result.host_port {
+                    println!("{service} will be available at https://{domain}:{port}");
+                } else {
+                    println!("{service} will be available at https://{domain}");
+                }
+            } else {
+                println!("{service} will be available at https://{domain}");
+            }
         } else {
             println!("{service} will be started (no domain — non-web service)");
         }
@@ -325,7 +342,15 @@ pub async fn run(
         })?;
         let home_dir = ryra_core::service_home(service);
         if let Some(ref domain) = result.domain {
-            println!("\n{service} is running at https://{domain}");
+            if domain.ends_with(".ts.net") {
+                if let Some(port) = result.host_port {
+                    println!("\n{service} is running at https://{domain}:{port}");
+                } else {
+                    println!("\n{service} is running at https://{domain}");
+                }
+            } else {
+                println!("\n{service} is running at https://{domain}");
+            }
         } else {
             println!("\n{service} is running.");
         }

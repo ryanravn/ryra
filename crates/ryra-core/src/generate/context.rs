@@ -22,11 +22,17 @@ pub fn build_context(
         ctx.insert("service.port".into(), port.to_string());
     }
     // service.url — the full base URL for this service.
-    // Local mode (*.localhost) uses http + port; proxied mode uses https.
+    // Local mode (*.localhost) uses http + port; Tailscale uses https + port;
+    // other proxied modes use https on standard port 443.
     let url = if domain.ends_with(".localhost") || domain == "localhost" {
         match host_port {
             Some(port) => format!("http://localhost:{port}"),
             None => format!("http://{domain}"),
+        }
+    } else if domain.ends_with(".ts.net") {
+        match host_port {
+            Some(port) => format!("https://{domain}:{port}"),
+            None => format!("https://{domain}"),
         }
     } else {
         format!("https://{domain}")

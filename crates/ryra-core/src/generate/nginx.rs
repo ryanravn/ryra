@@ -4,8 +4,14 @@ use std::path::{Path, PathBuf};
 pub enum SiteMode {
     /// No SSL — nginx just serves HTTP (used for tunnel + local modes).
     HttpOnly,
-    /// Direct exposure — nginx terminates SSL with certs.
+    /// Direct exposure — nginx terminates SSL with certs on 80/443.
     Ssl {
+        cert_path: PathBuf,
+        key_path: PathBuf,
+    },
+    /// Port-based SSL — nginx terminates SSL on a custom port (used for Tailscale).
+    SslPort {
+        listen_port: u16,
         cert_path: PathBuf,
         key_path: PathBuf,
     },
@@ -27,6 +33,11 @@ pub fn render_site(params: &NginxSiteParams) -> String {
             cert_path,
             key_path,
         } => render_ssl_site(params, cert_path, key_path),
+        SiteMode::SslPort {
+            listen_port,
+            cert_path,
+            key_path,
+        } => render_ssl_port_site(params, *listen_port, cert_path, key_path),
     }
 }
 
@@ -100,6 +111,51 @@ server {{
         name = params.service_name,
         domain = params.domain,
         port = params.upstream_port,
+        cert = cert_path.display(),
+        key = key_path.display(),
+    )
+}
+
+fn render_ssl_port_site(
+    params: &NginxSiteParams,
+    listen_port: u16,
+    cert_path: &Path,
+    key_path: &Path,
+) -> String {
+    format!(
+        r#"# Managed by ryra — do not edit manually
+upstream {name} {{
+    server 127.0.0.1:{upstream_port};
+}}
+
+server {{
+    listen {listen_port} ssl;
+    server_name {domain};
+
+    ssl_certificate {cert};
+    ssl_certificate_key {key};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers off;
+    ssl_ecdh_curve X25519:prime256v1:secp384r1;
+
+    location / {{
+        proxy_pass http://{name};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }}
+}}
+"#,
+        name = params.service_name,
+        domain = params.domain,
+        upstream_port = params.upstream_port,
+        listen_port = listen_port,
         cert = cert_path.display(),
         key = key_path.display(),
     )

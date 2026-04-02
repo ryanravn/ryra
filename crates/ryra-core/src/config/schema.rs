@@ -94,6 +94,8 @@ pub enum ExposureMode {
     Local,
     /// Binds to 0.0.0.0; reachable from network, no nginx/domain/DNS.
     HostPort,
+    /// Tailscale: HTTPS via tailscale cert, port-based routing, no purchased domain.
+    Tailscale,
 }
 
 impl ExposureMode {
@@ -109,6 +111,7 @@ impl ExposureMode {
         let mut modes = vec![
             ExposureMode::Local,
             ExposureMode::HostPort,
+            ExposureMode::Tailscale,
             ExposureMode::Public,
         ];
         match cf {
@@ -130,7 +133,10 @@ impl ExposureMode {
     }
 
     pub fn needs_cert(&self) -> bool {
-        matches!(self, ExposureMode::DnsOnly | ExposureMode::Public)
+        matches!(
+            self,
+            ExposureMode::DnsOnly | ExposureMode::Public | ExposureMode::Tailscale
+        )
     }
 
     pub fn needs_origin_cert(&self) -> bool {
@@ -157,6 +163,7 @@ impl ExposureMode {
                 | ExposureMode::Proxy
                 | ExposureMode::DnsOnly
                 | ExposureMode::Public
+                | ExposureMode::Tailscale
         )
     }
 
@@ -168,6 +175,7 @@ impl ExposureMode {
             ExposureMode::Public => "public",
             ExposureMode::Local => "local",
             ExposureMode::HostPort => "host",
+            ExposureMode::Tailscale => "tailscale",
         }
     }
 
@@ -179,6 +187,7 @@ impl ExposureMode {
             ExposureMode::Public => "nginx reverse proxy, your own domain + SSL",
             ExposureMode::Local => "localhost only, no DNS or tunnel",
             ExposureMode::HostPort => "bind to 0.0.0.0, reachable from network, no nginx/domain",
+            ExposureMode::Tailscale => "HTTPS via Tailscale, no purchased domain needed",
         }
     }
 
@@ -188,6 +197,7 @@ impl ExposureMode {
             vec![
                 ExposureMode::Local,
                 ExposureMode::HostPort,
+                ExposureMode::Tailscale,
                 ExposureMode::Public,
                 ExposureMode::DnsOnly,
                 ExposureMode::Proxy,
@@ -233,7 +243,7 @@ impl ExposureMode {
                     missing.push(ConfigRequirement::Ssl);
                 }
             }
-            ExposureMode::Local | ExposureMode::HostPort => {}
+            ExposureMode::Local | ExposureMode::HostPort | ExposureMode::Tailscale => {}
         }
         missing
     }

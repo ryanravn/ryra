@@ -97,9 +97,18 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
 
     // Domain for new mode
     let new_domain = if new_exposure.needs_domain() {
-        let default_domain = match config.base_domain() {
-            Some(d) => format!("{service}.{d}"),
-            None => format!("{service}.localhost"),
+        let default_domain = if new_exposure == ExposureMode::Tailscale {
+            match ryra_core::integrations::tailscale::detect_fqdn() {
+                Some(fqdn) => fqdn,
+                None => {
+                    bail!("Tailscale is not running or has no FQDN. Is tailscaled active?");
+                }
+            }
+        } else {
+            match config.base_domain() {
+                Some(d) => format!("{service}.{d}"),
+                None => format!("{service}.localhost"),
+            }
         };
         let default = current_domain.unwrap_or(default_domain);
         Some(match domain {

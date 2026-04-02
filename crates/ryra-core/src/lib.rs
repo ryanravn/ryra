@@ -91,6 +91,8 @@ pub enum Step {
     },
     /// Generate a self-signed origin cert (for Cloudflare proxy mode).
     GenerateOriginCert { domain: String },
+    /// Obtain a TLS certificate via `tailscale cert`.
+    ObtainTailscaleCert { fqdn: String },
     /// Start the cloudflared tunnel quadlet.
     StartTunnel,
     /// Stop the cloudflared tunnel.
@@ -198,6 +200,9 @@ impl Step {
             }
             Step::GenerateOriginCert { domain } => {
                 format!("openssl: generate self-signed origin cert for {domain}")
+            }
+            Step::ObtainTailscaleCert { fqdn } => {
+                format!("tailscale cert: obtain TLS certificate for {fqdn}")
             }
             Step::StartTunnel => "sudo systemctl start cloudflared".into(),
             Step::StopTunnel => "sudo systemctl stop cloudflared".into(),
@@ -643,6 +648,11 @@ pub fn add_service(
                         });
                     }
                 }
+                ExposureMode::Tailscale => {
+                    steps.push(Step::ObtainTailscaleCert {
+                        fqdn: domain.to_string(),
+                    });
+                }
                 _ => {}
             }
         }
@@ -898,7 +908,10 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
                     domain: domain.clone(),
                 });
             }
-            ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
+            ExposureMode::Public
+            | ExposureMode::Local
+            | ExposureMode::HostPort
+            | ExposureMode::Tailscale => {}
         }
     }
 
@@ -1177,7 +1190,10 @@ pub fn change_exposure(
                     domain: domain.to_string(),
                 });
             }
-            ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
+            ExposureMode::Public
+            | ExposureMode::Local
+            | ExposureMode::HostPort
+            | ExposureMode::Tailscale => {}
         }
     }
 
@@ -1252,7 +1268,10 @@ pub fn change_exposure(
                     });
                 }
             }
-            ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
+            ExposureMode::Public
+            | ExposureMode::Local
+            | ExposureMode::HostPort
+            | ExposureMode::Tailscale => {}
         }
 
         // SSL for new mode
@@ -1282,6 +1301,11 @@ pub fn change_exposure(
                     });
                 }
                 // Custom certs: no step needed, certs already in place
+            }
+            ExposureMode::Tailscale => {
+                steps.push(Step::ObtainTailscaleCert {
+                    fqdn: domain.to_string(),
+                });
             }
             _ => {}
         }
@@ -1400,7 +1424,10 @@ pub fn reset() -> ResetResult {
                             domain: domain.clone(),
                         });
                     }
-                    ExposureMode::Public | ExposureMode::Local | ExposureMode::HostPort => {}
+                    ExposureMode::Public
+                    | ExposureMode::Local
+                    | ExposureMode::HostPort
+                    | ExposureMode::Tailscale => {}
                 }
             }
         }

@@ -552,6 +552,13 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             println!("  Origin cert generated for {domain}");
             Ok(())
         }
+        Step::ObtainTailscaleCert { fqdn } => {
+            println!("  Obtaining Tailscale cert for {fqdn}...");
+            let cmd = ryra_core::integrations::tailscale::cert_command(fqdn);
+            run(&cmd)?;
+            println!("  Tailscale cert obtained for {fqdn}");
+            Ok(())
+        }
         Step::PullImage { image, username } => {
             // Skip if already in user's store
             let check = match &username {
