@@ -251,6 +251,11 @@ pub enum Warning {
         service_name: String,
         ports: Vec<(u16, PortProtocol)>,
     },
+    /// OIDC auth enabled on a local-only mode where browser redirects won't work.
+    OidcLocalExposure {
+        service_name: String,
+        exposure: ExposureMode,
+    },
     /// System RAM is below the service's minimum requirement.
     RamBelowMinimum {
         service_name: String,
@@ -489,6 +494,18 @@ pub fn add_service(
 
     if proxied && auth_kind.is_none() {
         warnings.push(Warning::NoAuthPublicExposure {
+            service_name: service_name.to_string(),
+            exposure: exposure.clone(),
+        });
+    }
+
+    if auth_kind.is_some()
+        && matches!(
+            exposure,
+            ExposureMode::Local | ExposureMode::HostPort
+        )
+    {
+        warnings.push(Warning::OidcLocalExposure {
             service_name: service_name.to_string(),
             exposure: exposure.clone(),
         });

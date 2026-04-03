@@ -155,6 +155,23 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
                         "  WARNING: {service_name} has auth disabled and will be publicly exposed via {exposure}"
                     );
                 }
+                Warning::OidcLocalExposure {
+                    service_name,
+                    exposure,
+                } => {
+                    println!(
+                        "  NOTE: {service_name} has OIDC auth enabled with {exposure} exposure."
+                    );
+                    println!(
+                        "        OIDC login via browser (e.g. SSH tunnel) will likely fail because"
+                    );
+                    println!(
+                        "        the browser and server disagree on redirect URLs."
+                    );
+                    println!(
+                        "        Consider using 'tailscale' exposure mode for OIDC to work."
+                    );
+                }
                 Warning::RamBelowMinimum {
                     service_name,
                     min_mb,
