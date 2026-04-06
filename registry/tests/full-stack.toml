@@ -1,0 +1,134 @@
+[test]
+name = "full-stack"
+services = ["caddy", "authentik", "postgres", "whoami", "forgejo", "vaultwarden", "uptime-kuma"]
+
+# Set up Caddy first
+[[steps]]
+action = "run"
+name = "init-caddyfile"
+run = "sudo mkdir -p /etc/ryra/caddy && echo '' | sudo tee /etc/ryra/caddy/Caddyfile"
+
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Authentik — SSO provider
+[[steps]]
+action = "run"
+name = "add-authentik"
+run = "AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 ryra add authentik --domain auth.test.local --repo /opt/ryra-test-registry"
+timeout_secs = 300
+
+[[steps]]
+action = "wait"
+service = "authentik"
+
+# Postgres — standalone database
+[[steps]]
+action = "add"
+service = "postgres"
+
+[[steps]]
+action = "wait"
+service = "postgres"
+
+# Whoami — simple HTTP echo with forward auth via Caddy
+[[steps]]
+action = "run"
+name = "add-whoami"
+run = "ryra add whoami --domain whoami.test.local --repo /opt/ryra-test-registry"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+# Forgejo — git forge with native OIDC
+[[steps]]
+action = "run"
+name = "add-forgejo"
+run = "ryra add forgejo --domain git.test.local --repo /opt/ryra-test-registry"
+timeout_secs = 300
+
+[[steps]]
+action = "wait"
+service = "forgejo"
+
+# Vaultwarden — password manager
+[[steps]]
+action = "run"
+name = "add-vaultwarden"
+run = "ryra add vaultwarden --domain vault.test.local --repo /opt/ryra-test-registry"
+
+[[steps]]
+action = "wait"
+service = "vaultwarden"
+
+# Uptime Kuma — monitoring
+[[steps]]
+action = "run"
+name = "add-uptime-kuma"
+run = "ryra add uptime-kuma --domain status.test.local --repo /opt/ryra-test-registry"
+
+[[steps]]
+action = "wait"
+service = "uptime-kuma"
+
+# === Assertions ===
+
+# All services responding
+[[steps]]
+action = "assert"
+name = "whoami-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
+
+[[steps]]
+action = "assert"
+name = "forgejo-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)"
+
+[[steps]]
+action = "assert"
+name = "vaultwarden-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2)"
+
+[[steps]]
+action = "assert"
+name = "uptime-kuma-responds"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/uptime-kuma/.env | cut -d= -f2)"
+timeout_secs = 30
+
+[[steps]]
+action = "assert"
+name = "postgres-accepts"
+run = "PGPASSWORD=$(grep POSTGRES_PASSWORD $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) psql -h 127.0.0.1 -p $(grep RYRA_PORT_TCP $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) -U postgres -c 'SELECT 1'"
+
+# Caddy has all routes
+[[steps]]
+action = "assert"
+name = "caddy-has-whoami-route"
+run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile"
+
+[[steps]]
+action = "assert"
+name = "caddy-has-forgejo-route"
+run = "sudo grep -q 'ryra:forgejo' /etc/ryra/caddy/Caddyfile"
+
+[[steps]]
+action = "assert"
+name = "caddy-has-vaultwarden-route"
+run = "sudo grep -q 'ryra:vaultwarden' /etc/ryra/caddy/Caddyfile"
+
+[[steps]]
+action = "assert"
+name = "caddy-has-uptime-kuma-route"
+run = "sudo grep -q 'ryra:uptime-kuma' /etc/ryra/caddy/Caddyfile"
+
+# Status shows everything
+[[steps]]
+action = "assert"
+name = "status-shows-all"
+run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden"
