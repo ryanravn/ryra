@@ -9,7 +9,6 @@ use crate::system::secret;
 pub fn build_context(
     config: &Config,
     service_def: &ServiceDef,
-    domain: &str,
     host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
 ) -> BTreeMap<String, String> {
@@ -17,32 +16,15 @@ pub fn build_context(
 
     // service.*
     ctx.insert("service.name".into(), service_def.service.name.clone());
-    ctx.insert("service.domain".into(), domain.to_string());
     if let Some(port) = host_port {
         ctx.insert("service.port".into(), port.to_string());
     }
-    // service.url — the full base URL for this service.
-    // Local mode (*.localhost) uses http + port; Tailscale uses https + port;
-    // other proxied modes use https on standard port 443.
-    let url = if domain.ends_with(".localhost") || domain == "localhost" {
-        match host_port {
-            Some(port) => format!("http://localhost:{port}"),
-            None => format!("http://{domain}"),
-        }
-    } else if domain.ends_with(".ts.net") {
-        match host_port {
-            Some(port) => format!("https://{domain}:{port}"),
-            None => format!("https://{domain}"),
-        }
-    } else {
-        format!("https://{domain}")
+    // service.url — always localhost-based now
+    let url = match host_port {
+        Some(port) => format!("http://localhost:{port}"),
+        None => "http://localhost".to_string(),
     };
     ctx.insert("service.url".into(), url);
-
-    // host.*
-    if let Some(base_domain) = config.base_domain() {
-        ctx.insert("host.domain".into(), base_domain.to_string());
-    }
 
     // smtp.*
     if let Some(smtp) = &config.smtp {
@@ -86,11 +68,6 @@ pub fn build_context(
     // services.* — cross-service references from installed services
     for installed in &config.services {
         let name = &installed.name;
-
-        // services.<name>.domain
-        if let Some(ref domain) = installed.domain {
-            ctx.insert(format!("services.{name}.domain"), domain.clone());
-        }
 
         // services.<name>.port.<port_name> — from stored port mappings
         for (port_name, port) in &installed.ports {

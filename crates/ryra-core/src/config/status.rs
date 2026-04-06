@@ -11,8 +11,6 @@ pub enum RyraStatus {
 
 pub struct StatusInfo {
     pub config_path: PathBuf,
-    pub domain: String,
-    pub ssl: ProviderStatus,
     pub smtp: ProviderStatus,
     pub auth: ProviderStatus,
     pub default_repo: Option<String>,
@@ -26,24 +24,12 @@ pub enum ProviderStatus {
 
 pub struct ServiceInfo {
     pub name: String,
-    pub domain: Option<String>,
-    pub exposure: ExposureMode,
 }
 
 impl StatusInfo {
     pub fn from_config(config_path: PathBuf, config: &Config) -> Self {
         Self {
             config_path,
-            domain: config.base_domain().unwrap_or_default().to_string(),
-            ssl: match &config.ssl {
-                None => ProviderStatus::None,
-                Some(SslConfig::Letsencrypt { email }) => ProviderStatus::Configured {
-                    name: format!("letsencrypt ({email})"),
-                },
-                Some(SslConfig::Custom { cert_dir }) => ProviderStatus::Configured {
-                    name: format!("custom ({cert_dir})"),
-                },
-            },
             smtp: match &config.smtp {
                 None => ProviderStatus::None,
                 Some(smtp) => ProviderStatus::Configured {
@@ -62,8 +48,6 @@ impl StatusInfo {
                 .iter()
                 .map(|s| ServiceInfo {
                     name: s.name.clone(),
-                    domain: s.domain.clone(),
-                    exposure: s.exposure.clone(),
                 })
                 .collect(),
         }

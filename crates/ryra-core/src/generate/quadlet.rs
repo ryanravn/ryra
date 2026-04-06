@@ -1,13 +1,5 @@
 use crate::registry::service_def::PortProtocol;
 
-/// Whether a container port binds to localhost or all interfaces.
-pub enum BindAddress {
-    /// 127.0.0.1 — only reachable from the same host.
-    Localhost,
-    /// 0.0.0.0 — reachable from the network.
-    Any,
-}
-
 /// All the pieces needed to generate quadlet files for one container.
 pub struct QuadletParams<'a> {
     pub service_name: &'a str,
@@ -16,7 +8,6 @@ pub struct QuadletParams<'a> {
     pub volumes: &'a [VolumeMapping],
     pub network: &'a str,
     pub command: Option<&'a str>,
-    pub bind_address: &'a BindAddress,
     /// Systemd units this container depends on (After=/Requires=).
     pub depends_on: &'a [String],
     /// Healthcheck configuration.
@@ -79,18 +70,13 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push(format!("Exec={cmd}"));
     }
 
-    let bind_ip = match params.bind_address {
-        BindAddress::Localhost => "127.0.0.1",
-        BindAddress::Any => "0.0.0.0",
-    };
-
     for port in params.ports {
         let proto_suffix = match port.protocol {
             PortProtocol::Tcp => String::new(),
             PortProtocol::Udp => "/udp".to_string(),
         };
         lines.push(format!(
-            "PublishPort={bind_ip}:{}:{}{proto_suffix}",
+            "PublishPort=127.0.0.1:{}:{}{proto_suffix}",
             port.host_port, port.container_port
         ));
     }

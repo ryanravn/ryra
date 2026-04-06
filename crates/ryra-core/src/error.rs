@@ -56,9 +56,6 @@ pub enum Error {
     #[error("systemctl command failed: {0}")]
     Systemctl(String),
 
-    #[error("nginx reload failed: {0}")]
-    NginxReload(String),
-
     #[error("directory creation failed for {path}: {source}")]
     DirCreate {
         path: PathBuf,
@@ -67,9 +64,6 @@ pub enum Error {
 
     #[error("template rendering failed: {0}")]
     Template(String),
-
-    #[error("invalid exposure mode: {0}")]
-    InvalidExposure(String),
 
     #[error(
         "auth integration requires an auth provider to be configured first — run `ryra config auth`"

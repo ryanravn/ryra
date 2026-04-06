@@ -11,10 +11,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use config::ConfigPaths;
-use config::schema::{Config, ExposureMode, InstalledService};
+use config::schema::{Config, InstalledService};
 use error::{Error, Result};
 use generate::GeneratedFile;
-use registry::service_def::PortProtocol;
 
 // --- Path conventions ---
 
@@ -39,30 +38,11 @@ pub fn quadlet_dir() -> PathBuf {
         .join("systemd")
 }
 
-/// Check if running as root.
-pub fn is_root() -> bool {
-    std::process::Command::new("id")
-        .args(["-u"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse::<u32>()
-                .ok()
-        })
-        .map(|uid| uid == 0)
-        .unwrap_or(false)
-}
-
 // --- Typed steps: what the CLI needs to execute ---
 
 /// A discrete operation that the CLI executes. Pattern matching ensures
 /// every step type is handled — no string parsing or if-chains.
 pub enum Step {
-    /// Enable systemd linger for the current user (idempotent).
-    /// Required so that user services survive after SSH sessions end.
-    EnableLinger,
     /// Write a file.
     WriteFile(GeneratedFile),
     /// Reload systemd for the current user.
@@ -71,18 +51,6 @@ pub enum Step {
     StartService { unit: String },
     /// Stop a service under the current user's systemd.
     StopService { unit: String },
-    /// Reload the system-level systemd (for nginx).
-    SystemDaemonReload,
-    /// Start a system-level service.
-    SystemStart { unit: String },
-    /// Restart a system-level service (e.g., nginx after config change).
-    SystemRestart { unit: String },
-    /// Stop a system-level service.
-    SystemStop { unit: String },
-    /// Obtain a Let's Encrypt certificate via certbot container.
-    ObtainCert { domain: String, email: String },
-    /// Obtain a TLS certificate via `tailscale cert`.
-    ObtainTailscaleCert { fqdn: String },
     /// Pull a container image.
     PullImage { image: String },
     /// Remove a file (requires sudo).
@@ -121,21 +89,10 @@ impl Step {
     /// Render this step as a shell command (for dry-run display).
     pub fn to_command(&self) -> String {
         match self {
-            Step::EnableLinger => "loginctl enable-linger".into(),
             Step::WriteFile(file) => format!("write {}", file.path.display()),
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
-            Step::SystemDaemonReload => "sudo systemctl daemon-reload".into(),
-            Step::SystemStart { unit } => format!("sudo systemctl start {unit}"),
-            Step::SystemRestart { unit } => format!("sudo systemctl restart {unit}"),
-            Step::SystemStop { unit } => format!("sudo systemctl stop {unit}"),
-            Step::ObtainCert { domain, .. } => {
-                format!("certbot: obtain certificate for {domain}")
-            }
-            Step::ObtainTailscaleCert { fqdn } => {
-                format!("tailscale cert: obtain TLS certificate for {fqdn}")
-            }
             Step::PullImage { image } => format!("podman pull {image}"),
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
@@ -166,21 +123,6 @@ impl Step {
 
 /// Warnings generated during service operations that the CLI should display.
 pub enum Warning {
-    /// Web service exposed publicly without auth protection.
-    NoAuthPublicExposure {
-        service_name: String,
-        exposure: ExposureMode,
-    },
-    /// Service bound to 0.0.0.0 — reachable from network.
-    HostPortExposure {
-        service_name: String,
-        ports: Vec<(u16, PortProtocol)>,
-    },
-    /// OIDC auth enabled on a local-only mode where browser redirects won't work.
-    OidcLocalExposure {
-        service_name: String,
-        exposure: ExposureMode,
-    },
     /// System RAM is below the service's minimum requirement.
     RamBelowMinimum {
         service_name: String,
@@ -203,10 +145,8 @@ pub struct InitResult {
 
 pub struct AddResult {
     pub steps: Vec<Step>,
-    pub domain: Option<String>,
     pub warnings: Vec<Warning>,
     pub repo_url: String,
-    pub host_port: Option<u16>,
     /// Allocated ports for this service (port_name, host_port).
     pub allocated_ports: Vec<(String, u16)>,
     /// Names of auto-generated secrets (values are in .env).
@@ -218,13 +158,6 @@ pub struct AddResult {
 pub struct RemoveResult {
     pub steps: Vec<Step>,
     pub service_name: String,
-    pub domain: Option<String>,
-    pub exposure: ExposureMode,
-}
-
-pub struct ExposeResult {
-    pub steps: Vec<Step>,
-    pub warnings: Vec<Warning>,
 }
 
 pub struct ResetResult {
@@ -316,8 +249,6 @@ pub async fn init(config: Config) -> Result<InitResult> {
 /// `repo_url` and `repo_dir` come from `resolve_repo()`.
 pub fn add_service(
     service_name: &str,
-    domain: Option<&str>,
-    exposure: ExposureMode,
     auth_kind: Option<registry::service_def::AuthKind>,
     env_overrides: &BTreeMap<String, String>,
     repo_url: &str,
@@ -357,25 +288,13 @@ pub fn add_service(
         return Err(Error::AuthNotConfigured);
     }
 
-    let has_nginx = reg_service.def.nginx.is_some();
-    let proxied = exposure.needs_domain();
-
-    // Validate: proxied modes require nginx config
-    if proxied && !has_nginx {
-        return Err(Error::InvalidExposure(format!(
-            "{} exposure requires an HTTP service (no [nginx] config)",
-            exposure.label()
-        )));
-    }
-
-    // Allocate a host port for proxied modes (nginx upstream) or when any
-    // container port is privileged (<1024) — rootless podman cannot bind those.
+    // Allocate a host port for all service ports
     let has_privileged_port = reg_service
         .def
         .ports
         .iter()
         .any(|p| p.container_port < 1024);
-    let host_port = if proxied || has_privileged_port {
+    let host_port = if has_privileged_port {
         Some(system::port::allocate_port(&config)?)
     } else {
         None
@@ -391,17 +310,13 @@ pub fn add_service(
 
     let home_dir = service_home(service_name);
     let quadlet_path = quadlet_dir();
-    let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
         service_def: &reg_service.def,
-        domain,
-        exposure: &exposure,
         auth_kind: auth_kind.as_ref(),
         host_port,
         quadlet_dir: &quadlet_path,
-        nginx_dir,
         env_overrides,
         service_dir: &reg_service.service_dir,
     })?;
@@ -409,33 +324,6 @@ pub fn add_service(
 
     // Generate warnings
     let mut warnings = Vec::new();
-
-    if proxied && auth_kind.is_none() {
-        warnings.push(Warning::NoAuthPublicExposure {
-            service_name: service_name.to_string(),
-            exposure: exposure.clone(),
-        });
-    }
-
-    if auth_kind.is_some() && matches!(exposure, ExposureMode::Local | ExposureMode::HostPort) {
-        warnings.push(Warning::OidcLocalExposure {
-            service_name: service_name.to_string(),
-            exposure: exposure.clone(),
-        });
-    }
-
-    if exposure == ExposureMode::HostPort {
-        let ports: Vec<(u16, PortProtocol)> = reg_service
-            .def
-            .ports
-            .iter()
-            .map(|p| (p.container_port, p.protocol.clone()))
-            .collect();
-        warnings.push(Warning::HostPortExposure {
-            service_name: service_name.to_string(),
-            ports,
-        });
-    }
 
     if let Some(ref reqs) = reg_service.def.requirements
         && let Some(total) = system::memory::total_ram_mb()
@@ -460,88 +348,31 @@ pub fn add_service(
     // Build ordered steps
     let mut steps = Vec::new();
 
-    // nginx is needed when a service is proxied (has a domain).
-    let needs_nginx = proxied;
-
-    // 0. Ensure nginx is set up
-    if needs_nginx && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
-            content: String::new(),
-        }));
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/certs/.keep"),
-            content: String::new(),
-        }));
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
-            content: generate::nginx::render_nginx_base_conf(),
-        }));
-        steps.push(Step::PullImage {
-            image: "docker.io/library/nginx:alpine".into(),
-        });
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/containers/systemd/nginx.container"),
-            content: generate::nginx::render_nginx_quadlet(),
-        }));
-        steps.push(Step::SystemDaemonReload);
-        steps.push(Step::SystemStart {
-            unit: "nginx".into(),
-        });
-    }
-
-    // 0. Enable linger so user services persist after logout/SSH disconnect
-    steps.push(Step::EnableLinger);
-
-    // 1. Networking: SSL certificates for proxied modes
-    if proxied && let Some(domain) = domain {
-        match &exposure {
-            ExposureMode::Public => {
-                if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
-                    steps.push(Step::ObtainCert {
-                        domain: domain.to_string(),
-                        email: email.clone(),
-                    });
-                }
-            }
-            ExposureMode::Tailscale => {
-                steps.push(Step::ObtainTailscaleCert {
-                    fqdn: domain.to_string(),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    // 2. Create service data directory
+    // 1. Create service data directory
     steps.push(Step::CreateDir(home_dir.clone()));
 
     // Capture env content before it's moved into steps
     let env_content = generated.env_file.content.clone();
 
-    // 3. Pull all images (primary + sidecars, deduplicated)
+    // 2. Pull all images (primary + sidecars, deduplicated)
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
         });
     }
 
-    // 4. Write quadlet + .env + nginx files
+    // 3. Write quadlet + .env files
     let generate::GeneratedService {
         files,
         env_file,
-        nginx_site,
     } = generated;
 
     for file in files {
         steps.push(Step::WriteFile(file));
     }
     steps.push(Step::WriteFile(env_file));
-    if let Some(nginx_site) = nginx_site {
-        steps.push(Step::WriteFile(nginx_site));
-    }
 
-    // 5. Create bind mount directories (must exist before container starts)
+    // 4. Create bind mount directories (must exist before container starts)
     let all_volumes = reg_service.def.volumes.iter().chain(
         reg_service
             .def
@@ -560,7 +391,7 @@ pub fn add_service(
         }
     }
 
-    // 6. Reload and start via systemd
+    // 5. Reload and start via systemd
     steps.push(Step::DaemonReload);
 
     // Start — dependencies start automatically via Requires=/After= in the quadlet
@@ -593,14 +424,7 @@ pub fn add_service(
         });
     }
 
-    // Reload nginx if proxied
-    if proxied {
-        steps.push(Step::SystemRestart {
-            unit: "nginx".into(),
-        });
-    }
-
-    // 7. Post-start hooks — run after service is active
+    // 6. Post-start hooks — run after service is active
     let has_hooks = !reg_service.def.post_start.is_empty();
     for hook in &reg_service.def.post_start {
         steps.push(Step::PostStartHook {
@@ -656,10 +480,8 @@ pub fn add_service(
 
     Ok(AddResult {
         steps,
-        domain: domain.map(|d| d.to_string()),
         warnings,
         repo_url: repo_url.to_string(),
-        host_port,
         allocated_ports,
         generated_secrets,
         env_content,
@@ -671,14 +493,11 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
-    let service = config
+    let _service = config
         .services
         .iter()
         .find(|s| s.name == service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
-
-    let domain = service.domain.clone();
-    let was_proxied = domain.is_some();
 
     // Stop the service
     let mut steps = vec![Step::StopService {
@@ -699,16 +518,6 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         if blueprint.exists() {
             steps.push(Step::RemoveFile(blueprint));
         }
-    }
-
-    // Clean up nginx if service was proxied
-    if was_proxied {
-        steps.push(Step::RemoveFile(PathBuf::from(format!(
-            "/etc/ryra/nginx/sites/{service_name}.conf"
-        ))));
-        steps.push(Step::SystemRestart {
-            unit: "nginx".into(),
-        });
     }
 
     // Remove quadlet files matching {service_name}*
@@ -734,19 +543,14 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     Ok(RemoveResult {
         steps,
         service_name: service_name.to_string(),
-        domain,
-        exposure: service.exposure.clone(),
     })
 }
 
 /// Parameters for [`finalize_add`].
 pub struct FinalizeAddParams<'a> {
     pub service_name: &'a str,
-    pub domain: Option<&'a str>,
-    pub exposure: ExposureMode,
     pub auth_kind: Option<registry::service_def::AuthKind>,
     pub repo: &'a str,
-    pub host_port: Option<u16>,
     pub allocated_ports: &'a [(String, u16)],
     pub repo_dir: &'a Path,
     /// The generated .env content, used for post-install config (e.g., auth auto-setup).
@@ -763,11 +567,8 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
 
     config.services.push(InstalledService {
         name: params.service_name.to_string(),
-        domain: params.domain.map(|d| d.to_string()),
         version: "0.1.0".to_string(),
-        exposure: params.exposure,
         repo: params.repo.to_string(),
-        host_port: params.host_port,
         ports,
         auth_kind: params.auth_kind,
     });
@@ -777,13 +578,13 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     if params.service_name == "authentik"
         && let Some(token) = parse_env_var(params.env_content, "AUTHENTIK_BOOTSTRAP_TOKEN")
     {
-        let url = match params.domain {
-            Some(domain) => format!("https://{domain}"),
-            None => {
-                let port = params.host_port.unwrap_or(9000);
-                format!("http://localhost:{port}")
-            }
-        };
+        let port = params
+            .allocated_ports
+            .iter()
+            .find(|(name, _)| name == "http")
+            .map(|(_, p)| *p)
+            .unwrap_or(9000);
+        let url = format!("http://localhost:{port}");
         config.auth = Some(config::schema::AuthCredentials::Authentik {
             url,
             api_token: token,
@@ -859,7 +660,9 @@ pub fn update_service(
     let changes = diff::compute_changes(&old, &reg_service.def);
 
     let quadlet_path = quadlet_dir();
-    let nginx_dir = Path::new("/etc/ryra/nginx/sites");
+
+    // Determine host_port from installed service's port mappings
+    let host_port = service.ports.values().next().copied();
 
     let mut steps = Vec::new();
 
@@ -872,12 +675,9 @@ pub fn update_service(
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
         service_def: &reg_service.def,
-        domain: service.domain.as_deref(),
-        exposure: &service.exposure,
         auth_kind: service.auth_kind.as_ref(),
-        host_port: service.host_port,
+        host_port,
         quadlet_dir: &quadlet_path,
-        nginx_dir,
         env_overrides,
         service_dir: &reg_service.service_dir,
     })?;
@@ -894,28 +694,17 @@ pub fn update_service(
     let generate::GeneratedService {
         files,
         env_file,
-        nginx_site,
     } = generated;
 
     for file in files {
         steps.push(Step::WriteFile(file));
     }
     steps.push(Step::WriteFile(env_file));
-    if let Some(nginx_site) = nginx_site {
-        steps.push(Step::WriteFile(nginx_site));
-    }
 
     steps.push(Step::DaemonReload);
     steps.push(Step::StartService {
         unit: service_name.to_string(),
     });
-
-    // Reload nginx if proxied
-    if service.domain.is_some() {
-        steps.push(Step::SystemRestart {
-            unit: "nginx".into(),
-        });
-    }
 
     Ok(UpdateResult { steps, changes })
 }
@@ -929,167 +718,6 @@ pub fn finalize_update(service_name: &str, repo_dir: &Path) -> Result<()> {
     if let Ok(content) = std::fs::read_to_string(&service_toml) {
         let _ = config::save_snapshot(&paths.snapshots_dir, service_name, &content);
     }
-
-    Ok(())
-}
-
-/// Change the exposure mode of an installed service.
-/// Tears down old networking/nginx/certs, sets up new ones.
-pub fn change_exposure(
-    service_name: &str,
-    new_exposure: ExposureMode,
-    new_domain: Option<&str>,
-    repo_dir: &Path,
-) -> Result<ExposeResult> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_or_default(&paths.config_file)?;
-
-    let service = config
-        .services
-        .iter()
-        .find(|s| s.name == service_name)
-        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
-
-    let reg_service = registry::find_service(repo_dir, service_name)?;
-    let has_nginx = reg_service.def.nginx.is_some();
-    let new_proxied = new_exposure.needs_domain();
-
-    // Validate: proxied modes require nginx config
-    if new_proxied && !has_nginx {
-        return Err(Error::InvalidExposure(format!(
-            "{} exposure requires an HTTP service (no [nginx] config)",
-            new_exposure.label()
-        )));
-    }
-
-    let old_domain = service.domain.as_deref();
-    let old_proxied = old_domain.is_some();
-    let nginx_dir = Path::new("/etc/ryra/nginx/sites");
-
-    let mut steps = Vec::new();
-
-    // Remove old nginx site if was proxied
-    if old_proxied {
-        steps.push(Step::RemoveFile(PathBuf::from(format!(
-            "/etc/ryra/nginx/sites/{service_name}.conf"
-        ))));
-    }
-
-    // --- Ensure nginx infra if going proxied for first time ---
-    if new_proxied && !PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/nginx/sites/.keep"),
-            content: String::new(),
-        }));
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/certs/.keep"),
-            content: String::new(),
-        }));
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/ryra/nginx/nginx.conf"),
-            content: generate::nginx::render_nginx_base_conf(),
-        }));
-        steps.push(Step::PullImage {
-            image: "docker.io/library/nginx:alpine".into(),
-        });
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: PathBuf::from("/etc/containers/systemd/nginx.container"),
-            content: generate::nginx::render_nginx_quadlet(),
-        }));
-        steps.push(Step::SystemDaemonReload);
-        steps.push(Step::SystemStart {
-            unit: "nginx".into(),
-        });
-    }
-
-    // --- Set up new networking ---
-    if new_proxied && let Some(domain) = new_domain {
-        // SSL for new mode
-        match &new_exposure {
-            ExposureMode::Public => {
-                if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
-                    steps.push(Step::ObtainCert {
-                        domain: domain.to_string(),
-                        email: email.clone(),
-                    });
-                }
-                // Custom certs: no step needed, certs already in place
-            }
-            ExposureMode::Tailscale => {
-                steps.push(Step::ObtainTailscaleCert {
-                    fqdn: domain.to_string(),
-                });
-            }
-            _ => {}
-        }
-
-        // Generate new nginx site config
-        let host_port = service.host_port.or_else(|| {
-            // Allocate a port if we're going proxied and don't have one
-            system::port::allocate_port(&config).ok()
-        });
-
-        if let Some(upstream_port) = host_port {
-            let nginx_site = generate::generate_nginx_site(
-                &config,
-                &reg_service.def,
-                service_name,
-                Some(domain),
-                &new_exposure,
-                Some(upstream_port),
-                nginx_dir,
-            )?;
-            if let Some(site_file) = nginx_site {
-                steps.push(Step::WriteFile(site_file));
-            }
-        }
-    }
-
-    // Reload nginx if either old or new was proxied
-    if old_proxied || new_proxied {
-        steps.push(Step::SystemRestart {
-            unit: "nginx".into(),
-        });
-    }
-
-    // Warnings
-    let mut warnings = Vec::new();
-    if new_exposure == ExposureMode::HostPort {
-        let ports: Vec<(u16, PortProtocol)> = reg_service
-            .def
-            .ports
-            .iter()
-            .map(|p| (p.container_port, p.protocol.clone()))
-            .collect();
-        if !ports.is_empty() {
-            warnings.push(Warning::HostPortExposure {
-                service_name: service_name.to_string(),
-                ports,
-            });
-        }
-    }
-
-    Ok(ExposeResult { steps, warnings })
-}
-
-/// Called after expose steps succeed — updates the service record in config.
-pub fn finalize_expose(
-    service_name: &str,
-    new_exposure: ExposureMode,
-    new_domain: Option<&str>,
-    new_host_port: Option<u16>,
-) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-    let mut config = config::load_or_default(&paths.config_file)?;
-
-    if let Some(svc) = config.services.iter_mut().find(|s| s.name == service_name) {
-        svc.exposure = new_exposure;
-        svc.domain = new_domain.map(|d| d.to_string());
-        if new_host_port.is_some() {
-            svc.host_port = new_host_port;
-        }
-    }
-    config::save_config(&paths.config_file, &config)?;
 
     Ok(())
 }
@@ -1108,11 +736,6 @@ pub fn reset() -> ResetResult {
             steps.push(Step::StopService {
                 unit: service.name.clone(),
             });
-            // Remove nginx site config
-            steps.push(Step::RemoveFile(PathBuf::from(format!(
-                "/etc/ryra/nginx/sites/{}.conf",
-                service.name
-            ))));
         }
     }
 
@@ -1125,23 +748,12 @@ pub fn reset() -> ResetResult {
     // 3. Reload user systemd after removing quadlets
     steps.push(Step::DaemonReload);
 
-    // 4. Stop and remove nginx
-    if PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
-        steps.push(Step::SystemStop {
-            unit: "nginx".into(),
-        });
-        steps.push(Step::RemoveFile(PathBuf::from(
-            "/etc/containers/systemd/nginx.container",
-        )));
-        steps.push(Step::SystemDaemonReload);
-    }
-
-    // 5. Remove system-level directories
+    // 4. Remove system-level directories
     if PathBuf::from("/etc/ryra").exists() {
         steps.push(Step::RemoveDir(PathBuf::from("/etc/ryra")));
     }
 
-    // 6. Remove service data directories
+    // 5. Remove service data directories
     if let Some(ref config) = config {
         for service in &config.services {
             let data_dir = service_home(&service.name);
@@ -1215,7 +827,6 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
             SearchResult {
                 name: name.clone(),
                 description: reg_svc.def.service.description,
-                is_web: reg_svc.def.nginx.is_some(),
                 has_sidecars: !reg_svc.def.containers.is_empty(),
                 installed,
             }
@@ -1228,7 +839,6 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
 pub struct SearchResult {
     pub name: String,
     pub description: String,
-    pub is_web: bool,
     pub has_sidecars: bool,
     pub installed: bool,
 }
@@ -1320,12 +930,8 @@ pub struct SuiteTestInfo {
 
 /// Get detailed info about a service from a repo.
 pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_or_default(&paths.config_file)?;
-
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let def = &reg_service.def;
-    let installed = config.services.iter().find(|s| s.name == service_name);
 
     Ok(ServiceDetail {
         name: def.service.name.clone(),
@@ -1342,8 +948,6 @@ pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail
             .iter()
             .map(|e| (e.name.clone(), e.prompt.clone()))
             .collect(),
-        installed_domain: installed.and_then(|s| s.domain.clone()),
-        installed_exposure: installed.map(|s| s.exposure.clone()),
     })
 }
 
@@ -1352,8 +956,6 @@ pub struct ServiceDetail {
     pub description: String,
     pub url: Option<String>,
     pub has_sidecars: bool,
-    pub ports: Vec<(u16, PortProtocol, String)>,
+    pub ports: Vec<(u16, registry::service_def::PortProtocol, String)>,
     pub env_vars: Vec<(String, Option<String>)>,
-    pub installed_domain: Option<String>,
-    pub installed_exposure: Option<ExposureMode>,
 }

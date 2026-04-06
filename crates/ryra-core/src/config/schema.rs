@@ -10,8 +10,6 @@ pub struct Config {
     /// Legacy — reads old configs with [host], never written back.
     #[serde(default, skip_serializing)]
     pub host: HostConfig,
-    pub domain: Option<String>,
-    pub ssl: Option<SslConfig>,
     pub smtp: Option<SmtpCredentials>,
     pub auth: Option<AuthCredentials>,
     #[serde(default)]
@@ -33,8 +31,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             host: HostConfig::default(),
-            domain: None,
-            ssl: None,
             smtp: None,
             auth: None,
             default_repo: Some(crate::DEFAULT_REPO.to_string()),
@@ -42,124 +38,6 @@ impl Default for Config {
             services: vec![],
         }
     }
-}
-
-impl Config {
-    /// Derive the base domain, falling back to legacy host.domain.
-    pub fn base_domain(&self) -> Option<&str> {
-        self.domain.as_deref().or(self.host.domain.as_deref())
-    }
-}
-
-// --- Per-service exposure mode ---
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ExposureMode {
-    /// nginx reverse proxy with your own domain + SSL (LE HTTP-01 or custom certs).
-    Public,
-    /// No DNS, no tunnel; localhost only.
-    Local,
-    /// Binds to 0.0.0.0; reachable from network, no nginx/domain/DNS.
-    HostPort,
-    /// Tailscale: HTTPS via tailscale cert, port-based routing, no purchased domain.
-    Tailscale,
-}
-
-impl ExposureMode {
-    /// What modes are available given service capabilities?
-    /// `has_nginx` means the service can be proxied (has an HTTP interface).
-    pub fn available_modes(has_nginx: bool) -> Vec<ExposureMode> {
-        if !has_nginx {
-            return vec![ExposureMode::Local, ExposureMode::HostPort];
-        }
-        vec![
-            ExposureMode::Local,
-            ExposureMode::HostPort,
-            ExposureMode::Tailscale,
-            ExposureMode::Public,
-        ]
-    }
-
-    pub fn needs_cert(&self) -> bool {
-        matches!(self, ExposureMode::Public | ExposureMode::Tailscale)
-    }
-
-    /// Whether this mode requires a domain and nginx proxy.
-    pub fn needs_domain(&self) -> bool {
-        matches!(self, ExposureMode::Public | ExposureMode::Tailscale)
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            ExposureMode::Public => "public",
-            ExposureMode::Local => "local",
-            ExposureMode::HostPort => "host",
-            ExposureMode::Tailscale => "tailscale",
-        }
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            ExposureMode::Public => "nginx reverse proxy, your own domain + SSL",
-            ExposureMode::Local => "localhost only, no DNS or tunnel",
-            ExposureMode::HostPort => "bind to 0.0.0.0, reachable from network, no nginx/domain",
-            ExposureMode::Tailscale => "HTTPS via Tailscale, no purchased domain needed",
-        }
-    }
-
-    /// All modes a service can support based on its capabilities (ignoring config state).
-    pub fn supported_modes(has_nginx: bool) -> Vec<ExposureMode> {
-        if has_nginx {
-            vec![
-                ExposureMode::Local,
-                ExposureMode::HostPort,
-                ExposureMode::Tailscale,
-                ExposureMode::Public,
-            ]
-        } else {
-            vec![ExposureMode::Local, ExposureMode::HostPort]
-        }
-    }
-
-    /// What global config sections are missing for this exposure mode?
-    pub fn missing_config(&self, config: &Config) -> Vec<ConfigRequirement> {
-        let mut missing = Vec::new();
-        match self {
-            ExposureMode::Public => {
-                if config.ssl.is_none() {
-                    missing.push(ConfigRequirement::Ssl);
-                }
-            }
-            ExposureMode::Local | ExposureMode::HostPort | ExposureMode::Tailscale => {}
-        }
-        missing
-    }
-}
-
-// --- Config requirements for exposure modes ---
-
-/// What global config section an exposure mode needs that may be missing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigRequirement {
-    Ssl,
-}
-
-impl std::fmt::Display for ExposureMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.label())
-    }
-}
-
-// --- SSL (for Public exposure mode) ---
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "provider", rename_all = "lowercase")]
-pub enum SslConfig {
-    /// Let's Encrypt (HTTP-01 standalone).
-    Letsencrypt { email: String },
-    /// User-provided certs at a custom path.
-    Custom { cert_dir: String },
 }
 
 // --- SMTP ---
@@ -213,14 +91,9 @@ pub struct RegistryEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstalledService {
     pub name: String,
-    pub domain: Option<String>,
     pub version: String,
-    pub exposure: ExposureMode,
     #[serde(default)]
     pub repo: String,
-    /// Allocated host port for web services (nginx upstream). None for non-web.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_port: Option<u16>,
     /// All allocated host ports by name (e.g., "http" → 8080, "tcp" → 5432).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ports: BTreeMap<String, u16>,

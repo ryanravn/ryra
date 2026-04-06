@@ -1,11 +1,10 @@
 pub mod context;
-pub mod nginx;
 pub mod quadlet;
 pub mod template;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::schema::{Config, ExposureMode};
+use crate::config::schema::Config;
 use crate::error::Result;
 use crate::registry::service_def::{AuthKind, EnvVar, ServiceDef};
 
@@ -13,7 +12,6 @@ use crate::registry::service_def::{AuthKind, EnvVar, ServiceDef};
 pub struct GeneratedService {
     pub files: Vec<GeneratedFile>,
     pub env_file: GeneratedFile,
-    pub nginx_site: Option<GeneratedFile>,
 }
 
 pub struct GeneratedFile {
@@ -32,30 +30,23 @@ pub struct GenerationOutput {
 pub struct GenerateServiceParams<'a> {
     pub config: &'a Config,
     pub service_def: &'a ServiceDef,
-    pub domain: Option<&'a str>,
-    pub exposure: &'a ExposureMode,
     /// The auth kind the user chose to enable, if any.
     pub auth_kind: Option<&'a AuthKind>,
     pub host_port: Option<u16>,
     pub quadlet_dir: &'a Path,
-    pub nginx_dir: &'a Path,
     pub env_overrides: &'a BTreeMap<String, String>,
     pub service_dir: &'a Path,
 }
 
 /// Generate all files for a service based on its deploy mode.
-/// `host_port` is the allocated port for web services (None for non-web).
+/// `host_port` is the allocated port for the service (None if using container port directly).
 pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationOutput> {
     let name = &params.service_def.service.name;
 
     // Build template context (generates fresh secrets based on each env var's format + length)
-    // Local mode has no domain — use <service>.localhost as a valid FQDN fallback.
-    let fallback_domain = format!("{name}.localhost");
-    let domain = params.domain.unwrap_or(&fallback_domain);
     let ctx = context::build_context(
         params.config,
         params.service_def,
-        domain,
         params.host_port,
         params.auth_kind,
     );
@@ -75,25 +66,12 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         params.host_port,
     );
 
-    // Nginx site config
-    let nginx_site = generate_nginx_site(
-        params.config,
-        params.service_def,
-        name,
-        params.domain,
-        params.exposure,
-        params.host_port,
-        params.nginx_dir,
-    )?;
-
     let service = generate_quadlet(GenerateQuadletParams {
         name,
         service_def: params.service_def,
-        exposure: params.exposure,
         host_port: params.host_port,
         quadlet_dir: params.quadlet_dir,
         env_file,
-        nginx_site,
     })?;
 
     Ok(GenerationOutput { service, ctx })
@@ -129,11 +107,9 @@ fn build_env_file(
 struct GenerateQuadletParams<'a> {
     name: &'a str,
     service_def: &'a ServiceDef,
-    exposure: &'a ExposureMode,
     host_port: Option<u16>,
     quadlet_dir: &'a Path,
     env_file: GeneratedFile,
-    nginx_site: Option<GeneratedFile>,
 }
 
 /// Generate quadlet files for a service (primary + sidecar containers).
@@ -141,11 +117,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
     let name = params.name;
     let service_def = params.service_def;
     let mut files = Vec::new();
-
-    let bind_address = match params.exposure {
-        ExposureMode::HostPort => quadlet::BindAddress::Any,
-        _ => quadlet::BindAddress::Localhost,
-    };
 
     // Network — shared by all containers
     let network_name = name.to_string();
@@ -211,7 +182,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
             volumes: &primary_volumes,
             network: &network_name,
             command: service_def.service.command.as_deref(),
-            bind_address: &bind_address,
             depends_on: &sidecar_units,
             healthcheck: None,
             env_file: Some(&env_path),
@@ -244,7 +214,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
                 volumes: &sidecar_volumes,
                 network: &network_name,
                 command: container.command.as_deref(),
-                bind_address: &quadlet::BindAddress::Localhost,
                 depends_on: &deps,
                 healthcheck: container.healthcheck.as_ref(),
                 env_file: if container.env_file {
@@ -261,7 +230,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
     Ok(GeneratedService {
         files,
         env_file: params.env_file,
-        nginx_site: params.nginx_site,
     })
 }
 
@@ -347,54 +315,6 @@ fn render_env_vars(
     }
 
     Ok(rendered)
-}
-
-pub fn generate_nginx_site(
-    config: &Config,
-    service_def: &ServiceDef,
-    name: &str,
-    domain: Option<&str>,
-    exposure: &ExposureMode,
-    host_port: Option<u16>,
-    nginx_dir: &Path,
-) -> Result<Option<GeneratedFile>> {
-    match (&service_def.nginx, domain, host_port) {
-        (Some(_nginx_def), Some(domain), Some(upstream_port)) => {
-            let mode = match exposure {
-                ExposureMode::Local => nginx::SiteMode::HttpOnly,
-                ExposureMode::Public => {
-                    let (cert_path, key_path) = match &config.ssl {
-                        Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
-                        None => crate::integrations::ssl::letsencrypt_cert_paths(domain),
-                    };
-                    nginx::SiteMode::Ssl {
-                        cert_path,
-                        key_path,
-                    }
-                }
-                ExposureMode::Tailscale => {
-                    let (cert_path, key_path) = crate::integrations::tailscale::cert_paths(domain);
-                    nginx::SiteMode::SslPort {
-                        listen_port: upstream_port,
-                        cert_path,
-                        key_path,
-                    }
-                }
-                ExposureMode::HostPort => nginx::SiteMode::HttpOnly,
-            };
-
-            Ok(Some(GeneratedFile {
-                path: nginx_dir.join(format!("{name}.conf")),
-                content: nginx::render_site(&nginx::NginxSiteParams {
-                    service_name: name,
-                    domain,
-                    upstream_port,
-                    mode,
-                }),
-            }))
-        }
-        _ => Ok(None),
-    }
 }
 
 pub fn extract_secret_refs(value: &str) -> Vec<String> {
