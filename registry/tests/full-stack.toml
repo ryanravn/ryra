@@ -21,7 +21,7 @@ service = "caddy"
 action = "run"
 name = "add-authentik"
 run = "AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 ryra add authentik --domain auth.test.local --repo /opt/ryra-test-registry"
-timeout_secs = 300
+timeout = 300
 
 [[steps]]
 action = "wait"
@@ -52,7 +52,7 @@ service = "whoami"
 action = "run"
 name = "add-forgejo"
 run = "ryra add forgejo --domain git.test.local --repo /opt/ryra-test-registry"
-timeout_secs = 300
+timeout = 300
 
 [[steps]]
 action = "wait"
@@ -148,7 +148,7 @@ run = "! sudo awk '/ryra:authentik/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'f
 action = "run"
 name = "wait-authentik-api"
 run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:9000/if/flow/initial-setup/ && exit 0; sleep 5; done; exit 1"
-timeout_secs = 360
+timeout = 360
 
 # Unauthenticated requests through Caddy should NOT get the raw service response.
 # They should get a 401 or 302 redirect to Authentik.
