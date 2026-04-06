@@ -1,5 +1,5 @@
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -8,19 +8,14 @@ use ryra_core::Step;
 
 /// A concrete record of something we created in this run.
 enum Created {
-    User(String),
     File(PathBuf),
-    Linger(String),
-    StartedService {
-        username: String,
-        unit: String,
-    },
+    StartedService(String),
     StartedSystemService(String),
-    DnsRecord {
-        api_token: String,
-        zone_id: String,
-        domain: String,
-    },
+}
+
+/// Returns true if a path is under /etc or /var (i.e. requires sudo).
+fn is_system_path(path: &Path) -> bool {
+    path.starts_with("/etc") || path.starts_with("/var")
 }
 
 /// Execute a list of steps with automatic rollback on failure.
@@ -78,11 +73,9 @@ async fn prompt_rollback(created: &[Created]) {
     eprintln!("Rolling back...");
     for item in created.iter().rev() {
         let result = match item {
-            Created::StartedService { username, unit } => {
+            Created::StartedService(unit) => {
                 eprintln!("  Stopping {unit}...");
-                run_quiet(&format!(
-                    "sudo systemctl --machine={username}@ --user stop {unit}"
-                ))
+                run_quiet(&format!("systemctl --user stop {unit}"))
             }
             Created::StartedSystemService(unit) => {
                 eprintln!("  Stopping {unit}...");
@@ -90,29 +83,12 @@ async fn prompt_rollback(created: &[Created]) {
             }
             Created::File(path) => {
                 eprintln!("  Removing {}", path.display());
-                run_quiet(&format!("sudo rm -f {}", path.display()))
-            }
-            Created::Linger(username) => {
-                eprintln!("  Disabling linger for {username}...");
-                run_quiet(&format!("sudo loginctl disable-linger {username}"))
-            }
-            Created::DnsRecord {
-                api_token,
-                zone_id,
-                domain,
-            } => {
-                eprintln!("  Deleting DNS record for {domain}...");
-                let r = ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await;
-                if let Ok(Some(record)) = r {
-                    let _ =
-                        ryra_core::integrations::dns::delete_record(api_token, zone_id, &record.id)
-                            .await;
+                if is_system_path(path) {
+                    run_quiet(&format!("sudo rm -f {}", path.display()))
+                } else {
+                    std::fs::remove_file(path)
+                        .with_context(|| format!("failed to remove {}", path.display()))
                 }
-                Ok(())
-            }
-            Created::User(username) => {
-                eprintln!("  Removing user {username}...");
-                run_quiet(&format!("sudo userdel --remove {username}"))
             }
         };
         if let Err(e) = result {
@@ -125,129 +101,6 @@ async fn prompt_rollback(created: &[Created]) {
 /// Execute a single step, recording what was created for rollback.
 async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
     match step {
-        Step::EnsureGroup => {
-            // Idempotent — succeeds if group already exists
-            let _ = run_quiet("sudo groupadd --system ryra 2>/dev/null");
-            Ok(())
-        }
-        Step::RemoveGroup => {
-            let _ = run_quiet("sudo groupdel ryra 2>/dev/null");
-            Ok(())
-        }
-        Step::CreateUser { username, home_dir } => {
-            let exists = Command::new("id")
-                .arg(username)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-
-            if exists {
-                println!("  User {username} already exists, skipping");
-                // Ensure user is in the ryra group (may be missing from older installs)
-                let _ = run_quiet(&format!("sudo usermod -aG ryra {username}"));
-                // Clean up stale podman storage (broken overlay symlinks from previous installs)
-                let _ = run_quiet(&format!(
-                    "sudo -H -u {username} sh -c 'cd / && podman system reset --force'"
-                ));
-                return Ok(());
-            }
-
-            // Detect nologin path — varies across distros
-            let nologin = [
-                "/usr/sbin/nologin",
-                "/sbin/nologin",
-                "/bin/nologin",
-                "/usr/bin/nologin",
-            ]
-            .iter()
-            .find(|p| std::path::Path::new(p).exists())
-            .unwrap_or(&"/usr/sbin/nologin");
-            run(&format!(
-                "sudo useradd --system --shell {nologin} --home-dir {} --create-home {username}",
-                home_dir.display()
-            ))?;
-            // Rootless podman needs subordinate UID/GID ranges for user namespaces.
-            // Allocate a unique 65536-range based on the user's UID to avoid overlap.
-            let uid_output = Command::new("id")
-                .args(["-u", username])
-                .output()
-                .context("failed to get uid")?;
-            let uid: u64 = String::from_utf8_lossy(&uid_output.stdout)
-                .trim()
-                .parse()
-                .unwrap_or(1000);
-            let sub_start = 100000 + (uid * 65536);
-            let sub_end = sub_start + 65535;
-            run(&format!(
-                "sudo usermod -aG ryra --add-subuids {sub_start}-{sub_end} --add-subgids {sub_start}-{sub_end} {username}"
-            ))?;
-            created.push(Created::User(username.clone()));
-            Ok(())
-        }
-        Step::EnableLinger { username } => {
-            run(&format!("sudo loginctl enable-linger {username}"))?;
-            // Wait for the user's systemd session to be ready
-            for _ in 0..10 {
-                let ready = Command::new("sudo")
-                    .args([
-                        "systemctl",
-                        &format!("--machine={username}@"),
-                        "--user",
-                        "is-system-running",
-                    ])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if ready {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-            created.push(Created::Linger(username.clone()));
-            Ok(())
-        }
-        Step::DisableLinger { username } => {
-            // Ignore errors — user may not exist (partial add failure)
-            let _ = run(&format!("sudo loginctl disable-linger {username}"));
-            Ok(())
-        }
-        Step::TerminateUserSession { username } => {
-            // Ignore errors — user may not have an active session
-            let _ = run(&format!("sudo loginctl terminate-user {username}"));
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            Ok(())
-        }
-        Step::KillUserProcesses { username } => {
-            // Force-kill all remaining processes owned by this user.
-            // Podman/conmon processes often survive loginctl terminate-user.
-            let _ = run_quiet(&format!("sudo pkill -9 -u {username}"));
-            // Wait for processes to actually die
-            for _ in 0..10 {
-                let still_running = Command::new("id")
-                    .arg(username)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-                    && Command::new("sudo")
-                        .args(["pgrep", "-u", username])
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-                if !still_running {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-            Ok(())
-        }
         Step::WriteFile(file) => {
             println!("  Writing {}", file.path.display());
             if ryra_core::verbose::is_enabled() && !file.content.is_empty() {
@@ -256,46 +109,43 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 }
                 println!();
             }
-            if let Some(parent) = file.path.parent() {
-                run(&format!("sudo mkdir -p {}", parent.display()))?;
-            }
-            let mut child = Command::new("sudo")
-                .args(["tee", &file.path.to_string_lossy()])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .spawn()
-                .context("failed to run sudo tee")?;
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(file.content.as_bytes())?;
-            }
-            let status = child.wait()?;
-            if !status.success() {
-                bail!("failed to write {}", file.path.display());
+            if is_system_path(&file.path) {
+                if let Some(parent) = file.path.parent() {
+                    run(&format!("sudo mkdir -p {}", parent.display()))?;
+                }
+                let mut child = Command::new("sudo")
+                    .args(["tee", &file.path.to_string_lossy()])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .spawn()
+                    .context("failed to run sudo tee")?;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    stdin.write_all(file.content.as_bytes())?;
+                }
+                let status = child.wait()?;
+                if !status.success() {
+                    bail!("failed to write {}", file.path.display());
+                }
+            } else {
+                if let Some(parent) = file.path.parent() {
+                    std::fs::create_dir_all(parent).with_context(|| {
+                        format!("failed to create directory {}", parent.display())
+                    })?;
+                }
+                std::fs::write(&file.path, &file.content)
+                    .with_context(|| format!("failed to write {}", file.path.display()))?;
             }
             created.push(Created::File(file.path.clone()));
             Ok(())
         }
-        Step::Chown { path, username } => run(&format!(
-            "sudo chown -R {username}:{username} {}",
-            path.display()
-        )),
-        Step::DaemonReload { username } => run(&format!(
-            "sudo systemctl --machine={username}@ --user daemon-reload"
-        )),
-        Step::StartService { username, unit } => {
-            run(&format!(
-                "sudo systemctl --machine={username}@ --user start --no-block {unit}"
-            ))?;
-            created.push(Created::StartedService {
-                username: username.clone(),
-                unit: unit.clone(),
-            });
+        Step::DaemonReload => run("systemctl --user daemon-reload"),
+        Step::StartService { unit } => {
+            run(&format!("systemctl --user start --no-block {unit}"))?;
+            created.push(Created::StartedService(unit.clone()));
             Ok(())
         }
-        Step::StopService { username, unit } => {
-            let _ = run(&format!(
-                "sudo systemctl --machine={username}@ --user stop {unit}"
-            ));
+        Step::StopService { unit } => {
+            let _ = run(&format!("systemctl --user stop {unit}"));
             Ok(())
         }
         Step::SystemDaemonReload => run("sudo systemctl daemon-reload"),
@@ -309,247 +159,26 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("sudo systemctl stop {unit}"));
             Ok(())
         }
-        Step::StartTunnel => {
-            println!("  Starting Cloudflare Tunnel...");
-            run("sudo systemctl start cloudflared")?;
-            created.push(Created::StartedSystemService("cloudflared".into()));
-            Ok(())
-        }
-        Step::StopTunnel => {
-            let _ = run("sudo systemctl stop cloudflared");
-            Ok(())
-        }
-        Step::AddTunnelRoute {
-            api_token,
-            account_id,
-            tunnel_id,
-            zone_id,
-            domain,
-        } => {
-            println!("  Adding tunnel route for {domain}...");
-
-            // Get current ingress rules
-            let mut rules = match ryra_core::integrations::tunnel::get_tunnel_config(
-                api_token, account_id, tunnel_id,
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("  Warning: could not fetch tunnel config: {e}");
-                    Vec::new()
-                }
-            };
-
-            // Add the new route (pointing to nginx HTTP on localhost —
-            // tunnel mode means nginx only listens on port 80)
-            rules.push(ryra_core::integrations::tunnel::IngressRule {
-                hostname: domain.clone(),
-                service: "http://localhost:80".into(),
-                path: None,
-            });
-
-            // Update tunnel config
-            ryra_core::integrations::tunnel::update_tunnel_config(
-                api_token, account_id, tunnel_id, &rules,
-            )
-            .await
-            .context("failed to update tunnel ingress")?;
-
-            // Create CNAME record
-            ryra_core::integrations::tunnel::create_tunnel_dns(
-                api_token, zone_id, domain, tunnel_id,
-            )
-            .await
-            .context("failed to create tunnel CNAME")?;
-
-            println!("  Tunnel route added: {domain} -> http://localhost:80");
-            created.push(Created::DnsRecord {
-                api_token: api_token.clone(),
-                zone_id: zone_id.clone(),
-                domain: domain.clone(),
-            });
-            Ok(())
-        }
-        Step::RemoveTunnelRoute {
-            api_token,
-            account_id,
-            tunnel_id,
-            zone_id,
-            domain,
-        } => {
-            println!("  Removing tunnel route for {domain}...");
-
-            // Get current ingress rules and filter out this domain
-            let rules = match ryra_core::integrations::tunnel::get_tunnel_config(
-                api_token, account_id, tunnel_id,
-            )
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("  Warning: could not fetch tunnel config: {e}");
-                    Vec::new()
-                }
-            };
-
-            let filtered: Vec<_> = rules
-                .into_iter()
-                .filter(|r| r.hostname != *domain)
-                .collect();
-
-            // Update tunnel config
-            let _ = ryra_core::integrations::tunnel::update_tunnel_config(
-                api_token, account_id, tunnel_id, &filtered,
-            )
-            .await;
-
-            // Delete CNAME record
-            if let Ok(Some(record)) =
-                ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await
-            {
-                let _ = ryra_core::integrations::dns::delete_record(api_token, zone_id, &record.id)
-                    .await;
-            }
-
-            println!("  Tunnel route removed for {domain}");
-            Ok(())
-        }
-        Step::CreateDnsRecord {
-            api_token,
-            zone_id,
-            domain,
-            proxied,
-        } => {
-            use ryra_core::integrations::dns::{CreateRecordAction, CreateRecordMachine};
-
-            let mode = match proxied {
-                true => "proxied",
-                false => "DNS-only",
-            };
-            println!("  Setting up DNS A record for {domain} ({mode})...");
-
-            let mut machine = CreateRecordMachine::new(
-                api_token.clone(),
-                zone_id.clone(),
-                domain.clone(),
-                *proxied,
-            );
-
-            loop {
-                match machine.advance().await? {
-                    Some(CreateRecordAction::ResolveConflict { existing_ip }) => {
-                        eprintln!(
-                            "  Warning: A record already exists for {domain} -> {existing_ip}"
-                        );
-                        let overwrite = match std::io::stdin().is_terminal() {
-                            true => dialoguer::Confirm::new()
-                                .with_prompt("  Overwrite existing record?")
-                                .default(false)
-                                .interact()
-                                .unwrap_or(false),
-                            false => false,
-                        };
-                        match overwrite {
-                            true => {
-                                machine.confirm_overwrite();
-                                println!("  Replacing existing record...");
-                            }
-                            false => {
-                                return machine.abort().map_err(Into::into);
-                            }
-                        }
-                    }
-                    Some(CreateRecordAction::Created { ip }) => {
-                        println!("  DNS record created: {domain} -> {ip}");
-                        created.push(Created::DnsRecord {
-                            api_token: api_token.clone(),
-                            zone_id: zone_id.clone(),
-                            domain: domain.clone(),
-                        });
-                        break;
-                    }
-                    None => break,
-                }
-            }
-            Ok(())
-        }
-        Step::DeleteDnsRecord {
-            api_token,
-            zone_id,
-            domain,
-        } => {
-            println!("  Deleting DNS record for {domain}...");
-            match ryra_core::integrations::dns::find_record(api_token, zone_id, domain).await {
-                Ok(Some(record)) => {
-                    ryra_core::integrations::dns::delete_record(api_token, zone_id, &record.id)
-                        .await
-                        .context("failed to delete DNS record")?;
-                    println!("  DNS record deleted");
-                }
-                Ok(None) => println!("  No DNS record found, skipping"),
-                Err(e) => println!("  Warning: could not look up DNS record: {e}"),
-            }
-            Ok(())
-        }
-        Step::ObtainCert {
-            domain,
-            email,
-            cloudflare_api_token,
-        } => {
+        Step::ObtainCert { domain, email } => {
             println!("  Obtaining SSL certificate for {domain}...");
             let cert_dir = ryra_core::integrations::ssl::cert_dir();
             run(&format!("sudo mkdir -p {}/{domain}", cert_dir.display()))?;
-
-            match cloudflare_api_token {
-                Some(token) => {
-                    // DNS-01 challenge via Cloudflare — run certbot in a container
-                    run(&format!(
-                        "sudo podman run --rm \
-                         -v {cert_dir}:/etc/letsencrypt/live:Z \
-                         -e CF_DNS_API_TOKEN={token} \
-                         docker.io/certbot/dns-cloudflare:latest certonly \
-                         --dns-cloudflare \
-                         --dns-cloudflare-credentials /dev/null \
-                         --dns-cloudflare-propagation-seconds 30 \
-                         -d {domain} \
-                         --email {email} \
-                         --agree-tos --non-interactive \
-                         --cert-path /etc/letsencrypt/live/{domain}/fullchain.pem \
-                         --key-path /etc/letsencrypt/live/{domain}/privkey.pem",
-                        cert_dir = cert_dir.display(),
-                        token = token,
-                        domain = domain,
-                        email = email,
-                    ))?;
-                }
-                None => {
-                    // HTTP-01 challenge — nginx must be running on port 80
-                    run(&format!(
-                        "sudo podman run --rm \
-                         -v {cert_dir}:/etc/letsencrypt/live:Z \
-                         -p 80:80 \
-                         docker.io/certbot/certbot:latest certonly \
-                         --standalone \
-                         -d {domain} \
-                         --email {email} \
-                         --agree-tos --non-interactive \
-                         --cert-path /etc/letsencrypt/live/{domain}/fullchain.pem \
-                         --key-path /etc/letsencrypt/live/{domain}/privkey.pem",
-                        cert_dir = cert_dir.display(),
-                        domain = domain,
-                        email = email,
-                    ))?;
-                }
-            }
+            run(&format!(
+                "sudo podman run --rm \
+                 -v {cert_dir}:/etc/letsencrypt/live:Z \
+                 -p 80:80 \
+                 docker.io/certbot/certbot:latest certonly \
+                 --standalone \
+                 -d {domain} \
+                 --email {email} \
+                 --agree-tos --non-interactive \
+                 --cert-path /etc/letsencrypt/live/{domain}/fullchain.pem \
+                 --key-path /etc/letsencrypt/live/{domain}/privkey.pem",
+                cert_dir = cert_dir.display(),
+                domain = domain,
+                email = email,
+            ))?;
             println!("  Certificate obtained for {domain}");
-            Ok(())
-        }
-        Step::GenerateOriginCert { domain } => {
-            println!("  Generating self-signed origin cert for {domain}...");
-            let cmd = ryra_core::integrations::ssl::self_signed_cert_command(domain);
-            run(&cmd)?;
-            println!("  Origin cert generated for {domain}");
             Ok(())
         }
         Step::ObtainTailscaleCert { fqdn } => {
@@ -559,14 +188,10 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             println!("  Tailscale cert obtained for {fqdn}");
             Ok(())
         }
-        Step::PullImage { image, username } => {
-            // Skip if already in user's store
-            let check = match &username {
-                Some(u) => format!("cd / && sudo -H -u {u} podman image exists {image}"),
-                None => format!("sudo podman image exists {image}"),
-            };
-            if Command::new("sh")
-                .args(["-c", &check])
+        Step::PullImage { image } => {
+            // Skip if already available
+            if Command::new("podman")
+                .args(["image", "exists", image])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -576,40 +201,27 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 println!("  {image} already available, skipping pull");
                 return Ok(());
             }
-            // For rootless users: copy from root's store if available (avoids network pull)
-            if let Some(u) = &username {
-                let root_check = format!("sudo podman image exists {image}");
-                let root_has = Command::new("sh")
-                    .args(["-c", &root_check])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if root_has {
-                    println!("  Copying {image} from system store...");
-                    if run_quiet(&format!(
-                        "sudo podman save {image} | sudo -H -u {u} sh -c 'cd / && podman load'"
-                    ))
-                    .is_ok()
-                    {
-                        return Ok(());
-                    }
-                }
-            }
             println!("  Pulling {image}...");
-            match username {
-                Some(u) => run(&format!("cd / && sudo -H -u {u} podman pull {image}")),
-                None => run(&format!("sudo podman pull {image}")),
+            run(&format!("podman pull {image}"))
+        }
+        Step::RemoveFile(path) => {
+            if is_system_path(path) {
+                run(&format!("sudo rm -f {}", path.display()))
+            } else {
+                std::fs::remove_file(path)
+                    .with_context(|| format!("failed to remove {}", path.display()))
             }
         }
-        Step::RemoveFile(path) => run(&format!("sudo rm -f {}", path.display())),
-        Step::RemoveDir(path) => run(&format!("sudo rm -rf {}", path.display())),
-        Step::RemoveUser { username } => {
-            // Ignore errors — user may not exist (partial add failure)
-            let _ = run(&format!("sudo userdel --remove {username}"));
-            Ok(())
+        Step::RemoveDir(path) => {
+            if is_system_path(path) {
+                run(&format!("sudo rm -rf {}", path.display()))
+            } else {
+                std::fs::remove_dir_all(path)
+                    .with_context(|| format!("failed to remove directory {}", path.display()))
+            }
         }
+        Step::CreateDir(path) => std::fs::create_dir_all(path)
+            .with_context(|| format!("failed to create directory {}", path.display())),
         Step::RegisterAuthProvider {
             service_name,
             api_url,
@@ -647,13 +259,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             timeout,
         } => {
             println!("  Running post-start hook: {name}...");
-            let home = format!("/var/lib/{service_name}");
-            // Run via sudo — the service home dir (e.g. /var/lib/seafile) is mode 700,
-            // only accessible to root or the service user.
+            let home = ryra_core::service_home(service_name);
             let full_cmd = format!(
-                "sudo sh -c {cmd}",
+                "sh -c {cmd}",
                 cmd = shell_escape(&format!(
                     "set -a && . {home}/.env && set +a && timeout {timeout} sh -c {inner}",
+                    home = home.display(),
                     inner = shell_escape(hook_cmd),
                 )),
             );
