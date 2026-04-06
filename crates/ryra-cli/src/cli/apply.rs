@@ -101,6 +101,11 @@ async fn prompt_rollback(created: &[Created]) {
 /// Execute a single step, recording what was created for rollback.
 async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
     match step {
+        Step::EnableLinger => {
+            // Idempotent — enable linger for the current user
+            let _ = run_quiet("loginctl enable-linger");
+            Ok(())
+        }
         Step::WriteFile(file) => {
             println!("  Writing {}", file.path.display());
             if ryra_core::verbose::is_enabled() && !file.content.is_empty() {

@@ -60,6 +60,9 @@ pub fn is_root() -> bool {
 /// A discrete operation that the CLI executes. Pattern matching ensures
 /// every step type is handled — no string parsing or if-chains.
 pub enum Step {
+    /// Enable systemd linger for the current user (idempotent).
+    /// Required so that user services survive after SSH sessions end.
+    EnableLinger,
     /// Write a file.
     WriteFile(GeneratedFile),
     /// Reload systemd for the current user.
@@ -118,6 +121,7 @@ impl Step {
     /// Render this step as a shell command (for dry-run display).
     pub fn to_command(&self) -> String {
         match self {
+            Step::EnableLinger => "loginctl enable-linger".into(),
             Step::WriteFile(file) => format!("write {}", file.path.display()),
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
@@ -485,6 +489,9 @@ pub fn add_service(
             unit: "nginx".into(),
         });
     }
+
+    // 0. Enable linger so user services persist after logout/SSH disconnect
+    steps.push(Step::EnableLinger);
 
     // 1. Networking: SSL certificates for proxied modes
     if proxied && let Some(domain) = domain {
