@@ -422,10 +422,10 @@ pub fn add_service(
             name: "export-ca-cert".into(),
             service_name: "caddy".into(),
             run: format!(
-                "sleep 2 && podman exec systemd-caddy cat /data/caddy/pki/authorities/local/root.crt > {}",
+                "for i in $(seq 1 10); do podman exec systemd-caddy cat /data/caddy/pki/authorities/local/root.crt > {} 2>/dev/null && exit 0; sleep 2; done; exit 1",
                 ca_dest.display()
             ),
-            timeout: 15,
+            timeout: 30,
         });
     }
 
