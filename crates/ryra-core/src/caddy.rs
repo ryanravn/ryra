@@ -37,6 +37,7 @@ pub enum AuthProvider {
 pub fn render_site_block(params: &CaddySiteParams) -> String {
     let mut block = format!("# ryra:{}\n", params.service_name);
     block.push_str(&format!("{} {{\n", params.domain));
+    block.push_str("    tls internal\n");
 
     if let Some(ref auth) = params.forward_auth {
         block.push_str(&format!("    forward_auth localhost:{} {{\n", auth.port));

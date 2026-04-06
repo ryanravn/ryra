@@ -137,12 +137,12 @@ run = "! sudo awk '/ryra:authelia/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'fo
 [[steps]]
 action = "assert"
 name = "whoami-blocked-via-caddy"
-run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: whoami.test.local' http://127.0.0.1:80); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
+run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve whoami.test.local:443:127.0.0.1 https://whoami.test.local); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
 
 [[steps]]
 action = "assert"
 name = "authelia-accessible-via-caddy"
-run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: auth.test.local' http://127.0.0.1:80); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
+run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:443:127.0.0.1 https://auth.test.local); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
 
 # Direct access bypasses auth
 [[steps]]

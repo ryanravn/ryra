@@ -88,8 +88,7 @@ authentication_backend:
 session:
   cookies:
     - domain: 'test.local'
-      authelia_url: 'http://auth.test.local'
-      default_redirection_url: 'http://auth.test.local'
+      authelia_url: 'https://auth.test.local'
 
 storage:
   local:
@@ -101,9 +100,6 @@ notifier:
 
 access_control:
   default_policy: 'one_factor'
-  rules:
-    - domain: '*.test.local'
-      policy: 'one_factor'
 YAML
 """
 
