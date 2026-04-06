@@ -21,13 +21,9 @@ priority = "optional"
 [package.metadata.generate-rpm]
 assets = [{ source = "target/release/ryra", dest = "/usr/bin/ryra", mode = "0755" }]
 
-[features]
-default = ["vm"]
-vm = ["dep:ryra-test"]
-
 [dependencies]
 ryra-core = { path = "../ryra-core" }
-ryra-test = { path = "../ryra-test", optional = true }
+ryra-test = { path = "../ryra-test" }
 anyhow.workspace = true
 tokio.workspace = true
 clap = { version = "4", features = ["derive"] }

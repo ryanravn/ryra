@@ -362,10 +362,7 @@ pub fn add_service(
     }
 
     // 3. Write quadlet + .env files
-    let generate::GeneratedService {
-        files,
-        env_file,
-    } = generated;
+    let generate::GeneratedService { files, env_file } = generated;
 
     for file in files {
         steps.push(Step::WriteFile(file));
@@ -691,10 +688,7 @@ pub fn update_service(
     }
 
     // 4. Write files and restart
-    let generate::GeneratedService {
-        files,
-        env_file,
-    } = generated;
+    let generate::GeneratedService { files, env_file } = generated;
 
     for file in files {
         steps.push(Step::WriteFile(file));

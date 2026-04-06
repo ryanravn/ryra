@@ -9,70 +9,32 @@ main() {
     os=$(uname -s)
     arch=$(uname -m)
 
-    case "$os" in
-        MINGW*|MSYS*|CYGWIN*|Windows_NT)
-            echo "Error: ryra requires Linux and does not run natively on Windows."
-            echo ""
-            echo "To use ryra on Windows, install WSL 2:"
-            echo "  https://learn.microsoft.com/en-us/windows/wsl/install"
-            echo ""
-            echo "Then run this script again from inside your WSL 2 terminal."
-            exit 1
-            ;;
-    esac
+    if [ "$os" != "Linux" ]; then
+        echo "Error: ryra requires Linux and is not supported on ${os}."
+        exit 1
+    fi
 
-    case "${os}-${arch}" in
-        Linux-x86_64)   rust_target="x86_64-unknown-linux-gnu" ;;
-        Linux-aarch64)  rust_target="aarch64-unknown-linux-gnu" ;;
-        Darwin-arm64)   rust_target="aarch64-apple-darwin" ;;
-        Darwin-x86_64)  rust_target="x86_64-apple-darwin" ;;
+    case "${arch}" in
+        x86_64)   rust_target="x86_64-unknown-linux-gnu" ;;
+        aarch64)  rust_target="aarch64-unknown-linux-gnu" ;;
         *)
-            echo "Error: unsupported platform: ${os} ${arch}"
+            echo "Error: unsupported architecture: ${arch}"
             exit 1
             ;;
     esac
 
-    case "$os" in
-        Darwin)
-            install_macos
-            ;;
-        Linux)
-            if command -v apt-get >/dev/null 2>&1; then
-                install_apt
-            elif command -v dnf >/dev/null 2>&1; then
-                install_rpm
-            elif command -v pacman >/dev/null 2>&1; then
-                install_pacman
-            else
-                install_binary
-            fi
-            ;;
-    esac
+    if command -v apt-get >/dev/null 2>&1; then
+        install_apt
+    elif command -v dnf >/dev/null 2>&1; then
+        install_rpm
+    elif command -v pacman >/dev/null 2>&1; then
+        install_pacman
+    else
+        install_binary
+    fi
 
     echo ""
     echo "ryra installed successfully! Run 'ryra init' to get started."
-}
-
-install_macos() {
-    echo "Detected macOS — installing binary..."
-    echo "Note: on macOS, ryra supports VM-based testing only (not deployment)."
-
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
-
-    url="${BASE_URL}/ryra-${rust_target}.tar.gz"
-    echo "Downloading ryra for macOS ${arch}..."
-    curl -fsSL -o "${tmp}/ryra.tar.gz" "$url"
-
-    tar xzf "${tmp}/ryra.tar.gz" -C "${tmp}"
-
-    install_dir="/usr/local/bin"
-    mkdir -p "$install_dir"
-    cp "${tmp}/ryra" "${install_dir}/ryra"
-    chmod 755 "${install_dir}/ryra"
-
-    echo "Installed to ${install_dir}/ryra"
-    echo "To update, re-run this script."
 }
 
 install_apt() {

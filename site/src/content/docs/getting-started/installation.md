@@ -32,7 +32,7 @@ Ryra installs its own dependencies (`podman`, `systemd-container`, `nginx`, etc.
 - `sudo` access
 - An internet connection (to pull container images)
 
-On macOS, ryra supports VM-based testing only (not deployment). On Windows, use [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install).
+Ryra is Linux-only. It requires systemd and rootless Podman, which are not available on other platforms.
 
 ## Verify installation
 

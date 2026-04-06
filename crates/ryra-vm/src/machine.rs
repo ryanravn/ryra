@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use tokio::process::Command;
 
-use crate::VmBackend;
 use crate::image::Image;
 
 /// Global registry of active VM PIDs and work dirs, for signal cleanup.
@@ -48,10 +47,9 @@ fn deregister_vm(pid: u32) {
     guard.retain(|vm| vm.pid != pid);
 }
 
-/// A running VM for E2E testing (QEMU or vfkit).
+/// A running QEMU VM for E2E testing.
 pub struct Machine {
     pub name: String,
-    /// SSH target host — "127.0.0.1" for QEMU (port-forwarded), VM IP for AppleVz.
     pub ssh_host: String,
     pub ssh_port: u16,
     pub work_dir: PathBuf,
@@ -60,7 +58,6 @@ pub struct Machine {
 
 /// Options that affect how the VM is launched.
 pub struct SpawnOpts {
-    pub backend: VmBackend,
     pub use_kvm: bool,
     pub memory_mb: u32,
     pub cpus: u32,
@@ -80,7 +77,6 @@ impl SpawnOpts {
 impl Default for SpawnOpts {
     fn default() -> Self {
         Self {
-            backend: VmBackend::default_for_platform(),
             use_kvm: true,
             memory_mb: 2048,
             cpus: 2,
@@ -96,18 +92,6 @@ pub fn random_id() -> String {
 
 impl Machine {
     pub async fn spawn(
-        image: &Image,
-        test_id: &str,
-        ssh_port: u16,
-        opts: &SpawnOpts,
-    ) -> Result<Self> {
-        match opts.backend {
-            VmBackend::Qemu => Self::spawn_qemu(image, test_id, ssh_port, opts).await,
-            VmBackend::AppleVz => Self::spawn_apple_vz(image, test_id, opts).await,
-        }
-    }
-
-    async fn spawn_qemu(
         image: &Image,
         test_id: &str,
         ssh_port: u16,
@@ -220,9 +204,7 @@ impl Machine {
             "none",
         ];
 
-        if crate::supports_virtfs() {
-            args.extend(["-virtfs", &virtfs_arg]);
-        }
+        args.extend(["-virtfs", &virtfs_arg]);
 
         if opts.use_kvm {
             args.extend(crate::accel_args());
@@ -254,166 +236,6 @@ impl Machine {
 
         // Wait for cloud-init to finish (packages installed, files written)
         // cloud-init status --wait blocks until all stages complete
-        machine
-            .exec("cloud-init status --wait")
-            .await
-            .context("cloud-init did not complete")?;
-
-        Ok(machine)
-    }
-
-    /// Spawn a VM using Apple Virtualization.framework via vfkit.
-    ///
-    /// Uses NAT networking with IP discovery via a virtio-fs shared directory.
-    /// The VM writes its IP to a file in the shared dir during cloud-init,
-    /// and the host polls for it. Uses vfkit's built-in `--cloud-init` flag
-    /// to inject user-data/meta-data without needing genisoimage.
-    async fn spawn_apple_vz(image: &Image, test_id: &str, opts: &SpawnOpts) -> Result<Self> {
-        let raw_image = image.raw_path.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Apple Virtualization backend requires a raw disk image")
-        })?;
-
-        let name = format!("ryra-test-{test_id}");
-        let work_dir = vm_work_base_dir()?.join(&name);
-        tokio::fs::create_dir_all(&work_dir)
-            .await
-            .context("failed to create VM work directory")?;
-
-        // Shared directory for VM → host communication (IP discovery)
-        let vminfo_dir = work_dir.join("vminfo");
-        tokio::fs::create_dir_all(&vminfo_dir)
-            .await
-            .context("failed to create vminfo directory")?;
-
-        // APFS clone the raw image (instant, near-zero disk cost on APFS)
-        let disk = work_dir.join("disk.raw");
-        if run_cmd(
-            "cp",
-            &["-c", &raw_image.to_string_lossy(), &disk.to_string_lossy()],
-        )
-        .await
-        .is_err()
-        {
-            // Fallback to regular copy if APFS clone fails (non-APFS filesystem)
-            run_cmd(
-                "cp",
-                &[&raw_image.to_string_lossy(), &disk.to_string_lossy()],
-            )
-            .await
-            .context("failed to copy raw disk image")?;
-        }
-
-        // Generate SSH key pair
-        let key_path = work_dir.join("id_ed25519");
-        let _ = tokio::fs::remove_file(&key_path).await;
-        run_cmd(
-            "ssh-keygen",
-            &[
-                "-t",
-                "ed25519",
-                "-f",
-                &key_path.to_string_lossy(),
-                "-N",
-                "",
-                "-q",
-            ],
-        )
-        .await
-        .context("ssh-keygen failed")?;
-
-        let pub_key = tokio::fs::read_to_string(format!("{}.pub", key_path.display()))
-            .await
-            .context("failed to read SSH public key")?;
-
-        // Write cloud-init files — vfkit's --cloud-init flag builds the ISO
-        // internally, so no genisoimage/mkisofs needed on macOS.
-        let cloud_init_dir = work_dir.join("cloud-init");
-        tokio::fs::create_dir_all(&cloud_init_dir).await?;
-        write_cloud_init_vz(&cloud_init_dir, &name, pub_key.trim()).await?;
-
-        let user_data_path = cloud_init_dir.join("user-data");
-        let meta_data_path = cloud_init_dir.join("meta-data");
-        let cloud_init_arg = format!("{},{}", user_data_path.display(), meta_data_path.display());
-
-        // Image cache directory for virtio-fs sharing
-        let image_cache = image_cache_dir()?;
-        std::fs::create_dir_all(&image_cache).context("failed to create image cache directory")?;
-
-        // Serial log
-        let serial_log = work_dir.join("serial.log");
-
-        // vfkit EFI variable store (created by vfkit on first boot)
-        let nvram_path = work_dir.join("nvram.bin");
-
-        // Build vfkit command
-        let memory_str = opts.memory_mb.to_string();
-        let cpus_str = opts.cpus.to_string();
-        let bootloader_arg = format!("efi,variable-store={},create", nvram_path.display());
-        let disk_arg = format!("virtio-blk,path={}", disk.display());
-        let net_arg = "virtio-net,nat";
-        let vminfo_fs_arg = format!(
-            "virtio-fs,sharedDir={},mountTag=vminfo",
-            vminfo_dir.display()
-        );
-        let images_fs_arg = format!(
-            "virtio-fs,sharedDir={},mountTag=images",
-            image_cache.display()
-        );
-        let serial_arg = format!("virtio-serial,logFilePath={}", serial_log.display());
-
-        let process = Command::new("vfkit")
-            .args([
-                "--cpus",
-                &cpus_str,
-                "--memory",
-                &memory_str,
-                "--bootloader",
-                &bootloader_arg,
-                "--cloud-init",
-                &cloud_init_arg,
-                "--device",
-                &disk_arg,
-                "--device",
-                net_arg,
-                "--device",
-                &vminfo_fs_arg,
-                "--device",
-                &images_fs_arg,
-                "--device",
-                &serial_arg,
-                "--device",
-                "virtio-rng",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("failed to start vfkit — install with: brew install vfkit")?;
-
-        let machine = Machine {
-            name,
-            ssh_host: String::new(), // will be discovered
-            ssh_port: 22,
-            work_dir,
-            process,
-        };
-
-        // Register for signal cleanup
-        if let Some(pid) = machine.process.id() {
-            register_vm(pid, &machine.work_dir);
-        }
-
-        // Wait for the VM to write its IP to the shared directory
-        let boot_timeout = opts.boot_timeout();
-        let ip = wait_for_vm_ip(&vminfo_dir, boot_timeout).await?;
-        let machine = Machine {
-            ssh_host: ip,
-            ..machine
-        };
-
-        // Wait for SSH to come up
-        machine.wait_for_ssh(boot_timeout).await?;
-
-        // Wait for cloud-init to finish
         machine
             .exec("cloud-init status --wait")
             .await
@@ -809,8 +631,7 @@ async fn write_seed_iso(
             "failed to create seed ISO — install genisoimage or mkisofs:\n  \
              sudo apt install genisoimage    # Debian/Ubuntu\n  \
              sudo dnf install genisoimage    # Fedora\n  \
-             sudo pacman -S cdrtools         # Arch\n  \
-             brew install cdrtools            # macOS"
+             sudo pacman -S cdrtools         # Arch"
         );
     }
 
@@ -818,86 +639,6 @@ async fn write_seed_iso(
     let _ = tokio::fs::remove_dir_all(&seed_dir).await;
 
     Ok(())
-}
-
-/// Write cloud-init user-data and meta-data files for Apple Virtualization VMs.
-///
-/// vfkit's `--cloud-init` flag builds the ISO internally from these files,
-/// so no genisoimage/mkisofs needed. Adds extra runcmd to mount virtio-fs
-/// and write the VM's IP for host-side discovery.
-async fn write_cloud_init_vz(cloud_init_dir: &Path, hostname: &str, pub_key: &str) -> Result<()> {
-    let user_data = format!(
-        r#"#cloud-config
-disable_root: false
-ssh_pwauth: false
-
-users:
-  - name: root
-    lock_passwd: true
-    ssh_authorized_keys:
-      - {pub_key}
-
-runcmd:
-  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-  - systemctl restart sshd
-  - systemctl enable podman.socket
-  - loginctl enable-linger root
-  - mkdir -p /mnt/vminfo
-  - |
-    for i in $(seq 1 60); do
-      mount -t virtiofs vminfo /mnt/vminfo 2>/dev/null && break
-      sleep 1
-    done
-  - |
-    for i in $(seq 1 30); do
-      IP=$(hostname -I | awk '{{print $1}}')
-      [ -n "$IP" ] && echo "$IP" > /mnt/vminfo/ip && break
-      sleep 1
-    done
-"#
-    );
-
-    let meta_data = format!("instance-id: {hostname}\nlocal-hostname: {hostname}\n");
-
-    tokio::fs::write(cloud_init_dir.join("user-data"), &user_data)
-        .await
-        .context("failed to write cloud-init user-data")?;
-    tokio::fs::write(cloud_init_dir.join("meta-data"), &meta_data)
-        .await
-        .context("failed to write cloud-init meta-data")?;
-
-    Ok(())
-}
-
-/// Poll a shared directory for the VM's IP address file.
-///
-/// The VM's cloud-init writes its IP to `<dir>/ip` via virtio-fs.
-async fn wait_for_vm_ip(vminfo_dir: &Path, timeout: std::time::Duration) -> Result<String> {
-    let ip_file = vminfo_dir.join("ip");
-    let start = std::time::Instant::now();
-
-    loop {
-        if ip_file.exists() {
-            let ip = tokio::fs::read_to_string(&ip_file)
-                .await
-                .context("failed to read VM IP file")?;
-            let ip = ip.trim().to_string();
-            if !ip.is_empty() {
-                return Ok(ip);
-            }
-        }
-
-        if start.elapsed() > timeout {
-            anyhow::bail!(
-                "timed out waiting for VM to report its IP after {}s\n  \
-                 The VM may have failed to boot or cloud-init did not run.\n  \
-                 Check serial log in the VM work directory.",
-                timeout.as_secs()
-            );
-        }
-
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
 }
 
 /// Cache directory for saved container images on the host.
@@ -971,17 +712,8 @@ pub async fn ensure_image_cached(image: &str) -> Result<PathBuf> {
     Ok(tar_path)
 }
 
-/// Load cached container images into a VM.
-///
-/// Strategy depends on backend:
-/// - QEMU on Linux: 9p virtfs mount (direct file access, no transfer)
-/// - Apple Virtualization: virtio-fs mount (direct file access, no transfer)
-/// - QEMU on macOS: SCP fallback (no 9p/virtio-fs in QEMU on macOS)
-pub async fn load_images_into_vm(
-    machine: &Machine,
-    images: &[String],
-    backend: VmBackend,
-) -> Result<()> {
+/// Load cached container images into a VM via 9p virtfs mount.
+pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result<()> {
     if images.is_empty() {
         return Ok(());
     }
@@ -996,47 +728,22 @@ pub async fn load_images_into_vm(
         .await
         .ok(); // best-effort
 
-    let use_shared_fs = match backend {
-        VmBackend::AppleVz => {
-            // virtio-fs is already available — mount the images share
-            machine
-                .exec("mkdir -p /mnt/images && mount -t virtiofs images /mnt/images")
-                .await
-                .context("failed to mount virtio-fs image cache in VM")?;
-            true
-        }
-        VmBackend::Qemu if crate::supports_virtfs() => {
-            // 9p virtfs on Linux QEMU
-            machine
-                .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
-                .await
-                .context("failed to mount 9p image cache in VM")?;
-            true
-        }
-        _ => false,
-    };
+    // Mount 9p virtfs image cache in the VM
+    machine
+        .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
+        .await
+        .context("failed to mount 9p image cache in VM")?;
 
     for image in images {
-        let tar_path = ensure_image_cached(image).await?;
+        let _tar_path = ensure_image_cached(image).await?;
         let safe_name = image.replace(['/', ':'], "-");
         println!("    loading {image} into VM...");
 
-        if use_shared_fs {
-            let remote_path = format!("/mnt/images/{safe_name}.tar");
-            machine
-                .exec(&format!("podman load -i {remote_path}"))
-                .await
-                .context(format!("failed to load {image} in VM"))?;
-        } else {
-            // No shared filesystem — SCP the tar into the VM and load it
-            scp_to_vm(machine, &tar_path, &format!("/tmp/{safe_name}.tar")).await?;
-            machine
-                .exec(&format!(
-                    "podman load -i /tmp/{safe_name}.tar && rm -f /tmp/{safe_name}.tar"
-                ))
-                .await
-                .context(format!("failed to load {image} in VM"))?;
-        }
+        let remote_path = format!("/mnt/images/{safe_name}.tar");
+        machine
+            .exec(&format!("podman load -i {remote_path}"))
+            .await
+            .context(format!("failed to load {image} in VM"))?;
     }
 
     Ok(())

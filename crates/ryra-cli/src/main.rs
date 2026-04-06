@@ -102,7 +102,7 @@ enum Command {
         #[arg(long, short)]
         verbose: bool,
     },
-    // -- Cross-platform commands (read-only / VM-based) --
+    // -- Read-only / VM-based commands --
     /// Show what changed in a service's registry definition since install
     Diff {
         /// Service name
@@ -156,35 +156,9 @@ enum Command {
     },
 }
 
-impl Command {
-    /// Whether this command works on non-Linux platforms.
-    /// New commands default to Linux-only — add them here explicitly if cross-platform.
-    fn is_cross_platform(&self) -> bool {
-        matches!(
-            self,
-            Command::Search { .. } | Command::Diff { .. } | Command::Test { .. }
-        )
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-
-    if cfg!(not(target_os = "linux")) && !cli.command.is_cross_platform() {
-        anyhow::bail!(
-            "this command requires Linux (systemd + podman).\n\
-             \n\
-             ryra manages services on a Linux host — commands like init, add, and remove\n\
-             need systemd and rootless podman, which aren't available on macOS.\n\
-             \n\
-             On macOS you can:\n  \
-             • ryra search / ryra diff  — browse and inspect the registry\n  \
-             • ryra test --vm           — spin up a Linux VM and test services\n\
-             \n\
-             To manage a remote Linux server, SSH in and run ryra there."
-        );
-    }
 
     match cli.command {
         Command::Init {

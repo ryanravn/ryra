@@ -16,31 +16,8 @@ pub struct ConfigPaths {
 
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
-        let (config_dir, cache_dir) = if cfg!(target_os = "linux") {
-            (PathBuf::from("/etc/ryra"), PathBuf::from("/var/cache/ryra"))
-        } else {
-            // macOS / other: use user-local directories (no sudo needed).
-            // ~/Library/Application Support/ryra and ~/Library/Caches/ryra (or XDG equivalent).
-            let config_dir = dirs::config_dir()
-                .ok_or_else(|| Error::DirCreate {
-                    path: PathBuf::from("config"),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "could not determine config directory (is $HOME set?)",
-                    ),
-                })?
-                .join("ryra");
-            let cache_dir = dirs::cache_dir()
-                .ok_or_else(|| Error::DirCreate {
-                    path: PathBuf::from("cache"),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "could not determine cache directory (is $HOME set?)",
-                    ),
-                })?
-                .join("ryra");
-            (config_dir, cache_dir)
-        };
+        let config_dir = PathBuf::from("/etc/ryra");
+        let cache_dir = PathBuf::from("/var/cache/ryra");
         let snapshots_dir = config_dir.join("snapshots");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
