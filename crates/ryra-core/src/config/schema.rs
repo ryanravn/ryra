@@ -100,9 +100,6 @@ pub struct InstalledService {
     /// The auth kind the user chose when installing this service, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<AuthKind>,
-    /// If true, this service runs as a system-level systemd unit (privileged ports).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub privileged: bool,
     /// Domain assigned to this service (used for Caddy reverse proxy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,

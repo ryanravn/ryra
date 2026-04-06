@@ -232,7 +232,6 @@ pub async fn run(
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
                 env_content: &result.env_content,
-                privileged: result.privileged,
                 domain: result.domain.as_deref(),
             })?;
             let home_dir = ryra_core::service_home(service);

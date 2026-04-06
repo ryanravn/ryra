@@ -5,7 +5,7 @@ name = "vaultwarden-lifecycle"
 [[steps]]
 action = "run"
 name = "inject-smtp-config"
-run = """cat >> /etc/ryra/ryra.toml <<'TOML'
+run = """cat >> $HOME/.config/ryra/ryra.toml <<'TOML'
 
 [smtp]
 host = "localhost"

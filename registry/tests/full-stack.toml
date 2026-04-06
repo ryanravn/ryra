@@ -6,7 +6,7 @@ services = ["caddy", "authelia", "postgres", "whoami", "forgejo", "vaultwarden",
 [[steps]]
 action = "run"
 name = "init-caddyfile"
-run = "sudo mkdir -p /etc/ryra/caddy && echo '' | sudo tee /etc/ryra/caddy/Caddyfile"
+run = "mkdir -p $HOME/.local/share/ryra/caddy/config && touch $HOME/.local/share/ryra/caddy/config/Caddyfile"
 
 [[steps]]
 action = "add"
@@ -114,35 +114,35 @@ run = "PGPASSWORD=$(grep POSTGRES_PASSWORD $HOME/.local/share/ryra/postgres/.env
 [[steps]]
 action = "assert"
 name = "caddy-has-all-routes"
-run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:forgejo' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:vaultwarden' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:uptime-kuma' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:authelia' /etc/ryra/caddy/Caddyfile"
+run = "grep -q 'ryra:whoami' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:forgejo' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:vaultwarden' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:uptime-kuma' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:authelia' $HOME/.local/share/ryra/caddy/config/Caddyfile"
 
 [[steps]]
 action = "assert"
 name = "whoami-has-forward-auth"
-run = "sudo awk '/ryra:whoami/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+run = "awk '/ryra:whoami/,/^}/' $HOME/.local/share/ryra/caddy/config/Caddyfile | grep -q 'forward_auth'"
 
 [[steps]]
 action = "assert"
 name = "uses-authelia-endpoint"
-run = "sudo grep -q '/api/authz/forward-auth' /etc/ryra/caddy/Caddyfile"
+run = "grep -q '/api/authz/forward-auth' $HOME/.local/share/ryra/caddy/config/Caddyfile"
 
 # Authelia itself should NOT have forward auth
 [[steps]]
 action = "assert"
 name = "authelia-no-forward-auth"
-run = "! sudo awk '/ryra:authelia/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+run = "! awk '/ryra:authelia/,/^}/' $HOME/.local/share/ryra/caddy/config/Caddyfile | grep -q 'forward_auth'"
 
 # === Auth actually blocks unauthenticated requests ===
 
 [[steps]]
 action = "assert"
 name = "whoami-blocked-via-caddy"
-run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve whoami.test.local:443:127.0.0.1 https://whoami.test.local); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
+run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve whoami.test.local:8443:127.0.0.1 https://whoami.test.local:8443); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
 
 [[steps]]
 action = "assert"
 name = "authelia-accessible-via-caddy"
-run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:443:127.0.0.1 https://auth.test.local); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
+run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
 
 # Direct access bypasses auth
 [[steps]]

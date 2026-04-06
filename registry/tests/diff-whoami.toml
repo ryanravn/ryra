@@ -13,7 +13,7 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "snapshot-saved"
-run = "test -f /etc/ryra/snapshots/whoami.toml"
+run = "test -f $HOME/.config/ryra/snapshots/whoami.toml"
 
 [[steps]]
 action = "assert"
@@ -44,4 +44,4 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "snapshot-removed"
-run = "test ! -f /etc/ryra/snapshots/whoami.toml"
+run = "test ! -f $HOME/.config/ryra/snapshots/whoami.toml"

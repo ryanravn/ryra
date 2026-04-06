@@ -72,7 +72,6 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         host_port: params.host_port,
         quadlet_dir: params.quadlet_dir,
         env_file,
-        host_network: params.service_def.service.privileged,
     })?;
 
     Ok(GenerationOutput { service, ctx })
@@ -111,8 +110,6 @@ struct GenerateQuadletParams<'a> {
     host_port: Option<u16>,
     quadlet_dir: &'a Path,
     env_file: GeneratedFile,
-    /// Privileged services use host networking.
-    host_network: bool,
 }
 
 /// Generate quadlet files for a service (primary + sidecar containers).
@@ -121,14 +118,12 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
     let service_def = params.service_def;
     let mut files = Vec::new();
 
-    // Network — shared by all containers (skip for host-network services)
+    // Network — shared by all containers
     let network_name = name.to_string();
-    if !params.host_network {
-        files.push(GeneratedFile {
-            path: params.quadlet_dir.join(format!("{name}.network")),
-            content: quadlet::render_network(&network_name),
-        });
-    }
+    files.push(GeneratedFile {
+        path: params.quadlet_dir.join(format!("{name}.network")),
+        content: quadlet::render_network(&network_name),
+    });
 
     // Volumes — primary container
     for vol in &service_def.volumes {
@@ -194,7 +189,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
             env_file: Some(&env_path),
             container_name: None,
             init: false,
-            host_network: params.host_network,
         }),
     });
 
@@ -231,7 +225,6 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
                 },
                 container_name: Some(&container.name),
                 init: container.init,
-                host_network: params.host_network,
             }),
         });
     }

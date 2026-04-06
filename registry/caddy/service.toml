@@ -4,38 +4,37 @@ description = "Caddy - automatic HTTPS reverse proxy"
 url = "https://caddyserver.com"
 image = "docker.io/library/caddy:2-alpine"
 architecture = ["amd64", "arm64"]
-privileged = true
 
 [[ports]]
 name = "http"
 container_port = 80
-host_port = 80
+host_port = 8080
 
 [[ports]]
 name = "https"
 container_port = 443
-host_port = 443
+host_port = 8443
 
 [[volumes]]
 name = "data"
 mount_path = "/data"
 
 [[volumes]]
-name = "config"
+name = "config-state"
 mount_path = "/config"
 
 [[volumes]]
 name = "caddyfile-dir"
 mount_path = "/etc/caddy"
-host_path = "/etc/ryra/caddy"
+host_path = "%h/config"
 
 [integrations]
 auth = []
 smtp = false
 
 [[tests]]
-name = "responds-on-80"
-run = "curl -sf http://127.0.0.1:80 || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:80 | grep -q '404\\|200'"
+name = "responds-on-8080"
+run = "curl -sf http://127.0.0.1:8080 || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:8080 | grep -q '404\\|200'"
 
 [[tests]]
 name = "data-dir-created"

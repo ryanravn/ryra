@@ -39,11 +39,6 @@ pub fn quadlet_dir() -> PathBuf {
         .join("systemd")
 }
 
-/// System-level quadlet directory: /etc/containers/systemd
-pub fn system_quadlet_dir() -> PathBuf {
-    PathBuf::from("/etc/containers/systemd")
-}
-
 // --- Typed steps: what the CLI needs to execute ---
 
 /// A discrete operation that the CLI executes. Pattern matching ensures
@@ -57,21 +52,13 @@ pub enum Step {
     StartService { unit: String },
     /// Stop a service under the current user's systemd.
     StopService { unit: String },
-    /// Reload the system-level systemd (for privileged services like Caddy).
-    SystemDaemonReload,
-    /// Start a system-level service.
-    SystemStart { unit: String },
-    /// Stop a system-level service.
-    SystemStop { unit: String },
     /// Reload Caddy's config without restarting the container.
     ReloadCaddy,
-    /// Restart a system-level service.
-    SystemRestart { unit: String },
-    /// Pull a container image. If `system` is true, uses `sudo podman` (for privileged services).
-    PullImage { image: String, system: bool },
-    /// Remove a file (requires sudo).
+    /// Pull a container image.
+    PullImage { image: String },
+    /// Remove a file.
     RemoveFile(PathBuf),
-    /// Remove a directory tree (requires sudo).
+    /// Remove a directory tree.
     RemoveDir(PathBuf),
     /// Create a directory (with parents).
     CreateDir(PathBuf),
@@ -109,20 +96,10 @@ impl Step {
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
-            Step::SystemDaemonReload => "sudo systemctl daemon-reload".into(),
-            Step::SystemStart { unit } => format!("sudo systemctl start {unit}"),
-            Step::SystemStop { unit } => format!("sudo systemctl stop {unit}"),
-            Step::ReloadCaddy => "sudo podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
-            Step::SystemRestart { unit } => format!("sudo systemctl restart {unit}"),
-            Step::PullImage { image, system } => {
-                if *system {
-                    format!("sudo podman pull {image}")
-                } else {
-                    format!("podman pull {image}")
-                }
-            }
-            Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
-            Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
+            Step::ReloadCaddy => "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
+            Step::PullImage { image } => format!("podman pull {image}"),
+            Step::RemoveFile(path) => format!("rm -f {}", path.display()),
+            Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
             Step::RegisterAuthProvider { service_name, .. } => {
                 format!("authentik: register OAuth2 provider for {service_name}")
@@ -178,10 +155,8 @@ pub struct AddResult {
     pub allocated_ports: Vec<(String, u16)>,
     /// Names of auto-generated secrets (values are in .env).
     pub generated_secrets: Vec<String>,
-    /// The generated .env content (for post-install processing without needing sudo).
+    /// The generated .env content (for post-install processing).
     pub env_content: String,
-    /// Whether this is a privileged (system-level) service.
-    pub privileged: bool,
     /// Domain assigned to this service (if Caddy reverse proxy was configured).
     pub domain: Option<String>,
 }
@@ -251,8 +226,6 @@ pub async fn init(config: Config) -> Result<InitResult> {
     let paths = ConfigPaths::resolve()?;
 
     // Fetch default repo if configured (into cache, which may not exist yet)
-    // Cache dir is under /etc/ryra which needs sudo — create it first if we can,
-    // otherwise the repo fetch happens after steps execute
     let _ = paths.ensure_dirs();
     if let Some(ref repo_url) = config.default_repo {
         let _ = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await;
@@ -266,7 +239,7 @@ pub async fn init(config: Config) -> Result<InitResult> {
         config.services = existing.services;
     }
 
-    // Write config as a step (needs sudo for /etc/ryra)
+    // Write config
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
 
@@ -348,12 +321,7 @@ pub fn add_service(
     }
 
     let home_dir = service_home(service_name);
-    let privileged = reg_service.def.service.privileged;
-    let quadlet_path = if privileged {
-        system_quadlet_dir()
-    } else {
-        quadlet_dir()
-    };
+    let quadlet_path = quadlet_dir();
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
@@ -402,7 +370,6 @@ pub fn add_service(
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
-            system: privileged,
         });
     }
 
@@ -434,18 +401,11 @@ pub fn add_service(
     }
 
     // 5. Reload and start via systemd
-    if privileged {
-        steps.push(Step::SystemDaemonReload);
-        steps.push(Step::SystemStart {
-            unit: service_name.to_string(),
-        });
-    } else {
-        steps.push(Step::DaemonReload);
-        // Start — dependencies start automatically via Requires=/After= in the quadlet
-        steps.push(Step::StartService {
-            unit: service_name.to_string(),
-        });
-    }
+    steps.push(Step::DaemonReload);
+    // Start — dependencies start automatically via Requires=/After= in the quadlet
+    steps.push(Step::StartService {
+        unit: service_name.to_string(),
+    });
 
     // Register OAuth provider in authentik via API
     if let (
@@ -485,18 +445,12 @@ pub fn add_service(
 
     // Restart the service after post-start hooks so it picks up injected config
     if has_hooks {
-        if privileged {
-            steps.push(Step::SystemRestart {
-                unit: service_name.to_string(),
-            });
-        } else {
-            steps.push(Step::StopService {
-                unit: service_name.to_string(),
-            });
-            steps.push(Step::StartService {
-                unit: service_name.to_string(),
-            });
-        }
+        steps.push(Step::StopService {
+            unit: service_name.to_string(),
+        });
+        steps.push(Step::StartService {
+            unit: service_name.to_string(),
+        });
     }
 
     // Collect post-install info
@@ -595,7 +549,6 @@ pub fn add_service(
         allocated_ports,
         generated_secrets,
         env_content,
-        privileged,
         domain: domain.map(|d| d.to_string()),
     })
 }
@@ -611,17 +564,9 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         .find(|s| s.name == service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
-    let privileged = installed.privileged;
-
     // Stop the service
-    let mut steps = vec![if privileged {
-        Step::SystemStop {
-            unit: service_name.to_string(),
-        }
-    } else {
-        Step::StopService {
-            unit: service_name.to_string(),
-        }
+    let mut steps = vec![Step::StopService {
+        unit: service_name.to_string(),
     }];
 
     // Remove OAuth provider from authentik
@@ -641,11 +586,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     }
 
     // Remove quadlet files matching {service_name}*
-    let quadlet_path = if privileged {
-        system_quadlet_dir()
-    } else {
-        quadlet_dir()
-    };
+    let quadlet_path = quadlet_dir();
     if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
     {
@@ -659,11 +600,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     }
 
     // Reload systemd after removing quadlet files
-    if privileged {
-        steps.push(Step::SystemDaemonReload);
-    } else {
-        steps.push(Step::DaemonReload);
-    }
+    steps.push(Step::DaemonReload);
 
     // Remove Caddy route if the service had a domain
     if installed.domain.is_some() && caddy::is_installed() {
@@ -697,8 +634,6 @@ pub struct FinalizeAddParams<'a> {
     pub repo_dir: &'a Path,
     /// The generated .env content, used for post-install config (e.g., auth auto-setup).
     pub env_content: &'a str,
-    /// Whether this is a privileged (system-level) service.
-    pub privileged: bool,
     /// Domain assigned to this service (for Caddy reverse proxy).
     pub domain: Option<&'a str>,
 }
@@ -717,7 +652,6 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         repo: params.repo.to_string(),
         ports,
         auth_kind: params.auth_kind,
-        privileged: params.privileged,
         domain: params.domain.map(|d| d.to_string()),
     });
 
@@ -807,12 +741,7 @@ pub fn update_service(
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
-    let privileged = service.privileged;
-    let quadlet_path = if privileged {
-        system_quadlet_dir()
-    } else {
-        quadlet_dir()
-    };
+    let quadlet_path = quadlet_dir();
 
     // Determine host_port from installed service's port mappings
     let host_port = service.ports.values().next().copied();
@@ -820,15 +749,9 @@ pub fn update_service(
     let mut steps = Vec::new();
 
     // 1. Stop the service
-    if privileged {
-        steps.push(Step::SystemStop {
-            unit: service_name.to_string(),
-        });
-    } else {
-        steps.push(Step::StopService {
-            unit: service_name.to_string(),
-        });
-    }
+    steps.push(Step::StopService {
+        unit: service_name.to_string(),
+    });
 
     // 2. Regenerate all files from the current registry definition
     let output = generate::generate_service(generate::GenerateServiceParams {
@@ -846,7 +769,6 @@ pub fn update_service(
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
-            system: privileged,
         });
     }
 
@@ -905,12 +827,7 @@ pub fn reset() -> ResetResult {
     // 3. Reload user systemd after removing quadlets
     steps.push(Step::DaemonReload);
 
-    // 4. Remove system-level directories
-    if PathBuf::from("/etc/ryra").exists() {
-        steps.push(Step::RemoveDir(PathBuf::from("/etc/ryra")));
-    }
-
-    // 5. Remove service data directories
+    // 4. Remove service data directories
     if let Some(ref config) = config {
         for service in &config.services {
             let data_dir = service_home(&service.name);

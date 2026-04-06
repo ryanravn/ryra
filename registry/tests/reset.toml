@@ -39,7 +39,7 @@ run = "! systemctl --user is-active postgres.service 2>/dev/null"
 [[steps]]
 action = "assert"
 name = "config-empty"
-run = "! grep -q '\\[services\\.' /etc/ryra/ryra.toml 2>/dev/null || test ! -f /etc/ryra/ryra.toml"
+run = "! grep -q '\\[services\\.' $HOME/.config/ryra/ryra.toml 2>/dev/null || test ! -f $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
 action = "assert"

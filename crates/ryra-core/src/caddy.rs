@@ -1,8 +1,13 @@
 use std::path::PathBuf;
 
 /// Path to the ryra-managed Caddyfile.
+///
+/// Lives inside the caddy service's data dir so the existing volume mount
+/// (`%h/config` -> `/etc/caddy/`) picks it up automatically.
 pub fn caddyfile_path() -> PathBuf {
-    PathBuf::from("/etc/ryra/caddy/Caddyfile")
+    crate::service_home("caddy")
+        .join("config")
+        .join("Caddyfile")
 }
 
 /// Check if Caddy is installed (Caddyfile exists on disk).
@@ -300,7 +305,11 @@ mod tests {
     }
 
     #[test]
-    fn caddyfile_path_is_correct() {
-        assert_eq!(caddyfile_path(), PathBuf::from("/etc/ryra/caddy/Caddyfile"));
+    fn caddyfile_path_is_under_service_home() {
+        let path = caddyfile_path();
+        assert!(
+            path.ends_with("ryra/caddy/config/Caddyfile"),
+            "unexpected caddyfile path: {path:?}"
+        );
     }
 }

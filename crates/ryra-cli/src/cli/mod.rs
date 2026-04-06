@@ -32,7 +32,7 @@ pub fn print_dry_run(steps: &[Step]) {
         .collect();
 
     if !file_steps.is_empty() {
-        println!("Files to write (sudo required):\n");
+        println!("Files to write:\n");
         for file in &file_steps {
             println!("  {}", file.path.display());
             if verbose && !file.content.is_empty() {

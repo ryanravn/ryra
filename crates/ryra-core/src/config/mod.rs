@@ -16,8 +16,18 @@ pub struct ConfigPaths {
 
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
-        let config_dir = PathBuf::from("/etc/ryra");
-        let cache_dir = PathBuf::from("/var/cache/ryra");
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+                    .join(".config")
+            })
+            .join("ryra");
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+                    .join(".cache")
+            })
+            .join("ryra");
         let snapshots_dir = config_dir.join("snapshots");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
@@ -38,34 +48,11 @@ impl ConfigPaths {
     }
 }
 
-/// Create a directory, falling back to sudo if permission denied.
 fn ensure_dir(path: &Path) -> Result<()> {
-    match std::fs::create_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            let status = std::process::Command::new("sudo")
-                .args(["mkdir", "-p", &path.to_string_lossy()])
-                .status()
-                .map_err(|source| Error::DirCreate {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-            if !status.success() {
-                return Err(Error::DirCreate {
-                    path: path.to_path_buf(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "sudo mkdir failed",
-                    ),
-                });
-            }
-            // Make it writable by the current user for cache operations
-            let _ = std::process::Command::new("sudo")
-                .args(["chmod", "777", &path.to_string_lossy()])
-                .status();
-            Ok(())
-        }
-    }
+    std::fs::create_dir_all(path).map_err(|source| Error::DirCreate {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 pub fn load_config(path: &Path) -> Result<Config> {
@@ -132,49 +119,13 @@ pub fn remove_snapshot(snapshots_dir: &Path, service_name: &str) {
 
 fn write_file(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        // Try direct creation first, fall back to sudo
-        if std::fs::create_dir_all(parent).is_err() {
-            let _ = std::process::Command::new("sudo")
-                .args(["mkdir", "-p", &parent.to_string_lossy()])
-                .status();
-        }
+        std::fs::create_dir_all(parent).map_err(|source| Error::DirCreate {
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
-    // Try direct write first, fall back to sudo tee
-    match std::fs::write(path, contents) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            use std::io::Write;
-            let mut child = std::process::Command::new("sudo")
-                .args(["tee", &path.to_string_lossy()])
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .spawn()
-                .map_err(|source| Error::FileWrite {
-                    path: path.to_path_buf(),
-                    source,
-                })?;
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin
-                    .write_all(contents.as_bytes())
-                    .map_err(|source| Error::FileWrite {
-                        path: path.to_path_buf(),
-                        source,
-                    })?;
-            }
-            let status = child.wait().map_err(|source| Error::FileWrite {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            if !status.success() {
-                return Err(Error::FileWrite {
-                    path: path.to_path_buf(),
-                    source: std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "sudo tee failed",
-                    ),
-                });
-            }
-            Ok(())
-        }
-    }
+    std::fs::write(path, contents).map_err(|source| Error::FileWrite {
+        path: path.to_path_buf(),
+        source,
+    })
 }

@@ -1,5 +1,5 @@
-use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -10,11 +10,6 @@ use ryra_core::Step;
 enum Created {
     File(PathBuf),
     StartedService(String),
-}
-
-/// Returns true if a path is under /etc or /var (i.e. requires sudo).
-fn is_system_path(path: &Path) -> bool {
-    path.starts_with("/etc") || path.starts_with("/var")
 }
 
 /// Execute a list of steps with automatic rollback on failure.
@@ -78,12 +73,8 @@ async fn prompt_rollback(created: &[Created]) {
             }
             Created::File(path) => {
                 eprintln!("  Removing {}", path.display());
-                if is_system_path(path) {
-                    run_quiet(&format!("sudo rm -f {}", path.display()))
-                } else {
-                    std::fs::remove_file(path)
-                        .with_context(|| format!("failed to remove {}", path.display()))
-                }
+                std::fs::remove_file(path)
+                    .with_context(|| format!("failed to remove {}", path.display()))
             }
         };
         if let Err(e) = result {
@@ -104,32 +95,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 }
                 println!();
             }
-            if is_system_path(&file.path) {
-                if let Some(parent) = file.path.parent() {
-                    run(&format!("sudo mkdir -p {}", parent.display()))?;
-                }
-                let mut child = Command::new("sudo")
-                    .args(["tee", &file.path.to_string_lossy()])
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::null())
-                    .spawn()
-                    .context("failed to run sudo tee")?;
-                if let Some(stdin) = child.stdin.as_mut() {
-                    stdin.write_all(file.content.as_bytes())?;
-                }
-                let status = child.wait()?;
-                if !status.success() {
-                    bail!("failed to write {}", file.path.display());
-                }
-            } else {
-                if let Some(parent) = file.path.parent() {
-                    std::fs::create_dir_all(parent).with_context(|| {
-                        format!("failed to create directory {}", parent.display())
-                    })?;
-                }
-                std::fs::write(&file.path, &file.content)
-                    .with_context(|| format!("failed to write {}", file.path.display()))?;
+            if let Some(parent) = file.path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create directory {}", parent.display()))?;
             }
+            std::fs::write(&file.path, &file.content)
+                .with_context(|| format!("failed to write {}", file.path.display()))?;
             created.push(Created::File(file.path.clone()));
             Ok(())
         }
@@ -143,29 +114,15 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("systemctl --user stop {unit}"));
             Ok(())
         }
-        Step::SystemDaemonReload => run("sudo systemctl daemon-reload"),
-        Step::SystemStart { unit } => {
-            run(&format!("sudo systemctl start {unit}"))?;
-            Ok(())
-        }
-        Step::SystemStop { unit } => {
-            let _ = run(&format!("sudo systemctl stop {unit}"));
-            Ok(())
-        }
-        Step::SystemRestart { unit } => {
-            let _ = run_quiet(&format!("sudo systemctl reset-failed {unit}"));
-            run(&format!("sudo systemctl restart {unit}"))
-        }
         Step::ReloadCaddy => {
             println!("  Reloading Caddy config...");
             run(
-                "sudo podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
+                "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
             )
         }
-        Step::PullImage { image, system } => {
-            let prefix = if *system { "sudo " } else { "" };
+        Step::PullImage { image } => {
             // Skip if already available
-            let check = format!("{prefix}podman image exists {image}");
+            let check = format!("podman image exists {image}");
             if Command::new("sh")
                 .args(["-c", &check])
                 .stdout(Stdio::null())
@@ -178,24 +135,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 return Ok(());
             }
             println!("  Pulling {image}...");
-            run(&format!("{prefix}podman pull {image}"))
+            run(&format!("podman pull {image}"))
         }
-        Step::RemoveFile(path) => {
-            if is_system_path(path) {
-                run(&format!("sudo rm -f {}", path.display()))
-            } else {
-                std::fs::remove_file(path)
-                    .with_context(|| format!("failed to remove {}", path.display()))
-            }
-        }
-        Step::RemoveDir(path) => {
-            if is_system_path(path) {
-                run(&format!("sudo rm -rf {}", path.display()))
-            } else {
-                std::fs::remove_dir_all(path)
-                    .with_context(|| format!("failed to remove directory {}", path.display()))
-            }
-        }
+        Step::RemoveFile(path) => std::fs::remove_file(path)
+            .with_context(|| format!("failed to remove {}", path.display())),
+        Step::RemoveDir(path) => std::fs::remove_dir_all(path)
+            .with_context(|| format!("failed to remove directory {}", path.display())),
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
         Step::RegisterAuthProvider {
@@ -319,7 +264,7 @@ async fn register_auth_provider(
         }
         if i == max_wait / 10 {
             bail!(
-                "authentik API not ready after {max_wait}s — check: sudo journalctl _SYSTEMD_USER_UNIT=authentik.service"
+                "authentik API not ready after {max_wait}s — check: journalctl --user-unit authentik.service"
             );
         }
         println!("    not yet — retrying in 10s ({}s elapsed)", i * 10);

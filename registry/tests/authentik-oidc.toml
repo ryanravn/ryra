@@ -18,12 +18,12 @@ service = "authentik"
 [[steps]]
 action = "assert"
 name = "auth-config-populated"
-run = "grep -q 'provider = \"authentik\"' /etc/ryra/ryra.toml"
+run = "grep -q 'provider = \"authentik\"' $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
 action = "assert"
 name = "auth-token-populated"
-run = "grep -q 'api_token' /etc/ryra/ryra.toml"
+run = "grep -q 'api_token' $HOME/.config/ryra/ryra.toml"
 
 # Install whoami-auth — supports oidc, should auto-enable and register via API
 [[steps]]
@@ -50,7 +50,7 @@ run = "grep -q 'OIDC_ISSUER=.*application/o/whoami-auth' $HOME/.local/share/ryra
 action = "assert"
 name = "oauth-provider-registered"
 run = """
-TOKEN=$(grep api_token /etc/ryra/ryra.toml | sed 's/.*= "\\(.*\\)"/\\1/')
+TOKEN=$(grep api_token $HOME/.config/ryra/ryra.toml | sed 's/.*= "\\(.*\\)"/\\1/')
 curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:9000/api/v3/providers/oauth2/?name=whoami-auth | grep -q '"name":"whoami-auth"'
 """
 timeout = 30

@@ -15,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    // -- Linux-only commands (require systemd, podman, sudo) --
+    // -- Linux-only commands (require systemd, podman) --
     /// Initialize ryra on this host (optional — `ryra add` works without it)
     Init {
         /// Default repo (git URL or local path)

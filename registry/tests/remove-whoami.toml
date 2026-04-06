@@ -23,7 +23,7 @@ run = "test -d $HOME/.local/share/ryra/whoami"
 [[steps]]
 action = "assert"
 name = "config-has-whoami"
-run = "grep -q whoami /etc/ryra/ryra.toml"
+run = "grep -q whoami $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
 action = "remove"
@@ -37,7 +37,7 @@ run = "! systemctl --user is-active whoami.service 2>/dev/null"
 [[steps]]
 action = "assert"
 name = "config-cleaned"
-run = "! grep -q whoami /etc/ryra/ryra.toml"
+run = "! grep -q whoami $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
 action = "assert"
