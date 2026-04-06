@@ -39,7 +39,7 @@ service = "postgres"
 [[steps]]
 action = "run"
 name = "add-whoami"
-run = "ryra add whoami --domain whoami.test.local --repo /opt/ryra-test-registry"
+run = "ryra add whoami --domain whoami.test.local --auth --repo /opt/ryra-test-registry"
 
 [[steps]]
 action = "wait"
