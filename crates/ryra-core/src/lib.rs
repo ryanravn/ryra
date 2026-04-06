@@ -313,12 +313,26 @@ pub fn add_service(
                 add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
             }
         }
-        // Mount Caddy's root CA cert so containers trust the self-signed HTTPS
+        // Mount Caddy's root CA cert so containers trust the self-signed HTTPS.
+        // Export it on-demand if not already cached.
         let ca_cert = service_home("caddy")
             .parent()
             .unwrap_or(std::path::Path::new("/tmp"))
             .join("caddy-root-ca.crt");
-        if ca_cert.exists() {
+        if !ca_cert.exists() {
+            // Try to export from running Caddy container
+            let _ = std::process::Command::new("podman")
+                .args([
+                    "exec", "systemd-caddy", "cat",
+                    "/data/caddy/pki/authorities/local/root.crt",
+                ])
+                .stdout(std::fs::File::create(&ca_cert).unwrap_or_else(|_| {
+                    std::fs::File::create("/dev/null").expect("can't open /dev/null")
+                }))
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        if ca_cert.exists() && ca_cert.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             extra_volumes.push(format!(
                 "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",
                 ca_cert.display()
@@ -411,23 +425,6 @@ pub fn add_service(
     steps.push(Step::StartService {
         unit: service_name.to_string(),
     });
-
-    // Export Caddy's root CA cert so other containers can trust HTTPS
-    if service_name == "caddy" {
-        let ca_dest = service_home("caddy")
-            .parent()
-            .unwrap_or(std::path::Path::new("/tmp"))
-            .join("caddy-root-ca.crt");
-        steps.push(Step::PostStartHook {
-            name: "export-ca-cert".into(),
-            service_name: "caddy".into(),
-            run: format!(
-                "for i in $(seq 1 10); do podman exec systemd-caddy cat /data/caddy/pki/authorities/local/root.crt > {} 2>/dev/null && exit 0; sleep 2; done; exit 1",
-                ca_dest.display()
-            ),
-            timeout: 30,
-        });
-    }
 
     // Register OIDC client with the auth provider
     if let (Some(registry::service_def::AuthKind::Oidc), Some(auth)) =
