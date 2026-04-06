@@ -16,7 +16,7 @@ service = "caddy"
 action = "wait"
 service = "caddy"
 
-# Authentik — SSO provider
+# Authentik — SSO provider (installed first so all subsequent services get auth)
 [[steps]]
 action = "run"
 name = "add-authentik"
@@ -28,7 +28,7 @@ action = "wait"
 service = "authentik"
 timeout = 300
 
-# Postgres — standalone database
+# Postgres — standalone database (no domain, no auth)
 [[steps]]
 action = "add"
 service = "postgres"
@@ -37,7 +37,7 @@ service = "postgres"
 action = "wait"
 service = "postgres"
 
-# Whoami — simple HTTP echo with forward auth via Caddy
+# Whoami — gets Caddy forward auth (no native OIDC)
 [[steps]]
 action = "run"
 name = "add-whoami"
@@ -47,7 +47,7 @@ run = "ryra add whoami --domain whoami.test.local --repo /opt/ryra-test-registry
 action = "wait"
 service = "whoami"
 
-# Forgejo — git forge with native OIDC
+# Forgejo — gets Caddy forward auth (no native OIDC mappings yet)
 [[steps]]
 action = "run"
 name = "add-forgejo"
@@ -58,7 +58,7 @@ timeout_secs = 300
 action = "wait"
 service = "forgejo"
 
-# Vaultwarden — password manager
+# Vaultwarden — gets Caddy forward auth
 [[steps]]
 action = "run"
 name = "add-vaultwarden"
@@ -68,7 +68,7 @@ run = "ryra add vaultwarden --domain vault.test.local --repo /opt/ryra-test-regi
 action = "wait"
 service = "vaultwarden"
 
-# Uptime Kuma — monitoring
+# Uptime Kuma — gets Caddy forward auth
 [[steps]]
 action = "run"
 name = "add-uptime-kuma"
@@ -78,9 +78,8 @@ run = "ryra add uptime-kuma --domain status.test.local --repo /opt/ryra-test-reg
 action = "wait"
 service = "uptime-kuma"
 
-# === Assertions ===
+# === Assertions: Services respond ===
 
-# All services responding
 [[steps]]
 action = "assert"
 name = "whoami-responds"
@@ -107,29 +106,44 @@ action = "assert"
 name = "postgres-accepts"
 run = "PGPASSWORD=$(grep POSTGRES_PASSWORD $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) psql -h 127.0.0.1 -p $(grep RYRA_PORT_TCP $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) -U postgres -c 'SELECT 1'"
 
-# Caddy has all routes
-[[steps]]
-action = "assert"
-name = "caddy-has-whoami-route"
-run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile"
+# === Assertions: Caddy routes exist ===
 
 [[steps]]
 action = "assert"
-name = "caddy-has-forgejo-route"
-run = "sudo grep -q 'ryra:forgejo' /etc/ryra/caddy/Caddyfile"
+name = "caddy-has-all-routes"
+run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:forgejo' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:vaultwarden' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:uptime-kuma' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:authentik' /etc/ryra/caddy/Caddyfile"
+
+# === Assertions: Forward auth on non-OIDC services ===
 
 [[steps]]
 action = "assert"
-name = "caddy-has-vaultwarden-route"
-run = "sudo grep -q 'ryra:vaultwarden' /etc/ryra/caddy/Caddyfile"
+name = "whoami-has-forward-auth"
+run = "sudo awk '/ryra:whoami/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
 
 [[steps]]
 action = "assert"
-name = "caddy-has-uptime-kuma-route"
-run = "sudo grep -q 'ryra:uptime-kuma' /etc/ryra/caddy/Caddyfile"
+name = "forgejo-has-forward-auth"
+run = "sudo awk '/ryra:forgejo/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
 
-# Status shows everything
+[[steps]]
+action = "assert"
+name = "vaultwarden-has-forward-auth"
+run = "sudo awk '/ryra:vaultwarden/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+
+[[steps]]
+action = "assert"
+name = "uptime-kuma-has-forward-auth"
+run = "sudo awk '/ryra:uptime-kuma/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+
+# Authentik itself should NOT have forward auth (it IS the auth provider)
+[[steps]]
+action = "assert"
+name = "authentik-no-forward-auth"
+run = "! sudo awk '/ryra:authentik/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+
+# === Status ===
+
 [[steps]]
 action = "assert"
 name = "status-shows-all"
-run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden"
+run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden && ryra list | grep -q authentik && ryra list | grep -q caddy"

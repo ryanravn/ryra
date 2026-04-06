@@ -535,8 +535,13 @@ pub fn add_service(
         if caddy::is_installed() {
             let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
 
-            // Use forward_auth if auth is enabled but the service has no native OIDC mappings
-            let forward_auth = if auth_kind.is_some() && reg_service.def.mappings.auth.is_empty() {
+            // Use forward_auth when:
+            // - Authentik is installed, AND
+            // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
+            // - The service is not authentik itself
+            let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
+            let is_authentik = service_name == "authentik";
+            let forward_auth = if !has_native_oidc && !is_authentik {
                 config
                     .services
                     .iter()
