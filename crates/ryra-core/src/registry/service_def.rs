@@ -111,6 +111,10 @@ pub struct ServiceMeta {
     /// Empty means all architectures are supported.
     #[serde(default)]
     pub architecture: Vec<String>,
+    /// If true, this service runs as a system-level systemd service (e.g. Caddy).
+    /// System services bind privileged ports and use `/etc/containers/systemd/`.
+    #[serde(default)]
+    pub privileged: bool,
 }
 
 /// What role this service plays in the system.

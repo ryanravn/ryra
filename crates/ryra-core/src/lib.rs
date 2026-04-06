@@ -1,3 +1,4 @@
+pub mod caddy;
 pub mod config;
 pub mod diff;
 pub mod error;
@@ -38,6 +39,11 @@ pub fn quadlet_dir() -> PathBuf {
         .join("systemd")
 }
 
+/// System-level quadlet directory: /etc/containers/systemd
+pub fn system_quadlet_dir() -> PathBuf {
+    PathBuf::from("/etc/containers/systemd")
+}
+
 // --- Typed steps: what the CLI needs to execute ---
 
 /// A discrete operation that the CLI executes. Pattern matching ensures
@@ -51,8 +57,16 @@ pub enum Step {
     StartService { unit: String },
     /// Stop a service under the current user's systemd.
     StopService { unit: String },
-    /// Pull a container image.
-    PullImage { image: String },
+    /// Reload the system-level systemd (for privileged services like Caddy).
+    SystemDaemonReload,
+    /// Start a system-level service.
+    SystemStart { unit: String },
+    /// Stop a system-level service.
+    SystemStop { unit: String },
+    /// Restart a system-level service.
+    SystemRestart { unit: String },
+    /// Pull a container image. If `system` is true, uses `sudo podman` (for privileged services).
+    PullImage { image: String, system: bool },
     /// Remove a file (requires sudo).
     RemoveFile(PathBuf),
     /// Remove a directory tree (requires sudo).
@@ -93,7 +107,17 @@ impl Step {
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
-            Step::PullImage { image } => format!("podman pull {image}"),
+            Step::SystemDaemonReload => "sudo systemctl daemon-reload".into(),
+            Step::SystemStart { unit } => format!("sudo systemctl start {unit}"),
+            Step::SystemStop { unit } => format!("sudo systemctl stop {unit}"),
+            Step::SystemRestart { unit } => format!("sudo systemctl restart {unit}"),
+            Step::PullImage { image, system } => {
+                if *system {
+                    format!("sudo podman pull {image}")
+                } else {
+                    format!("podman pull {image}")
+                }
+            }
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
@@ -153,6 +177,8 @@ pub struct AddResult {
     pub generated_secrets: Vec<String>,
     /// The generated .env content (for post-install processing without needing sudo).
     pub env_content: String,
+    /// Whether this is a privileged (system-level) service.
+    pub privileged: bool,
 }
 
 pub struct RemoveResult {
@@ -309,7 +335,12 @@ pub fn add_service(
     }
 
     let home_dir = service_home(service_name);
-    let quadlet_path = quadlet_dir();
+    let privileged = reg_service.def.service.privileged;
+    let quadlet_path = if privileged {
+        system_quadlet_dir()
+    } else {
+        quadlet_dir()
+    };
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
@@ -358,6 +389,7 @@ pub fn add_service(
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
+            system: privileged,
         });
     }
 
@@ -389,12 +421,18 @@ pub fn add_service(
     }
 
     // 5. Reload and start via systemd
-    steps.push(Step::DaemonReload);
-
-    // Start — dependencies start automatically via Requires=/After= in the quadlet
-    steps.push(Step::StartService {
-        unit: service_name.to_string(),
-    });
+    if privileged {
+        steps.push(Step::SystemDaemonReload);
+        steps.push(Step::SystemStart {
+            unit: service_name.to_string(),
+        });
+    } else {
+        steps.push(Step::DaemonReload);
+        // Start — dependencies start automatically via Requires=/After= in the quadlet
+        steps.push(Step::StartService {
+            unit: service_name.to_string(),
+        });
+    }
 
     // Register OAuth provider in authentik via API
     if let (
@@ -434,12 +472,18 @@ pub fn add_service(
 
     // Restart the service after post-start hooks so it picks up injected config
     if has_hooks {
-        steps.push(Step::StopService {
-            unit: service_name.to_string(),
-        });
-        steps.push(Step::StartService {
-            unit: service_name.to_string(),
-        });
+        if privileged {
+            steps.push(Step::SystemRestart {
+                unit: service_name.to_string(),
+            });
+        } else {
+            steps.push(Step::StopService {
+                unit: service_name.to_string(),
+            });
+            steps.push(Step::StartService {
+                unit: service_name.to_string(),
+            });
+        }
     }
 
     // Collect post-install info
@@ -482,6 +526,7 @@ pub fn add_service(
         allocated_ports,
         generated_secrets,
         env_content,
+        privileged,
     })
 }
 
@@ -490,15 +535,23 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
-    let _service = config
+    let installed = config
         .services
         .iter()
         .find(|s| s.name == service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
+    let privileged = installed.privileged;
+
     // Stop the service
-    let mut steps = vec![Step::StopService {
-        unit: service_name.to_string(),
+    let mut steps = vec![if privileged {
+        Step::SystemStop {
+            unit: service_name.to_string(),
+        }
+    } else {
+        Step::StopService {
+            unit: service_name.to_string(),
+        }
     }];
 
     // Remove OAuth provider from authentik
@@ -518,7 +571,11 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     }
 
     // Remove quadlet files matching {service_name}*
-    let quadlet_path = quadlet_dir();
+    let quadlet_path = if privileged {
+        system_quadlet_dir()
+    } else {
+        quadlet_dir()
+    };
     if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
     {
@@ -532,7 +589,11 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     }
 
     // Reload systemd after removing quadlet files
-    steps.push(Step::DaemonReload);
+    if privileged {
+        steps.push(Step::SystemDaemonReload);
+    } else {
+        steps.push(Step::DaemonReload);
+    }
 
     // Remove service data directory
     steps.push(Step::RemoveDir(service_home(service_name)));
@@ -552,6 +613,8 @@ pub struct FinalizeAddParams<'a> {
     pub repo_dir: &'a Path,
     /// The generated .env content, used for post-install config (e.g., auth auto-setup).
     pub env_content: &'a str,
+    /// Whether this is a privileged (system-level) service.
+    pub privileged: bool,
 }
 
 /// Called after add steps succeed — records the service in config and saves a snapshot.
@@ -568,6 +631,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         repo: params.repo.to_string(),
         ports,
         auth_kind: params.auth_kind,
+        privileged: params.privileged,
     });
 
     // Auto-configure [auth] when authentik is installed (so subsequent services
@@ -656,7 +720,12 @@ pub fn update_service(
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
-    let quadlet_path = quadlet_dir();
+    let privileged = service.privileged;
+    let quadlet_path = if privileged {
+        system_quadlet_dir()
+    } else {
+        quadlet_dir()
+    };
 
     // Determine host_port from installed service's port mappings
     let host_port = service.ports.values().next().copied();
@@ -664,9 +733,15 @@ pub fn update_service(
     let mut steps = Vec::new();
 
     // 1. Stop the service
-    steps.push(Step::StopService {
-        unit: service_name.to_string(),
-    });
+    if privileged {
+        steps.push(Step::SystemStop {
+            unit: service_name.to_string(),
+        });
+    } else {
+        steps.push(Step::StopService {
+            unit: service_name.to_string(),
+        });
+    }
 
     // 2. Regenerate all files from the current registry definition
     let output = generate::generate_service(generate::GenerateServiceParams {
@@ -684,6 +759,7 @@ pub fn update_service(
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
+            system: privileged,
         });
     }
 

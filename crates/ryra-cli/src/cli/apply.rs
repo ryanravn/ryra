@@ -143,10 +143,22 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("systemctl --user stop {unit}"));
             Ok(())
         }
-        Step::PullImage { image } => {
+        Step::SystemDaemonReload => run("sudo systemctl daemon-reload"),
+        Step::SystemStart { unit } => {
+            run(&format!("sudo systemctl start {unit}"))?;
+            Ok(())
+        }
+        Step::SystemStop { unit } => {
+            let _ = run(&format!("sudo systemctl stop {unit}"));
+            Ok(())
+        }
+        Step::SystemRestart { unit } => run(&format!("sudo systemctl restart {unit}")),
+        Step::PullImage { image, system } => {
+            let prefix = if *system { "sudo " } else { "" };
             // Skip if already available
-            if Command::new("podman")
-                .args(["image", "exists", image])
+            let check = format!("{prefix}podman image exists {image}");
+            if Command::new("sh")
+                .args(["-c", &check])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -157,7 +169,7 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
                 return Ok(());
             }
             println!("  Pulling {image}...");
-            run(&format!("podman pull {image}"))
+            run(&format!("{prefix}podman pull {image}"))
         }
         Step::RemoveFile(path) => {
             if is_system_path(path) {

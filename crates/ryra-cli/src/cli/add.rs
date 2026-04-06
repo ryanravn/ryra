@@ -222,6 +222,7 @@ pub async fn run(services: &[String], repo: Option<&str>, dry_run: bool) -> Resu
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
                 env_content: &result.env_content,
+                privileged: result.privileged,
             })?;
             let home_dir = ryra_core::service_home(service);
             println!("\n{service} is running.");
