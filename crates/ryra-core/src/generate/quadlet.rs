@@ -19,6 +19,9 @@ pub struct QuadletParams<'a> {
     pub container_name: Option<&'a str>,
     /// If true, this is an init container (Type=oneshot, RemainAfterExit=yes).
     pub init: bool,
+    /// If true, use host networking instead of a podman network.
+    /// Used for privileged services that bind system ports (e.g. Caddy on 80/443).
+    pub host_network: bool,
 }
 
 pub struct PortMapping {
@@ -60,7 +63,11 @@ pub fn render_container(params: &QuadletParams) -> String {
     if let Some(name) = params.container_name {
         lines.push(format!("ContainerName={name}"));
     }
-    lines.push(format!("Network={}.network", params.network));
+    if params.host_network {
+        lines.push("Network=host".to_string());
+    } else {
+        lines.push(format!("Network={}.network", params.network));
+    }
 
     if let Some(env_path) = params.env_file {
         lines.push(format!("EnvironmentFile={env_path}"));
@@ -70,15 +77,18 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push(format!("Exec={cmd}"));
     }
 
-    for port in params.ports {
-        let proto_suffix = match port.protocol {
-            PortProtocol::Tcp => String::new(),
-            PortProtocol::Udp => "/udp".to_string(),
-        };
-        lines.push(format!(
-            "PublishPort=127.0.0.1:{}:{}{proto_suffix}",
-            port.host_port, port.container_port
-        ));
+    // Host network binds ports directly — no PublishPort needed
+    if !params.host_network {
+        for port in params.ports {
+            let proto_suffix = match port.protocol {
+                PortProtocol::Tcp => String::new(),
+                PortProtocol::Udp => "/udp".to_string(),
+            };
+            lines.push(format!(
+                "PublishPort=127.0.0.1:{}:{}{proto_suffix}",
+                port.host_port, port.container_port
+            ));
+        }
     }
 
     for vol in params.volumes {

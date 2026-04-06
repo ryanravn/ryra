@@ -148,6 +148,10 @@ impl std::fmt::Display for PortProtocol {
 pub struct PortDef {
     pub name: String,
     pub container_port: u16,
+    /// Fixed host port (for privileged services like Caddy that need specific ports).
+    /// If not set, ryra allocates a port dynamically.
+    #[serde(default)]
+    pub host_port: Option<u16>,
     #[serde(default)]
     pub protocol: PortProtocol,
 }

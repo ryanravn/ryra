@@ -319,13 +319,18 @@ pub fn add_service(
         return Err(Error::AuthNotConfigured);
     }
 
-    // Allocate a host port for all service ports
+    // Determine host port: use fixed host_port from service def if set,
+    // allocate one if container port is privileged, otherwise use container port directly.
+    let has_fixed_ports = reg_service.def.ports.iter().any(|p| p.host_port.is_some());
     let has_privileged_port = reg_service
         .def
         .ports
         .iter()
-        .any(|p| p.container_port < 1024);
-    let host_port = if has_privileged_port {
+        .any(|p| p.host_port.is_none() && p.container_port < 1024);
+    let host_port = if has_fixed_ports {
+        // Fixed ports are set per-port in the service def (e.g. Caddy 80/443)
+        None
+    } else if has_privileged_port {
         Some(system::port::allocate_port(&config)?)
     } else {
         None
@@ -333,7 +338,7 @@ pub fn add_service(
 
     // Check for port conflicts by probing whether the port is already bound.
     for p in &reg_service.def.ports {
-        let port = host_port.unwrap_or(p.container_port);
+        let port = p.host_port.unwrap_or(host_port.unwrap_or(p.container_port));
         if system::port::is_port_in_use(port) {
             return Err(Error::PortConflict { port });
         }
@@ -497,7 +502,7 @@ pub fn add_service(
         .ports
         .iter()
         .map(|p| {
-            let port = host_port.unwrap_or(p.container_port);
+            let port = p.host_port.unwrap_or(host_port.unwrap_or(p.container_port));
             (p.name.clone(), port)
         })
         .collect();
