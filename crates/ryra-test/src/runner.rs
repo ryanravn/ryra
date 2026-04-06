@@ -524,9 +524,7 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
     println!("[{test_name}] --- diagnostics ---");
     for svc in services {
         // Systemd service status
-        let cmd = format!(
-            "systemctl --user status {svc}.service 2>&1 | head -20 || true"
-        );
+        let cmd = format!("systemctl --user status {svc}.service 2>&1 | head -20 || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
@@ -538,10 +536,8 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
         }
 
         // Container status
-        let cmd = format!(
-            "podman ps -a --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Ports}}}}' 2>&1 || true"
-        );
-        if let Ok(out) = vm.exec(&cmd).await {
+        let cmd = "podman ps -a --format '{{.Names}} {{.Status}} {{.Ports}}' 2>&1 || true";
+        if let Ok(out) = vm.exec(cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
                 println!("[{test_name}]   [{svc}] containers: {trimmed}");
@@ -551,9 +547,7 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
         }
 
         // Journal logs
-        let cmd = format!(
-            "journalctl --user -u {svc}.service --no-pager -n 30 2>&1 || true"
-        );
+        let cmd = format!("journalctl --user -u {svc}.service --no-pager -n 30 2>&1 || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
