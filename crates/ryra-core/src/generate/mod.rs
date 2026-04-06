@@ -368,8 +368,7 @@ pub fn generate_nginx_site(
                     }
                 }
                 ExposureMode::Tailscale => {
-                    let (cert_path, key_path) =
-                        crate::integrations::tailscale::cert_paths(domain);
+                    let (cert_path, key_path) = crate::integrations::tailscale::cert_paths(domain);
                     nginx::SiteMode::SslPort {
                         listen_port: upstream_port,
                         cert_path,

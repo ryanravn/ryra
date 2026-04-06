@@ -5,15 +5,15 @@
 Use enums and pattern matching everywhere instead of string comparisons, boolean flags, or if-chains. This applies at every layer:
 
 - **Config values**: DNS, SSL, SMTP, auth providers are enums with associated data, not string fields with optional companions
-- **Commands/actions**: Operations returned from core to CLI are typed enums (e.g., `Step::CreateUser { .. }`, `Step::WriteFile { .. }`), not string commands that get parsed with `.contains()`
+- **Commands/actions**: Operations returned from core to CLI are typed enums (e.g., `Step::WriteFile { .. }`, `Step::StartService { .. }`), not string commands that get parsed with `.contains()`
 - **Service status**: `Available | Installed`, not a bool flag
 - **Service kind**: `Application | Infrastructure`, not a string
 
 When adding new functionality, ask: "Can this state be invalid?" If yes, restructure with enums so the type system prevents it. Pattern matching (`match`) must be exhaustive — the compiler enforces that every case is handled.
 
 **Anti-patterns to avoid:**
-- `if config.provider == "cloudflare"` → use `match config.dns { DnsConfig::Cloudflare { .. } => .. }`
-- `if cmd.contains("chown")` → use `match step { Step::ChownFiles { .. } => .. }`
+- `if config.provider == "letsencrypt"` → use `match config.ssl { SslConfig::Letsencrypt { .. } => .. }`
+- `if cmd.contains("start")` → use `match step { Step::StartService { .. } => .. }`
 - Optional fields that are only valid in certain states → put them inside enum variants
 
 ## No Unwraps — Handle Every Error
@@ -38,14 +38,15 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - `ryra-test`: E2E test runner, depends on ryra-vm
 - `ryra-dev-tools`: build tooling (generate-registry)
 - Core returns typed results describing what needs to happen; CLI decides whether to apply or print
-- Each service gets its own Linux user running rootless podman
+- All services run under the invoking user's rootless podman (`systemctl --user`)
+- Quadlet files go to `~/.config/containers/systemd/`
+- Service data goes to `~/.local/share/ryra/<name>/`
+- Warns if running as root
 - nginx runs as a root system quadlet with `Network=host` — the only privileged component
 
 ## System Dependencies
 
-- `podman` — rootless containers for services, root containers for nginx/cloudflared
-- `systemd-container` — provides `systemd-machined` and `--machine=` support for managing user services of other users (e.g., `systemctl --machine=ryra-whoami@ --user start whoami`)
-- `loginctl` linger — keeps service users' systemd alive without login sessions
+- `podman` — rootless containers for services, root containers for nginx
 
 ## E2E Testing
 

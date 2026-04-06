@@ -165,12 +165,8 @@ pub async fn run(service: &str, domain: Option<&str>, dry_run: bool) -> Result<(
                     println!(
                         "        OIDC login via browser (e.g. SSH tunnel) will likely fail because"
                     );
-                    println!(
-                        "        the browser and server disagree on redirect URLs."
-                    );
-                    println!(
-                        "        Consider using 'tailscale' exposure mode for OIDC to work."
-                    );
+                    println!("        the browser and server disagree on redirect URLs.");
+                    println!("        Consider using 'tailscale' exposure mode for OIDC to work.");
                 }
                 Warning::RamBelowMinimum {
                     service_name,

@@ -45,7 +45,12 @@ pub fn is_root() -> bool {
         .args(["-u"])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
         .map(|uid| uid == 0)
         .unwrap_or(false)
 }
@@ -408,12 +413,7 @@ pub fn add_service(
         });
     }
 
-    if auth_kind.is_some()
-        && matches!(
-            exposure,
-            ExposureMode::Local | ExposureMode::HostPort
-        )
-    {
+    if auth_kind.is_some() && matches!(exposure, ExposureMode::Local | ExposureMode::HostPort) {
         warnings.push(Warning::OidcLocalExposure {
             service_name: service_name.to_string(),
             exposure: exposure.clone(),
@@ -487,24 +487,22 @@ pub fn add_service(
     }
 
     // 1. Networking: SSL certificates for proxied modes
-    if proxied {
-        if let Some(domain) = domain {
-            match &exposure {
-                ExposureMode::Public => {
-                    if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
-                        steps.push(Step::ObtainCert {
-                            domain: domain.to_string(),
-                            email: email.clone(),
-                        });
-                    }
-                }
-                ExposureMode::Tailscale => {
-                    steps.push(Step::ObtainTailscaleCert {
-                        fqdn: domain.to_string(),
+    if proxied && let Some(domain) = domain {
+        match &exposure {
+            ExposureMode::Public => {
+                if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
+                    steps.push(Step::ObtainCert {
+                        domain: domain.to_string(),
+                        email: email.clone(),
                     });
                 }
-                _ => {}
             }
+            ExposureMode::Tailscale => {
+                steps.push(Step::ObtainTailscaleCert {
+                    fqdn: domain.to_string(),
+                });
+            }
+            _ => {}
         }
     }
 
@@ -708,14 +706,14 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
 
     // Remove quadlet files matching {service_name}*
     let quadlet_path = quadlet_dir();
-    if quadlet_path.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&quadlet_path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name();
-                let name = file_name.to_string_lossy();
-                if name.starts_with(service_name) {
-                    steps.push(Step::RemoveFile(entry.path()));
-                }
+    if quadlet_path.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&quadlet_path)
+    {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            if name.starts_with(service_name) {
+                steps.push(Step::RemoveFile(entry.path()));
             }
         }
     }
@@ -853,7 +851,6 @@ pub fn update_service(
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
-    let home_dir = service_home(service_name);
     let quadlet_path = quadlet_dir();
     let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
