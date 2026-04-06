@@ -50,6 +50,9 @@ pub fn render_container(params: &QuadletParams) -> String {
 
     lines.push("[Unit]".to_string());
     lines.push(format!("Description={}", params.service_name));
+    // Never give up restarting — daemon-reload from adding other services
+    // can cause transient failures (e.g., postgres connection drops).
+    lines.push("StartLimitIntervalSec=0".to_string());
 
     for dep in params.depends_on {
         lines.push(format!("After={dep}.service"));
@@ -131,6 +134,7 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push("RemainAfterExit=yes".to_string());
     } else {
         lines.push("Restart=always".to_string());
+        lines.push("RestartSec=5".to_string());
     }
     lines.push("TimeoutStartSec=300".to_string());
 

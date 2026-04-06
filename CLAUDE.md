@@ -48,6 +48,14 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 
 - `podman` — rootless containers for services, root containers for nginx
 
+## Debugging
+
+When tests fail, don't just increase timeouts. SSH into the VM and study the actual logs to find the root cause:
+- `journalctl --user -u <service>.service` for service logs
+- `podman ps -a` to see container state
+- `podman logs <container>` for container output
+- `ss -tlnp` to check port bindings
+
 ## E2E Testing
 
 Key points:
