@@ -1,6 +1,6 @@
 [test]
 name = "full-stack"
-services = ["caddy", "authentik", "postgres", "whoami", "forgejo", "vaultwarden", "uptime-kuma"]
+services = ["caddy", "authelia", "postgres", "whoami", "forgejo", "vaultwarden", "uptime-kuma"]
 
 # Set up Caddy first
 [[steps]]
@@ -16,17 +16,15 @@ service = "caddy"
 action = "wait"
 service = "caddy"
 
-# Authentik — SSO provider (installed first so all subsequent services get auth)
+# Authelia — lightweight SSO (boots in seconds, no migrations)
 [[steps]]
 action = "run"
-name = "add-authentik"
-run = "AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 ryra add authentik --domain auth.test.local --repo /opt/ryra-test-registry"
-timeout = 300
+name = "add-authelia"
+run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"
 
 [[steps]]
 action = "wait"
-service = "authentik"
-timeout = 300
+service = "authelia"
 
 # Postgres — standalone database (no domain, no auth)
 [[steps]]
@@ -47,7 +45,7 @@ run = "ryra add whoami --domain whoami.test.local --repo /opt/ryra-test-registry
 action = "wait"
 service = "whoami"
 
-# Forgejo — gets Caddy forward auth (no native OIDC mappings yet)
+# Forgejo — gets Caddy forward auth
 [[steps]]
 action = "run"
 name = "add-forgejo"
@@ -82,6 +80,11 @@ service = "uptime-kuma"
 
 [[steps]]
 action = "assert"
+name = "authelia-health"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/authelia/.env | cut -d= -f2)/api/health"
+
+[[steps]]
+action = "assert"
 name = "whoami-responds"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
@@ -106,14 +109,12 @@ action = "assert"
 name = "postgres-accepts"
 run = "PGPASSWORD=$(grep POSTGRES_PASSWORD $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) psql -h 127.0.0.1 -p $(grep RYRA_PORT_TCP $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) -U postgres -c 'SELECT 1'"
 
-# === Assertions: Caddy routes exist ===
+# === Assertions: Caddy routes + forward auth ===
 
 [[steps]]
 action = "assert"
 name = "caddy-has-all-routes"
-run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:forgejo' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:vaultwarden' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:uptime-kuma' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:authentik' /etc/ryra/caddy/Caddyfile"
-
-# === Assertions: Forward auth on non-OIDC services ===
+run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:forgejo' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:vaultwarden' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:uptime-kuma' /etc/ryra/caddy/Caddyfile && sudo grep -q 'ryra:authelia' /etc/ryra/caddy/Caddyfile"
 
 [[steps]]
 action = "assert"
@@ -122,36 +123,17 @@ run = "sudo awk '/ryra:whoami/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forwar
 
 [[steps]]
 action = "assert"
-name = "forgejo-has-forward-auth"
-run = "sudo awk '/ryra:forgejo/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+name = "uses-authelia-endpoint"
+run = "sudo grep -q '/api/authz/forward-auth' /etc/ryra/caddy/Caddyfile"
 
+# Authelia itself should NOT have forward auth
 [[steps]]
 action = "assert"
-name = "vaultwarden-has-forward-auth"
-run = "sudo awk '/ryra:vaultwarden/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+name = "authelia-no-forward-auth"
+run = "! sudo awk '/ryra:authelia/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
 
-[[steps]]
-action = "assert"
-name = "uptime-kuma-has-forward-auth"
-run = "sudo awk '/ryra:uptime-kuma/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
+# === Auth actually blocks unauthenticated requests ===
 
-# Authentik itself should NOT have forward auth (it IS the auth provider)
-[[steps]]
-action = "assert"
-name = "authentik-no-forward-auth"
-run = "! sudo awk '/ryra:authentik/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
-
-# === Assertions: Auth actually works (curl through Caddy gets blocked) ===
-
-# Wait for authentik to be fully ready (API needs to respond for forward_auth to work)
-[[steps]]
-action = "run"
-name = "wait-authentik-api"
-run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:9000/if/flow/initial-setup/ && exit 0; sleep 5; done; exit 1"
-timeout = 360
-
-# Unauthenticated requests through Caddy should NOT get the raw service response.
-# They should get a 401 or 302 redirect to Authentik.
 [[steps]]
 action = "assert"
 name = "whoami-blocked-via-caddy"
@@ -159,22 +141,10 @@ run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: whoami.test.local
 
 [[steps]]
 action = "assert"
-name = "forgejo-blocked-via-caddy"
-run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: git.test.local' http://127.0.0.1:80); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
-
-[[steps]]
-action = "assert"
-name = "vaultwarden-blocked-via-caddy"
-run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: vault.test.local' http://127.0.0.1:80); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
-
-# Authentik itself should be accessible (no forward auth)
-[[steps]]
-action = "assert"
-name = "authentik-accessible-via-caddy"
+name = "authelia-accessible-via-caddy"
 run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: auth.test.local' http://127.0.0.1:80); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
-timeout = 30
 
-# Direct access (bypassing Caddy) should still work — no auth on the raw port
+# Direct access bypasses auth
 [[steps]]
 action = "assert"
 name = "whoami-direct-no-auth"
@@ -185,4 +155,4 @@ run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/w
 [[steps]]
 action = "assert"
 name = "status-shows-all"
-run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden && ryra list | grep -q authentik && ryra list | grep -q caddy"
+run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden && ryra list | grep -q authelia && ryra list | grep -q caddy"

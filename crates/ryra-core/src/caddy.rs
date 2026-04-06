@@ -20,7 +20,14 @@ pub struct CaddySiteParams {
 
 /// Forward auth configuration for services without native OIDC.
 pub struct ForwardAuthParams {
-    pub authentik_port: u16,
+    pub port: u16,
+    pub provider: AuthProvider,
+}
+
+/// Which auth provider is handling forward auth.
+pub enum AuthProvider {
+    Authelia,
+    Authentik,
 }
 
 /// Generate a Caddy site block for a service.
@@ -32,14 +39,21 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
     block.push_str(&format!("{} {{\n", params.domain));
 
     if let Some(ref auth) = params.forward_auth {
-        block.push_str(&format!(
-            "    forward_auth localhost:{} {{\n",
-            auth.authentik_port
-        ));
-        block.push_str("        uri /outpost.goauthentik.io/auth/caddy\n");
-        block.push_str(
-            "        copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email\n",
-        );
+        block.push_str(&format!("    forward_auth localhost:{} {{\n", auth.port));
+        match auth.provider {
+            AuthProvider::Authelia => {
+                block.push_str("        uri /api/authz/forward-auth\n");
+                block.push_str(
+                    "        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email\n",
+                );
+            }
+            AuthProvider::Authentik => {
+                block.push_str("        uri /outpost.goauthentik.io/auth/caddy\n");
+                block.push_str(
+                    "        copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email\n",
+                );
+            }
+        }
         block.push_str("    }\n");
     }
 
@@ -172,7 +186,8 @@ mod tests {
             domain: "grafana.example.com".to_string(),
             upstream_port: 3000,
             forward_auth: Some(ForwardAuthParams {
-                authentik_port: 9000,
+                port: 9000,
+                provider: AuthProvider::Authentik,
             }),
         };
         let block = render_site_block(&params);

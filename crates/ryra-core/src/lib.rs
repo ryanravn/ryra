@@ -539,19 +539,32 @@ pub fn add_service(
             let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
 
             // Use forward_auth when:
-            // - Authentik is installed, AND
-            // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
-            // - The service is not authentik itself
+            // - An auth provider (authelia or authentik) is installed, AND
+            // - The service has no native OIDC mappings, AND
+            // - The service is not the auth provider itself
             let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
-            let is_authentik = service_name == "authentik";
-            let forward_auth = if !has_native_oidc && !is_authentik {
+            let is_auth_provider = service_name == "authelia" || service_name == "authentik";
+            let forward_auth = if !has_native_oidc && !is_auth_provider {
+                // Try authelia first, then authentik
                 config
                     .services
                     .iter()
-                    .find(|s| s.name == "authentik")
+                    .find(|s| s.name == "authelia")
                     .and_then(|s| s.ports.values().next().copied())
                     .map(|port| caddy::ForwardAuthParams {
-                        authentik_port: port,
+                        port,
+                        provider: caddy::AuthProvider::Authelia,
+                    })
+                    .or_else(|| {
+                        config
+                            .services
+                            .iter()
+                            .find(|s| s.name == "authentik")
+                            .and_then(|s| s.ports.values().next().copied())
+                            .map(|port| caddy::ForwardAuthParams {
+                                port,
+                                provider: caddy::AuthProvider::Authentik,
+                            })
                     })
             } else {
                 None

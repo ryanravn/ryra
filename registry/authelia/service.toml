@@ -1,0 +1,128 @@
+[service]
+name = "authelia"
+description = "Authelia - lightweight SSO and 2FA server"
+url = "https://www.authelia.com/"
+image = "docker.io/authelia/authelia:4.39"
+architecture = ["amd64", "arm64"]
+
+[[ports]]
+name = "http"
+container_port = 9091
+
+[[volumes]]
+name = "config"
+mount_path = "/config"
+host_path = "%h/config"
+
+# --- Env vars ---
+# Authelia reads env vars with AUTHELIA_ prefix as config overrides.
+# Secrets are injected via env vars, config file is generated as a post-start hook.
+
+[[env]]
+name = "AUTHELIA_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+format = "hex"
+length = 64
+
+[[env]]
+name = "AUTHELIA_SESSION_SECRET"
+value = "{{secret.session_secret}}"
+format = "hex"
+length = 64
+
+[[env]]
+name = "AUTHELIA_STORAGE_ENCRYPTION_KEY"
+value = "{{secret.storage_key}}"
+format = "hex"
+length = 64
+
+[[env]]
+name = "AUTHELIA_DEFAULT_REDIRECTION_URL"
+value = "http://localhost"
+
+[[env]]
+name = "AUTHELIA_ADMIN_USER"
+value = "admin"
+kind = "prompted"
+prompt = "Admin username"
+
+[[env]]
+name = "AUTHELIA_ADMIN_PASSWORD"
+value = ""
+kind = "required"
+prompt = "Admin password"
+
+[[env]]
+name = "AUTHELIA_ADMIN_EMAIL"
+value = "admin@localhost"
+kind = "prompted"
+prompt = "Admin email"
+
+# Port for Caddy forward auth
+[[env]]
+name = "RYRA_AUTH_PORT"
+value = "9091"
+
+[integrations]
+auth = []
+smtp = false
+
+# Post-start: generate the configuration.yml and users_database.yml
+# Authelia needs these files on disk — env vars alone aren't enough for all settings.
+[[post_start]]
+name = "generate-config"
+timeout = 30
+run = """
+cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << 'YAML'
+---
+server:
+  address: 'tcp://0.0.0.0:9091'
+
+log:
+  level: 'info'
+
+authentication_backend:
+  file:
+    path: '/config/users_database.yml'
+
+session:
+  cookies:
+    - domain: 'localhost'
+      authelia_url: 'http://localhost:9091'
+
+storage:
+  local:
+    path: '/config/db.sqlite3'
+
+notifier:
+  filesystem:
+    filename: '/config/notification.txt'
+
+access_control:
+  default_policy: 'one_factor'
+YAML
+"""
+
+[[post_start]]
+name = "generate-users"
+timeout = 30
+run = """
+HASH=$(podman exec systemd-authelia authelia crypto hash generate argon2 --password "$AUTHELIA_ADMIN_PASSWORD" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')
+cat > $HOME/.local/share/ryra/authelia/config/users_database.yml << YAML
+---
+users:
+  ${AUTHELIA_ADMIN_USER}:
+    displayname: "${AUTHELIA_ADMIN_USER}"
+    password: "${HASH}"
+    email: "${AUTHELIA_ADMIN_EMAIL}"
+YAML
+"""
+
+[[tests]]
+name = "health-check"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+timeout = 30
+
+[[tests]]
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/authelia"

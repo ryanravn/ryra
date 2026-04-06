@@ -1,5 +1,138 @@
 {
   "services": {
+    "authelia": {
+      "service": {
+        "name": "authelia",
+        "description": "Authelia - lightweight SSO and 2FA server",
+        "url": "https://www.authelia.com/",
+        "image": "docker.io/authelia/authelia:4.39",
+        "command": null,
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ],
+        "privileged": false
+      },
+      "requirements": null,
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 9091,
+          "host_port": null,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "config",
+          "mount_path": "/config",
+          "host_path": "%h/config"
+        }
+      ],
+      "env": [
+        {
+          "name": "AUTHELIA_JWT_SECRET",
+          "value": "{{secret.jwt_secret}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "hex",
+          "length": 64
+        },
+        {
+          "name": "AUTHELIA_SESSION_SECRET",
+          "value": "{{secret.session_secret}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "hex",
+          "length": 64
+        },
+        {
+          "name": "AUTHELIA_STORAGE_ENCRYPTION_KEY",
+          "value": "{{secret.storage_key}}",
+          "kind": "default",
+          "prompt": null,
+          "format": "hex",
+          "length": 64
+        },
+        {
+          "name": "AUTHELIA_DEFAULT_REDIRECTION_URL",
+          "value": "http://localhost",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHELIA_ADMIN_USER",
+          "value": "admin",
+          "kind": "prompted",
+          "prompt": "Admin username",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHELIA_ADMIN_PASSWORD",
+          "value": "",
+          "kind": "required",
+          "prompt": "Admin password",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "AUTHELIA_ADMIN_EMAIL",
+          "value": "admin@localhost",
+          "kind": "prompted",
+          "prompt": "Admin email",
+          "format": "string",
+          "length": null
+        },
+        {
+          "name": "RYRA_AUTH_PORT",
+          "value": "9091",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        }
+      ],
+      "requires": [],
+      "containers": [],
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": [],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "health-check",
+          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/health",
+          "timeout": 30,
+          "env": {}
+        },
+        {
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/authelia",
+          "timeout": 30,
+          "env": {}
+        }
+      ],
+      "post_start": [
+        {
+          "name": "generate-config",
+          "run": "cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << 'YAML'\n---\nserver:\n  address: 'tcp://0.0.0.0:9091'\n\nlog:\n  level: 'info'\n\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\n\nsession:\n  cookies:\n    - domain: 'localhost'\n      authelia_url: 'http://localhost:9091'\n\nstorage:\n  local:\n    path: '/config/db.sqlite3'\n\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\n\naccess_control:\n  default_policy: 'one_factor'\nYAML\n",
+          "timeout": 30
+        },
+        {
+          "name": "generate-users",
+          "run": "HASH=$(podman exec systemd-authelia authelia crypto hash generate argon2 --password \"$AUTHELIA_ADMIN_PASSWORD\" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')\ncat > $HOME/.local/share/ryra/authelia/config/users_database.yml << YAML\n---\nusers:\n  ${AUTHELIA_ADMIN_USER}:\n    displayname: \"${AUTHELIA_ADMIN_USER}\"\n    password: \"${HASH}\"\n    email: \"${AUTHELIA_ADMIN_EMAIL}\"\nYAML\n",
+          "timeout": 30
+        }
+      ]
+    },
     "authentik": {
       "service": {
         "name": "authentik",
@@ -24,6 +157,7 @@
         {
           "name": "http",
           "container_port": 9000,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -37,11 +171,6 @@
           "name": "templates",
           "mount_path": "/templates",
           "host_path": null
-        },
-        {
-          "name": "blueprints",
-          "mount_path": "/blueprints/custom",
-          "host_path": "%h/blueprints"
         }
       ],
       "env": [
@@ -143,9 +272,6 @@
         }
       ],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [
         {
           "name": "worker",
@@ -161,11 +287,6 @@
               "name": "templates",
               "mount_path": "/templates",
               "host_path": null
-            },
-            {
-              "name": "blueprints",
-              "mount_path": "/blueprints/custom",
-              "host_path": "%h/blueprints"
             }
           ],
           "env_file": true,
@@ -270,11 +391,13 @@
         {
           "name": "http",
           "container_port": 80,
+          "host_port": 80,
           "protocol": "tcp"
         },
         {
           "name": "https",
           "container_port": 443,
+          "host_port": 443,
           "protocol": "tcp"
         }
       ],
@@ -297,7 +420,6 @@
       ],
       "env": [],
       "requires": [],
-      "nginx": null,
       "containers": [],
       "mappings": {
         "smtp": {},
@@ -347,6 +469,7 @@
         {
           "name": "http",
           "container_port": 3000,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -424,9 +547,6 @@
         }
       ],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [
         {
           "name": "postgres",
@@ -499,6 +619,7 @@
         {
           "name": "http",
           "container_port": 2283,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -576,9 +697,6 @@
         }
       ],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [
         {
           "name": "machine-learning",
@@ -709,6 +827,7 @@
         {
           "name": "gateway",
           "container_port": 18789,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -746,9 +865,6 @@
         }
       ],
       "requires": [],
-      "nginx": {
-        "upstream_port": "gateway"
-      },
       "containers": [],
       "mappings": {
         "smtp": {},
@@ -798,6 +914,7 @@
         {
           "name": "tcp",
           "container_port": 5432,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -835,7 +952,6 @@
         }
       ],
       "requires": [],
-      "nginx": null,
       "containers": [],
       "mappings": {
         "smtp": {},
@@ -885,6 +1001,7 @@
         {
           "name": "http",
           "container_port": 80,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -897,9 +1014,6 @@
       ],
       "env": [],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [],
       "mappings": {
         "smtp": {},
@@ -949,6 +1063,7 @@
         {
           "name": "http",
           "container_port": 80,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -1042,9 +1157,6 @@
         }
       ],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [
         {
           "name": "mariadb",
@@ -1154,6 +1266,7 @@
         {
           "name": "http",
           "container_port": 3001,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -1166,9 +1279,6 @@
       ],
       "env": [],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [],
       "mappings": {
         "smtp": {},
@@ -1218,6 +1328,7 @@
         {
           "name": "http",
           "container_port": 80,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
@@ -1255,9 +1366,6 @@
         }
       ],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [],
       "mappings": {
         "smtp": {
@@ -1296,15 +1404,13 @@
         {
           "name": "http",
           "container_port": 80,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
       "volumes": [],
       "env": [],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [],
       "mappings": {
         "smtp": {},
@@ -1355,15 +1461,13 @@
         {
           "name": "http",
           "container_port": 80,
+          "host_port": null,
           "protocol": "tcp"
         }
       ],
       "volumes": [],
       "env": [],
       "requires": [],
-      "nginx": {
-        "upstream_port": "http"
-      },
       "containers": [],
       "mappings": {
         "smtp": {},
