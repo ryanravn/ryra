@@ -36,6 +36,10 @@ pub struct GenerateServiceParams<'a> {
     pub quadlet_dir: &'a Path,
     pub env_overrides: &'a BTreeMap<String, String>,
     pub service_dir: &'a Path,
+    /// Extra host entries for containers (e.g., auth domain → host IP).
+    pub add_hosts: Vec<(String, String)>,
+    /// Extra volume mounts for containers (e.g., CA cert).
+    pub extra_volumes: Vec<String>,
 }
 
 /// Generate all files for a service based on its deploy mode.
@@ -72,6 +76,8 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         host_port: params.host_port,
         quadlet_dir: params.quadlet_dir,
         env_file,
+        add_hosts: &params.add_hosts,
+        extra_volumes: &params.extra_volumes,
     })?;
 
     Ok(GenerationOutput { service, ctx })
@@ -110,6 +116,8 @@ struct GenerateQuadletParams<'a> {
     host_port: Option<u16>,
     quadlet_dir: &'a Path,
     env_file: GeneratedFile,
+    add_hosts: &'a [(String, String)],
+    extra_volumes: &'a [String],
 }
 
 /// Generate quadlet files for a service (primary + sidecar containers).
@@ -189,6 +197,8 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
             env_file: Some(&env_path),
             container_name: None,
             init: false,
+            add_hosts: params.add_hosts,
+            extra_volumes: params.extra_volumes,
         }),
     });
 
@@ -225,6 +235,8 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
                 },
                 container_name: Some(&container.name),
                 init: container.init,
+                add_hosts: params.add_hosts,
+                extra_volumes: params.extra_volumes,
             }),
         });
     }

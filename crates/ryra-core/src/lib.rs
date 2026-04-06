@@ -324,6 +324,34 @@ pub fn add_service(
     let home_dir = service_home(service_name);
     let quadlet_path = quadlet_dir();
 
+    // When auth is enabled, containers need to reach the auth provider and trust Caddy's HTTPS.
+    let mut add_hosts = Vec::new();
+    let mut extra_volumes = Vec::new();
+    if enable_auth {
+        // Find the auth provider's domain from installed services
+        if let Some(auth_service) = config
+            .services
+            .iter()
+            .find(|s| s.name == "authelia" || s.name == "authentik")
+        {
+            if let Some(ref auth_domain) = auth_service.domain {
+                // Container host IP (podman's host.containers.internal resolves to this)
+                add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
+            }
+        }
+        // Mount Caddy's root CA cert so containers trust the self-signed HTTPS
+        let ca_cert = service_home("caddy")
+            .parent()
+            .unwrap_or(std::path::Path::new("/tmp"))
+            .join("caddy-root-ca.crt");
+        if ca_cert.exists() {
+            extra_volumes.push(format!(
+                "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",
+                ca_cert.display()
+            ));
+        }
+    }
+
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
         service_def: &reg_service.def,
@@ -332,6 +360,8 @@ pub fn add_service(
         quadlet_dir: &quadlet_path,
         env_overrides,
         service_dir: &reg_service.service_dir,
+        add_hosts,
+        extra_volumes,
     })?;
     let generated = output.service;
 
@@ -407,6 +437,23 @@ pub fn add_service(
     steps.push(Step::StartService {
         unit: service_name.to_string(),
     });
+
+    // Export Caddy's root CA cert so other containers can trust HTTPS
+    if service_name == "caddy" {
+        let ca_dest = service_home("caddy")
+            .parent()
+            .unwrap_or(std::path::Path::new("/tmp"))
+            .join("caddy-root-ca.crt");
+        steps.push(Step::PostStartHook {
+            name: "export-ca-cert".into(),
+            service_name: "caddy".into(),
+            run: format!(
+                "sleep 2 && podman exec systemd-caddy cat /data/caddy/pki/authorities/local/root.crt > {}",
+                ca_dest.display()
+            ),
+            timeout: 15,
+        });
+    }
 
     // Register OIDC client with the auth provider
     if let (Some(registry::service_def::AuthKind::Oidc), Some(auth)) =
@@ -836,6 +883,8 @@ pub fn update_service(
         quadlet_dir: &quadlet_path,
         env_overrides,
         service_dir: &reg_service.service_dir,
+        add_hosts: Vec::new(),
+        extra_volumes: Vec::new(),
     })?;
     let generated = output.service;
 

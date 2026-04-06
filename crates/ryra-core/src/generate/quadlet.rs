@@ -19,6 +19,10 @@ pub struct QuadletParams<'a> {
     pub container_name: Option<&'a str>,
     /// If true, this is an init container (Type=oneshot, RemainAfterExit=yes).
     pub init: bool,
+    /// Extra host entries to add (e.g., auth domain → host IP).
+    pub add_hosts: &'a [(String, String)],
+    /// Extra volume mounts (e.g., Caddy root CA cert).
+    pub extra_volumes: &'a [String],
 }
 
 pub struct PortMapping {
@@ -64,6 +68,14 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push(format!("ContainerName={name}"));
     }
     lines.push(format!("Network={}.network", params.network));
+
+    for (host, ip) in params.add_hosts {
+        lines.push(format!("AddHost={host}:{ip}"));
+    }
+
+    for vol in params.extra_volumes {
+        lines.push(format!("Volume={vol}"));
+    }
 
     if let Some(env_path) = params.env_file {
         lines.push(format!("EnvironmentFile={env_path}"));
