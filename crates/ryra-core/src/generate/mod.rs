@@ -356,15 +356,8 @@ pub fn generate_nginx_site(
     match (&service_def.nginx, domain, host_port) {
         (Some(_nginx_def), Some(domain), Some(upstream_port)) => {
             let mode = match exposure {
-                ExposureMode::Tunnel | ExposureMode::Local => nginx::SiteMode::HttpOnly,
-                ExposureMode::Proxy => {
-                    let (cert_path, key_path) = crate::integrations::ssl::origin_cert_paths(domain);
-                    nginx::SiteMode::Ssl {
-                        cert_path,
-                        key_path,
-                    }
-                }
-                ExposureMode::DnsOnly | ExposureMode::Public => {
+                ExposureMode::Local => nginx::SiteMode::HttpOnly,
+                ExposureMode::Public => {
                     let (cert_path, key_path) = match &config.ssl {
                         Some(ssl) => crate::integrations::ssl::cert_paths_for_ssl(ssl, domain),
                         None => crate::integrations::ssl::letsencrypt_cert_paths(domain),
