@@ -79,7 +79,7 @@ pub fn render_container(params: &QuadletParams) -> String {
             PortProtocol::Udp => "/udp".to_string(),
         };
         lines.push(format!(
-            "PublishPort=127.0.0.1:{}:{}{proto_suffix}",
+            "PublishPort={}:{}{proto_suffix}",
             port.host_port, port.container_port
         ));
     }
@@ -96,7 +96,9 @@ pub fn render_container(params: &QuadletParams) -> String {
                 host_path,
                 mount_path,
             } => {
-                lines.push(format!("Volume={host_path}:{mount_path}:U"));
+                // Bind mounts use :Z (SELinux relabel) not :U (user remap).
+                // :U changes ownership which breaks when container UID != host UID.
+                lines.push(format!("Volume={host_path}:{mount_path}:Z"));
             }
         }
     }

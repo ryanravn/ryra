@@ -45,7 +45,10 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
     block.push_str("    tls internal\n");
 
     if let Some(ref auth) = params.forward_auth {
-        block.push_str(&format!("    forward_auth localhost:{} {{\n", auth.port));
+        block.push_str(&format!(
+            "    forward_auth host.containers.internal:{} {{\n",
+            auth.port
+        ));
         match auth.provider {
             AuthProvider::Authelia => {
                 block.push_str("        uri /api/authz/forward-auth\n");
@@ -63,8 +66,10 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
         block.push_str("    }\n");
     }
 
+    // Use host.containers.internal so Caddy (in its own podman network)
+    // can reach services bound to 127.0.0.1 on the host.
     block.push_str(&format!(
-        "    reverse_proxy localhost:{}\n",
+        "    reverse_proxy host.containers.internal:{}\n",
         params.upstream_port
     ));
     block.push_str("}\n");
