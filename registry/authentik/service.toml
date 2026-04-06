@@ -23,11 +23,6 @@ mount_path = "/media"
 name = "templates"
 mount_path = "/templates"
 
-[[volumes]]
-name = "blueprints"
-mount_path = "/blueprints/custom"
-host_path = "%h/blueprints"
-
 # --- Sidecar: worker (same image, different command) ---
 
 [[containers]]
@@ -43,11 +38,6 @@ mount_path = "/media"
 [[containers.volumes]]
 name = "templates"
 mount_path = "/templates"
-
-[[containers.volumes]]
-name = "blueprints"
-mount_path = "/blueprints/custom"
-host_path = "%h/blueprints"
 
 # --- Sidecar: postgres ---
 
@@ -145,9 +135,6 @@ value = "authentik"
 [[env]]
 name = "AUTHENTIK_POSTGRESQL__PASSWORD"
 value = "{{secret.db_password}}"
-
-[nginx]
-upstream_port = "http"
 
 [integrations]
 auth = []

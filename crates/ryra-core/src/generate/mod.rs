@@ -243,16 +243,19 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
 }
 
 /// Build volume mappings for quadlet container rendering.
+/// Resolves `%h` in host paths to the actual service data directory.
 fn build_volume_mappings(
     service_name: &str,
     volumes: &[crate::registry::service_def::VolumeDef],
 ) -> Vec<quadlet::VolumeMapping> {
+    let home = crate::service_home(service_name);
     volumes
         .iter()
         .map(|v| {
             if let Some(ref host_path) = v.host_path {
+                let resolved = host_path.replace("%h", &home.to_string_lossy());
                 quadlet::VolumeMapping::Bind {
-                    host_path: host_path.clone(),
+                    host_path: resolved,
                     mount_path: v.mount_path.clone(),
                 }
             } else {
