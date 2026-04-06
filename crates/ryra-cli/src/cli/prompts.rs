@@ -39,8 +39,8 @@ pub fn prompt_smtp() -> Result<Option<SmtpCredentials>> {
 
 /// What the user chose when prompted for auth setup.
 pub enum AuthSetupChoice {
-    /// Install a managed Authentik instance via ryra.
-    InstallAuthentik,
+    /// Install a managed Authelia instance via ryra.
+    InstallAuthelia,
     /// Use an external OIDC provider (user provided URL).
     External(AuthCredentials),
     /// Skip auth setup.
@@ -54,8 +54,8 @@ pub fn prompt_auth() -> Result<AuthSetupChoice> {
     println!();
 
     let items = [
-        "authentik — install a managed Authentik instance via ryra",
-        "external — use your own OIDC provider (Authentik, Keycloak, etc.)",
+        "authelia — install a managed Authelia instance via ryra",
+        "external — use your own OIDC provider (Keycloak, etc.)",
         "skip",
     ];
     let selection = dialoguer::Select::new()
@@ -65,7 +65,7 @@ pub fn prompt_auth() -> Result<AuthSetupChoice> {
         .interact()?;
 
     match selection {
-        0 => Ok(AuthSetupChoice::InstallAuthentik),
+        0 => Ok(AuthSetupChoice::InstallAuthelia),
         1 => {
             let url: String = Input::new()
                 .with_prompt("OIDC issuer base URL (e.g. https://auth.example.com)")
@@ -77,7 +77,7 @@ pub fn prompt_auth() -> Result<AuthSetupChoice> {
 }
 
 /// Prompt for auth config, apply if external. Returns true if auth is now configured.
-/// For managed authentik, returns false — caller must handle installing authentik.
+/// For managed authelia, returns false — caller must handle installing authelia.
 pub async fn ensure_auth_configured(
     config: &mut Config,
     paths: &ConfigPaths,

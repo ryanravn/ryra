@@ -32,7 +32,6 @@ pub struct ForwardAuthParams {
 /// Which auth provider is handling forward auth.
 pub enum AuthProvider {
     Authelia,
-    Authentik,
 }
 
 /// Generate a Caddy site block for a service.
@@ -54,12 +53,6 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
                 block.push_str("        uri /api/authz/forward-auth\n");
                 block.push_str(
                     "        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email\n",
-                );
-            }
-            AuthProvider::Authentik => {
-                block.push_str("        uri /outpost.goauthentik.io/auth/caddy\n");
-                block.push_str(
-                    "        copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email\n",
                 );
             }
         }
@@ -197,13 +190,13 @@ mod tests {
             domain: "grafana.example.com".to_string(),
             upstream_port: 3000,
             forward_auth: Some(ForwardAuthParams {
-                port: 9000,
-                provider: AuthProvider::Authentik,
+                port: 9091,
+                provider: AuthProvider::Authelia,
             }),
         };
         let block = render_site_block(&params);
-        assert!(block.contains("forward_auth host.containers.internal:9000"));
-        assert!(block.contains("uri /outpost.goauthentik.io/auth/caddy"));
+        assert!(block.contains("forward_auth host.containers.internal:9091"));
+        assert!(block.contains("uri /api/authz/forward-auth"));
         assert!(block.contains("copy_headers"));
     }
 
@@ -270,8 +263,8 @@ mod tests {
         let caddyfile = concat!(
             "# ryra:grafana\n",
             "grafana.example.com {\n",
-            "    forward_auth host.containers.internal:9000 {\n",
-            "        uri /outpost.goauthentik.io/auth/caddy\n",
+            "    forward_auth host.containers.internal:9091 {\n",
+            "        uri /api/authz/forward-auth\n",
             "    }\n",
             "    reverse_proxy host.containers.internal:3000\n",
             "}\n",

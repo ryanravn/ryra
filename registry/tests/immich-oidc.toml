@@ -1,18 +1,17 @@
 [test]
 name = "immich-oidc-lifecycle"
 
-# Install authentik (OIDC provider)
+# Install authelia (OIDC provider)
 [[steps]]
 action = "run"
-name = "add-authentik"
-run = """AUTHENTIK_BOOTSTRAP_EMAIL=admin@test.local \
-AUTHENTIK_BOOTSTRAP_PASSWORD=testpassword123 \
-ryra add authentik --repo /opt/ryra-test-registry"""
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
 timeout = 300
 
 [[steps]]
 action = "wait"
-service = "authentik"
+service = "authelia"
 
 # Install immich with OIDC auth
 [[steps]]

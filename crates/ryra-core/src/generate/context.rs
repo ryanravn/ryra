@@ -53,10 +53,6 @@ pub fn build_context(
                 // Authelia's OIDC issuer is just its base URL
                 internal_url.clone()
             }
-            crate::config::schema::AuthCredentials::Authentik { .. } => {
-                // Authentik's OIDC issuer includes the application slug
-                format!("{internal_url}/application/o/{{{{service.name}}}}/")
-            }
             crate::config::schema::AuthCredentials::External { .. } => url.clone(),
         };
         ctx.insert("auth.issuer".into(), issuer);

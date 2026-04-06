@@ -58,8 +58,6 @@ pub struct SmtpCredentials {
 pub enum AuthCredentials {
     /// Managed Authelia instance installed via ryra.
     Authelia { url: String, port: u16 },
-    /// Managed Authentik instance installed via ryra.
-    Authentik { url: String, api_token: String },
     /// External OIDC provider managed by the user.
     External { url: String },
 }
@@ -68,7 +66,6 @@ impl AuthCredentials {
     pub fn url(&self) -> &str {
         match self {
             AuthCredentials::Authelia { url, .. } => url,
-            AuthCredentials::Authentik { url, .. } => url,
             AuthCredentials::External { url } => url,
         }
     }
@@ -76,7 +73,6 @@ impl AuthCredentials {
     pub fn provider_name(&self) -> &str {
         match self {
             AuthCredentials::Authelia { .. } => "authelia",
-            AuthCredentials::Authentik { .. } => "authentik",
             AuthCredentials::External { .. } => "external",
         }
     }
@@ -84,9 +80,6 @@ impl AuthCredentials {
     pub fn port(&self) -> Option<u16> {
         match self {
             AuthCredentials::Authelia { port, .. } => Some(*port),
-            AuthCredentials::Authentik { url, .. } => {
-                url.rsplit(':').next().and_then(|p| p.parse().ok())
-            }
             AuthCredentials::External { .. } => None,
         }
     }

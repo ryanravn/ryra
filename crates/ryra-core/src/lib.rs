@@ -62,22 +62,6 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Create a directory (with parents).
     CreateDir(PathBuf),
-    /// Register an OAuth2 provider + application in authentik via its API.
-    RegisterAuthProvider {
-        service_name: String,
-        api_url: String,
-        api_token: String,
-        client_id: String,
-        client_secret: String,
-        redirect_uri: String,
-        launch_url: String,
-    },
-    /// Remove an OAuth2 application + provider from authentik via API.
-    RemoveAuthProvider {
-        service_name: String,
-        api_url: String,
-        api_token: String,
-    },
     /// Run a post-start hook — a shell command on the host after the service is active.
     /// The service's .env is sourced before the command runs.
     PostStartHook {
@@ -101,12 +85,6 @@ impl Step {
             Step::RemoveFile(path) => format!("rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
-            Step::RegisterAuthProvider { service_name, .. } => {
-                format!("authentik: register OAuth2 provider for {service_name}")
-            }
-            Step::RemoveAuthProvider { service_name, .. } => {
-                format!("authentik: remove OAuth2 provider for {service_name}")
-            }
             Step::PostStartHook {
                 name,
                 service_name,
@@ -329,11 +307,7 @@ pub fn add_service(
     let mut extra_volumes = Vec::new();
     if enable_auth {
         // Find the auth provider's domain from installed services
-        if let Some(auth_service) = config
-            .services
-            .iter()
-            .find(|s| s.name == "authelia" || s.name == "authentik")
-        {
+        if let Some(auth_service) = config.services.iter().find(|s| s.name == "authelia") {
             if let Some(ref auth_domain) = auth_service.domain {
                 // Container host IP (podman's host.containers.internal resolves to this)
                 add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
@@ -464,21 +438,6 @@ pub fn add_service(
         let service_url = output.ctx.get("service.url").cloned();
 
         match auth {
-            config::schema::AuthCredentials::Authentik { url, api_token } => {
-                if let (Some(client_id), Some(client_secret), Some(service_url)) =
-                    (client_id, client_secret, service_url)
-                {
-                    steps.push(Step::RegisterAuthProvider {
-                        service_name: service_name.to_string(),
-                        api_url: url.clone(),
-                        api_token: api_token.clone(),
-                        client_id,
-                        client_secret,
-                        redirect_uri: format!("{service_url}/.*"),
-                        launch_url: service_url,
-                    });
-                }
-            }
             config::schema::AuthCredentials::Authelia { .. } => {
                 // Authelia: register OIDC client via configuration.yml
                 if let (Some(client_id), Some(client_secret)) = (client_id, client_secret) {
@@ -610,9 +569,8 @@ pub fn add_service(
             // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
             // - The service is not the auth provider itself
             let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
-            let is_auth_provider = service_name == "authelia" || service_name == "authentik";
+            let is_auth_provider = service_name == "authelia";
             let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
-                // Try authelia first, then authentik
                 config
                     .services
                     .iter()
@@ -621,17 +579,6 @@ pub fn add_service(
                     .map(|port| caddy::ForwardAuthParams {
                         port,
                         provider: caddy::AuthProvider::Authelia,
-                    })
-                    .or_else(|| {
-                        config
-                            .services
-                            .iter()
-                            .find(|s| s.name == "authentik")
-                            .and_then(|s| s.ports.values().next().copied())
-                            .map(|port| caddy::ForwardAuthParams {
-                                port,
-                                provider: caddy::AuthProvider::Authentik,
-                            })
                     })
             } else {
                 None
@@ -681,22 +628,6 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let mut steps = vec![Step::StopService {
         unit: service_name.to_string(),
     }];
-
-    // Remove OAuth provider from authentik
-    if let Some(config::schema::AuthCredentials::Authentik { url, api_token }) = &config.auth {
-        steps.push(Step::RemoveAuthProvider {
-            service_name: service_name.to_string(),
-            api_url: url.clone(),
-            api_token: api_token.clone(),
-        });
-        // Also clean up legacy blueprint file if it exists
-        let blueprint = service_home("authentik")
-            .join("blueprints")
-            .join(format!("{service_name}.yaml"));
-        if blueprint.exists() {
-            steps.push(Step::RemoveFile(blueprint));
-        }
-    }
 
     // Remove quadlet files matching {service_name}*
     let quadlet_path = quadlet_dir();
@@ -778,20 +709,6 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
             .unwrap_or(9091);
         let url = format!("http://localhost:{port}");
         config.auth = Some(config::schema::AuthCredentials::Authelia { url, port });
-    } else if params.service_name == "authentik"
-        && let Some(token) = parse_env_var(params.env_content, "AUTHENTIK_BOOTSTRAP_TOKEN")
-    {
-        let port = params
-            .allocated_ports
-            .iter()
-            .find(|(name, _)| name == "http")
-            .map(|(_, p)| *p)
-            .unwrap_or(9000);
-        let url = format!("http://localhost:{port}");
-        config.auth = Some(config::schema::AuthCredentials::Authentik {
-            url,
-            api_token: token,
-        });
     }
 
     config::save_config(&paths.config_file, &config)?;
@@ -806,20 +723,6 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Parse a `KEY=VALUE` line from a `.env` file, returning the value if found.
-fn parse_env_var(env_content: &str, key: &str) -> Option<String> {
-    for line in env_content.lines() {
-        let line = line.trim();
-        if let Some(val) = line
-            .strip_prefix(key)
-            .and_then(|rest| rest.strip_prefix('='))
-        {
-            return Some(val.to_string());
-        }
-    }
-    None
 }
 
 pub fn finalize_remove(service_name: &str) -> Result<()> {

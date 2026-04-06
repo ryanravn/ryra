@@ -278,7 +278,7 @@ pub async fn run(
     Ok(())
 }
 
-/// Ensure auth is configured, possibly installing authentik inline.
+/// Ensure auth is configured, possibly installing authelia inline.
 /// Returns true if auth is ready, false if user cancelled.
 async fn ensure_auth_for_add(
     config: &mut Config,
@@ -289,38 +289,38 @@ async fn ensure_auth_for_add(
 ) -> Result<bool> {
     match prompts::ensure_auth_configured(config, paths).await? {
         prompts::AuthSetupChoice::External(_) => Ok(true),
-        prompts::AuthSetupChoice::InstallAuthentik => {
-            // Check if authentik is already installed but auth wasn't configured
-            let authentik_installed = config.services.iter().any(|s| s.name == "authentik");
-            if authentik_installed {
+        prompts::AuthSetupChoice::InstallAuthelia => {
+            // Check if authelia is already installed but auth wasn't configured
+            let authelia_installed = config.services.iter().any(|s| s.name == "authelia");
+            if authelia_installed {
                 println!();
-                println!("Authentik is already installed — configuring auth...");
+                println!("Authelia is already installed — configuring auth...");
                 if try_configure_auth_from_installed(config, paths)? {
                     return Ok(true);
                 }
-                println!("Could not auto-configure auth from installed authentik.");
+                println!("Could not auto-configure auth from installed authelia.");
                 return Ok(false);
             }
 
             println!();
-            println!("Installing authentik first...");
+            println!("Installing authelia first...");
             println!();
-            // Recursively install authentik, then reload config
+            // Recursively install authelia, then reload config
             Box::pin(run(
-                &["authentik".to_string()],
+                &["authelia".to_string()],
                 None,
                 false,
                 Some(repo_url),
                 dry_run,
             ))
             .await?;
-            // Reload config — authentik's finalize_add auto-configures [auth]
+            // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.auth.is_some() {
                 println!();
                 Ok(true)
             } else {
-                println!("Auth was not configured after installing authentik.");
+                println!("Auth was not configured after installing authelia.");
                 Ok(false)
             }
         }
@@ -331,36 +331,29 @@ async fn ensure_auth_for_add(
     }
 }
 
-/// Try to configure auth from an already-installed authentik instance.
-/// The .env is user-readable under ~/.local/share/ryra/authentik/.env.
+/// Try to configure auth from an already-installed authelia instance.
+/// The .env is user-readable under ~/.local/share/ryra/authelia/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
-    let env_path = ryra_core::service_home("authentik").join(".env");
+    let env_path = ryra_core::service_home("authelia").join(".env");
     let env_content = match std::fs::read_to_string(&env_path) {
         Ok(content) => content,
         Err(_) => return Ok(false),
     };
 
-    // Find the bootstrap token
-    let token = env_content
-        .lines()
-        .find_map(|line| line.strip_prefix("AUTHENTIK_BOOTSTRAP_TOKEN="))
-        .map(|v| v.to_string());
-
-    let Some(token) = token else {
-        return Ok(false);
-    };
-
-    // Find the URL from the installed service record — use the first allocated port
-    let service = config.services.iter().find(|s| s.name == "authentik");
+    // Find the port from the installed service record
+    let service = config.services.iter().find(|s| s.name == "authelia");
     let port = service
         .and_then(|s| s.ports.values().next().copied())
-        .unwrap_or(9000);
+        .unwrap_or(9091);
+
+    // Verify the .env file looks valid (has at least a port reference)
+    if env_content.is_empty() {
+        return Ok(false);
+    }
+
     let url = format!("http://localhost:{port}");
 
-    config.auth = Some(ryra_core::config::schema::AuthCredentials::Authentik {
-        url,
-        api_token: token,
-    });
+    config.auth = Some(ryra_core::config::schema::AuthCredentials::Authelia { url, port });
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, config)?;
     println!(

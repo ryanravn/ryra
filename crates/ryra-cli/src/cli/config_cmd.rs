@@ -17,10 +17,10 @@ pub async fn run(section: Option<&str>) -> Result<()> {
         }
         Some("auth") => match prompts::prompt_auth()? {
             prompts::AuthSetupChoice::External(auth) => config.auth = Some(auth),
-            prompts::AuthSetupChoice::InstallAuthentik => {
+            prompts::AuthSetupChoice::InstallAuthelia => {
                 println!();
                 println!(
-                    "  Run `ryra add authentik` to install — auth will be configured automatically."
+                    "  Run `ryra add authelia` to install — auth will be configured automatically."
                 );
                 return Ok(());
             }
