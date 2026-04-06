@@ -152,7 +152,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("sudo systemctl stop {unit}"));
             Ok(())
         }
-        Step::SystemRestart { unit } => run(&format!("sudo systemctl restart {unit}")),
+        Step::SystemRestart { unit } => {
+            // Reset failed state first to avoid rate-limiting when reloading
+            // config frequently (e.g., adding multiple services with --domain)
+            let _ = run_quiet(&format!("sudo systemctl reset-failed {unit}"));
+            run(&format!("sudo systemctl restart {unit}"))
+        }
         Step::PullImage { image, system } => {
             let prefix = if *system { "sudo " } else { "" };
             // Skip if already available
