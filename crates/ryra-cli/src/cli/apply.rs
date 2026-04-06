@@ -153,10 +153,14 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             Ok(())
         }
         Step::SystemRestart { unit } => {
-            // Reset failed state first to avoid rate-limiting when reloading
-            // config frequently (e.g., adding multiple services with --domain)
             let _ = run_quiet(&format!("sudo systemctl reset-failed {unit}"));
             run(&format!("sudo systemctl restart {unit}"))
+        }
+        Step::ReloadCaddy => {
+            println!("  Reloading Caddy config...");
+            run(
+                "sudo podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
+            )
         }
         Step::PullImage { image, system } => {
             let prefix = if *system { "sudo " } else { "" };

@@ -63,6 +63,8 @@ pub enum Step {
     SystemStart { unit: String },
     /// Stop a system-level service.
     SystemStop { unit: String },
+    /// Reload Caddy's config without restarting the container.
+    ReloadCaddy,
     /// Restart a system-level service.
     SystemRestart { unit: String },
     /// Pull a container image. If `system` is true, uses `sudo podman` (for privileged services).
@@ -110,6 +112,7 @@ impl Step {
             Step::SystemDaemonReload => "sudo systemctl daemon-reload".into(),
             Step::SystemStart { unit } => format!("sudo systemctl start {unit}"),
             Step::SystemStop { unit } => format!("sudo systemctl stop {unit}"),
+            Step::ReloadCaddy => "sudo podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
             Step::SystemRestart { unit } => format!("sudo systemctl restart {unit}"),
             Step::PullImage { image, system } => {
                 if *system {
@@ -568,9 +571,7 @@ pub fn add_service(
                 path: caddy::caddyfile_path(),
                 content: updated,
             }));
-            steps.push(Step::SystemRestart {
-                unit: "caddy".into(),
-            });
+            steps.push(Step::ReloadCaddy);
         }
     }
 
@@ -659,9 +660,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
             path: caddy::caddyfile_path(),
             content: updated,
         }));
-        steps.push(Step::SystemRestart {
-            unit: "caddy".into(),
-        });
+        steps.push(Step::ReloadCaddy);
     }
 
     let domain = installed.domain.clone();
