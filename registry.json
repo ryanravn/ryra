@@ -11,7 +11,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -239,13 +240,85 @@
           }
         },
         {
-          "name": "user-created",
-          "run": "id authentik",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/authentik",
           "timeout": 30,
           "env": {
             "AUTHENTIK_BOOTSTRAP_EMAIL": "admin@test.local",
             "AUTHENTIK_BOOTSTRAP_PASSWORD": "testpassword123"
           }
+        }
+      ],
+      "post_start": []
+    },
+    "caddy": {
+      "service": {
+        "name": "caddy",
+        "description": "Caddy - automatic HTTPS reverse proxy",
+        "url": "https://caddyserver.com",
+        "image": "docker.io/library/caddy:2-alpine",
+        "command": null,
+        "kind": "application",
+        "architecture": [
+          "amd64",
+          "arm64"
+        ],
+        "privileged": true
+      },
+      "requirements": null,
+      "ports": [
+        {
+          "name": "http",
+          "container_port": 80,
+          "protocol": "tcp"
+        },
+        {
+          "name": "https",
+          "container_port": 443,
+          "protocol": "tcp"
+        }
+      ],
+      "volumes": [
+        {
+          "name": "data",
+          "mount_path": "/data",
+          "host_path": null
+        },
+        {
+          "name": "config",
+          "mount_path": "/config",
+          "host_path": null
+        },
+        {
+          "name": "caddyfile-dir",
+          "mount_path": "/etc/caddy",
+          "host_path": "/etc/ryra/caddy"
+        }
+      ],
+      "env": [],
+      "requires": [],
+      "nginx": null,
+      "containers": [],
+      "mappings": {
+        "smtp": {},
+        "auth": {}
+      },
+      "integrations": {
+        "auth": [],
+        "smtp": false
+      },
+      "tests": [
+        {
+          "name": "responds-on-80",
+          "run": "curl -sf http://127.0.0.1:80 || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:80 | grep -q '404\\|200'",
+          "timeout": 30,
+          "env": {}
+        },
+        {
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/caddy",
+          "timeout": 30,
+          "env": {}
         }
       ],
       "post_start": []
@@ -261,7 +334,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -393,8 +467,8 @@
           "env": {}
         },
         {
-          "name": "user-created",
-          "run": "id forgejo",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/forgejo",
           "timeout": 30,
           "env": {}
         }
@@ -412,7 +486,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -593,8 +668,8 @@
           }
         },
         {
-          "name": "user-created",
-          "run": "id immich",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/immich",
           "timeout": 30,
           "env": {
             "INIT_IMMICH_ADMIN_EMAIL": "admin@test.local",
@@ -621,7 +696,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -690,8 +766,8 @@
           "env": {}
         },
         {
-          "name": "user-created",
-          "run": "id openclaw",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/openclaw",
           "timeout": 30,
           "env": {}
         }
@@ -709,7 +785,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -776,8 +853,8 @@
           "env": {}
         },
         {
-          "name": "user-created",
-          "run": "id postgres",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/postgres",
           "timeout": 30,
           "env": {}
         }
@@ -795,7 +872,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -858,7 +936,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -1034,8 +1113,8 @@
           }
         },
         {
-          "name": "user-created",
-          "run": "id seafile",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/seafile",
           "timeout": 30,
           "env": {
             "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
@@ -1062,7 +1141,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -1106,8 +1186,8 @@
           "env": {}
         },
         {
-          "name": "user-created",
-          "run": "id uptime-kuma",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/uptime-kuma",
           "timeout": 30,
           "env": {}
         }
@@ -1125,7 +1205,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": {
         "ram": {
@@ -1207,7 +1288,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": null,
       "ports": [
@@ -1246,8 +1328,8 @@
           "env": {}
         },
         {
-          "name": "user-created",
-          "run": "id whoami",
+          "name": "data-dir-created",
+          "run": "test -d $HOME/.local/share/ryra/whoami",
           "timeout": 30,
           "env": {}
         }
@@ -1265,7 +1347,8 @@
         "architecture": [
           "amd64",
           "arm64"
-        ]
+        ],
+        "privileged": false
       },
       "requirements": null,
       "ports": [

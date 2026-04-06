@@ -1,0 +1,55 @@
+[test]
+name = "caddy-domain"
+services = ["caddy", "whoami"]
+
+# Create initial Caddyfile before installing Caddy
+[[steps]]
+action = "run"
+name = "init-caddyfile"
+run = "sudo mkdir -p /etc/ryra/caddy && echo '' | sudo tee /etc/ryra/caddy/Caddyfile"
+
+# Install Caddy (privileged service — system quadlet)
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install whoami with a domain — should add a Caddy route
+[[steps]]
+action = "run"
+name = "add-whoami-with-domain"
+run = "ryra add whoami --domain whoami.test.local --repo /opt/ryra-test-registry"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+# Verify the Caddyfile has the whoami route
+[[steps]]
+action = "assert"
+name = "caddyfile-has-whoami"
+run = "sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile"
+
+[[steps]]
+action = "assert"
+name = "caddyfile-has-domain"
+run = "sudo grep -q 'whoami.test.local' /etc/ryra/caddy/Caddyfile"
+
+[[steps]]
+action = "assert"
+name = "caddyfile-has-reverse-proxy"
+run = "sudo grep -q 'reverse_proxy' /etc/ryra/caddy/Caddyfile"
+
+# Remove whoami — should clean up Caddy route
+[[steps]]
+action = "run"
+name = "remove-whoami"
+run = "ryra remove whoami -y"
+
+[[steps]]
+action = "assert"
+name = "caddyfile-cleaned"
+run = "! sudo grep -q 'ryra:whoami' /etc/ryra/caddy/Caddyfile"
