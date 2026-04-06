@@ -69,7 +69,10 @@ impl Machine {
         loop {
             // Check both user-level and system-level (for privileged services like Caddy)
             let cmd = format!(
-                "systemctl --user is-active {unit} 2>/dev/null || sudo systemctl is-active {unit} 2>/dev/null || echo inactive"
+                "s=$(systemctl --user is-active {unit} 2>/dev/null); \
+                 if [ \"$s\" = active ] || [ \"$s\" = failed ]; then echo $s; \
+                 else s=$(sudo systemctl is-active {unit} 2>/dev/null); \
+                 if [ -n \"$s\" ]; then echo $s; else echo inactive; fi; fi"
             );
             if let Ok(output) = self.exec(&cmd).await {
                 let status = output.stdout_trimmed();
