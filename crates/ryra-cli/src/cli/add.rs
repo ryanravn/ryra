@@ -90,7 +90,7 @@ pub async fn run(
             }
         }
 
-        // Domain — only for proxied modes (tunnel/proxy/dns-only/tailscale)
+        // Domain — only for proxied modes (public/tailscale)
         let domain = if exposure.needs_domain() {
             let default_domain = if exposure == ExposureMode::Tailscale {
                 match ryra_core::integrations::tailscale::detect_fqdn() {
