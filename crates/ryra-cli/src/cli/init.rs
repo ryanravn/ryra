@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use dialoguer::Input;
 
 use ryra_core::config::schema::*;
@@ -8,14 +8,10 @@ use ryra_core::config::schema::*;
 use super::apply;
 use super::prompts;
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run(
     repo: Option<String>,
     email: Option<String>,
-    cf_token: Option<String>,
-    cf_zone_id: Option<String>,
-    cf_zone_name: Option<String>,
-    tunnel_token: Option<String>,
+    domain: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
@@ -37,55 +33,34 @@ pub async fn run(
         }
     }
 
-    // 1. Cloudflare
-    let cloudflare = match (cf_token, cf_zone_id, cf_zone_name) {
-        (Some(token), Some(zone_id), Some(zone_name)) => Some(CloudflareCredentials {
-            api_token: token,
-            zone_id,
-            zone_name,
-            tunnel: None,
-        }),
-        (None, None, None) if interactive => prompts::prompt_cloudflare().await?,
-        (None, None, None) => None,
-        _ => bail!("--cf-token, --cf-zone-id, and --cf-zone-name must all be provided together"),
-    };
-
-    // 2. Tunnel (only if CF is configured)
-    let cloudflare = match (&cloudflare, tunnel_token) {
-        (Some(_), Some(_token)) => {
-            bail!("Use interactive mode for tunnel setup (need to select tunnel)");
+    // 1. Domain
+    let domain = match domain {
+        Some(d) => Some(d),
+        None if interactive => {
+            let d: String = Input::new()
+                .with_prompt("Base domain (leave empty to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            if d.is_empty() { None } else { Some(d) }
         }
-        (Some(cf), None) if interactive => {
-            let tunnel = prompts::prompt_tunnel(&cf.api_token, &cf.zone_id).await?;
-            Some(CloudflareCredentials {
-                api_token: cf.api_token.clone(),
-                zone_id: cf.zone_id.clone(),
-                zone_name: cf.zone_name.clone(),
-                tunnel,
-            })
-        }
-        _ => cloudflare,
-    };
-
-    // 3. Let's Encrypt email (skip if tunnel-only)
-    let has_tunnel = cloudflare
-        .as_ref()
-        .and_then(|cf| cf.tunnel.as_ref())
-        .is_some();
-    let ssl = match email {
-        Some(e) => Some(SslConfig::Letsencrypt { email: e }),
-        None if interactive && !has_tunnel => prompts::prompt_ssl()?,
         None => None,
     };
 
-    // 4. SMTP
+    // 2. Let's Encrypt email
+    let ssl = match email {
+        Some(e) => Some(SslConfig::Letsencrypt { email: e }),
+        None if interactive => prompts::prompt_ssl()?,
+        None => None,
+    };
+
+    // 3. SMTP
     let smtp = if interactive {
         prompts::prompt_smtp()?
     } else {
         None
     };
 
-    // 5. Repo
+    // 4. Repo
     let default_repo = match repo {
         Some(r) => Some(r),
         None if interactive => {
@@ -99,7 +74,7 @@ pub async fn run(
     };
 
     let config = Config {
-        cloudflare,
+        domain,
         ssl,
         smtp,
         auth: None,

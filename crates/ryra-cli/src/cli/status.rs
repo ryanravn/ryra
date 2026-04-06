@@ -89,7 +89,6 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
 
     if let Some(exposure) = &detail.installed_exposure {
         let home_dir = ryra_core::service_home(service);
-        let username = ryra_core::service_user(service);
 
         println!();
         match &detail.installed_domain {
@@ -99,10 +98,10 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         println!("Config:   {}", home_dir.display());
         println!();
         println!("Useful commands:");
-        println!("  sudo cat {}", home_dir.join(".env").display());
-        println!("  sudo systemctl --machine={username}@ --user status {service}");
-        println!("  sudo journalctl _SYSTEMD_USER_UNIT={service}.service -f");
-        println!("  sudo systemctl --machine={username}@ --user restart {service}");
+        println!("  cat {}", home_dir.join(".env").display());
+        println!("  systemctl --user status {service}");
+        println!("  journalctl --user-unit {service}.service -f");
+        println!("  systemctl --user restart {service}");
     } else {
         println!();
         println!("Not installed. Run `ryra add {service}` to install.");

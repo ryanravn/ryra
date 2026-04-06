@@ -24,18 +24,9 @@ enum Command {
         /// Email for Let's Encrypt SSL certificates
         #[arg(long)]
         email: Option<String>,
-        /// Cloudflare API token (optional, enables auto DNS)
+        /// Base domain for service subdomains
         #[arg(long)]
-        cf_token: Option<String>,
-        /// Cloudflare zone ID (required if --cf-token is set)
-        #[arg(long)]
-        cf_zone_id: Option<String>,
-        /// Cloudflare zone name (required if --cf-token is set)
-        #[arg(long)]
-        cf_zone_name: Option<String>,
-        /// Cloudflare Tunnel token (optional, enables tunnel mode)
-        #[arg(long)]
-        tunnel_token: Option<String>,
+        domain: Option<String>,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -90,10 +81,10 @@ enum Command {
     },
     /// View or edit global configuration
     Config {
-        /// Section to configure (cloudflare, tunnel, ssl, smtp, repo)
+        /// Section to configure (domain, ssl, smtp, auth, repo)
         section: Option<String>,
     },
-    /// Change how a service is exposed (local, tunnel, proxy, dns-only, host-port)
+    /// Change how a service is exposed (local, public, host-port, tailscale)
     Expose {
         /// Service name
         service: String,
@@ -203,6 +194,11 @@ impl Command {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    if ryra_core::is_root() {
+        eprintln!("WARNING: Running ryra as root. Services will run as root.");
+        eprintln!("         Consider running as a regular user instead.\n");
+    }
+
     if cfg!(not(target_os = "linux")) && !cli.command.is_cross_platform() {
         anyhow::bail!(
             "this command requires Linux (systemd + podman).\n\
@@ -222,24 +218,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Init {
             repo,
             email,
-            cf_token,
-            cf_zone_id,
-            cf_zone_name,
-            tunnel_token,
+            domain,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::init::run(
-                repo,
-                email,
-                cf_token,
-                cf_zone_id,
-                cf_zone_name,
-                tunnel_token,
-                dry_run,
-            )
-            .await?
+            cli::init::run(repo, email, domain, dry_run).await?
         }
         Command::Add {
             ref services,

@@ -344,7 +344,7 @@ pub async fn run(
             println!("{service} will be started (no domain — non-web service)");
         }
     } else {
-        println!("Setting up {service} as user {}...", result.username);
+        println!("Setting up {service}...");
         apply::execute_all(&result.steps).await?;
         ryra_core::finalize_add(ryra_core::FinalizeAddParams {
             service_name: service,
@@ -386,13 +386,12 @@ pub async fn run(
         }
         println!("  Config:  {}", home_dir.display());
 
-        let u = &result.username;
         println!();
         println!("Useful commands:");
-        println!("  sudo cat {}", home_dir.join(".env").display());
-        println!("  sudo systemctl --machine={u}@ --user status {service}");
-        println!("  sudo journalctl _SYSTEMD_USER_UNIT={service}.service -f");
-        println!("  sudo systemctl --machine={u}@ --user restart {service}");
+        println!("  cat {}", home_dir.join(".env").display());
+        println!("  systemctl --user status {service}");
+        println!("  journalctl --user-unit {service}.service -f");
+        println!("  systemctl --user restart {service}");
     }
 
     } // end for service in services
@@ -447,16 +446,13 @@ async fn ensure_auth_for_add(
 }
 
 /// Try to configure auth from an already-installed authentik instance.
-/// Reads the .env via sudo since it's owned by the authentik user.
+/// The .env is user-readable under ~/.local/share/ryra/authentik/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
     let env_path = ryra_core::service_home("authentik").join(".env");
-    let output = std::process::Command::new("sudo")
-        .args(["cat", &env_path.to_string_lossy()])
-        .output()?;
-    if !output.status.success() {
-        return Ok(false);
-    }
-    let env_content = String::from_utf8_lossy(&output.stdout);
+    let env_content = match std::fs::read_to_string(&env_path) {
+        Ok(content) => content,
+        Err(_) => return Ok(false),
+    };
 
     // Find the bootstrap token
     let token = env_content

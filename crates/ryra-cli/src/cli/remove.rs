@@ -2,7 +2,6 @@ use std::io::IsTerminal;
 
 use anyhow::Result;
 use dialoguer::Input;
-use ryra_core::config::schema::ExposureMode;
 
 use super::apply;
 
@@ -14,17 +13,8 @@ pub async fn run(services: &[String], yes: bool, dry_run: bool) -> Result<()> {
         if std::io::stdin().is_terminal() {
             let home_dir = ryra_core::service_home(service);
             println!("This will:");
-            println!("  - Stop {service} and remove user {}", result.username);
+            println!("  - Stop and remove {service}");
             println!("  - Delete all data and config at {}", home_dir.display());
-            match (&result.exposure, &result.domain) {
-                (ExposureMode::Tunnel, Some(domain)) => {
-                    println!("  - Remove tunnel route for {domain}");
-                }
-                (ExposureMode::Proxy | ExposureMode::DnsOnly, Some(domain)) => {
-                    println!("  - Delete DNS record for {domain}");
-                }
-                _ => {}
-            }
             println!();
 
             let input: String = Input::new()

@@ -15,8 +15,8 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
     if !yes && !dry_run {
         if std::io::stdin().is_terminal() {
             println!("This will:");
-            println!("  - Stop and remove all installed services and their users");
-            println!("  - Remove nginx and cloudflared containers");
+            println!("  - Stop and remove all installed services");
+            println!("  - Remove nginx container");
             println!("  - Delete all certs, nginx configs, and ryra state");
             println!();
 

@@ -55,10 +55,9 @@ pub async fn run(service: &str, repo: Option<&str>, yes: bool, dry_run: bool) ->
     ryra_core::finalize_update(service, &repo_dir)?;
 
     println!("\n{service} has been updated and restarted.");
-    let u = &result.username;
     println!("\nUseful commands:");
-    println!("  sudo systemctl --machine={u}@ --user status {service}");
-    println!("  sudo journalctl _SYSTEMD_USER_UNIT={service}.service -f");
+    println!("  systemctl --user status {service}");
+    println!("  journalctl --user-unit {service}.service -f");
 
     Ok(())
 }
