@@ -67,16 +67,19 @@ impl Machine {
     pub async fn wait_for_service(&self, unit: &str, timeout: std::time::Duration) -> Result<()> {
         let start = std::time::Instant::now();
         loop {
-            let cmd = format!("systemctl --user is-active {unit} 2>/dev/null || echo inactive");
+            // Check both user-level and system-level (for privileged services like Caddy)
+            let cmd = format!(
+                "systemctl --user is-active {unit} 2>/dev/null || sudo systemctl is-active {unit} 2>/dev/null || echo inactive"
+            );
             if let Ok(output) = self.exec(&cmd).await {
                 let status = output.stdout_trimmed();
                 if status == "active" {
                     return Ok(());
                 }
                 if status == "failed" {
-                    // Get failure reason immediately
+                    // Get failure reason — try both user and system
                     let diag_cmd = format!(
-                        "systemctl --user status {unit} 2>&1 | head -15; echo '---'; journalctl --user -u {unit} --no-pager -n 10 2>&1"
+                        "systemctl --user status {unit} 2>&1 | head -15; sudo systemctl status {unit} 2>&1 | head -15; echo '---'; journalctl --user -u {unit} --no-pager -n 10 2>&1; sudo journalctl -u {unit} --no-pager -n 10 2>&1"
                     );
                     let diag = self
                         .exec(&diag_cmd)
