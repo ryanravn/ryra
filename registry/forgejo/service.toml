@@ -63,6 +63,22 @@ value = "forgejo"
 name = "FORGEJO__database__PASSWD"
 value = "{{secret.db_password}}"
 
+[[env]]
+name = "FORGEJO__server__DOMAIN"
+value = "localhost"
+
+[[env]]
+name = "FORGEJO__server__ROOT_URL"
+value = "{{service.url}}/"
+
+[[env]]
+name = "FORGEJO__service__DISABLE_REGISTRATION"
+value = "true"
+
+[[env]]
+name = "FORGEJO__INSTALL_LOCK"
+value = "true"
+
 [nginx]
 upstream_port = "http"
 

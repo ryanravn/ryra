@@ -93,7 +93,12 @@ fn build_env_file(
     let mut lines = Vec::new();
 
     for env in rendered_env {
-        lines.push(format!("{}={}", env.name, env.value));
+        // Quote values with spaces so `set -a && . .env` works in shell
+        if env.value.contains(' ') {
+            lines.push(format!("{}=\"{}\"", env.name, env.value));
+        } else {
+            lines.push(format!("{}={}", env.name, env.value));
+        }
     }
 
     // Expose port as RYRA_PORT_* for compose files
