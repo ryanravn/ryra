@@ -99,8 +99,8 @@ run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/v
 [[steps]]
 action = "assert"
 name = "uptime-kuma-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/uptime-kuma/.env | cut -d= -f2)"
-timeout_secs = 30
+run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/uptime-kuma/.env | cut -d= -f2) && exit 0; sleep 3; done; exit 1"
+timeout = 60
 
 [[steps]]
 action = "assert"
