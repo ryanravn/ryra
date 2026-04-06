@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 /// Render a template string with the given context variables.
 pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<String> {
     let mut env = Environment::new();
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
     env.add_template("tpl", template_str)
         .map_err(|e| Error::Template(format!("invalid template: {e}")))?;
 
