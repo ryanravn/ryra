@@ -2,8 +2,6 @@ pub mod context;
 pub mod nginx;
 pub mod quadlet;
 pub mod template;
-pub mod tunnel;
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

@@ -68,9 +68,6 @@ pub enum Error {
     #[error("template rendering failed: {0}")]
     Template(String),
 
-    #[error("cloudflare API: {0}")]
-    Cloudflare(String),
-
     #[error("invalid exposure mode: {0}")]
     InvalidExposure(String),
 
