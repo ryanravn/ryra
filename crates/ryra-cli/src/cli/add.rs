@@ -81,12 +81,8 @@ pub async fn run(
                     None
                 }
             } else {
-                // Non-interactive: enable auth if configured
-                if config.auth.is_some() {
-                    Some(kind.clone())
-                } else {
-                    None
-                }
+                // Non-interactive without --auth: don't auto-enable
+                None
             }
         } else if interactive {
             let items: Vec<String> = std::iter::once("None".to_string())
