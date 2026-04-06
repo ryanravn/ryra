@@ -14,7 +14,16 @@ use ryra_core::registry::service_def::AuthKind;
 use super::apply;
 use super::prompts;
 
-pub async fn run(services: &[String], repo: Option<&str>, dry_run: bool) -> Result<()> {
+pub async fn run(
+    services: &[String],
+    domain: Option<&str>,
+    repo: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    if domain.is_some() && services.len() > 1 {
+        bail!("--domain can only be used when adding a single service");
+    }
+
     let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
 
     for service in services {
@@ -162,6 +171,7 @@ pub async fn run(services: &[String], repo: Option<&str>, dry_run: bool) -> Resu
 
         let result = ryra_core::add_service(
             service,
+            domain,
             auth_kind.clone(),
             &env_overrides,
             &repo_url,
@@ -223,9 +233,14 @@ pub async fn run(services: &[String], repo: Option<&str>, dry_run: bool) -> Resu
                 repo_dir: &repo_dir,
                 env_content: &result.env_content,
                 privileged: result.privileged,
+                domain: result.domain.as_deref(),
             })?;
             let home_dir = ryra_core::service_home(service);
-            println!("\n{service} is running.");
+            if let Some(ref domain) = result.domain {
+                println!("\n{service} is running at https://{domain}");
+            } else {
+                println!("\n{service} is running.");
+            }
 
             // Connection info
             if !result.allocated_ports.is_empty() {
@@ -281,7 +296,13 @@ async fn ensure_auth_for_add(
             println!("Installing authentik first...");
             println!();
             // Recursively install authentik, then reload config
-            Box::pin(run(&["authentik".to_string()], Some(repo_url), dry_run)).await?;
+            Box::pin(run(
+                &["authentik".to_string()],
+                None,
+                Some(repo_url),
+                dry_run,
+            ))
+            .await?;
             // Reload config — authentik's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.auth.is_some() {

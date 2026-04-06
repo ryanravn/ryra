@@ -179,11 +179,15 @@ pub struct AddResult {
     pub env_content: String,
     /// Whether this is a privileged (system-level) service.
     pub privileged: bool,
+    /// Domain assigned to this service (if Caddy reverse proxy was configured).
+    pub domain: Option<String>,
 }
 
 pub struct RemoveResult {
     pub steps: Vec<Step>,
     pub service_name: String,
+    /// Domain that was assigned to this service (if any).
+    pub domain: Option<String>,
 }
 
 pub struct ResetResult {
@@ -275,6 +279,7 @@ pub async fn init(config: Config) -> Result<InitResult> {
 /// `repo_url` and `repo_dir` come from `resolve_repo()`.
 pub fn add_service(
     service_name: &str,
+    domain: Option<&str>,
     auth_kind: Option<registry::service_def::AuthKind>,
     env_overrides: &BTreeMap<String, String>,
     repo_url: &str,
@@ -519,6 +524,46 @@ pub fn add_service(
         })
         .collect();
 
+    // Caddy reverse proxy: if a domain is provided and Caddy is installed,
+    // add a site block to the Caddyfile and restart Caddy.
+    if let Some(domain) = domain {
+        if caddy::is_installed() {
+            let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
+
+            // Use forward_auth if auth is enabled but the service has no native OIDC mappings
+            let forward_auth = if auth_kind.is_some() && reg_service.def.mappings.auth.is_empty() {
+                config
+                    .services
+                    .iter()
+                    .find(|s| s.name == "authentik")
+                    .and_then(|s| s.ports.values().next().copied())
+                    .map(|port| caddy::ForwardAuthParams {
+                        authentik_port: port,
+                    })
+            } else {
+                None
+            };
+
+            let block = caddy::render_site_block(&caddy::CaddySiteParams {
+                service_name: service_name.to_string(),
+                domain: domain.to_string(),
+                upstream_port,
+                forward_auth,
+            });
+
+            let current = std::fs::read_to_string(caddy::caddyfile_path()).unwrap_or_default();
+            let updated = caddy::add_route(&current, service_name, &block);
+
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: caddy::caddyfile_path(),
+                content: updated,
+            }));
+            steps.push(Step::SystemRestart {
+                unit: "caddy".into(),
+            });
+        }
+    }
+
     Ok(AddResult {
         steps,
         warnings,
@@ -527,6 +572,7 @@ pub fn add_service(
         generated_secrets,
         env_content,
         privileged,
+        domain: domain.map(|d| d.to_string()),
     })
 }
 
@@ -595,12 +641,28 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         steps.push(Step::DaemonReload);
     }
 
+    // Remove Caddy route if the service had a domain
+    if installed.domain.is_some() && caddy::is_installed() {
+        let current = std::fs::read_to_string(caddy::caddyfile_path()).unwrap_or_default();
+        let updated = caddy::remove_route(&current, service_name);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: caddy::caddyfile_path(),
+            content: updated,
+        }));
+        steps.push(Step::SystemRestart {
+            unit: "caddy".into(),
+        });
+    }
+
+    let domain = installed.domain.clone();
+
     // Remove service data directory
     steps.push(Step::RemoveDir(service_home(service_name)));
 
     Ok(RemoveResult {
         steps,
         service_name: service_name.to_string(),
+        domain,
     })
 }
 
@@ -615,6 +677,8 @@ pub struct FinalizeAddParams<'a> {
     pub env_content: &'a str,
     /// Whether this is a privileged (system-level) service.
     pub privileged: bool,
+    /// Domain assigned to this service (for Caddy reverse proxy).
+    pub domain: Option<&'a str>,
 }
 
 /// Called after add steps succeed — records the service in config and saves a snapshot.
@@ -632,6 +696,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         ports,
         auth_kind: params.auth_kind,
         privileged: params.privileged,
+        domain: params.domain.map(|d| d.to_string()),
     });
 
     // Auto-configure [auth] when authentik is installed (so subsequent services

@@ -38,7 +38,11 @@ fn print_global(info: &StatusInfo) {
     } else {
         println!("Services:");
         for svc in &info.services {
-            println!("  {}", svc.name);
+            if let Some(ref domain) = svc.domain {
+                println!("  {} (https://{})", svc.name, domain);
+            } else {
+                println!("  {}", svc.name);
+            }
         }
     }
 
@@ -81,16 +85,19 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         }
     }
 
-    // Check if installed
-    let installed = ryra_core::list_installed()?
+    // Check if installed and get the domain
+    let installed_service = ryra_core::list_installed()?
         .into_iter()
-        .any(|s| s.name == service);
+        .find(|s| s.name == service);
 
-    if installed {
+    if let Some(ref svc) = installed_service {
         let home_dir = ryra_core::service_home(service);
 
         println!();
         println!("Installed");
+        if let Some(ref domain) = svc.domain {
+            println!("Domain:   https://{domain}");
+        }
         println!("Config:   {}", home_dir.display());
         println!();
         println!("Useful commands:");

@@ -24,6 +24,7 @@ pub enum ProviderStatus {
 
 pub struct ServiceInfo {
     pub name: String,
+    pub domain: Option<String>,
 }
 
 impl StatusInfo {
@@ -48,6 +49,7 @@ impl StatusInfo {
                 .iter()
                 .map(|s| ServiceInfo {
                     name: s.name.clone(),
+                    domain: s.domain.clone(),
                 })
                 .collect(),
         }
