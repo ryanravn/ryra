@@ -264,10 +264,15 @@ async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String
     }
 }
 
-/// Wait for a service's systemd unit to become active.
+/// Wait for a service's systemd unit to become active (default 60s timeout).
 async fn wait_for_service(vm: &Machine, service: &str) -> Event {
+    wait_for_service_with_timeout(vm, service, 60).await
+}
+
+/// Wait for a service's systemd unit to become active with a custom timeout.
+async fn wait_for_service_with_timeout(vm: &Machine, service: &str, timeout_secs: u64) -> Event {
     let t = Instant::now();
-    let timeout = Duration::from_secs(60);
+    let timeout = Duration::from_secs(timeout_secs);
 
     let unit = format!("{service}.service");
     let result = vm.wait_for_service(&unit, timeout).await;
@@ -376,9 +381,12 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepEntry::Wait { service } => {
+            StepEntry::Wait {
+                service,
+                timeout_secs,
+            } => {
                 println!("{p}  waiting for {service}...");
-                let event = wait_for_service(vm, service).await;
+                let event = wait_for_service_with_timeout(vm, service, *timeout_secs).await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
@@ -460,7 +468,10 @@ fn lifecycle_step_description(step: &StepEntry) -> String {
         StepEntry::Add { service } => format!("ryra add {service}"),
         StepEntry::Remove { service } => format!("ryra remove {service}"),
         StepEntry::Reset => "ryra reset".to_string(),
-        StepEntry::Wait { service } => format!("wait for {service}"),
+        StepEntry::Wait {
+            service,
+            timeout_secs,
+        } => format!("wait for {service}"),
         StepEntry::Run { name, .. } => format!("run: {name}"),
         StepEntry::Assert { name, .. } => format!("assert: {name}"),
     }

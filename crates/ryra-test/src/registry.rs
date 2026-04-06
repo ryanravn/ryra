@@ -38,6 +38,7 @@ pub enum StepEntry {
     Reset,
     Wait {
         service: String,
+        timeout_secs: u64,
     },
     Run {
         name: String,
@@ -337,7 +338,10 @@ fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
                         parsed.test.name
                     )
                 })?;
-                StepEntry::Wait { service }
+                StepEntry::Wait {
+                    service,
+                    timeout_secs: if s.timeout > 0 { s.timeout } else { 60 },
+                }
             }
             "run" => {
                 let name = s.name.ok_or_else(|| {

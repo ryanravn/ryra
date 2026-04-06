@@ -26,6 +26,7 @@ timeout_secs = 300
 [[steps]]
 action = "wait"
 service = "authentik"
+timeout = 300
 
 # Postgres — standalone database
 [[steps]]
