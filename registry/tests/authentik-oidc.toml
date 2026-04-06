@@ -38,12 +38,12 @@ service = "whoami-auth"
 [[steps]]
 action = "assert"
 name = "oidc-client-id-in-env"
-run = "grep -q 'OIDC_CLIENT_ID=' /var/lib/whoami-auth/.env"
+run = "grep -q 'OIDC_CLIENT_ID=' $HOME/.local/share/ryra/whoami-auth/.env"
 
 [[steps]]
 action = "assert"
 name = "oidc-issuer-in-env"
-run = "grep -q 'OIDC_ISSUER=.*application/o/whoami-auth' /var/lib/whoami-auth/.env"
+run = "grep -q 'OIDC_ISSUER=.*application/o/whoami-auth' $HOME/.local/share/ryra/whoami-auth/.env"
 
 # Verify the OAuth provider was registered in authentik via API
 [[steps]]

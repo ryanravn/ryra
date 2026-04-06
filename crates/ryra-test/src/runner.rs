@@ -100,8 +100,9 @@ pub async fn run_registry_test(
     // beyond what systemd "active" indicates).
     if !failed {
         for service in test.services() {
-            let port_cmd =
-                format!("grep RYRA_PORT /var/lib/{service}/.env 2>/dev/null | cut -d= -f2");
+            let port_cmd = format!(
+                "grep RYRA_PORT $HOME/.local/share/ryra/{service}/.env 2>/dev/null | cut -d= -f2"
+            );
             if let Ok(out) = vm.exec(&port_cmd).await {
                 for port in out.stdout.trim().lines() {
                     let port = port.trim();
@@ -234,12 +235,12 @@ async fn run_test_entry(vm: &Machine, entry: &TestEntry, env_prefix: &str) -> Ev
 
 /// Build a shell snippet that sources all relevant .env files.
 ///
-/// Single-service: `. /var/lib/<service>/.env` (unprefixed)
+/// Single-service: `. $HOME/.local/share/ryra/<service>/.env` (unprefixed)
 /// Multi-service: reads each .env and exports with SERVICE__ prefix
 async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String> {
     match test {
         DiscoveredTest::SingleService { service_name, .. } => {
-            Ok(format!(". /var/lib/{service_name}/.env"))
+            Ok(format!(". $HOME/.local/share/ryra/{service_name}/.env"))
         }
         DiscoveredTest::MultiService { services, .. } => {
             // For multi-service, we generate a script that reads each .env
@@ -251,7 +252,7 @@ async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String
                 lines.push(format!(
                     "while IFS='=' read -r key val; do \
                      [ -n \"$key\" ] && export {prefix}__$key=\"$val\"; \
-                     done < /var/lib/{service}/.env"
+                     done < $HOME/.local/share/ryra/{service}/.env"
                 ));
             }
             Ok(lines.join(" && "))
@@ -269,7 +270,7 @@ async fn wait_for_service(vm: &Machine, service: &str) -> Event {
     let timeout = Duration::from_secs(300);
 
     let unit = format!("{service}.service");
-    let result = vm.wait_for_service(service, &unit, timeout).await;
+    let result = vm.wait_for_service(&unit, timeout).await;
 
     let outcome = match result {
         Ok(()) => Outcome::Passed,
@@ -524,7 +525,7 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
     for svc in services {
         // Systemd service status
         let cmd = format!(
-            "systemctl --machine={svc}@ --user status {svc}.service 2>&1 | head -20 || true"
+            "systemctl --user status {svc}.service 2>&1 | head -20 || true"
         );
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
@@ -538,7 +539,7 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
 
         // Container status
         let cmd = format!(
-            "cd / && sudo -H -u {svc} podman ps -a --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Ports}}}}' 2>&1 || true"
+            "podman ps -a --format '{{{{.Names}}}} {{{{.Status}}}} {{{{.Ports}}}}' 2>&1 || true"
         );
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
@@ -549,15 +550,9 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
             }
         }
 
-        // Container/journal logs
-        let uid_cmd = format!("id -u {svc} 2>/dev/null || echo 0");
-        let uid = vm
-            .exec(&uid_cmd)
-            .await
-            .map(|o| o.stdout.trim().to_string())
-            .unwrap_or_else(|_| "0".to_string());
+        // Journal logs
         let cmd = format!(
-            "sudo -u {svc} XDG_RUNTIME_DIR=/run/user/{uid} journalctl --user -u {svc}.service --no-pager -n 30 2>&1 || true"
+            "journalctl --user -u {svc}.service --no-pager -n 30 2>&1 || true"
         );
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
@@ -570,7 +565,7 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
         }
 
         // Env file
-        let cmd = format!("cat /var/lib/{svc}/.env 2>&1 | grep RYRA_PORT || true");
+        let cmd = format!("cat $HOME/.local/share/ryra/{svc}/.env 2>&1 | grep RYRA_PORT || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
@@ -580,9 +575,9 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
 
         // Check quadlet, container internals, and network
         let cmd = format!(
-            "echo '=== quadlet ==='; grep -i exec /var/lib/{svc}/.config/containers/systemd/{svc}.container 2>/dev/null || true; \
-             echo '=== container process ==='; cd / && sudo -H -u {svc} podman exec systemd-{svc} ps aux 2>&1 | head -10 || true; \
-             echo '=== container listeners ==='; cd / && sudo -H -u {svc} podman exec systemd-{svc} cat /proc/net/tcp6 2>&1 | head -10 || true; \
+            "echo '=== quadlet ==='; grep -i exec $HOME/.config/containers/systemd/{svc}.container 2>/dev/null || true; \
+             echo '=== container process ==='; podman exec systemd-{svc} ps aux 2>&1 | head -10 || true; \
+             echo '=== container listeners ==='; podman exec systemd-{svc} cat /proc/net/tcp6 2>&1 | head -10 || true; \
              echo '=== host listeners ==='; ss -tlnp 2>/dev/null | head -20; \
              echo '=== curl ==='; curl -sv http://127.0.0.1:18789/ 2>&1 | head -10 || true"
         );

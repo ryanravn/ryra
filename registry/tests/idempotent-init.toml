@@ -36,7 +36,7 @@ timeout = 30
 [[steps]]
 action = "assert"
 name = "whoami-still-running"
-run = "systemctl --machine=whoami@ --user is-active whoami.service"
+run = "systemctl --user is-active whoami.service"
 
 [[steps]]
 action = "assert"

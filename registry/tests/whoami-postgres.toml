@@ -13,4 +13,4 @@ timeout = 60
 
 [[tests]]
 name = "both-services-active"
-run = "systemctl --machine=whoami@ --user is-active whoami.service && systemctl --machine=postgres@ --user is-active postgres.service"
+run = "systemctl --user is-active whoami.service && systemctl --user is-active postgres.service"

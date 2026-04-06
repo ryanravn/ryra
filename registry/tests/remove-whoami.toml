@@ -13,12 +13,12 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "whoami-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/whoami/.env | cut -d= -f2)"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
 [[steps]]
 action = "assert"
-name = "user-exists"
-run = "id whoami"
+name = "data-dir-exists"
+run = "test -d $HOME/.local/share/ryra/whoami"
 
 [[steps]]
 action = "assert"
@@ -32,12 +32,7 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "service-stopped"
-run = "! systemctl --machine=whoami@ --user is-active whoami.service 2>/dev/null"
-
-[[steps]]
-action = "assert"
-name = "user-deleted"
-run = "! id whoami 2>/dev/null"
+run = "! systemctl --user is-active whoami.service 2>/dev/null"
 
 [[steps]]
 action = "assert"
@@ -46,5 +41,5 @@ run = "! grep -q whoami /etc/ryra/ryra.toml"
 
 [[steps]]
 action = "assert"
-name = "home-dir-removed"
-run = "test ! -d /var/lib/whoami"
+name = "data-dir-removed"
+run = "test ! -d $HOME/.local/share/ryra/whoami"

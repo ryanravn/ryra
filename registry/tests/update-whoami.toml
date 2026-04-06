@@ -46,7 +46,7 @@ run = "curl -sf http://127.0.0.1:10000"
 [[steps]]
 action = "assert"
 name = "new-env-var-present"
-run = "sudo grep -q 'NEW_VAR=hello' /var/lib/whoami/.env"
+run = "grep -q 'NEW_VAR=hello' $HOME/.local/share/ryra/whoami/.env"
 
 # Verify snapshot was updated (diff should show no changes now)
 [[steps]]

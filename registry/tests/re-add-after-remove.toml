@@ -13,7 +13,7 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "first-add-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/whoami/.env | cut -d= -f2)"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
 [[steps]]
 action = "remove"
@@ -22,7 +22,7 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "removed-cleanly"
-run = "! id whoami 2>/dev/null && test ! -d /var/lib/whoami"
+run = "test ! -d $HOME/.local/share/ryra/whoami"
 
 # Re-add the same service
 [[steps]]
@@ -36,12 +36,12 @@ service = "whoami"
 [[steps]]
 action = "assert"
 name = "re-add-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/whoami/.env | cut -d= -f2)"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
 [[steps]]
 action = "assert"
-name = "re-add-user-exists"
-run = "id whoami"
+name = "re-add-data-dir-exists"
+run = "test -d $HOME/.local/share/ryra/whoami"
 
 [[steps]]
 action = "assert"

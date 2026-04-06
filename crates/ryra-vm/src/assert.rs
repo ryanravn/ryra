@@ -4,24 +4,22 @@ use crate::machine::Machine;
 
 #[allow(dead_code)]
 impl Machine {
-    pub async fn assert_service_active(&self, user: &str, unit: &str) -> Result<()> {
-        let cmd = format!("systemctl --machine=ryra-{user}@ --user is-active {unit}");
+    pub async fn assert_service_active(&self, unit: &str) -> Result<()> {
+        let cmd = format!("systemctl --user is-active {unit}");
         let output = self.exec(&cmd).await?;
         let status = output.stdout_trimmed();
         if status != "active" {
-            bail!("expected service {unit} for user ryra-{user} to be active, got: {status}");
+            bail!("expected service {unit} to be active, got: {status}");
         }
         Ok(())
     }
 
-    pub async fn assert_service_inactive(&self, user: &str, unit: &str) -> Result<()> {
-        let cmd = format!("systemctl --machine=ryra-{user}@ --user is-active {unit}");
-        let output = self
-            .exec(&format!("{cmd} 2>/dev/null || echo inactive"))
-            .await?;
+    pub async fn assert_service_inactive(&self, unit: &str) -> Result<()> {
+        let cmd = format!("systemctl --user is-active {unit} 2>/dev/null || echo inactive");
+        let output = self.exec(&cmd).await?;
         let status = output.stdout_trimmed();
         if status == "active" {
-            bail!("expected service {unit} for user ryra-{user} to be inactive, but it is active");
+            bail!("expected service {unit} to be inactive, but it is active");
         }
         Ok(())
     }
@@ -51,23 +49,6 @@ impl Machine {
         Ok(())
     }
 
-    pub async fn assert_user_exists(&self, username: &str) -> Result<()> {
-        self.exec(&format!("id {username}")).await?;
-        Ok(())
-    }
-
-    pub async fn assert_user_not_exists(&self, username: &str) -> Result<()> {
-        let result = self
-            .exec(&format!(
-                "id {username} 2>/dev/null && echo exists || echo missing"
-            ))
-            .await?;
-        if result.stdout_trimmed().contains("exists") {
-            bail!("expected user {username} to not exist, but it does");
-        }
-        Ok(())
-    }
-
     pub async fn assert_file_exists(&self, path: &str) -> Result<()> {
         self.exec(&format!("test -e {path}")).await?;
         Ok(())
@@ -85,14 +66,13 @@ impl Machine {
 
     pub async fn wait_for_service(
         &self,
-        user: &str,
         unit: &str,
         timeout: std::time::Duration,
     ) -> Result<()> {
         let start = std::time::Instant::now();
         loop {
             let cmd = format!(
-                "systemctl --machine={user}@ --user is-active {unit} 2>/dev/null || echo inactive"
+                "systemctl --user is-active {unit} 2>/dev/null || echo inactive"
             );
             if let Ok(output) = self.exec(&cmd).await
                 && output.stdout_trimmed() == "active"
@@ -102,7 +82,7 @@ impl Machine {
 
             if start.elapsed() > timeout {
                 bail!(
-                    "timed out waiting for {unit} (user {user}) to become active after {}s",
+                    "timed out waiting for {unit} to become active after {}s",
                     timeout.as_secs()
                 );
             }

@@ -23,7 +23,7 @@ service = "vaultwarden"
 [[steps]]
 action = "run"
 name = "fix-domain-env"
-run = "sed -i 's|^DOMAIN=.*|DOMAIN=https://vault.test.local|' /var/lib/vaultwarden/.env && systemctl --machine=vaultwarden@ --user restart vaultwarden"
+run = "sed -i 's|^DOMAIN=.*|DOMAIN=https://vault.test.local|' $HOME/.local/share/ryra/vaultwarden/.env && systemctl --user restart vaultwarden"
 
 [[steps]]
 action = "wait"
@@ -32,25 +32,25 @@ service = "vaultwarden"
 [[steps]]
 action = "assert"
 name = "http-responds"
-run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/vaultwarden/.env | cut -d= -f2) && exit 0; sleep 2; done; exit 1"
+run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2) && exit 0; sleep 2; done; exit 1"
 
 [[steps]]
 action = "assert"
 name = "alive-endpoint"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/vaultwarden/.env | cut -d= -f2)/alive"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2)/alive"
 
 [[steps]]
 action = "assert"
-name = "user-created"
-run = "id vaultwarden"
+name = "data-dir-exists"
+run = "test -d $HOME/.local/share/ryra/vaultwarden"
 
 # Verify SMTP env vars were rendered correctly from the mappings
 [[steps]]
 action = "assert"
 name = "smtp-host-rendered"
-run = "grep -q 'SMTP_HOST=localhost' /var/lib/vaultwarden/.env"
+run = "grep -q 'SMTP_HOST=localhost' $HOME/.local/share/ryra/vaultwarden/.env"
 
 [[steps]]
 action = "assert"
 name = "smtp-from-rendered"
-run = "grep -q 'SMTP_FROM=noreply@test.local' /var/lib/vaultwarden/.env"
+run = "grep -q 'SMTP_FROM=noreply@test.local' $HOME/.local/share/ryra/vaultwarden/.env"

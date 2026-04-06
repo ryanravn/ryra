@@ -31,7 +31,7 @@ service = "immich"
 [[steps]]
 action = "assert"
 name = "http-responds"
-run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP /var/lib/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
+run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
 timeout = 360
 
 # Verify OIDC was configured via Immich API
@@ -39,9 +39,9 @@ timeout = 360
 action = "assert"
 name = "oidc-configured"
 run = """
-PORT=$(sudo grep RYRA_PORT_HTTP /var/lib/immich/.env | cut -d= -f2)
-EMAIL=$(sudo grep INIT_IMMICH_ADMIN_EMAIL /var/lib/immich/.env | cut -d= -f2)
-PASS=$(sudo grep INIT_IMMICH_ADMIN_PASSWORD /var/lib/immich/.env | cut -d= -f2)
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+EMAIL=$(grep INIT_IMMICH_ADMIN_EMAIL $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+PASS=$(grep INIT_IMMICH_ADMIN_PASSWORD $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
 python3 -c "
 import json, urllib.request
 url = 'http://127.0.0.1:' + '$PORT'

@@ -21,7 +21,7 @@ service = "postgres"
 [[steps]]
 action = "assert"
 name = "both-running"
-run = "systemctl --machine=whoami@ --user is-active whoami.service && systemctl --machine=postgres@ --user is-active postgres.service"
+run = "systemctl --user is-active whoami.service && systemctl --user is-active postgres.service"
 
 [[steps]]
 action = "reset"
@@ -29,22 +29,12 @@ action = "reset"
 [[steps]]
 action = "assert"
 name = "whoami-stopped"
-run = "! systemctl --machine=whoami@ --user is-active whoami.service 2>/dev/null"
+run = "! systemctl --user is-active whoami.service 2>/dev/null"
 
 [[steps]]
 action = "assert"
 name = "postgres-stopped"
-run = "! systemctl --machine=postgres@ --user is-active postgres.service 2>/dev/null"
-
-[[steps]]
-action = "assert"
-name = "whoami-user-gone"
-run = "! id whoami 2>/dev/null"
-
-[[steps]]
-action = "assert"
-name = "postgres-user-gone"
-run = "! id postgres 2>/dev/null"
+run = "! systemctl --user is-active postgres.service 2>/dev/null"
 
 [[steps]]
 action = "assert"
@@ -53,10 +43,10 @@ run = "! grep -q '\\[services\\.' /etc/ryra/ryra.toml 2>/dev/null || test ! -f /
 
 [[steps]]
 action = "assert"
-name = "whoami-home-gone"
-run = "test ! -d /var/lib/whoami"
+name = "whoami-data-gone"
+run = "test ! -d $HOME/.local/share/ryra/whoami"
 
 [[steps]]
 action = "assert"
-name = "postgres-home-gone"
-run = "test ! -d /var/lib/postgres"
+name = "postgres-data-gone"
+run = "test ! -d $HOME/.local/share/ryra/postgres"
