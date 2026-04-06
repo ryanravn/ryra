@@ -11,26 +11,43 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use config::ConfigPaths;
-use config::schema::{CloudflareCredentials, Config, ExposureMode, InstalledService};
+use config::schema::{Config, ExposureMode, InstalledService};
 use error::{Error, Result};
 use generate::GeneratedFile;
 use registry::service_def::PortProtocol;
 
-// --- Per-service user conventions ---
+// --- Path conventions ---
 
-pub fn service_user(service_name: &str) -> String {
-    service_name.to_string()
-}
-
+/// Data directory for a service: ~/.local/share/ryra/<name>
 pub fn service_home(service_name: &str) -> PathBuf {
-    PathBuf::from(format!("/var/lib/{service_name}"))
+    dirs::data_local_dir()
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+                .join(".local/share")
+        })
+        .join("ryra")
+        .join(service_name)
 }
 
-pub fn service_quadlet_dir(service_name: &str) -> PathBuf {
-    service_home(service_name)
-        .join(".config")
+/// Quadlet directory: ~/.config/containers/systemd
+pub fn quadlet_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())).join(".config")
+        })
         .join("containers")
         .join("systemd")
+}
+
+/// Check if running as root.
+pub fn is_root() -> bool {
+    std::process::Command::new("id")
+        .args(["-u"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .map(|uid| uid == 0)
+        .unwrap_or(false)
 }
 
 // --- Typed steps: what the CLI needs to execute ---
@@ -38,30 +55,14 @@ pub fn service_quadlet_dir(service_name: &str) -> PathBuf {
 /// A discrete operation that the CLI executes. Pattern matching ensures
 /// every step type is handled — no string parsing or if-chains.
 pub enum Step {
-    /// Ensure the `ryra` system group exists (idempotent).
-    EnsureGroup,
-    /// Remove the `ryra` system group.
-    RemoveGroup,
-    /// Create a system user for a service and add it to the `ryra` group.
-    CreateUser { username: String, home_dir: PathBuf },
-    /// Enable systemd linger so user services persist.
-    EnableLinger { username: String },
-    /// Disable systemd linger.
-    DisableLinger { username: String },
-    /// Terminate a user's systemd session.
-    TerminateUserSession { username: String },
-    /// Kill all processes owned by a user (SIGKILL). Ensures userdel can succeed.
-    KillUserProcesses { username: String },
-    /// Write a file (requires sudo — goes to service user home or /etc).
+    /// Write a file.
     WriteFile(GeneratedFile),
-    /// Set ownership of a path to a user.
-    Chown { path: PathBuf, username: String },
-    /// Reload systemd for a service user.
-    DaemonReload { username: String },
-    /// Start a service under a user's systemd.
-    StartService { username: String, unit: String },
-    /// Stop a service under a user's systemd.
-    StopService { username: String, unit: String },
+    /// Reload systemd for the current user.
+    DaemonReload,
+    /// Start a service under the current user's systemd.
+    StartService { unit: String },
+    /// Stop a service under the current user's systemd.
+    StopService { unit: String },
     /// Reload the system-level systemd (for nginx).
     SystemDaemonReload,
     /// Start a system-level service.
@@ -70,62 +71,19 @@ pub enum Step {
     SystemRestart { unit: String },
     /// Stop a system-level service.
     SystemStop { unit: String },
-    /// Create a Cloudflare DNS A record.
-    CreateDnsRecord {
-        api_token: String,
-        zone_id: String,
-        domain: String,
-        proxied: bool,
-    },
-    /// Delete a Cloudflare DNS A record.
-    DeleteDnsRecord {
-        api_token: String,
-        zone_id: String,
-        domain: String,
-    },
     /// Obtain a Let's Encrypt certificate via certbot container.
-    ObtainCert {
-        domain: String,
-        email: String,
-        cloudflare_api_token: Option<String>,
-    },
-    /// Generate a self-signed origin cert (for Cloudflare proxy mode).
-    GenerateOriginCert { domain: String },
+    ObtainCert { domain: String, email: String },
     /// Obtain a TLS certificate via `tailscale cert`.
     ObtainTailscaleCert { fqdn: String },
-    /// Start the cloudflared tunnel quadlet.
-    StartTunnel,
-    /// Stop the cloudflared tunnel.
-    StopTunnel,
-    /// Add a hostname to the tunnel ingress + create CNAME.
-    AddTunnelRoute {
-        api_token: String,
-        account_id: String,
-        tunnel_id: String,
-        zone_id: String,
-        domain: String,
-    },
-    /// Remove a hostname from the tunnel ingress + delete CNAME.
-    RemoveTunnelRoute {
-        api_token: String,
-        account_id: String,
-        tunnel_id: String,
-        zone_id: String,
-        domain: String,
-    },
-    /// Pull a container image. If username is set, pull as that user (rootless).
-    PullImage {
-        image: String,
-        username: Option<String>,
-    },
+    /// Pull a container image.
+    PullImage { image: String },
     /// Remove a file (requires sudo).
     RemoveFile(PathBuf),
     /// Remove a directory tree (requires sudo).
     RemoveDir(PathBuf),
-    /// Remove a Linux user and their home directory.
-    RemoveUser { username: String },
+    /// Create a directory (with parents).
+    CreateDir(PathBuf),
     /// Register an OAuth2 provider + application in authentik via its API.
-    /// Replaces blueprints which silently fail on newer authentik versions.
     RegisterAuthProvider {
         service_name: String,
         api_url: String,
@@ -155,70 +113,24 @@ impl Step {
     /// Render this step as a shell command (for dry-run display).
     pub fn to_command(&self) -> String {
         match self {
-            Step::EnsureGroup => "sudo groupadd --system ryra 2>/dev/null || true".into(),
-            Step::RemoveGroup => "sudo groupdel ryra 2>/dev/null || true".into(),
-            Step::CreateUser { username, home_dir } => format!(
-                "sudo useradd --system --shell $(which nologin) --home-dir {} --create-home {username} && sudo usermod -aG ryra {username}",
-                home_dir.display()
-            ),
-            Step::EnableLinger { username } => format!("sudo loginctl enable-linger {username}"),
-            Step::DisableLinger { username } => format!("sudo loginctl disable-linger {username}"),
-            Step::TerminateUserSession { username } => {
-                format!("sudo loginctl terminate-user {username}")
-            }
-            Step::KillUserProcesses { username } => {
-                format!("sudo pkill -9 -u {username} || true")
-            }
             Step::WriteFile(file) => format!("write {}", file.path.display()),
-            Step::Chown { path, username } => {
-                format!("sudo chown -R {username}:{username} {}", path.display())
-            }
-            Step::DaemonReload { username } => {
-                format!("sudo systemctl --machine={username}@ --user daemon-reload")
-            }
-            Step::StartService { username, unit } => {
-                format!("sudo systemctl --machine={username}@ --user start {unit}")
-            }
-            Step::StopService { username, unit } => {
-                format!("sudo systemctl --machine={username}@ --user stop {unit}")
-            }
+            Step::DaemonReload => "systemctl --user daemon-reload".into(),
+            Step::StartService { unit } => format!("systemctl --user start {unit}"),
+            Step::StopService { unit } => format!("systemctl --user stop {unit}"),
             Step::SystemDaemonReload => "sudo systemctl daemon-reload".into(),
             Step::SystemStart { unit } => format!("sudo systemctl start {unit}"),
             Step::SystemRestart { unit } => format!("sudo systemctl restart {unit}"),
             Step::SystemStop { unit } => format!("sudo systemctl stop {unit}"),
-            Step::CreateDnsRecord {
-                domain, proxied, ..
-            } => {
-                let mode = if *proxied { "proxied" } else { "DNS-only" };
-                format!("cloudflare: create A record for {domain} ({mode})")
-            }
-            Step::DeleteDnsRecord { domain, .. } => {
-                format!("cloudflare: delete A record for {domain}")
-            }
             Step::ObtainCert { domain, .. } => {
                 format!("certbot: obtain certificate for {domain}")
-            }
-            Step::GenerateOriginCert { domain } => {
-                format!("openssl: generate self-signed origin cert for {domain}")
             }
             Step::ObtainTailscaleCert { fqdn } => {
                 format!("tailscale cert: obtain TLS certificate for {fqdn}")
             }
-            Step::StartTunnel => "sudo systemctl start cloudflared".into(),
-            Step::StopTunnel => "sudo systemctl stop cloudflared".into(),
-            Step::AddTunnelRoute { domain, .. } => {
-                format!("cloudflare tunnel: add route {domain} -> http://localhost:80")
-            }
-            Step::RemoveTunnelRoute { domain, .. } => {
-                format!("cloudflare tunnel: remove route for {domain}")
-            }
-            Step::PullImage { image, username } => match username {
-                Some(u) => format!("sudo -u {u} podman pull {image}"),
-                None => format!("sudo podman pull {image}"),
-            },
+            Step::PullImage { image } => format!("podman pull {image}"),
             Step::RemoveFile(path) => format!("sudo rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("sudo rm -rf {}", path.display()),
-            Step::RemoveUser { username } => format!("sudo userdel --remove {username}"),
+            Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
             Step::RegisterAuthProvider { service_name, .. } => {
                 format!("authentik: register OAuth2 provider for {service_name}")
             }
@@ -230,9 +142,13 @@ impl Step {
                 service_name,
                 run,
                 ..
-            } => format!(
-                "# post-start hook '{name}' for {service_name}\nsudo sh -c '. /var/lib/{service_name}/.env && {run}'"
-            ),
+            } => {
+                let home = service_home(service_name);
+                format!(
+                    "# post-start hook '{name}' for {service_name}\nsh -c '. {}/.env && {run}'",
+                    home.display()
+                )
+            }
         }
     }
 }
@@ -279,7 +195,6 @@ pub struct InitResult {
 pub struct AddResult {
     pub steps: Vec<Step>,
     pub domain: Option<String>,
-    pub username: String,
     pub warnings: Vec<Warning>,
     pub repo_url: String,
     pub host_port: Option<u16>,
@@ -293,7 +208,6 @@ pub struct AddResult {
 
 pub struct RemoveResult {
     pub steps: Vec<Step>,
-    pub username: String,
     pub service_name: String,
     pub domain: Option<String>,
     pub exposure: ExposureMode,
@@ -311,7 +225,6 @@ pub struct ResetResult {
 pub struct UpdateResult {
     pub steps: Vec<Step>,
     pub changes: Vec<diff::Change>,
-    pub username: String,
 }
 
 pub const DEFAULT_REPO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry");
@@ -382,13 +295,10 @@ pub async fn init(config: Config) -> Result<InitResult> {
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
 
-    let steps = vec![
-        Step::EnsureGroup,
-        Step::WriteFile(GeneratedFile {
-            path: paths.config_file.clone(),
-            content: config_content,
-        }),
-    ];
+    let steps = vec![Step::WriteFile(GeneratedFile {
+        path: paths.config_file.clone(),
+        content: config_content,
+    })];
 
     Ok(InitResult { steps })
 }
@@ -470,9 +380,8 @@ pub fn add_service(
         }
     }
 
-    let username = service_user(service_name);
     let home_dir = service_home(service_name);
-    let quadlet_dir = service_quadlet_dir(service_name);
+    let quadlet_path = quadlet_dir();
     let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
     let output = generate::generate_service(generate::GenerateServiceParams {
@@ -482,7 +391,7 @@ pub fn add_service(
         exposure: &exposure,
         auth_kind: auth_kind.as_ref(),
         host_port,
-        quadlet_dir: &quadlet_dir,
+        quadlet_dir: &quadlet_path,
         nginx_dir,
         env_overrides,
         service_dir: &reg_service.service_dir,
@@ -548,7 +457,6 @@ pub fn add_service(
     let mut steps = Vec::new();
 
     // nginx is needed when a service is proxied (has a domain).
-    // Auth inter-service communication goes directly via host.containers.internal.
     let needs_nginx = proxied;
 
     // 0. Ensure nginx is set up
@@ -567,7 +475,6 @@ pub fn add_service(
         }));
         steps.push(Step::PullImage {
             image: "docker.io/library/nginx:alpine".into(),
-            username: None,
         });
         steps.push(Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/containers/systemd/nginx.container"),
@@ -577,91 +484,17 @@ pub fn add_service(
         steps.push(Step::SystemStart {
             unit: "nginx".into(),
         });
-
-        // Cloudflared (if tunnel configured and not already running)
-        if let Some(CloudflareCredentials {
-            tunnel: Some(ref ti),
-            ..
-        }) = config.cloudflare
-            && !PathBuf::from("/etc/containers/systemd/cloudflared.container").exists()
-        {
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: PathBuf::from("/etc/containers/systemd/cloudflared.container"),
-                content: generate::tunnel::render_cloudflared_quadlet(&ti.tunnel_token),
-            }));
-            steps.push(Step::SystemDaemonReload);
-            steps.push(Step::StartTunnel);
-        }
     }
 
-    // Auth inter-service communication: containers reach authentik directly
-    // via host.containers.internal:{authentik_host_port} — no nginx proxy needed.
-
-    // 1. Networking: only for proxied modes
+    // 1. Networking: SSL certificates for proxied modes
     if proxied {
-        match (&exposure, domain) {
-            (ExposureMode::Tunnel, Some(domain)) => {
-                if let Some(cf) = &config.cloudflare
-                    && let Some(ti) = &cf.tunnel
-                {
-                    steps.push(Step::AddTunnelRoute {
-                        api_token: cf.api_token.clone(),
-                        account_id: ti.account_id.clone(),
-                        tunnel_id: ti.tunnel_id.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                    });
-                }
-            }
-            (ExposureMode::Proxy, Some(domain)) => {
-                if let Some(cf) = &config.cloudflare {
-                    steps.push(Step::CreateDnsRecord {
-                        api_token: cf.api_token.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                        proxied: true,
-                    });
-                }
-            }
-            (ExposureMode::DnsOnly, Some(domain)) => {
-                if let Some(cf) = &config.cloudflare {
-                    steps.push(Step::CreateDnsRecord {
-                        api_token: cf.api_token.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                        proxied: false,
-                    });
-                }
-            }
-            _ => {}
-        }
-
-        // 2. SSL certificate — depends on exposure mode (web only)
         if let Some(domain) = domain {
             match &exposure {
-                ExposureMode::Proxy => {
-                    steps.push(Step::GenerateOriginCert {
-                        domain: domain.to_string(),
-                    });
-                }
-                ExposureMode::DnsOnly => {
-                    // LE with DNS-01 via Cloudflare; custom certs skip this step
-                    if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
-                        let cf_token = config.cloudflare.as_ref().map(|cf| cf.api_token.clone());
-                        steps.push(Step::ObtainCert {
-                            domain: domain.to_string(),
-                            email: email.clone(),
-                            cloudflare_api_token: cf_token,
-                        });
-                    }
-                }
                 ExposureMode::Public => {
-                    // LE with HTTP-01 standalone (no Cloudflare); custom certs skip this step
                     if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
                         steps.push(Step::ObtainCert {
                             domain: domain.to_string(),
                             email: email.clone(),
-                            cloudflare_api_token: None,
                         });
                     }
                 }
@@ -675,28 +508,20 @@ pub fn add_service(
         }
     }
 
-    // 3. Ensure ryra group exists, then create service user
-    steps.push(Step::EnsureGroup);
-    steps.push(Step::CreateUser {
-        username: username.clone(),
-        home_dir: home_dir.clone(),
-    });
-    steps.push(Step::EnableLinger {
-        username: username.clone(),
-    });
+    // 2. Create service data directory
+    steps.push(Step::CreateDir(home_dir.clone()));
 
     // Capture env content before it's moved into steps
     let env_content = generated.env_file.content.clone();
 
-    // 4. Pull all images (primary + sidecars, deduplicated)
+    // 3. Pull all images (primary + sidecars, deduplicated)
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
-            username: Some(username.clone()),
         });
     }
 
-    // 5. Write quadlet + .env + nginx files
+    // 4. Write quadlet + .env + nginx files
     let generate::GeneratedService {
         files,
         env_file,
@@ -711,7 +536,7 @@ pub fn add_service(
         steps.push(Step::WriteFile(nginx_site));
     }
 
-    // 6. Create bind mount directories (must exist before container starts)
+    // 5. Create bind mount directories (must exist before container starts)
     let all_volumes = reg_service.def.volumes.iter().chain(
         reg_service
             .def
@@ -730,18 +555,11 @@ pub fn add_service(
         }
     }
 
-    // 7. Fix ownership, start via systemd
-    steps.push(Step::Chown {
-        path: home_dir,
-        username: username.clone(),
-    });
-    steps.push(Step::DaemonReload {
-        username: username.clone(),
-    });
+    // 6. Reload and start via systemd
+    steps.push(Step::DaemonReload);
 
-    // 7. Start — dependencies start automatically via Requires=/After= in the quadlet
+    // Start — dependencies start automatically via Requires=/After= in the quadlet
     steps.push(Step::StartService {
-        username: username.clone(),
         unit: service_name.to_string(),
     });
 
@@ -777,7 +595,7 @@ pub fn add_service(
         });
     }
 
-    // 8. Post-start hooks — run after service is active
+    // 7. Post-start hooks — run after service is active
     let has_hooks = !reg_service.def.post_start.is_empty();
     for hook in &reg_service.def.post_start {
         steps.push(Step::PostStartHook {
@@ -791,11 +609,9 @@ pub fn add_service(
     // Restart the service after post-start hooks so it picks up injected config
     if has_hooks {
         steps.push(Step::StopService {
-            username: username.clone(),
             unit: service_name.to_string(),
         });
         steps.push(Step::StartService {
-            username: username.clone(),
             unit: service_name.to_string(),
         });
     }
@@ -836,7 +652,6 @@ pub fn add_service(
     Ok(AddResult {
         steps,
         domain: domain.map(|d| d.to_string()),
-        username,
         warnings,
         repo_url: repo_url.to_string(),
         host_port,
@@ -857,26 +672,13 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         .find(|s| s.name == service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
-    let username = service_user(service_name);
     let domain = service.domain.clone();
     let was_proxied = domain.is_some();
 
-    // Stop the service and remove the user
-    let mut steps = vec![
-        Step::StopService {
-            username: username.clone(),
-            unit: service_name.to_string(),
-        },
-        Step::DisableLinger {
-            username: username.clone(),
-        },
-        Step::TerminateUserSession {
-            username: username.clone(),
-        },
-        Step::RemoveUser {
-            username: username.clone(),
-        },
-    ];
+    // Stop the service
+    let mut steps = vec![Step::StopService {
+        unit: service_name.to_string(),
+    }];
 
     // Remove OAuth provider from authentik
     if let Some(config::schema::AuthCredentials::Authentik { url, api_token }) = &config.auth {
@@ -904,37 +706,28 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         });
     }
 
-    // Clean up networking based on stored exposure mode (web services only)
-    if let (Some(cf), Some(domain)) = (&config.cloudflare, &domain) {
-        match &service.exposure {
-            ExposureMode::Tunnel => {
-                if let Some(ti) = &cf.tunnel {
-                    steps.push(Step::RemoveTunnelRoute {
-                        api_token: cf.api_token.clone(),
-                        account_id: ti.account_id.clone(),
-                        tunnel_id: ti.tunnel_id.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.clone(),
-                    });
+    // Remove quadlet files matching {service_name}*
+    let quadlet_path = quadlet_dir();
+    if quadlet_path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&quadlet_path) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if name.starts_with(service_name) {
+                    steps.push(Step::RemoveFile(entry.path()));
                 }
             }
-            ExposureMode::Proxy | ExposureMode::DnsOnly => {
-                steps.push(Step::DeleteDnsRecord {
-                    api_token: cf.api_token.clone(),
-                    zone_id: cf.zone_id.clone(),
-                    domain: domain.clone(),
-                });
-            }
-            ExposureMode::Public
-            | ExposureMode::Local
-            | ExposureMode::HostPort
-            | ExposureMode::Tailscale => {}
         }
     }
 
+    // Reload systemd after removing quadlet files
+    steps.push(Step::DaemonReload);
+
+    // Remove service data directory
+    steps.push(Step::RemoveDir(service_home(service_name)));
+
     Ok(RemoveResult {
         steps,
-        username,
         service_name: service_name.to_string(),
         domain,
         exposure: service.exposure.clone(),
@@ -1060,16 +853,14 @@ pub fn update_service(
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
-    let username = service_user(service_name);
     let home_dir = service_home(service_name);
-    let quadlet_dir = service_quadlet_dir(service_name);
+    let quadlet_path = quadlet_dir();
     let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
     let mut steps = Vec::new();
 
     // 1. Stop the service
     steps.push(Step::StopService {
-        username: username.clone(),
         unit: service_name.to_string(),
     });
 
@@ -1081,7 +872,7 @@ pub fn update_service(
         exposure: &service.exposure,
         auth_kind: service.auth_kind.as_ref(),
         host_port: service.host_port,
-        quadlet_dir: &quadlet_dir,
+        quadlet_dir: &quadlet_path,
         nginx_dir,
         env_overrides,
         service_dir: &reg_service.service_dir,
@@ -1092,7 +883,6 @@ pub fn update_service(
     for image in reg_service.def.all_images() {
         steps.push(Step::PullImage {
             image: image.to_string(),
-            username: Some(username.clone()),
         });
     }
 
@@ -1111,15 +901,8 @@ pub fn update_service(
         steps.push(Step::WriteFile(nginx_site));
     }
 
-    steps.push(Step::Chown {
-        path: home_dir,
-        username: username.clone(),
-    });
-    steps.push(Step::DaemonReload {
-        username: username.clone(),
-    });
+    steps.push(Step::DaemonReload);
     steps.push(Step::StartService {
-        username: username.clone(),
         unit: service_name.to_string(),
     });
 
@@ -1130,11 +913,7 @@ pub fn update_service(
         });
     }
 
-    Ok(UpdateResult {
-        steps,
-        changes,
-        username,
-    })
+    Ok(UpdateResult { steps, changes })
 }
 
 /// Called after update steps succeed — updates the snapshot to match the new registry version.
@@ -1179,40 +958,11 @@ pub fn change_exposure(
         )));
     }
 
-    let old_exposure = &service.exposure;
     let old_domain = service.domain.as_deref();
     let old_proxied = old_domain.is_some();
     let nginx_dir = Path::new("/etc/ryra/nginx/sites");
 
     let mut steps = Vec::new();
-
-    // --- Tear down old networking ---
-    if let (Some(cf), Some(domain)) = (&config.cloudflare, old_domain) {
-        match old_exposure {
-            ExposureMode::Tunnel => {
-                if let Some(ti) = &cf.tunnel {
-                    steps.push(Step::RemoveTunnelRoute {
-                        api_token: cf.api_token.clone(),
-                        account_id: ti.account_id.clone(),
-                        tunnel_id: ti.tunnel_id.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                    });
-                }
-            }
-            ExposureMode::Proxy | ExposureMode::DnsOnly => {
-                steps.push(Step::DeleteDnsRecord {
-                    api_token: cf.api_token.clone(),
-                    zone_id: cf.zone_id.clone(),
-                    domain: domain.to_string(),
-                });
-            }
-            ExposureMode::Public
-            | ExposureMode::Local
-            | ExposureMode::HostPort
-            | ExposureMode::Tailscale => {}
-        }
-    }
 
     // Remove old nginx site if was proxied
     if old_proxied {
@@ -1237,7 +987,6 @@ pub fn change_exposure(
         }));
         steps.push(Step::PullImage {
             image: "docker.io/library/nginx:alpine".into(),
-            username: None,
         });
         steps.push(Step::WriteFile(GeneratedFile {
             path: PathBuf::from("/etc/containers/systemd/nginx.container"),
@@ -1251,70 +1000,13 @@ pub fn change_exposure(
 
     // --- Set up new networking ---
     if new_proxied && let Some(domain) = new_domain {
-        match &new_exposure {
-            ExposureMode::Tunnel => {
-                if let Some(cf) = &config.cloudflare
-                    && let Some(ti) = &cf.tunnel
-                {
-                    steps.push(Step::AddTunnelRoute {
-                        api_token: cf.api_token.clone(),
-                        account_id: ti.account_id.clone(),
-                        tunnel_id: ti.tunnel_id.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                    });
-                }
-            }
-            ExposureMode::Proxy => {
-                if let Some(cf) = &config.cloudflare {
-                    steps.push(Step::CreateDnsRecord {
-                        api_token: cf.api_token.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                        proxied: true,
-                    });
-                }
-            }
-            ExposureMode::DnsOnly => {
-                if let Some(cf) = &config.cloudflare {
-                    steps.push(Step::CreateDnsRecord {
-                        api_token: cf.api_token.clone(),
-                        zone_id: cf.zone_id.clone(),
-                        domain: domain.to_string(),
-                        proxied: false,
-                    });
-                }
-            }
-            ExposureMode::Public
-            | ExposureMode::Local
-            | ExposureMode::HostPort
-            | ExposureMode::Tailscale => {}
-        }
-
         // SSL for new mode
         match &new_exposure {
-            ExposureMode::Proxy => {
-                steps.push(Step::GenerateOriginCert {
-                    domain: domain.to_string(),
-                });
-            }
-            ExposureMode::DnsOnly => {
-                if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
-                    let cf_token = config.cloudflare.as_ref().map(|cf| cf.api_token.clone());
-                    steps.push(Step::ObtainCert {
-                        domain: domain.to_string(),
-                        email: email.clone(),
-                        cloudflare_api_token: cf_token,
-                    });
-                }
-                // Custom certs: no step needed, certs already in place
-            }
             ExposureMode::Public => {
                 if let Some(config::schema::SslConfig::Letsencrypt { email }) = &config.ssl {
                     steps.push(Step::ObtainCert {
                         domain: domain.to_string(),
                         email: email.clone(),
-                        cloudflare_api_token: None, // HTTP-01 standalone
                     });
                 }
                 // Custom certs: no step needed, certs already in place
@@ -1399,8 +1091,6 @@ pub fn finalize_expose(
 }
 
 /// Reset ryra: tear down all services, infrastructure, and config.
-/// Discovers service users from the `ryra` system group so orphaned users
-/// (from partial installs) are always found — even without a config file.
 pub fn reset() -> ResetResult {
     let config = ConfigPaths::resolve()
         .ok()
@@ -1408,70 +1098,30 @@ pub fn reset() -> ResetResult {
 
     let mut steps = Vec::new();
 
-    // 1. Discover all ryra-managed users from the system group.
-    //    This catches orphaned users that the config file doesn't know about.
-    let group_users = ryra_group_members();
-
-    // 2. Clean up services known from config (includes DNS/tunnel cleanup)
-    let mut handled_users = Vec::new();
+    // 1. Stop all services known from config
     if let Some(ref config) = config {
         for service in &config.services {
-            let username = service_user(&service.name);
-            push_service_teardown(&mut steps, &username, &service.name);
-            handled_users.push(username);
-
-            // Clean up networking based on stored exposure (web services only)
-            if let (Some(cf), Some(domain)) = (&config.cloudflare, &service.domain) {
-                match &service.exposure {
-                    ExposureMode::Tunnel => {
-                        if let Some(ti) = &cf.tunnel {
-                            steps.push(Step::RemoveTunnelRoute {
-                                api_token: cf.api_token.clone(),
-                                account_id: ti.account_id.clone(),
-                                tunnel_id: ti.tunnel_id.clone(),
-                                zone_id: cf.zone_id.clone(),
-                                domain: domain.clone(),
-                            });
-                        }
-                    }
-                    ExposureMode::Proxy | ExposureMode::DnsOnly => {
-                        steps.push(Step::DeleteDnsRecord {
-                            api_token: cf.api_token.clone(),
-                            zone_id: cf.zone_id.clone(),
-                            domain: domain.clone(),
-                        });
-                    }
-                    ExposureMode::Public
-                    | ExposureMode::Local
-                    | ExposureMode::HostPort
-                    | ExposureMode::Tailscale => {}
-                }
-            }
+            steps.push(Step::StopService {
+                unit: service.name.clone(),
+            });
+            // Remove nginx site config
+            steps.push(Step::RemoveFile(PathBuf::from(format!(
+                "/etc/ryra/nginx/sites/{}.conf",
+                service.name
+            ))));
         }
     }
 
-    // 3. Tear down orphaned users in the ryra group but not in config
-    for username in &group_users {
-        if handled_users.contains(username) {
-            continue;
-        }
-        push_service_teardown(&mut steps, username, username);
+    // 2. Remove quadlet files
+    let quadlet_path = quadlet_dir();
+    if quadlet_path.is_dir() {
+        steps.push(Step::RemoveDir(quadlet_path));
     }
 
-    // 4. Stop and remove cloudflared tunnel
-    let has_tunnel = config
-        .as_ref()
-        .and_then(|c| c.cloudflare.as_ref())
-        .and_then(|cf| cf.tunnel.as_ref())
-        .is_some();
-    if has_tunnel || PathBuf::from("/etc/containers/systemd/cloudflared.container").exists() {
-        steps.push(Step::StopTunnel);
-        steps.push(Step::RemoveFile(PathBuf::from(
-            "/etc/containers/systemd/cloudflared.container",
-        )));
-    }
+    // 3. Reload user systemd after removing quadlets
+    steps.push(Step::DaemonReload);
 
-    // 5. Stop and remove nginx
+    // 4. Stop and remove nginx
     if PathBuf::from("/etc/containers/systemd/nginx.container").exists() {
         steps.push(Step::SystemStop {
             unit: "nginx".into(),
@@ -1482,64 +1132,22 @@ pub fn reset() -> ResetResult {
         steps.push(Step::SystemDaemonReload);
     }
 
-    // 6. Remove system-level directories
+    // 5. Remove system-level directories
     if PathBuf::from("/etc/ryra").exists() {
         steps.push(Step::RemoveDir(PathBuf::from("/etc/ryra")));
     }
 
-    // 7. Remove the ryra group itself (after all users are deleted)
-    if !group_users.is_empty() || config.is_some() {
-        steps.push(Step::RemoveGroup);
+    // 6. Remove service data directories
+    if let Some(ref config) = config {
+        for service in &config.services {
+            let data_dir = service_home(&service.name);
+            if data_dir.exists() {
+                steps.push(Step::RemoveDir(data_dir));
+            }
+        }
     }
 
     ResetResult { steps }
-}
-
-/// Read members of the `ryra` system group from /etc/group.
-/// Returns an empty vec if the group doesn't exist.
-fn ryra_group_members() -> Vec<String> {
-    let output = std::process::Command::new("getent")
-        .args(["group", "ryra"])
-        .output()
-        .ok();
-
-    let Some(output) = output else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-
-    // getent group ryra => "ryra:x:999:authentik,seafile,forgejo"
-    let line = String::from_utf8_lossy(&output.stdout);
-    let members = line.trim().split(':').nth(3).unwrap_or("");
-    if members.is_empty() {
-        return Vec::new();
-    }
-    members.split(',').map(|s| s.to_string()).collect()
-}
-
-/// Push the standard teardown steps for a single service user.
-fn push_service_teardown(steps: &mut Vec<Step>, username: &str, service_name: &str) {
-    steps.push(Step::StopService {
-        username: username.to_string(),
-        unit: service_name.to_string(),
-    });
-    steps.push(Step::DisableLinger {
-        username: username.to_string(),
-    });
-    steps.push(Step::TerminateUserSession {
-        username: username.to_string(),
-    });
-    steps.push(Step::KillUserProcesses {
-        username: username.to_string(),
-    });
-    steps.push(Step::RemoveUser {
-        username: username.to_string(),
-    });
-    steps.push(Step::RemoveFile(PathBuf::from(format!(
-        "/etc/ryra/nginx/sites/{service_name}.conf"
-    ))));
 }
 
 /// Called after reset steps succeed — removes ryra's config directory.
