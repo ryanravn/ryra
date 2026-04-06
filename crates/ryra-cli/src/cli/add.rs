@@ -8,27 +8,18 @@ use std::path::Path;
 
 use ryra_core::Warning;
 use ryra_core::config::ConfigPaths;
-use ryra_core::config::schema::{Config, ExposureMode};
+use ryra_core::config::schema::Config;
 use ryra_core::registry::service_def::AuthKind;
 
 use super::apply;
 use super::prompts;
 
-pub async fn run(
-    services: &[String],
-    domain: Option<&str>,
-    repo: Option<&str>,
-    dry_run: bool,
-) -> Result<()> {
-    if domain.is_some() && services.len() > 1 {
-        bail!("--domain can only be used when adding a single service");
-    }
-
+pub async fn run(services: &[String], repo: Option<&str>, dry_run: bool) -> Result<()> {
     let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
 
     for service in services {
         let paths = ryra_core::config::ConfigPaths::resolve()?;
-        let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+        let config = ryra_core::config::load_or_default(&paths.config_file)?;
         let interactive = std::io::stdin().is_terminal();
 
         // Look up the service definition
@@ -38,84 +29,6 @@ pub async fn run(
         if let Some(msg) = reg_service.def.check_architecture() {
             bail!("{msg}");
         }
-
-        let has_nginx = reg_service.def.nginx.is_some();
-
-        // Show ALL modes the service supports, annotate which need setup
-        let supported = ExposureMode::supported_modes(has_nginx);
-
-        let exposure = if supported.len() == 1 {
-            let mode = supported[0].clone();
-            println!("Exposure mode: {} — {}", mode.label(), mode.description());
-            mode
-        } else if interactive {
-            let items: Vec<String> = supported
-                .iter()
-                .map(|m| {
-                    let missing = m.missing_config(&config);
-                    if missing.is_empty() {
-                        format!("{} — {}", m.label(), m.description())
-                    } else {
-                        format!("{} — {} (setup required)", m.label(), m.description())
-                    }
-                })
-                .collect();
-            let selection = dialoguer::Select::new()
-                .with_prompt("Exposure mode")
-                .items(&items)
-                .default(0)
-                .interact()?;
-            supported[selection].clone()
-        } else {
-            // Non-interactive: pick first mode that needs no setup
-            supported
-                .iter()
-                .find(|m| m.missing_config(&config).is_empty())
-                .cloned()
-                .unwrap_or(ExposureMode::Local)
-        };
-
-        // Just-in-time: prompt for missing config sections
-        if !exposure.missing_config(&config).is_empty() {
-            if interactive {
-                if !prompts::ensure_config_for_mode(&mut config, &paths, &exposure).await? {
-                    println!("Cancelled.");
-                    return Ok(());
-                }
-            } else {
-                bail!(
-                    "{} exposure requires additional config. Run interactively or use `ryra config`.",
-                    exposure.label()
-                );
-            }
-        }
-
-        // Domain — only for proxied modes (public/tailscale)
-        let domain = if exposure.needs_domain() {
-            let default_domain = if exposure == ExposureMode::Tailscale {
-                match ryra_core::integrations::tailscale::detect_fqdn() {
-                    Some(fqdn) => fqdn,
-                    None => {
-                        bail!("Tailscale is not running or has no FQDN. Is tailscaled active?");
-                    }
-                }
-            } else {
-                match config.base_domain() {
-                    Some(d) => format!("{service}.{d}"),
-                    None => format!("{service}.localhost"),
-                }
-            };
-            Some(match domain {
-                Some(d) => d.to_string(),
-                None if interactive => Input::new()
-                    .with_prompt(format!("Domain for {service}"))
-                    .default(default_domain.clone())
-                    .interact_text()?,
-                None => default_domain,
-            })
-        } else {
-            None
-        };
 
         // Auth — ask user if they want to enable auth (if the service supports it)
         let auth_kind: Option<AuthKind> = if reg_service.def.integrations.auth.is_empty() {
@@ -129,6 +42,7 @@ pub async fn run(
                     .interact()?;
                 if enable {
                     // Ensure auth is configured
+                    let mut config = config.clone();
                     if config.auth.is_none() {
                         match ensure_auth_for_add(
                             &mut config,
@@ -175,6 +89,7 @@ pub async fn run(
                 None
             } else {
                 let kind = reg_service.def.integrations.auth[selection - 1].clone();
+                let mut config = config.clone();
                 if config.auth.is_none() {
                     match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run)
                         .await?
@@ -247,8 +162,6 @@ pub async fn run(
 
         let result = ryra_core::add_service(
             service,
-            domain.as_deref(),
-            exposure.clone(),
             auth_kind.clone(),
             &env_overrides,
             &repo_url,
@@ -260,42 +173,6 @@ pub async fn run(
             println!();
             for warning in &result.warnings {
                 match warning {
-                    Warning::NoAuthPublicExposure {
-                        service_name,
-                        exposure,
-                    } => {
-                        println!(
-                            "  WARNING: {service_name} has auth disabled and will be publicly exposed via {exposure}"
-                        );
-                    }
-                    Warning::HostPortExposure {
-                        service_name,
-                        ports,
-                    } => {
-                        let port_list: Vec<String> = ports
-                            .iter()
-                            .map(|(p, proto)| format!("{p}/{proto}"))
-                            .collect();
-                        println!(
-                            "  WARNING: {service_name} will bind to 0.0.0.0 on ports: {}",
-                            port_list.join(", ")
-                        );
-                    }
-                    Warning::OidcLocalExposure {
-                        service_name,
-                        exposure,
-                    } => {
-                        println!(
-                            "  NOTE: {service_name} has OIDC auth enabled with {exposure} exposure."
-                        );
-                        println!(
-                            "        OIDC login via browser (e.g. SSH tunnel) will likely fail because"
-                        );
-                        println!("        the browser and server disagree on redirect URLs.");
-                        println!(
-                            "        Consider using 'tailscale' exposure mode for OIDC to work."
-                        );
-                    }
                     Warning::RamBelowMinimum {
                         service_name,
                         min_mb,
@@ -334,47 +211,20 @@ pub async fn run(
 
         if dry_run {
             super::print_dry_run(&result.steps);
-            if let Some(ref domain) = result.domain {
-                if domain.ends_with(".ts.net") {
-                    if let Some(port) = result.host_port {
-                        println!("{service} will be available at https://{domain}:{port}");
-                    } else {
-                        println!("{service} will be available at https://{domain}");
-                    }
-                } else {
-                    println!("{service} will be available at https://{domain}");
-                }
-            } else {
-                println!("{service} will be started (no domain — non-web service)");
-            }
+            println!("{service} will be started.");
         } else {
             println!("Setting up {service}...");
             apply::execute_all(&result.steps).await?;
             ryra_core::finalize_add(ryra_core::FinalizeAddParams {
                 service_name: service,
-                domain: domain.as_deref(),
-                exposure,
                 auth_kind,
                 repo: &result.repo_url,
-                host_port: result.host_port,
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
                 env_content: &result.env_content,
             })?;
             let home_dir = ryra_core::service_home(service);
-            if let Some(ref domain) = result.domain {
-                if domain.ends_with(".ts.net") {
-                    if let Some(port) = result.host_port {
-                        println!("\n{service} is running at https://{domain}:{port}");
-                    } else {
-                        println!("\n{service} is running at https://{domain}");
-                    }
-                } else {
-                    println!("\n{service} is running at https://{domain}");
-                }
-            } else {
-                println!("\n{service} is running.");
-            }
+            println!("\n{service} is running.");
 
             // Connection info
             if !result.allocated_ports.is_empty() {
@@ -430,13 +280,7 @@ async fn ensure_auth_for_add(
             println!("Installing authentik first...");
             println!();
             // Recursively install authentik, then reload config
-            Box::pin(run(
-                &["authentik".to_string()],
-                None,
-                Some(repo_url),
-                dry_run,
-            ))
-            .await?;
+            Box::pin(run(&["authentik".to_string()], Some(repo_url), dry_run)).await?;
             // Reload config — authentik's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.auth.is_some() {
@@ -473,15 +317,12 @@ fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -
         return Ok(false);
     };
 
-    // Find the URL from the installed service record
+    // Find the URL from the installed service record — use the first allocated port
     let service = config.services.iter().find(|s| s.name == "authentik");
-    let url = match service.and_then(|s| s.domain.as_deref()) {
-        Some(domain) => format!("https://{domain}"),
-        None => {
-            let port = service.and_then(|s| s.host_port).unwrap_or(9000);
-            format!("http://localhost:{port}")
-        }
-    };
+    let port = service
+        .and_then(|s| s.ports.values().next().copied())
+        .unwrap_or(9000);
+    let url = format!("http://localhost:{port}");
 
     config.auth = Some(ryra_core::config::schema::AuthCredentials::Authentik {
         url,

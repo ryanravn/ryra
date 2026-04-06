@@ -21,12 +21,6 @@ enum Command {
         /// Default repo (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
-        /// Email for Let's Encrypt SSL certificates
-        #[arg(long)]
-        email: Option<String>,
-        /// Base domain for service subdomains
-        #[arg(long)]
-        domain: Option<String>,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -39,9 +33,6 @@ enum Command {
         /// Service name(s) from repo
         #[arg(required = true, num_args = 1..)]
         services: Vec<String>,
-        /// Domain for this service (defaults to <service>.<zone>)
-        #[arg(long)]
-        domain: Option<String>,
         /// Repo to install from (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
@@ -81,22 +72,8 @@ enum Command {
     },
     /// View or edit global configuration
     Config {
-        /// Section to configure (domain, ssl, smtp, auth, repo)
+        /// Section to configure (smtp, auth, repo)
         section: Option<String>,
-    },
-    /// Change how a service is exposed (local, public, host-port, tailscale)
-    Expose {
-        /// Service name
-        service: String,
-        /// New domain (optional, for proxied modes)
-        #[arg(long)]
-        domain: Option<String>,
-        /// Show what would happen without making changes
-        #[arg(long)]
-        dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
     },
     /// Show global config, or details about a specific service
     Status {
@@ -194,11 +171,6 @@ impl Command {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    if ryra_core::is_root() {
-        eprintln!("WARNING: Running ryra as root. Services will run as root.");
-        eprintln!("         Consider running as a regular user instead.\n");
-    }
-
     if cfg!(not(target_os = "linux")) && !cli.command.is_cross_platform() {
         anyhow::bail!(
             "this command requires Linux (systemd + podman).\n\
@@ -217,23 +189,20 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Init {
             repo,
-            email,
-            domain,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::init::run(repo, email, domain, dry_run).await?
+            cli::init::run(repo, dry_run).await?
         }
         Command::Add {
             ref services,
-            ref domain,
             ref repo,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(services, domain.as_deref(), repo.as_deref(), dry_run).await?
+            cli::add::run(services, repo.as_deref(), dry_run).await?
         }
         Command::Remove {
             ref services,
@@ -253,15 +222,6 @@ async fn main() -> anyhow::Result<()> {
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
-        Command::Expose {
-            ref service,
-            ref domain,
-            dry_run,
-            verbose,
-        } => {
-            ryra_core::verbose::set(verbose);
-            cli::expose::run(service, domain.as_deref(), dry_run).await?
-        }
         Command::Status {
             ref service,
             ref repo,

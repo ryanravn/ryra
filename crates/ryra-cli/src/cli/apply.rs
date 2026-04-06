@@ -10,7 +10,6 @@ use ryra_core::Step;
 enum Created {
     File(PathBuf),
     StartedService(String),
-    StartedSystemService(String),
 }
 
 /// Returns true if a path is under /etc or /var (i.e. requires sudo).
@@ -77,10 +76,6 @@ async fn prompt_rollback(created: &[Created]) {
                 eprintln!("  Stopping {unit}...");
                 run_quiet(&format!("systemctl --user stop {unit}"))
             }
-            Created::StartedSystemService(unit) => {
-                eprintln!("  Stopping {unit}...");
-                run_quiet(&format!("sudo systemctl stop {unit}"))
-            }
             Created::File(path) => {
                 eprintln!("  Removing {}", path.display());
                 if is_system_path(path) {
@@ -101,11 +96,6 @@ async fn prompt_rollback(created: &[Created]) {
 /// Execute a single step, recording what was created for rollback.
 async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
     match step {
-        Step::EnableLinger => {
-            // Idempotent — enable linger for the current user
-            let _ = run_quiet("loginctl enable-linger");
-            Ok(())
-        }
         Step::WriteFile(file) => {
             println!("  Writing {}", file.path.display());
             if ryra_core::verbose::is_enabled() && !file.content.is_empty() {
@@ -151,46 +141,6 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         }
         Step::StopService { unit } => {
             let _ = run(&format!("systemctl --user stop {unit}"));
-            Ok(())
-        }
-        Step::SystemDaemonReload => run("sudo systemctl daemon-reload"),
-        Step::SystemStart { unit } => {
-            run(&format!("sudo systemctl start {unit}"))?;
-            created.push(Created::StartedSystemService(unit.clone()));
-            Ok(())
-        }
-        Step::SystemRestart { unit } => run(&format!("sudo systemctl restart {unit}")),
-        Step::SystemStop { unit } => {
-            let _ = run(&format!("sudo systemctl stop {unit}"));
-            Ok(())
-        }
-        Step::ObtainCert { domain, email } => {
-            println!("  Obtaining SSL certificate for {domain}...");
-            let cert_dir = ryra_core::integrations::ssl::cert_dir();
-            run(&format!("sudo mkdir -p {}/{domain}", cert_dir.display()))?;
-            run(&format!(
-                "sudo podman run --rm \
-                 -v {cert_dir}:/etc/letsencrypt/live:Z \
-                 -p 80:80 \
-                 docker.io/certbot/certbot:latest certonly \
-                 --standalone \
-                 -d {domain} \
-                 --email {email} \
-                 --agree-tos --non-interactive \
-                 --cert-path /etc/letsencrypt/live/{domain}/fullchain.pem \
-                 --key-path /etc/letsencrypt/live/{domain}/privkey.pem",
-                cert_dir = cert_dir.display(),
-                domain = domain,
-                email = email,
-            ))?;
-            println!("  Certificate obtained for {domain}");
-            Ok(())
-        }
-        Step::ObtainTailscaleCert { fqdn } => {
-            println!("  Obtaining Tailscale cert for {fqdn}...");
-            let cmd = ryra_core::integrations::tailscale::cert_command(fqdn);
-            run(&cmd)?;
-            println!("  Tailscale cert obtained for {fqdn}");
             Ok(())
         }
         Step::PullImage { image } => {

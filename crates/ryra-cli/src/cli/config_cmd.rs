@@ -12,16 +12,6 @@ pub async fn run(section: Option<&str>) -> Result<()> {
             print_overview(&config);
             return Ok(());
         }
-        Some("domain") => {
-            let d: String = Input::new()
-                .with_prompt("Base domain")
-                .default(config.domain.clone().unwrap_or_default())
-                .interact_text()?;
-            config.domain = if d.is_empty() { None } else { Some(d) };
-        }
-        Some("ssl") => {
-            config.ssl = prompts::prompt_ssl()?;
-        }
         Some("smtp") => {
             config.smtp = prompts::prompt_smtp()?;
         }
@@ -49,7 +39,7 @@ pub async fn run(section: Option<&str>) -> Result<()> {
             config.default_repo = Some(url);
         }
         Some(other) => {
-            bail!("Unknown section: {other}. Options: domain, ssl, smtp, auth, repo");
+            bail!("Unknown section: {other}. Options: smtp, auth, repo");
         }
     }
 
@@ -62,23 +52,6 @@ pub async fn run(section: Option<&str>) -> Result<()> {
 
 fn print_overview(config: &ryra_core::config::schema::Config) {
     println!("ryra configuration:\n");
-
-    // Domain
-    match &config.domain {
-        Some(domain) => println!("  domain:     {domain}"),
-        None => println!("  domain:     {}", status_none()),
-    }
-
-    // SSL
-    match &config.ssl {
-        Some(ryra_core::config::schema::SslConfig::Letsencrypt { email }) => {
-            println!("  ssl:        {} (letsencrypt, {})", status_ok(), email);
-        }
-        Some(ryra_core::config::schema::SslConfig::Custom { cert_dir }) => {
-            println!("  ssl:        {} (custom, {})", status_ok(), cert_dir);
-        }
-        None => println!("  ssl:        {}", status_none()),
-    }
 
     // SMTP
     match &config.smtp {
@@ -109,7 +82,7 @@ fn print_overview(config: &ryra_core::config::schema::Config) {
         println!("\n  {} installed service(s)", config.services.len());
     }
 
-    println!("\nEdit a section: ryra config <domain|ssl|smtp|auth|repo>");
+    println!("\nEdit a section: ryra config <smtp|auth|repo>");
 }
 
 fn status_ok() -> &'static str {

@@ -8,15 +8,11 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<30} EXPOSURE", "SERVICE", "LOCATION");
-    println!("{}", "-".repeat(70));
+    println!("{:<20} REPO", "SERVICE");
+    println!("{}", "-".repeat(50));
 
     for svc in &services {
-        let location = match &svc.domain {
-            Some(d) => d.clone(),
-            None => "-".to_string(),
-        };
-        println!("{:<20} {:<30} {}", svc.name, location, svc.exposure);
+        println!("{:<20} {}", svc.name, svc.repo);
     }
 
     Ok(())

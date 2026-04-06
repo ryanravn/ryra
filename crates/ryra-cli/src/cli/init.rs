@@ -8,12 +8,7 @@ use ryra_core::config::schema::*;
 use super::apply;
 use super::prompts;
 
-pub async fn run(
-    repo: Option<String>,
-    email: Option<String>,
-    domain: Option<String>,
-    dry_run: bool,
-) -> Result<()> {
+pub async fn run(repo: Option<String>, dry_run: bool) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
 
     // If config exists, ask to overwrite
@@ -33,34 +28,14 @@ pub async fn run(
         }
     }
 
-    // 1. Domain
-    let domain = match domain {
-        Some(d) => Some(d),
-        None if interactive => {
-            let d: String = Input::new()
-                .with_prompt("Base domain (leave empty to skip)")
-                .allow_empty(true)
-                .interact_text()?;
-            if d.is_empty() { None } else { Some(d) }
-        }
-        None => None,
-    };
-
-    // 2. Let's Encrypt email
-    let ssl = match email {
-        Some(e) => Some(SslConfig::Letsencrypt { email: e }),
-        None if interactive => prompts::prompt_ssl()?,
-        None => None,
-    };
-
-    // 3. SMTP
+    // 1. SMTP
     let smtp = if interactive {
         prompts::prompt_smtp()?
     } else {
         None
     };
 
-    // 4. Repo
+    // 2. Repo
     let default_repo = match repo {
         Some(r) => Some(r),
         None if interactive => {
@@ -74,8 +49,6 @@ pub async fn run(
     };
 
     let config = Config {
-        domain,
-        ssl,
         smtp,
         auth: None,
         default_repo,

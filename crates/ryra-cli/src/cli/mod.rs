@@ -2,7 +2,6 @@ pub mod add;
 pub mod apply;
 pub mod config_cmd;
 pub mod diff;
-pub mod expose;
 pub mod init;
 pub mod list;
 pub mod prompts;

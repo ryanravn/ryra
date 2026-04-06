@@ -4,40 +4,6 @@ use dialoguer::Input;
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::*;
 
-/// Interactive SSL setup — Let's Encrypt or custom certs.
-pub fn prompt_ssl() -> Result<Option<SslConfig>> {
-    println!();
-
-    let items = vec![
-        "Let's Encrypt (automatic, needs port 80 open)",
-        "Custom certificates (provide your own)",
-        "Skip",
-    ];
-    let selection = dialoguer::Select::new()
-        .with_prompt("SSL provider")
-        .items(&items)
-        .default(0)
-        .interact()?;
-
-    match selection {
-        0 => {
-            let email: String = Input::new()
-                .with_prompt("Let's Encrypt email")
-                .interact_text()?;
-            Ok(Some(SslConfig::Letsencrypt { email }))
-        }
-        1 => {
-            println!("  Certs should be at <cert_dir>/<domain>/fullchain.pem and privkey.pem");
-            let cert_dir: String = Input::new()
-                .with_prompt("Certificate directory")
-                .default("/etc/ryra/certs".into())
-                .interact_text()?;
-            Ok(Some(SslConfig::Custom { cert_dir }))
-        }
-        _ => Ok(None),
-    }
-}
-
 /// Interactive SMTP setup.
 pub fn prompt_smtp() -> Result<Option<SmtpCredentials>> {
     println!();
@@ -69,41 +35,6 @@ pub fn prompt_smtp() -> Result<Option<SmtpCredentials>> {
         password,
         from,
     }))
-}
-
-/// Prompt for any missing config sections required by the chosen exposure mode.
-/// Mutates config in-place and saves globally. Returns false if user cancelled.
-pub async fn ensure_config_for_mode(
-    config: &mut Config,
-    paths: &ConfigPaths,
-    exposure: &ExposureMode,
-) -> Result<bool> {
-    let missing = exposure.missing_config(config);
-    if missing.is_empty() {
-        return Ok(true);
-    }
-
-    println!();
-    println!("  {} mode requires additional setup:", exposure.label());
-
-    for req in &missing {
-        match req {
-            ConfigRequirement::Ssl => {
-                println!();
-                println!("  This will be saved globally and reused for future services.");
-                match prompt_ssl()? {
-                    Some(ssl) => config.ssl = Some(ssl),
-                    None => return Ok(false),
-                }
-            }
-        }
-    }
-
-    // Save updated config
-    paths.ensure_dirs()?;
-    ryra_core::config::save_config(&paths.config_file, config)?;
-    println!("  Config saved to {}", paths.config_file.display());
-    Ok(true)
 }
 
 /// What the user chose when prompted for auth setup.

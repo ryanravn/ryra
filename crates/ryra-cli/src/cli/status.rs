@@ -23,9 +23,7 @@ fn run_global() -> Result<()> {
 
 fn print_global(info: &StatusInfo) {
     println!("Config:     {}", info.config_path.display());
-    println!("Host:       {}", info.domain);
     println!();
-    println!("SSL:        {}", format_provider(&info.ssl));
     println!("SMTP:       {}", format_provider(&info.smtp));
     println!("Auth:       {}", format_provider(&info.auth));
     println!();
@@ -40,11 +38,7 @@ fn print_global(info: &StatusInfo) {
     } else {
         println!("Services:");
         for svc in &info.services {
-            let location = match &svc.domain {
-                Some(d) => d.clone(),
-                None => format!("[no domain — {}]", svc.exposure),
-            };
-            println!("  {:<20} {:<30} ({})", svc.name, location, svc.exposure);
+            println!("  {}", svc.name);
         }
     }
 
@@ -87,14 +81,16 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         }
     }
 
-    if let Some(exposure) = &detail.installed_exposure {
+    // Check if installed
+    let installed = ryra_core::list_installed()?
+        .into_iter()
+        .any(|s| s.name == service);
+
+    if installed {
         let home_dir = ryra_core::service_home(service);
 
         println!();
-        match &detail.installed_domain {
-            Some(domain) => println!("Installed: {domain} ({exposure})"),
-            None => println!("Installed ({exposure})"),
-        }
+        println!("Installed");
         println!("Config:   {}", home_dir.display());
         println!();
         println!("Useful commands:");
