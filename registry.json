@@ -122,8 +122,8 @@
       "post_start": [
         {
           "name": "generate-rsa-key",
-          "run": "[ -f $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem ] && exit 0\nopenssl genrsa -out $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2048 2>/dev/null\n",
-          "timeout": 30
+          "run": "[ -f $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem ] && exit 0\npodman run --rm -v $HOME/.local/share/ryra/authelia/config:/out:Z docker.io/authelia/authelia:4.39 authelia crypto pair rsa generate --directory /out 2>/dev/null && mv $HOME/.local/share/ryra/authelia/config/private.pem $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2>/dev/null\n",
+          "timeout": 60
         },
         {
           "name": "generate-config",

@@ -71,10 +71,11 @@ smtp = false
 # Authelia needs these files on disk — env vars alone aren't enough for all settings.
 [[post_start]]
 name = "generate-rsa-key"
-timeout = 30
+timeout = 60
 run = """
 [ -f $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem ] && exit 0
-openssl genrsa -out $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2048 2>/dev/null
+podman run --rm -v $HOME/.local/share/ryra/authelia/config:/out:Z docker.io/authelia/authelia:4.39 authelia crypto pair rsa generate --directory /out 2>/dev/null && \
+  mv $HOME/.local/share/ryra/authelia/config/private.pem $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2>/dev/null
 """
 
 [[post_start]]
