@@ -141,6 +141,45 @@ action = "assert"
 name = "authentik-no-forward-auth"
 run = "! sudo awk '/ryra:authentik/,/^}/' /etc/ryra/caddy/Caddyfile | grep -q 'forward_auth'"
 
+# === Assertions: Auth actually works (curl through Caddy gets blocked) ===
+
+# Wait for authentik to be fully ready (API needs to respond for forward_auth to work)
+[[steps]]
+action = "run"
+name = "wait-authentik-api"
+run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:9000/if/flow/initial-setup/ && exit 0; sleep 5; done; exit 1"
+timeout_secs = 360
+
+# Unauthenticated requests through Caddy should NOT get the raw service response.
+# They should get a 401 or 302 redirect to Authentik.
+[[steps]]
+action = "assert"
+name = "whoami-blocked-via-caddy"
+run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: whoami.test.local' http://127.0.0.1:80); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
+
+[[steps]]
+action = "assert"
+name = "forgejo-blocked-via-caddy"
+run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: git.test.local' http://127.0.0.1:80); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
+
+[[steps]]
+action = "assert"
+name = "vaultwarden-blocked-via-caddy"
+run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: vault.test.local' http://127.0.0.1:80); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
+
+# Authentik itself should be accessible (no forward auth)
+[[steps]]
+action = "assert"
+name = "authentik-accessible-via-caddy"
+run = "CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: auth.test.local' http://127.0.0.1:80); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
+timeout = 30
+
+# Direct access (bypassing Caddy) should still work — no auth on the raw port
+[[steps]]
+action = "assert"
+name = "whoami-direct-no-auth"
+run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2) | grep -q Hostname"
+
 # === Status ===
 
 [[steps]]
