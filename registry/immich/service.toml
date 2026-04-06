@@ -210,6 +210,6 @@ timeout = 360
 env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 
 [[tests]]
-name = "user-created"
-run = "id immich"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/immich"
 env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }

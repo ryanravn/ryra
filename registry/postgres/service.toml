@@ -44,5 +44,5 @@ run = "for i in $(seq 1 15); do PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 
 timeout = 60
 
 [[tests]]
-name = "user-created"
-run = "id postgres"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/postgres"

@@ -30,5 +30,5 @@ run = "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exi
 timeout = 60
 
 [[tests]]
-name = "user-created"
-run = "id uptime-kuma"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/uptime-kuma"

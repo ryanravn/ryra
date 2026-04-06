@@ -81,5 +81,5 @@ run = "! ss -tlnp | grep -q ':5432 '"
 timeout = 5
 
 [[tests]]
-name = "user-created"
-run = "id forgejo"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/forgejo"

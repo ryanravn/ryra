@@ -25,5 +25,5 @@ name = "returns-hostname"
 run = "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname"
 
 [[tests]]
-name = "user-created"
-run = "id whoami"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/whoami"

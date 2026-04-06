@@ -160,6 +160,6 @@ timeout = 420
 env = { AUTHENTIK_BOOTSTRAP_EMAIL = "admin@test.local", AUTHENTIK_BOOTSTRAP_PASSWORD = "testpassword123" }
 
 [[tests]]
-name = "user-created"
-run = "id authentik"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/authentik"
 env = { AUTHENTIK_BOOTSTRAP_EMAIL = "admin@test.local", AUTHENTIK_BOOTSTRAP_PASSWORD = "testpassword123" }
