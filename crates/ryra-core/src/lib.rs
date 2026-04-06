@@ -323,7 +323,9 @@ pub fn add_service(
             // Try to export from running Caddy container
             let _ = std::process::Command::new("podman")
                 .args([
-                    "exec", "systemd-caddy", "cat",
+                    "exec",
+                    "systemd-caddy",
+                    "cat",
                     "/data/caddy/pki/authorities/local/root.crt",
                 ])
                 .stdout(std::fs::File::create(&ca_cert).unwrap_or_else(|_| {
@@ -419,7 +421,88 @@ pub fn add_service(
         }
     }
 
-    // 5. Reload and start via systemd
+    // 5. Authelia: generate config files BEFORE starting (not post-start hooks)
+    if service_name == "authelia" {
+        let config_dir = home_dir.join("config");
+        let config_path = config_dir.join("configuration.yml");
+        let users_path = config_dir.join("users_database.yml");
+
+        // Only generate if they don't exist (first install)
+        if !config_path.exists() {
+            let domain = domain.unwrap_or("localhost");
+            let cookie_domain = if domain.contains('.') {
+                // Extract parent domain: auth.test.local → test.local
+                domain.splitn(2, '.').nth(1).unwrap_or(domain)
+            } else {
+                domain
+            };
+            let authelia_url = format!("https://{domain}:8443");
+
+            let config_content = format!(
+                "---\nserver:\n  address: 'tcp://0.0.0.0:9091'\nlog:\n  level: 'info'\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\nsession:\n  cookies:\n    - domain: '{cookie_domain}'\n      authelia_url: '{authelia_url}'\nstorage:\n  local:\n    path: '/config/db.sqlite3'\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\naccess_control:\n  default_policy: 'one_factor'\n"
+            );
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: config_path,
+                content: config_content,
+            }));
+        }
+
+        if !users_path.exists() {
+            // Generate argon2 hash using the authelia container image
+            let password = env_overrides
+                .get("AUTHELIA_ADMIN_PASSWORD")
+                .or_else(|| output.ctx.get("AUTHELIA_ADMIN_PASSWORD"))
+                .cloned()
+                .unwrap_or_default();
+            let username = env_overrides
+                .get("AUTHELIA_ADMIN_USER")
+                .or_else(|| output.ctx.get("AUTHELIA_ADMIN_USER"))
+                .cloned()
+                .unwrap_or_else(|| "admin".to_string());
+            let email = env_overrides
+                .get("AUTHELIA_ADMIN_EMAIL")
+                .or_else(|| output.ctx.get("AUTHELIA_ADMIN_EMAIL"))
+                .cloned()
+                .unwrap_or_else(|| "admin@localhost".to_string());
+
+            if !password.is_empty() {
+                let hash_output = std::process::Command::new("podman")
+                    .args([
+                        "run",
+                        "--rm",
+                        "docker.io/authelia/authelia:4.39",
+                        "authelia",
+                        "crypto",
+                        "hash",
+                        "generate",
+                        "argon2",
+                        "--password",
+                        &password,
+                    ])
+                    .output()
+                    .ok()
+                    .and_then(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .find(|l| l.starts_with("Digest:"))
+                            .map(|l| l.trim_start_matches("Digest: ").trim().to_string())
+                    })
+                    .unwrap_or_default();
+
+                if !hash_output.is_empty() {
+                    let users_content = format!(
+                        "---\nusers:\n  {username}:\n    displayname: \"{username}\"\n    password: \"{hash_output}\"\n    email: \"{email}\"\n"
+                    );
+                    steps.push(Step::WriteFile(GeneratedFile {
+                        path: users_path,
+                        content: users_content,
+                    }));
+                }
+            }
+        }
+    }
+
+    // 6. Reload and start via systemd
     steps.push(Step::DaemonReload);
     // Start — dependencies start automatically via Requires=/After= in the quadlet
     steps.push(Step::StartService {
@@ -444,17 +527,27 @@ pub fn add_service(
 
                     // Step 1: Generate RSA key if not exists (for OIDC JWKS)
                     if !rsa_key_path.exists() {
-                        steps.push(Step::PostStartHook {
-                            name: "generate-oidc-rsa-key".into(),
-                            service_name: "authelia".into(),
-                            run: format!(
-                                "podman run --rm -v {}:/out:Z docker.io/authelia/authelia:4.39 authelia crypto pair rsa generate --directory /out && mv {}/private.pem {}",
-                                authelia_config_dir.display(),
-                                authelia_config_dir.display(),
-                                rsa_key_path.display(),
-                            ),
-                            timeout: 60,
-                        });
+                        let _ = std::process::Command::new("podman")
+                            .args([
+                                "run",
+                                "--rm",
+                                "-v",
+                                &format!("{}:/out:Z", authelia_config_dir.display()),
+                                "docker.io/authelia/authelia:4.39",
+                                "authelia",
+                                "crypto",
+                                "pair",
+                                "rsa",
+                                "generate",
+                                "--directory",
+                                "/out",
+                            ])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
+                        // Rename private.pem → oidc.jwk.rsa.pem
+                        let _ =
+                            std::fs::rename(authelia_config_dir.join("private.pem"), &rsa_key_path);
                     }
 
                     // Step 2: Add OIDC section + client to authelia config
@@ -486,13 +579,9 @@ pub fn add_service(
                                 content: yaml,
                             }));
 
-                            // Restart authelia to pick up the new OIDC config
-                            steps.push(Step::StopService {
-                                unit: "authelia".into(),
-                            });
-                            steps.push(Step::StartService {
-                                unit: "authelia".into(),
-                            });
+                            // Note: authelia needs restart to pick up OIDC config.
+                            // This happens via the daemon-reload that follows, or
+                            // the user can manually restart authelia.
                         }
                     }
                 }

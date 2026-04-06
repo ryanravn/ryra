@@ -116,9 +116,25 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
         }
         Step::ReloadCaddy => {
             println!("  Reloading Caddy config...");
-            run(
-                "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
-            )
+            // Wait for Caddy container to be running before reload
+            for _ in 0..10 {
+                if Command::new("podman")
+                    .args(["exec", "systemd-caddy", "true"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+                {
+                    return run(
+                        "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            // Caddy not running — skip reload (will pick up config on next start)
+            println!("    Caddy not running, skipping reload");
+            Ok(())
         }
         Step::PullImage { image } => {
             // Skip if already available

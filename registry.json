@@ -119,18 +119,7 @@
           "env": {}
         }
       ],
-      "post_start": [
-        {
-          "name": "generate-config",
-          "run": "[ -f \"$HOME/.local/share/ryra/authelia/config/configuration.yml\" ] && exit 0\nprintf '%s\n' '---' 'server:' \"  address: 'tcp://0.0.0.0:9091'\" 'log:' \"  level: 'info'\" 'authentication_backend:' '  file:' \"    path: '/config/users_database.yml'\" 'session:' '  cookies:' \"    - domain: 'test.local'\" \"      authelia_url: 'https://auth.test.local:8443'\" 'storage:' '  local:' \"    path: '/config/db.sqlite3'\" 'notifier:' '  filesystem:' \"    filename: '/config/notification.txt'\" 'access_control:' \"  default_policy: 'one_factor'\" > \"$HOME/.local/share/ryra/authelia/config/configuration.yml\"\n",
-          "timeout": 10
-        },
-        {
-          "name": "generate-users",
-          "run": "[ -f \"$HOME/.local/share/ryra/authelia/config/users_database.yml\" ] && exit 0\nHASH=$(podman run --rm docker.io/authelia/authelia:4.39 authelia crypto hash generate argon2 --password \"$AUTHELIA_ADMIN_PASSWORD\" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')\nprintf '%s\n' '---' 'users:' \"  $AUTHELIA_ADMIN_USER:\" \"    displayname: $AUTHELIA_ADMIN_USER\" \"    password: $HASH\" \"    email: $AUTHELIA_ADMIN_EMAIL\" > \"$HOME/.local/share/ryra/authelia/config/users_database.yml\"\n",
-          "timeout": 60
-        }
-      ]
+      "post_start": []
     },
     "caddy": {
       "service": {
