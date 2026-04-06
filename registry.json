@@ -123,12 +123,12 @@
       "post_start": [
         {
           "name": "generate-config",
-          "run": "cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << 'YAML'\n---\nserver:\n  address: 'tcp://0.0.0.0:9091'\n\nlog:\n  level: 'info'\n\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\n\nsession:\n  cookies:\n    - domain: 'test.local'\n      authelia_url: 'http://auth.test.local'\n      default_redirection_url: 'http://auth.test.local'\n\nstorage:\n  local:\n    path: '/config/db.sqlite3'\n\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\n\naccess_control:\n  default_policy: 'one_factor'\n  rules:\n    - domain: '*.test.local'\n      policy: 'one_factor'\nYAML\n",
+          "run": "cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << 'YAML'\n---\nserver:\n  address: 'tcp://0.0.0.0:9091'\n\nlog:\n  level: 'info'\n\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\n\nsession:\n  cookies:\n    - domain: 'test.local'\n      authelia_url: 'https://auth.test.local'\n\nstorage:\n  local:\n    path: '/config/db.sqlite3'\n\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\n\naccess_control:\n  default_policy: 'one_factor'\nYAML\n",
           "timeout": 30
         },
         {
           "name": "generate-users",
-          "run": "HASH=$(podman exec systemd-authelia authelia crypto hash generate argon2 --password \"$AUTHELIA_ADMIN_PASSWORD\" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')\ncat > $HOME/.local/share/ryra/authelia/config/users_database.yml << YAML\n---\nusers:\n  ${AUTHELIA_ADMIN_USER}:\n    displayname: \"${AUTHELIA_ADMIN_USER}\"\n    password: \"${HASH}\"\n    email: \"${AUTHELIA_ADMIN_EMAIL}\"\nYAML\n",
+          "run": "HASH=$(podman run --rm docker.io/authelia/authelia:4.39 authelia crypto hash generate argon2 --password \"$AUTHELIA_ADMIN_PASSWORD\" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')\ncat > $HOME/.local/share/ryra/authelia/config/users_database.yml << YAML\n---\nusers:\n  ${AUTHELIA_ADMIN_USER}:\n    displayname: \"${AUTHELIA_ADMIN_USER}\"\n    password: \"${HASH}\"\n    email: \"${AUTHELIA_ADMIN_EMAIL}\"\nYAML\n",
           "timeout": 30
         }
       ]

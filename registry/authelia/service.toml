@@ -107,7 +107,7 @@ YAML
 name = "generate-users"
 timeout = 30
 run = """
-HASH=$(podman exec systemd-authelia authelia crypto hash generate argon2 --password "$AUTHELIA_ADMIN_PASSWORD" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')
+HASH=$(podman run --rm docker.io/authelia/authelia:4.39 authelia crypto hash generate argon2 --password "$AUTHELIA_ADMIN_PASSWORD" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')
 cat > $HOME/.local/share/ryra/authelia/config/users_database.yml << YAML
 ---
 users:
