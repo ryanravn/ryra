@@ -433,33 +433,63 @@ pub fn add_service(
                 }
             }
             config::schema::AuthCredentials::Authelia { .. } => {
-                // Authelia: append OIDC client to configuration.yml
-                // This is done via file manipulation, not an API call
+                // Authelia: register OIDC client via configuration.yml
                 if let (Some(client_id), Some(client_secret)) = (client_id, client_secret) {
-                    let authelia_config_path = service_home("authelia")
-                        .join("config")
-                        .join("configuration.yml");
+                    let authelia_config_dir = service_home("authelia").join("config");
+                    let authelia_config_path = authelia_config_dir.join("configuration.yml");
+                    let rsa_key_path = authelia_config_dir.join("oidc.jwk.rsa.pem");
+
+                    // Step 1: Generate RSA key if not exists (for OIDC JWKS)
+                    if !rsa_key_path.exists() {
+                        steps.push(Step::PostStartHook {
+                            name: "generate-oidc-rsa-key".into(),
+                            service_name: "authelia".into(),
+                            run: format!(
+                                "podman run --rm -v {}:/out:Z docker.io/authelia/authelia:4.39 authelia crypto pair rsa generate --directory /out && mv {}/private.pem {}",
+                                authelia_config_dir.display(),
+                                authelia_config_dir.display(),
+                                rsa_key_path.display(),
+                            ),
+                            timeout: 60,
+                        });
+                    }
+
+                    // Step 2: Add OIDC section + client to authelia config
                     if authelia_config_path.exists() {
                         if let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path) {
-                            // Replace empty clients list or append to existing
                             let redirect_uri =
                                 service_url.map(|u| format!("{u}/.*")).unwrap_or_default();
                             let client_block = format!(
-                                "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'",
+                                "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
                             );
-                            yaml = yaml
-                                .replace("    clients: []", &format!("    clients:{client_block}"));
-                            // If clients already has entries, append
-                            if !yaml.contains(&client_id) && !yaml.contains("clients: []") {
+
+                            if !yaml.contains("identity_providers:") {
+                                // First OIDC client — add the entire OIDC section.
+                                // The RSA key is referenced via Authelia's template filter
+                                // (container path /config/oidc.jwk.rsa.pem).
+                                yaml.push_str(&format!(
+                                    "\nidentity_providers:\n  oidc:\n    jwks:\n      - key_id: 'main'\n        algorithm: 'RS256'\n        use: 'sig'\n        key: {{{{ secret \"/config/oidc.jwk.rsa.pem\" | mindent 10 \"|\" | msquote }}}}\n    clients:{client_block}\n",
+                                ));
+                            } else if !yaml.contains(&client_id) {
+                                // OIDC section exists, append client
                                 yaml = yaml.replace(
                                     "    clients:",
                                     &format!("    clients:{client_block}"),
                                 );
                             }
+
                             steps.push(Step::WriteFile(GeneratedFile {
                                 path: authelia_config_path,
                                 content: yaml,
                             }));
+
+                            // Restart authelia to pick up the new OIDC config
+                            steps.push(Step::StopService {
+                                unit: "authelia".into(),
+                            });
+                            steps.push(Step::StartService {
+                                unit: "authelia".into(),
+                            });
                         }
                     }
                 }

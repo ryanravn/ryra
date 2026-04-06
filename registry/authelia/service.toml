@@ -67,75 +67,23 @@ value = "9091"
 auth = []
 smtp = false
 
-# Post-start: generate the configuration.yml and users_database.yml
-# Authelia needs these files on disk — env vars alone aren't enough for all settings.
-[[post_start]]
-name = "generate-rsa-key"
-timeout = 60
-run = """
-[ -f $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem ] && exit 0
-podman run --rm -v $HOME/.local/share/ryra/authelia/config:/out:Z docker.io/authelia/authelia:4.39 authelia crypto pair rsa generate --directory /out 2>/dev/null && \
-  mv $HOME/.local/share/ryra/authelia/config/private.pem $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2>/dev/null
-"""
-
+# Post-start: generate config files. OIDC is added later by ryra when
+# the first service with --auth + native OIDC is installed.
 [[post_start]]
 name = "generate-config"
-timeout = 30
+timeout = 10
 run = """
-RSA_KEY=$(cat $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem | sed 's/^/          /')
-cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << YAML
----
-server:
-  address: 'tcp://0.0.0.0:9091'
-
-log:
-  level: 'info'
-
-authentication_backend:
-  file:
-    path: '/config/users_database.yml'
-
-session:
-  cookies:
-    - domain: 'test.local'
-      authelia_url: 'https://auth.test.local:8443'
-
-storage:
-  local:
-    path: '/config/db.sqlite3'
-
-notifier:
-  filesystem:
-    filename: '/config/notification.txt'
-
-access_control:
-  default_policy: 'one_factor'
-
-identity_providers:
-  oidc:
-    jwks:
-      - key_id: 'main'
-        algorithm: 'RS256'
-        use: 'sig'
-        key: |
-${RSA_KEY}
-    clients: []
-YAML
+[ -f "$HOME/.local/share/ryra/authelia/config/configuration.yml" ] && exit 0
+printf '%s\n' '---' 'server:' "  address: 'tcp://0.0.0.0:9091'" 'log:' "  level: 'info'" 'authentication_backend:' '  file:' "    path: '/config/users_database.yml'" 'session:' '  cookies:' "    - domain: 'test.local'" "      authelia_url: 'https://auth.test.local:8443'" 'storage:' '  local:' "    path: '/config/db.sqlite3'" 'notifier:' '  filesystem:' "    filename: '/config/notification.txt'" 'access_control:' "  default_policy: 'one_factor'" > "$HOME/.local/share/ryra/authelia/config/configuration.yml"
 """
 
 [[post_start]]
 name = "generate-users"
-timeout = 30
+timeout = 60
 run = """
+[ -f "$HOME/.local/share/ryra/authelia/config/users_database.yml" ] && exit 0
 HASH=$(podman run --rm docker.io/authelia/authelia:4.39 authelia crypto hash generate argon2 --password "$AUTHELIA_ADMIN_PASSWORD" 2>/dev/null | grep 'Digest:' | sed 's/Digest: //')
-cat > $HOME/.local/share/ryra/authelia/config/users_database.yml << YAML
----
-users:
-  ${AUTHELIA_ADMIN_USER}:
-    displayname: "${AUTHELIA_ADMIN_USER}"
-    password: "${HASH}"
-    email: "${AUTHELIA_ADMIN_EMAIL}"
-YAML
+printf '%s\n' '---' 'users:' "  $AUTHELIA_ADMIN_USER:" "    displayname: $AUTHELIA_ADMIN_USER" "    password: $HASH" "    email: $AUTHELIA_ADMIN_EMAIL" > "$HOME/.local/share/ryra/authelia/config/users_database.yml"
 """
 
 [[tests]]
