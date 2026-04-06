@@ -21,8 +21,8 @@ pub struct QuadletParams<'a> {
     pub depends_on: &'a [String],
     /// Healthcheck configuration.
     pub healthcheck: Option<&'a crate::registry::service_def::HealthcheckDef>,
-    /// Whether to read the shared .env file.
-    pub env_file: bool,
+    /// Absolute path to the .env file for this service, or None to skip.
+    pub env_file: Option<&'a str>,
     /// Override the container name (used for DNS on shared network).
     /// If None, podman uses the quadlet filename stem.
     pub container_name: Option<&'a str>,
@@ -71,8 +71,8 @@ pub fn render_container(params: &QuadletParams) -> String {
     }
     lines.push(format!("Network={}.network", params.network));
 
-    if params.env_file {
-        lines.push("EnvironmentFile=%h/.env".to_string());
+    if let Some(env_path) = params.env_file {
+        lines.push(format!("EnvironmentFile={env_path}"));
     }
 
     if let Some(cmd) = params.command {

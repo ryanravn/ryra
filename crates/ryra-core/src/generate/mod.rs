@@ -200,6 +200,7 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
         .collect();
 
     let primary_volumes = build_volume_mappings(name, &service_def.volumes);
+    let env_path = params.env_file.path.to_string_lossy().to_string();
 
     files.push(GeneratedFile {
         path: params.quadlet_dir.join(format!("{name}.container")),
@@ -213,7 +214,7 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
             bind_address: &bind_address,
             depends_on: &sidecar_units,
             healthcheck: None,
-            env_file: true,
+            env_file: Some(&env_path),
             container_name: None,
             init: false,
         }),
@@ -246,7 +247,11 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
                 bind_address: &quadlet::BindAddress::Localhost,
                 depends_on: &deps,
                 healthcheck: container.healthcheck.as_ref(),
-                env_file: container.env_file,
+                env_file: if container.env_file {
+                    Some(&env_path)
+                } else {
+                    None
+                },
                 container_name: Some(&container.name),
                 init: container.init,
             }),
