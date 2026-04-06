@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ryra_core::config::status::{CloudflareStatus, ProviderStatus, RyraStatus, StatusInfo};
+use ryra_core::config::status::{ProviderStatus, RyraStatus, StatusInfo};
 
 pub async fn run(service: Option<&str>, repo: Option<&str>) -> Result<()> {
     match service {
@@ -25,16 +25,6 @@ fn print_global(info: &StatusInfo) {
     println!("Config:     {}", info.config_path.display());
     println!("Host:       {}", info.domain);
     println!();
-    println!(
-        "Cloudflare: {}",
-        match &info.cloudflare {
-            CloudflareStatus::None => "not configured".into(),
-            CloudflareStatus::Configured { zone_name, tunnel } => {
-                let tunnel_str = if *tunnel { " + tunnel" } else { "" };
-                format!("{zone_name}{tunnel_str}")
-            }
-        }
-    );
     println!("SSL:        {}", format_provider(&info.ssl));
     println!("SMTP:       {}", format_provider(&info.smtp));
     println!("Auth:       {}", format_provider(&info.auth));

@@ -12,17 +12,11 @@ pub enum RyraStatus {
 pub struct StatusInfo {
     pub config_path: PathBuf,
     pub domain: String,
-    pub cloudflare: CloudflareStatus,
     pub ssl: ProviderStatus,
     pub smtp: ProviderStatus,
     pub auth: ProviderStatus,
     pub default_repo: Option<String>,
     pub services: Vec<ServiceInfo>,
-}
-
-pub enum CloudflareStatus {
-    None,
-    Configured { zone_name: String, tunnel: bool },
 }
 
 pub enum ProviderStatus {
@@ -41,13 +35,6 @@ impl StatusInfo {
         Self {
             config_path,
             domain: config.base_domain().unwrap_or_default().to_string(),
-            cloudflare: match &config.cloudflare {
-                None => CloudflareStatus::None,
-                Some(cf) => CloudflareStatus::Configured {
-                    zone_name: cf.zone_name.clone(),
-                    tunnel: cf.tunnel.is_some(),
-                },
-            },
             ssl: match &config.ssl {
                 None => ProviderStatus::None,
                 Some(SslConfig::Letsencrypt { email }) => ProviderStatus::Configured {
