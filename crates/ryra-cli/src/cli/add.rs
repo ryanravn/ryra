@@ -17,6 +17,7 @@ use super::prompts;
 pub async fn run(
     services: &[String],
     domain: Option<&str>,
+    auth: bool,
     repo: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
@@ -39,10 +40,20 @@ pub async fn run(
             bail!("{msg}");
         }
 
-        // Auth — ask user if they want to enable auth (if the service supports it)
-        let auth_kind: Option<AuthKind> = if reg_service.def.integrations.auth.is_empty() {
-            None
-        } else if reg_service.def.integrations.auth.len() == 1 {
+        // Auth — determined by --auth flag
+        let auth_kind: Option<AuthKind> = if auth {
+            // --auth flag: use native OIDC if service supports it, otherwise
+            // forward auth is handled by Caddy (no auth_kind needed for that)
+            if !reg_service.def.integrations.auth.is_empty() {
+                Some(reg_service.def.integrations.auth[0].clone())
+            } else {
+                // No native OIDC — forward auth via Caddy will be added automatically
+                // when a domain is set and an auth provider is installed
+                None
+            }
+        } else if !reg_service.def.integrations.auth.is_empty()
+            && reg_service.def.integrations.auth.len() == 1
+        {
             let kind = &reg_service.def.integrations.auth[0];
             if interactive {
                 let enable = Confirm::new()
@@ -50,7 +61,6 @@ pub async fn run(
                     .default(true)
                     .interact()?;
                 if enable {
-                    // Ensure auth is configured
                     let mut config = config.clone();
                     if config.auth.is_none() {
                         match ensure_auth_for_add(
@@ -173,6 +183,7 @@ pub async fn run(
             service,
             domain,
             auth_kind.clone(),
+            auth,
             &env_overrides,
             &repo_url,
             &repo_dir,
@@ -298,6 +309,7 @@ async fn ensure_auth_for_add(
             Box::pin(run(
                 &["authentik".to_string()],
                 None,
+                false,
                 Some(repo_url),
                 dry_run,
             ))

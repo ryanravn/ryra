@@ -121,7 +121,7 @@ smtp = false
 [mappings.auth]
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
-OAUTH_ISSUER_URL = "{{auth.internal_url}}/application/o/immich/"
+OAUTH_ISSUER_URL = "{{auth.issuer}}"
 OAUTH_REDIRECT_URL = "{{service.url}}/auth/login"
 OAUTHLIB_INSECURE_TRANSPORT = "1"
 

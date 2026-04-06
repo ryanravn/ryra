@@ -257,6 +257,7 @@ pub fn add_service(
     service_name: &str,
     domain: Option<&str>,
     auth_kind: Option<registry::service_def::AuthKind>,
+    enable_auth: bool,
     env_overrides: &BTreeMap<String, String>,
     repo_url: &str,
     repo_dir: &Path,
@@ -407,29 +408,64 @@ pub fn add_service(
         unit: service_name.to_string(),
     });
 
-    // Register OAuth provider in authentik via API
-    if let (
-        Some(registry::service_def::AuthKind::Oidc),
-        Some(config::schema::AuthCredentials::Authentik { url, api_token }),
-        Some(client_id),
-        Some(client_secret),
-        Some(service_url),
-    ) = (
-        auth_kind.as_ref(),
-        config.auth.as_ref(),
-        output.ctx.get("auth.client_id"),
-        output.ctx.get("auth.client_secret"),
-        output.ctx.get("service.url"),
-    ) {
-        steps.push(Step::RegisterAuthProvider {
-            service_name: service_name.to_string(),
-            api_url: url.clone(),
-            api_token: api_token.clone(),
-            client_id: client_id.clone(),
-            client_secret: client_secret.clone(),
-            redirect_uri: format!("{service_url}/.*"),
-            launch_url: service_url.clone(),
-        });
+    // Register OIDC client with the auth provider
+    if let (Some(registry::service_def::AuthKind::Oidc), Some(auth)) =
+        (auth_kind.as_ref(), config.auth.as_ref())
+    {
+        let client_id = output.ctx.get("auth.client_id").cloned();
+        let client_secret = output.ctx.get("auth.client_secret").cloned();
+        let service_url = output.ctx.get("service.url").cloned();
+
+        match auth {
+            config::schema::AuthCredentials::Authentik { url, api_token } => {
+                if let (Some(client_id), Some(client_secret), Some(service_url)) =
+                    (client_id, client_secret, service_url)
+                {
+                    steps.push(Step::RegisterAuthProvider {
+                        service_name: service_name.to_string(),
+                        api_url: url.clone(),
+                        api_token: api_token.clone(),
+                        client_id,
+                        client_secret,
+                        redirect_uri: format!("{service_url}/.*"),
+                        launch_url: service_url,
+                    });
+                }
+            }
+            config::schema::AuthCredentials::Authelia { .. } => {
+                // Authelia: append OIDC client to configuration.yml
+                // This is done via file manipulation, not an API call
+                if let (Some(client_id), Some(client_secret)) = (client_id, client_secret) {
+                    let authelia_config_path = service_home("authelia")
+                        .join("config")
+                        .join("configuration.yml");
+                    if authelia_config_path.exists() {
+                        if let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path) {
+                            // Replace empty clients list or append to existing
+                            let redirect_uri =
+                                service_url.map(|u| format!("{u}/.*")).unwrap_or_default();
+                            let client_block = format!(
+                                "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'",
+                            );
+                            yaml = yaml
+                                .replace("    clients: []", &format!("    clients:{client_block}"));
+                            // If clients already has entries, append
+                            if !yaml.contains(&client_id) && !yaml.contains("clients: []") {
+                                yaml = yaml.replace(
+                                    "    clients:",
+                                    &format!("    clients:{client_block}"),
+                                );
+                            }
+                            steps.push(Step::WriteFile(GeneratedFile {
+                                path: authelia_config_path,
+                                content: yaml,
+                            }));
+                        }
+                    }
+                }
+            }
+            config::schema::AuthCredentials::External { .. } => {}
+        }
     }
 
     // 6. Post-start hooks — run after service is active
@@ -493,12 +529,12 @@ pub fn add_service(
             let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
 
             // Use forward_auth when:
-            // - An auth provider (authelia or authentik) is installed, AND
-            // - The service has no native OIDC mappings, AND
+            // - User requested auth (--auth flag), AND
+            // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
             // - The service is not the auth provider itself
             let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
             let is_auth_provider = service_name == "authelia" || service_name == "authentik";
-            let forward_auth = if !has_native_oidc && !is_auth_provider {
+            let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
                 // Try authelia first, then authentik
                 config
                     .services
@@ -655,9 +691,17 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         domain: params.domain.map(|d| d.to_string()),
     });
 
-    // Auto-configure [auth] when authentik is installed (so subsequent services
-    // can use it for auth without manual setup).
-    if params.service_name == "authentik"
+    // Auto-configure [auth] when an auth provider is installed
+    if params.service_name == "authelia" {
+        let port = params
+            .allocated_ports
+            .iter()
+            .find(|(name, _)| name == "http")
+            .map(|(_, p)| *p)
+            .unwrap_or(9091);
+        let url = format!("http://localhost:{port}");
+        config.auth = Some(config::schema::AuthCredentials::Authelia { url, port });
+    } else if params.service_name == "authentik"
         && let Some(token) = parse_env_var(params.env_content, "AUTHENTIK_BOOTSTRAP_TOKEN")
     {
         let port = params

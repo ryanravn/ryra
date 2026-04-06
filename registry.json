@@ -121,8 +121,13 @@
       ],
       "post_start": [
         {
+          "name": "generate-rsa-key",
+          "run": "[ -f $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem ] && exit 0\nopenssl genrsa -out $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2048 2>/dev/null\n",
+          "timeout": 30
+        },
+        {
           "name": "generate-config",
-          "run": "cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << 'YAML'\n---\nserver:\n  address: 'tcp://0.0.0.0:9091'\n\nlog:\n  level: 'info'\n\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\n\nsession:\n  cookies:\n    - domain: 'test.local'\n      authelia_url: 'https://auth.test.local'\n\nstorage:\n  local:\n    path: '/config/db.sqlite3'\n\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\n\naccess_control:\n  default_policy: 'one_factor'\nYAML\n",
+          "run": "RSA_KEY=$(cat $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem | sed 's/^/          /')\ncat > $HOME/.local/share/ryra/authelia/config/configuration.yml << YAML\n---\nserver:\n  address: 'tcp://0.0.0.0:9091'\n\nlog:\n  level: 'info'\n\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\n\nsession:\n  cookies:\n    - domain: 'test.local'\n      authelia_url: 'https://auth.test.local:8443'\n\nstorage:\n  local:\n    path: '/config/db.sqlite3'\n\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\n\naccess_control:\n  default_policy: 'one_factor'\n\nidentity_providers:\n  oidc:\n    jwks:\n      - key_id: 'main'\n        algorithm: 'RS256'\n        use: 'sig'\n        key: |\n${RSA_KEY}\n    clients: []\nYAML\n",
           "timeout": 30
         },
         {
@@ -563,10 +568,17 @@
       ],
       "mappings": {
         "smtp": {},
-        "auth": {}
+        "auth": {
+          "FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION": "true",
+          "FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES": "openid email profile",
+          "FORGEJO__openid__ENABLE_OPENID_SIGNIN": "true",
+          "FORGEJO__service__ENABLE_OPENID_SIGNIN": "true"
+        }
       },
       "integrations": {
-        "auth": [],
+        "auth": [
+          "oidc"
+        ],
         "smtp": false
       },
       "tests": [
@@ -760,7 +772,7 @@
           "OAUTHLIB_INSECURE_TRANSPORT": "1",
           "OAUTH_CLIENT_ID": "{{auth.client_id}}",
           "OAUTH_CLIENT_SECRET": "{{auth.client_secret}}",
-          "OAUTH_ISSUER_URL": "{{auth.internal_url}}/application/o/immich/",
+          "OAUTH_ISSUER_URL": "{{auth.issuer}}",
           "OAUTH_REDIRECT_URL": "{{service.url}}/auth/login"
         }
       },
@@ -1461,7 +1473,7 @@
         "auth": {
           "OIDC_CLIENT_ID": "{{auth.client_id}}",
           "OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
-          "OIDC_ISSUER": "{{auth.url}}/application/o/whoami-auth/"
+          "OIDC_ISSUER": "{{auth.issuer}}"
         }
       },
       "integrations": {

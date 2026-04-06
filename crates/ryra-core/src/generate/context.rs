@@ -39,22 +39,27 @@ pub fn build_context(
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let url = auth.url().to_string();
         // auth.internal_url is how containers reach the auth provider.
-        // Containers can reach host-published ports directly via
-        // host.containers.internal — no nginx proxy needed.
-        let internal_url = match auth {
-            crate::config::schema::AuthCredentials::Authentik { url: auth_url, .. } => {
-                // Extract port from auth URL (e.g., "http://localhost:9000" → 9000)
-                let port = auth_url
-                    .rsplit(':')
-                    .next()
-                    .and_then(|p| p.parse::<u16>().ok())
-                    .unwrap_or(9000);
-                format!("http://host.containers.internal:{port}")
-            }
-            _ => url.clone(),
+        let internal_url = match auth.port() {
+            Some(port) => format!("http://host.containers.internal:{port}"),
+            None => url.clone(),
         };
-        ctx.insert("auth.url".into(), url);
-        ctx.insert("auth.internal_url".into(), internal_url);
+        ctx.insert("auth.url".into(), url.clone());
+        ctx.insert("auth.internal_url".into(), internal_url.clone());
+        ctx.insert("auth.provider".into(), auth.provider_name().to_string());
+
+        // OIDC issuer URL — differs per provider
+        let issuer = match auth {
+            crate::config::schema::AuthCredentials::Authelia { .. } => {
+                // Authelia's OIDC issuer is just its base URL
+                internal_url.clone()
+            }
+            crate::config::schema::AuthCredentials::Authentik { .. } => {
+                // Authentik's OIDC issuer includes the application slug
+                format!("{internal_url}/application/o/{{{{service.name}}}}/")
+            }
+            crate::config::schema::AuthCredentials::External { .. } => url.clone(),
+        };
+        ctx.insert("auth.issuer".into(), issuer);
         ctx.insert(
             "auth.client_id".into(),
             secret::generate(&EnvFormat::Uuid, None),

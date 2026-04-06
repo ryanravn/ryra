@@ -67,8 +67,14 @@ value = "{{secret.db_password}}"
 upstream_port = "http"
 
 [integrations]
-auth = []
+auth = ["oidc"]
 smtp = false
+
+[mappings.auth]
+FORGEJO__openid__ENABLE_OPENID_SIGNIN = "true"
+FORGEJO__service__ENABLE_OPENID_SIGNIN = "true"
+FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES = "openid email profile"
+FORGEJO__oauth2_client__ENABLE_AUTO_REGISTRATION = "true"
 
 [[tests]]
 name = "forgejo-responds"

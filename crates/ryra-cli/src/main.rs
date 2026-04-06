@@ -36,6 +36,9 @@ enum Command {
         /// Domain for this service (adds Caddy reverse proxy route)
         #[arg(long)]
         domain: Option<String>,
+        /// Enable auth (forward auth via Caddy, or native OIDC if supported)
+        #[arg(long)]
+        auth: bool,
         /// Repo to install from (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
@@ -175,12 +178,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Add {
             ref services,
             ref domain,
+            auth,
             ref repo,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(services, domain.as_deref(), repo.as_deref(), dry_run).await?
+            cli::add::run(services, domain.as_deref(), auth, repo.as_deref(), dry_run).await?
         }
         Command::Remove {
             ref services,

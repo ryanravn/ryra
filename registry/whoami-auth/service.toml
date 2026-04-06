@@ -18,7 +18,7 @@ smtp = false
 [mappings.auth]
 OIDC_CLIENT_ID = "{{auth.client_id}}"
 OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
-OIDC_ISSUER = "{{auth.url}}/application/o/whoami-auth/"
+OIDC_ISSUER = "{{auth.issuer}}"
 
 [[tests]]
 name = "http-responds"

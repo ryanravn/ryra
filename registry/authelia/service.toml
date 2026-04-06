@@ -70,10 +70,19 @@ smtp = false
 # Post-start: generate the configuration.yml and users_database.yml
 # Authelia needs these files on disk — env vars alone aren't enough for all settings.
 [[post_start]]
+name = "generate-rsa-key"
+timeout = 30
+run = """
+[ -f $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem ] && exit 0
+openssl genrsa -out $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem 2048 2>/dev/null
+"""
+
+[[post_start]]
 name = "generate-config"
 timeout = 30
 run = """
-cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << 'YAML'
+RSA_KEY=$(cat $HOME/.local/share/ryra/authelia/config/oidc.jwk.rsa.pem | sed 's/^/          /')
+cat > $HOME/.local/share/ryra/authelia/config/configuration.yml << YAML
 ---
 server:
   address: 'tcp://0.0.0.0:9091'
@@ -88,7 +97,7 @@ authentication_backend:
 session:
   cookies:
     - domain: 'test.local'
-      authelia_url: 'https://auth.test.local'
+      authelia_url: 'https://auth.test.local:8443'
 
 storage:
   local:
@@ -100,6 +109,16 @@ notifier:
 
 access_control:
   default_policy: 'one_factor'
+
+identity_providers:
+  oidc:
+    jwks:
+      - key_id: 'main'
+        algorithm: 'RS256'
+        use: 'sig'
+        key: |
+${RSA_KEY}
+    clients: []
 YAML
 """
 

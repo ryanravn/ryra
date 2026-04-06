@@ -186,7 +186,7 @@ mod tests {
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
         assert!(block.contains("whoami.example.com {"));
-        assert!(block.contains("    reverse_proxy localhost:8080"));
+        assert!(block.contains("    reverse_proxy host.containers.internal:8080"));
         assert!(block.ends_with("}\n"));
     }
 
@@ -202,22 +202,24 @@ mod tests {
             }),
         };
         let block = render_site_block(&params);
-        assert!(block.contains("forward_auth localhost:9000"));
+        assert!(block.contains("forward_auth host.containers.internal:9000"));
         assert!(block.contains("uri /outpost.goauthentik.io/auth/caddy"));
         assert!(block.contains("copy_headers"));
     }
 
     #[test]
     fn add_route_to_empty() {
-        let block = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:8080\n}\n";
+        let block = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
         let result = add_route("", "whoami", block);
         assert_eq!(result, format!("{block}\n"));
     }
 
     #[test]
     fn add_route_appends() {
-        let existing = "# ryra:foo\nfoo.example.com {\n    reverse_proxy localhost:3000\n}\n";
-        let block = "# ryra:bar\nbar.example.com {\n    reverse_proxy localhost:4000\n}\n";
+        let existing =
+            "# ryra:foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n";
+        let block =
+            "# ryra:bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n";
         let result = add_route(existing, "bar", block);
         assert!(result.contains("# ryra:foo"));
         assert!(result.contains("# ryra:bar"));
@@ -225,9 +227,8 @@ mod tests {
 
     #[test]
     fn add_route_replaces_existing() {
-        let existing = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:8080\n}\n";
-        let new_block =
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:9090\n}\n";
+        let existing = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
+        let new_block = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:9090\n}\n";
         let result = add_route(existing, "whoami", new_block);
         assert!(!result.contains("8080"));
         assert!(result.contains("9090"));
@@ -235,8 +236,7 @@ mod tests {
 
     #[test]
     fn remove_route_single() {
-        let caddyfile =
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:8080\n}\n";
+        let caddyfile = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
         let result = remove_route(caddyfile, "whoami");
         assert_eq!(result, "");
     }
@@ -244,20 +244,20 @@ mod tests {
     #[test]
     fn remove_route_preserves_others() {
         let caddyfile = concat!(
-            "# ryra:foo\nfoo.example.com {\n    reverse_proxy localhost:3000\n}\n\n",
-            "# ryra:bar\nbar.example.com {\n    reverse_proxy localhost:4000\n}\n",
+            "# ryra:foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n\n",
+            "# ryra:bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n",
         );
         let result = remove_route(caddyfile, "foo");
         assert!(!result.contains("foo"));
         assert!(result.contains("# ryra:bar"));
-        assert!(result.contains("reverse_proxy localhost:4000"));
+        assert!(result.contains("reverse_proxy host.containers.internal:4000"));
     }
 
     #[test]
     fn remove_route_preserves_user_blocks() {
         let caddyfile = concat!(
             "mysite.example.com {\n    root * /var/www\n    file_server\n}\n\n",
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:8080\n}\n",
+            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n",
         );
         let result = remove_route(caddyfile, "whoami");
         assert!(result.contains("mysite.example.com"));
@@ -270,10 +270,10 @@ mod tests {
         let caddyfile = concat!(
             "# ryra:grafana\n",
             "grafana.example.com {\n",
-            "    forward_auth localhost:9000 {\n",
+            "    forward_auth host.containers.internal:9000 {\n",
             "        uri /outpost.goauthentik.io/auth/caddy\n",
             "    }\n",
-            "    reverse_proxy localhost:3000\n",
+            "    reverse_proxy host.containers.internal:3000\n",
             "}\n",
         );
         let result = remove_route(caddyfile, "grafana");
@@ -283,8 +283,8 @@ mod tests {
     #[test]
     fn parse_domains_basic() {
         let caddyfile = concat!(
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:8080\n}\n\n",
-            "# ryra:grafana\ngrafana.example.com {\n    reverse_proxy localhost:3000\n}\n",
+            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n\n",
+            "# ryra:grafana\ngrafana.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n",
         );
         let domains = parse_domains(caddyfile);
         assert_eq!(domains.len(), 2);
@@ -302,7 +302,7 @@ mod tests {
     fn parse_domains_ignores_user_blocks() {
         let caddyfile = concat!(
             "mysite.example.com {\n    file_server\n}\n\n",
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy localhost:8080\n}\n",
+            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n",
         );
         let domains = parse_domains(caddyfile);
         assert_eq!(domains.len(), 1);
