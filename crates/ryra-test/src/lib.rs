@@ -42,8 +42,8 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     about = "E2E test runner for ryra — spins up VMs (QEMU on Linux, Apple Virtualization on macOS)"
 )]
 pub struct Args {
-    /// Max concurrent VMs
-    #[arg(long, default_value_t = 1)]
+    /// Max concurrent VMs (0 = auto-detect from available RAM)
+    #[arg(long, default_value_t = 0)]
     pub parallel: usize,
 
     /// Base image distro
@@ -239,7 +239,7 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
 }
 
 /// Run the E2E test suite with the given arguments.
-pub async fn run(args: Args) -> Result<()> {
+pub async fn run(mut args: Args) -> Result<()> {
     install_signal_handler();
 
     let registry_path = resolve_registry_path(args.registry.as_ref())?;
@@ -325,6 +325,17 @@ pub async fn run(args: Args) -> Result<()> {
     println!("Pre-caching {} container images...", all_images.len());
     for img in &all_images {
         machine::ensure_image_cached(img).await?;
+    }
+
+    // Auto-detect parallelism from available RAM when --parallel=0 (the default)
+    if args.parallel == 0 {
+        let total_mb = ryra_vm::read_host_memory()
+            .map(|(total, _)| total)
+            .unwrap_or(4096);
+        let vm_mb = args.memory.unwrap_or(1024) as u64;
+        // Leave 2GB for the host, use the rest for VMs
+        let available = total_mb.saturating_sub(2048);
+        args.parallel = (available / vm_mb).max(1) as usize;
     }
 
     // Compute per-test memory and show summary

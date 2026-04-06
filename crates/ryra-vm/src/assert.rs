@@ -64,20 +64,27 @@ impl Machine {
         Ok(())
     }
 
-    pub async fn wait_for_service(
-        &self,
-        unit: &str,
-        timeout: std::time::Duration,
-    ) -> Result<()> {
+    pub async fn wait_for_service(&self, unit: &str, timeout: std::time::Duration) -> Result<()> {
         let start = std::time::Instant::now();
         loop {
-            let cmd = format!(
-                "systemctl --user is-active {unit} 2>/dev/null || echo inactive"
-            );
-            if let Ok(output) = self.exec(&cmd).await
-                && output.stdout_trimmed() == "active"
-            {
-                return Ok(());
+            let cmd = format!("systemctl --user is-active {unit} 2>/dev/null || echo inactive");
+            if let Ok(output) = self.exec(&cmd).await {
+                let status = output.stdout_trimmed();
+                if status == "active" {
+                    return Ok(());
+                }
+                if status == "failed" {
+                    // Get failure reason immediately
+                    let diag_cmd = format!(
+                        "systemctl --user status {unit} 2>&1 | head -15; echo '---'; journalctl --user -u {unit} --no-pager -n 10 2>&1"
+                    );
+                    let diag = self
+                        .exec(&diag_cmd)
+                        .await
+                        .map(|o| o.stdout.trim().to_string())
+                        .unwrap_or_default();
+                    bail!("service {unit} failed to start:\n{diag}");
+                }
             }
 
             if start.elapsed() > timeout {

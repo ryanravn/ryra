@@ -267,7 +267,7 @@ async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String
 /// Wait for a service's systemd unit to become active.
 async fn wait_for_service(vm: &Machine, service: &str) -> Event {
     let t = Instant::now();
-    let timeout = Duration::from_secs(300);
+    let timeout = Duration::from_secs(60);
 
     let unit = format!("{service}.service");
     let result = vm.wait_for_service(&unit, timeout).await;
@@ -479,7 +479,7 @@ fn lifecycle_step_kind(step: &StepEntry) -> EventKind {
 /// container, not just whether rootlessport is listening on the host side.
 async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
     let t = Instant::now();
-    let timeout = Duration::from_secs(300);
+    let timeout = Duration::from_secs(60);
     let mut last_log = std::time::Instant::now();
     // First few seconds: rootlessport is listening but the container app
     // may not be ready yet. A successful bash /dev/tcp probe means the
@@ -507,7 +507,7 @@ async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
             };
         }
 
-        if last_log.elapsed().as_secs() >= 30 {
+        if last_log.elapsed().as_secs() >= 10 {
             println!(
                 "[{test_name}]     still waiting for port {port}... ({:.0}s)",
                 t.elapsed().as_secs_f64()
