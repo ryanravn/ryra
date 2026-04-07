@@ -357,9 +357,12 @@
           "FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES": "openid email profile",
           "FORGEJO__openid__ENABLE_OPENID_SIGNIN": "true",
           "FORGEJO__service__ENABLE_OPENID_SIGNIN": "true",
+          "OIDC_AUTH_URL": "{{auth.external_url}}/api/oidc/authorization",
           "OIDC_CLIENT_ID": "{{auth.client_id}}",
           "OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
-          "OIDC_DISCOVERY_URL": "{{auth.internal_url}}/.well-known/openid-configuration"
+          "OIDC_DISCOVERY_URL": "{{auth.internal_url}}/.well-known/openid-configuration",
+          "OIDC_PROFILE_URL": "{{auth.internal_url}}/api/oidc/userinfo",
+          "OIDC_TOKEN_URL": "{{auth.internal_url}}/api/oidc/token"
         }
       },
       "integrations": {
@@ -391,7 +394,7 @@
       "post_start": [
         {
           "name": "register-oidc",
-          "run": "[ -z \"$OIDC_CLIENT_ID\" ] && exit 0\necho \"Waiting for Forgejo API...\"\nfor i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break; sleep 5; done\npodman exec -u git systemd-forgejo forgejo admin auth add-oauth --name \"Authelia\" --provider \"openidConnect\" --key \"$OIDC_CLIENT_ID\" --secret \"$OIDC_CLIENT_SECRET\" --auto-discover-url \"$OIDC_DISCOVERY_URL\" --scopes \"openid email profile\" 2>/dev/null || true\n",
+          "run": "[ -z \"$OIDC_CLIENT_ID\" ] && exit 0\necho \"Waiting for Forgejo API...\"\nfor i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break; sleep 5; done\npodman exec -u git systemd-forgejo forgejo admin auth add-oauth --name \"Authelia\" --provider \"openidConnect\" --key \"$OIDC_CLIENT_ID\" --secret \"$OIDC_CLIENT_SECRET\" --auto-discover-url \"$OIDC_DISCOVERY_URL\" --custom-auth-url \"$OIDC_AUTH_URL\" --custom-token-url \"$OIDC_TOKEN_URL\" --custom-profile-url \"$OIDC_PROFILE_URL\" --scopes \"openid email profile\" 2>&1 || true\n",
           "timeout": 300
         }
       ]

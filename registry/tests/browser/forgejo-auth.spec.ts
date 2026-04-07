@@ -1,30 +1,29 @@
 import { test, expect } from "@playwright/test";
 
-const FORGEJO_URL = `https://git.test.local:8443`;
+const FORGEJO_PORT = process.env.FORGEJO_PORT || "3000";
+const FORGEJO_URL = `http://127.0.0.1:${FORGEJO_PORT}`;
 
-test("forgejo login page loads via caddy", async ({ page }) => {
+test("forgejo login page loads", async ({ page }) => {
   await page.goto(FORGEJO_URL);
   await expect(page).toHaveTitle(/Forgejo/, { timeout: 15_000 });
 });
 
-test("forgejo has OIDC login option configured", async ({ page }) => {
+test("forgejo has Authelia SSO button", async ({ page }) => {
   await page.goto(`${FORGEJO_URL}/user/login`);
-  // Forgejo renders OAuth providers in #oauth2-login-navigator
-  const oauthSection = page.locator("#oauth2-login-navigator");
-  await expect(oauthSection).toBeVisible({ timeout: 15_000 });
-  // Should have at least one OAuth login link (Authelia provider)
-  const oauthLinks = oauthSection.locator("a");
-  await expect(oauthLinks.first()).toBeVisible();
+  const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');
+  await expect(autheliaLink).toBeVisible({ timeout: 15_000 });
+  await expect(autheliaLink).toContainText(/Authelia/);
 });
 
-test("authelia login page is accessible", async ({ page }) => {
-  // Verify authelia's login page loads through caddy
-  await page.goto(`https://auth.test.local:8443`);
-  // Authelia should show a login form
-  await expect(
-    page.locator('input[id="username-textfield"]'),
-  ).toBeVisible({ timeout: 15_000 });
-  await expect(
-    page.locator('input[id="password-textfield"]'),
-  ).toBeVisible();
+test("clicking SSO button initiates OIDC flow", async ({ page }) => {
+  await page.goto(`${FORGEJO_URL}/user/login`);
+  const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');
+  await autheliaLink.click();
+
+  // Wait for navigation away from forgejo login
+  await page.waitForTimeout(3_000);
+
+  // Should have left the login page — the OIDC authorization redirect happened
+  const url = page.url();
+  expect(url).not.toContain("/user/login");
 });

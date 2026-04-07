@@ -6,7 +6,9 @@ export default defineConfig({
   retries: 0,
   use: {
     headless: true,
-    // Accept self-signed certs from Caddy's internal TLS
     ignoreHTTPSErrors: true,
+    launchOptions: {
+      args: ["--ignore-certificate-errors"],
+    },
   },
 });

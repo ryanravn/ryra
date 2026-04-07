@@ -572,8 +572,12 @@ pub fn add_service(
                     if authelia_config_path.exists()
                         && let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path)
                     {
-                        let redirect_uri =
-                            service_url.map(|u| format!("{u}/.*")).unwrap_or_default();
+                        // Use domain-based URL for redirects (browser-accessible via Caddy)
+                        // Fall back to localhost-based URL if no domain
+                        let redirect_uri = match domain {
+                            Some(d) => format!("https://{d}:8443/.*"),
+                            None => service_url.map(|u| format!("{u}/.*")).unwrap_or_default(),
+                        };
                         let client_block = format!(
                             "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
                         );

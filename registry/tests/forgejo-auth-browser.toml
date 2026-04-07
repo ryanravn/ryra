@@ -61,6 +61,8 @@ action = "assert"
 name = "playwright-auth-flow"
 run = """
 export PATH="$HOME/.bun/bin:$PATH"
+export FORGEJO_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)
+export AUTHELIA_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/authelia/.env | cut -d= -f2)
 cd /opt/ryra-test-registry/tests/browser
 ln -sf /opt/playwright/node_modules .
 bunx playwright test forgejo-auth.spec.ts --reporter=list

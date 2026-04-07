@@ -51,6 +51,16 @@ pub fn build_context(
         ctx.insert("auth.internal_url".into(), internal_url.clone());
         ctx.insert("auth.provider".into(), auth.provider_name().to_string());
 
+        // auth.external_url — browser-accessible URL via Caddy (HTTPS with domain)
+        let external_url = config
+            .services
+            .iter()
+            .find(|s| s.name == auth.provider_name())
+            .and_then(|s| s.domain.as_ref())
+            .map(|d| format!("https://{d}:8443"))
+            .unwrap_or_else(|| url.clone());
+        ctx.insert("auth.external_url".into(), external_url);
+
         // OIDC issuer URL — differs per provider
         let issuer = match auth {
             crate::config::schema::AuthCredentials::Authelia { .. } => {
