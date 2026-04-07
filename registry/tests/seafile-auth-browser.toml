@@ -2,7 +2,7 @@
 name = "seafile-auth-browser"
 browser = true
 
-# Set up /etc/hosts for .test.local domains
+# /etc/hosts for domain resolution
 [[steps]]
 action = "run"
 name = "setup-hosts"
@@ -42,22 +42,22 @@ timeout = 900
 action = "wait"
 service = "seafile"
 
-# Wait for seafile HTTP to be ready via caddy
+# Wait for seafile HTTP
 [[steps]]
 action = "assert"
-name = "seafile-via-caddy"
-run = "for i in $(seq 1 60); do curl -sk -o /dev/null -w '%{http_code}' --resolve seafile.test.local:8443:127.0.0.1 https://seafile.test.local:8443 | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
+name = "seafile-http-ready"
+run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/seafile/.env | cut -d= -f2) 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
 timeout = 360
 
-# Run playwright auth tests
+# Run playwright SSO tests
 [[steps]]
 action = "assert"
-name = "playwright-auth-tests"
+name = "playwright-sso-tests"
 run = """
 export PATH="$HOME/.bun/bin:$PATH"
-export RYRA_PORT_HTTP=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/seafile/.env | cut -d= -f2)
-cd /opt/ryra-test-registry/seafile/tests
+export SEAFILE_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/seafile/.env | cut -d= -f2)
+cd /opt/ryra-test-registry/tests/browser
 ln -sf /opt/playwright/node_modules .
-bunx playwright test --reporter=list
+bunx playwright test seafile-auth.spec.ts --reporter=list
 """
 timeout = 120

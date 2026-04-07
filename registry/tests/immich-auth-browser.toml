@@ -1,0 +1,75 @@
+[test]
+name = "immich-auth-browser"
+browser = true
+
+# /etc/hosts for domain resolution
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local immich.test.local' >> /etc/hosts"
+
+# Install caddy
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia
+[[steps]]
+action = "run"
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install immich with OIDC auth
+[[steps]]
+action = "run"
+name = "add-immich"
+run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
+INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
+ryra add immich --auth --domain immich.test.local --repo /opt/ryra-test-registry"""
+timeout = 900
+
+[[steps]]
+action = "wait"
+service = "immich"
+
+# Wait for immich HTTP
+[[steps]]
+action = "assert"
+name = "immich-http-ready"
+run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+# Create admin user
+[[steps]]
+action = "run"
+name = "create-admin"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+curl -sf -X POST "http://127.0.0.1:$PORT/api/auth/admin-sign-up" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@test.local","password":"testpassword123","name":"Admin"}' \
+  >/dev/null 2>&1 || true
+"""
+
+# Run playwright SSO tests
+[[steps]]
+action = "assert"
+name = "playwright-sso-tests"
+run = """
+export PATH="$HOME/.bun/bin:$PATH"
+export IMMICH_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+cd /opt/ryra-test-registry/tests/browser
+ln -sf /opt/playwright/node_modules .
+bunx playwright test immich-auth.spec.ts --reporter=list
+"""
+timeout = 120
