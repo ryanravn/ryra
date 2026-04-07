@@ -1,0 +1,63 @@
+[test]
+name = "seafile-auth-browser"
+browser = true
+
+# Set up /etc/hosts for .test.local domains
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local seafile.test.local' >> /etc/hosts"
+
+# Install caddy
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia
+[[steps]]
+action = "run"
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install seafile with OIDC auth
+[[steps]]
+action = "run"
+name = "add-seafile"
+run = """INIT_SEAFILE_ADMIN_EMAIL=admin@test.local \
+INIT_SEAFILE_ADMIN_PASSWORD=testpassword123 \
+ryra add seafile --auth --domain seafile.test.local --repo /opt/ryra-test-registry"""
+timeout = 900
+
+[[steps]]
+action = "wait"
+service = "seafile"
+
+# Wait for seafile HTTP to be ready via caddy
+[[steps]]
+action = "assert"
+name = "seafile-via-caddy"
+run = "for i in $(seq 1 60); do curl -sk -o /dev/null -w '%{http_code}' --resolve seafile.test.local:8443:127.0.0.1 https://seafile.test.local:8443 | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+# Run playwright auth tests
+[[steps]]
+action = "assert"
+name = "playwright-auth-tests"
+run = """
+export PATH="$HOME/.bun/bin:$PATH"
+export RYRA_PORT_HTTP=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/seafile/.env | cut -d= -f2)
+cd /opt/ryra-test-registry/seafile/tests
+ln -sf /opt/playwright/node_modules .
+bunx playwright test --reporter=list
+"""
+timeout = 120
