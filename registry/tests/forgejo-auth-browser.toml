@@ -1,0 +1,68 @@
+[test]
+name = "forgejo-auth-browser"
+browser = true
+
+# Set up /etc/hosts so browser can resolve .test.local domains
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = """
+echo '127.0.0.1 auth.test.local git.test.local' >> /etc/hosts
+"""
+
+# Install caddy
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia
+[[steps]]
+action = "run"
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install forgejo with OIDC auth
+[[steps]]
+action = "run"
+name = "add-forgejo"
+run = "ryra add forgejo --auth --domain git.test.local --repo /opt/ryra-test-registry"
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "forgejo"
+
+# Wait for forgejo to respond via caddy
+[[steps]]
+action = "assert"
+name = "forgejo-via-caddy"
+run = "for i in $(seq 1 30); do curl -sk -o /dev/null -w '%{http_code}' --resolve git.test.local:8443:127.0.0.1 https://git.test.local:8443 | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+timeout = 90
+
+# Wait for authelia to respond via caddy
+[[steps]]
+action = "assert"
+name = "authelia-via-caddy"
+run = "curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443 | grep -qE '^(200|302)'"
+
+# Run playwright auth flow tests
+[[steps]]
+action = "assert"
+name = "playwright-auth-flow"
+run = """
+export PATH="$HOME/.bun/bin:$PATH"
+cd /opt/ryra-test-registry/tests/browser
+ln -sf /opt/playwright/node_modules .
+bunx playwright test forgejo-auth.spec.ts --reporter=list
+"""
+timeout = 120

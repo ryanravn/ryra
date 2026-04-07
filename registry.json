@@ -322,7 +322,7 @@
           "length": null
         },
         {
-          "name": "FORGEJO__INSTALL_LOCK",
+          "name": "FORGEJO__security__INSTALL_LOCK",
           "value": "true",
           "kind": "default",
           "prompt": null,
@@ -359,7 +359,7 @@
           "FORGEJO__service__ENABLE_OPENID_SIGNIN": "true",
           "OIDC_CLIENT_ID": "{{auth.client_id}}",
           "OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
-          "OIDC_DISCOVERY_URL": "{{auth.url}}/.well-known/openid-configuration"
+          "OIDC_DISCOVERY_URL": "{{auth.internal_url}}/.well-known/openid-configuration"
         }
       },
       "integrations": {
@@ -391,8 +391,8 @@
       "post_start": [
         {
           "name": "register-oidc",
-          "run": "[ -z \"$OIDC_CLIENT_ID\" ] && exit 0\nfor i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api && break; sleep 2; done\npodman exec -u git systemd-forgejo forgejo admin auth add-oauth --name \"Authelia\" --provider \"openidConnect\" --key \"$OIDC_CLIENT_ID\" --secret \"$OIDC_CLIENT_SECRET\" --auto-discover-url \"$OIDC_DISCOVERY_URL\" --scopes \"openid email profile\" 2>/dev/null || true\n",
-          "timeout": 60
+          "run": "[ -z \"$OIDC_CLIENT_ID\" ] && exit 0\necho \"Waiting for Forgejo API...\"\nfor i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break; sleep 5; done\npodman exec -u git systemd-forgejo forgejo admin auth add-oauth --name \"Authelia\" --provider \"openidConnect\" --key \"$OIDC_CLIENT_ID\" --secret \"$OIDC_CLIENT_SECRET\" --auto-discover-url \"$OIDC_DISCOVERY_URL\" --scopes \"openid email profile\" 2>/dev/null || true\n",
+          "timeout": 300
         }
       ]
     },

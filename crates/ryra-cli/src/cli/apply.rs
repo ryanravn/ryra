@@ -114,6 +114,7 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             let _ = run(&format!("systemctl --user stop {unit}"));
             Ok(())
         }
+        Step::RestartService { unit } => run(&format!("systemctl --user restart {unit}")),
         Step::ReloadCaddy => {
             println!("  Reloading Caddy config...");
             // Wait for Caddy container to be running before reload

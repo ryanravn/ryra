@@ -52,6 +52,8 @@ pub enum Step {
     StartService { unit: String },
     /// Stop a service under the current user's systemd.
     StopService { unit: String },
+    /// Restart a service under the current user's systemd.
+    RestartService { unit: String },
     /// Reload Caddy's config without restarting the container.
     ReloadCaddy,
     /// Pull a container image.
@@ -80,6 +82,7 @@ impl Step {
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
+            Step::RestartService { unit } => format!("systemctl --user restart {unit}"),
             Step::ReloadCaddy => "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
             Step::PullImage { image } => format!("podman pull {image}"),
             Step::RemoveFile(path) => format!("rm -f {}", path.display()),
@@ -593,9 +596,10 @@ pub fn add_service(
                             content: yaml,
                         }));
 
-                        // Note: authelia needs restart to pick up OIDC config.
-                        // This happens via the daemon-reload that follows, or
-                        // the user can manually restart authelia.
+                        // Restart authelia to pick up the new OIDC config
+                        steps.push(Step::RestartService {
+                            unit: "authelia".to_string(),
+                        });
                     }
                 }
             }
