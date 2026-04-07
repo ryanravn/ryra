@@ -2,13 +2,7 @@
 name = "caddy-domain"
 services = ["caddy", "whoami"]
 
-# Create initial Caddyfile before installing Caddy
-[[steps]]
-action = "run"
-name = "init-caddyfile"
-run = "mkdir -p $HOME/.local/share/ryra/caddy/config && touch $HOME/.local/share/ryra/caddy/config/Caddyfile"
-
-# Install Caddy (user quadlet)
+# Install Caddy (user quadlet — creates empty Caddyfile automatically)
 [[steps]]
 action = "add"
 service = "caddy"

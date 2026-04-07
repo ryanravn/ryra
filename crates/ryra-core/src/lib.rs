@@ -352,6 +352,7 @@ pub fn add_service(
         service_dir: &reg_service.service_dir,
         add_hosts,
         extra_volumes,
+        domain,
     })?;
     let generated = output.service;
 
@@ -421,7 +422,20 @@ pub fn add_service(
         }
     }
 
-    // 5. Authelia: generate config files BEFORE starting (not post-start hooks)
+    // 5a. Caddy: create an initial Caddyfile so the bind mount doesn't
+    // hide the container's default config with an empty directory.
+    // The catch-all block returns 404 until a real service route is added.
+    if service_name == "caddy" {
+        let caddyfile = caddy::caddyfile_path();
+        if !caddyfile.exists() {
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: caddyfile,
+                content: ":80 {\n\trespond 404\n}\n\n:443 {\n\ttls internal\n\trespond 404\n}\n".to_string(),
+            }));
+        }
+    }
+
+    // 5b. Authelia: generate config files BEFORE starting (not post-start hooks)
     if service_name == "authelia" {
         let config_dir = home_dir.join("config");
         let config_path = config_dir.join("configuration.yml");
@@ -738,9 +752,12 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         let updated = caddy::remove_route(&current, service_name);
         steps.push(Step::WriteFile(GeneratedFile {
             path: caddy::caddyfile_path(),
-            content: updated,
+            content: updated.clone(),
         }));
-        steps.push(Step::ReloadCaddy);
+        // Only reload if there are routes left — caddy rejects an empty Caddyfile
+        if !updated.trim().is_empty() {
+            steps.push(Step::ReloadCaddy);
+        }
     }
 
     let domain = installed.domain.clone();
@@ -874,6 +891,7 @@ pub fn update_service(
         service_dir: &reg_service.service_dir,
         add_hosts: Vec::new(),
         extra_volumes: Vec::new(),
+        domain: service.domain.as_deref(),
     })?;
     let generated = output.service;
 

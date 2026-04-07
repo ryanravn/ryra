@@ -92,4 +92,20 @@ mod tests {
 
         assert_eq!(result, "postgresql://user:secret123@127.0.0.1:5432");
     }
+
+    #[test]
+    fn default_filter_on_missing_key() {
+        let ctx = BTreeMap::new();
+        // service.domain is not in context — default filter should provide fallback
+        let result = render("{{ service.domain | default('localhost') }}", &ctx).unwrap();
+        assert_eq!(result, "localhost");
+    }
+
+    #[test]
+    fn default_filter_with_value_present() {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("service.domain".into(), "example.com".into());
+        let result = render("{{ service.domain | default('localhost') }}", &ctx).unwrap();
+        assert_eq!(result, "example.com");
+    }
 }

@@ -5,6 +5,10 @@ url = "https://www.authelia.com/"
 image = "docker.io/authelia/authelia:4.39"
 architecture = ["amd64", "arm64"]
 
+[requirements.ram]
+min = 128
+recommended = 256
+
 [[ports]]
 name = "http"
 container_port = 9091

@@ -11,6 +11,7 @@ pub fn build_context(
     service_def: &ServiceDef,
     host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
+    domain: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
 
@@ -25,6 +26,9 @@ pub fn build_context(
         None => "http://localhost".to_string(),
     };
     ctx.insert("service.url".into(), url);
+    if let Some(domain) = domain {
+        ctx.insert("service.domain".into(), domain.to_string());
+    }
 
     // smtp.*
     if let Some(smtp) = &config.smtp {

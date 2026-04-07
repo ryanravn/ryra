@@ -40,6 +40,8 @@ pub struct GenerateServiceParams<'a> {
     pub add_hosts: Vec<(String, String)>,
     /// Extra volume mounts for containers (e.g., CA cert).
     pub extra_volumes: Vec<String>,
+    /// Domain for the service (used in templates as `{{service.domain}}`).
+    pub domain: Option<&'a str>,
 }
 
 /// Generate all files for a service based on its deploy mode.
@@ -53,6 +55,7 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         params.service_def,
         params.host_port,
         params.auth_kind,
+        params.domain,
     );
     let rendered_env = render_env_vars(
         params.service_def,
@@ -101,9 +104,13 @@ fn build_env_file(
         }
     }
 
-    // Expose port as RYRA_PORT_* for compose files
+    // Expose port as RYRA_PORT_* — use the fixed host_port from the port definition
+    // if set, otherwise the allocated host port, otherwise the container port.
     for port_def in &service_def.ports {
-        let port = host_port.unwrap_or(port_def.container_port);
+        let port = port_def
+            .host_port
+            .or(host_port)
+            .unwrap_or(port_def.container_port);
         let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
         lines.push(format!("{var_name}={port}"));
     }

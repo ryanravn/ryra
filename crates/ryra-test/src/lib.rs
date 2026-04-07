@@ -41,8 +41,8 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     about = "E2E test runner for ryra — spins up QEMU VMs for integration testing"
 )]
 pub struct Args {
-    /// Max concurrent VMs (0 = auto-detect from available RAM)
-    #[arg(long, default_value_t = 0)]
+    /// Max concurrent VMs
+    #[arg(long, default_value_t = 1)]
     pub parallel: usize,
 
     /// Base image distro
@@ -289,18 +289,7 @@ pub async fn run(mut args: Args) -> Result<()> {
         machine::ensure_image_cached(img).await?;
     }
 
-    // Auto-detect parallelism from available RAM when --parallel=0 (the default)
-    if args.parallel == 0 {
-        let total_mb = ryra_vm::read_host_memory()
-            .map(|(total, _)| total)
-            .unwrap_or(4096);
-        let vm_mb = args.memory.unwrap_or(1024) as u64;
-        // Leave 2GB for the host, use the rest for VMs
-        let available = total_mb.saturating_sub(2048);
-        args.parallel = (available / vm_mb).max(1) as usize;
-    }
-
-    // Compute per-test memory and show summary
+    // Compute per-test memory first (needed for accurate parallelism calculation)
     let test_memories: Vec<(&str, u32)> = to_run
         .iter()
         .map(|t| {
@@ -309,6 +298,7 @@ pub async fn run(mut args: Args) -> Result<()> {
             (t.name(), mem)
         })
         .collect();
+
     let mut sorted_mems: Vec<u32> = test_memories.iter().map(|(_, m)| *m).collect();
     sorted_mems.sort_unstable_by(|a, b| b.cmp(a));
     let max_concurrent_mb: u64 = sorted_mems

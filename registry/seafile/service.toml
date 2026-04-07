@@ -76,7 +76,7 @@ value = "{{secret.mysql_root_password}}"
 
 [[env]]
 name = "SEAFILE_SERVER_HOSTNAME"
-value = "{{service.domain}}"
+value = "{{service.domain | default('seafile.local')}}"
 
 [[env]]
 name = "SEAFILE_SERVER_PROTOCOL"
@@ -138,7 +138,7 @@ name = "inject-seafile-oauth"
 run = """
 [ -z "$OAUTH_CLIENT_ID" ] && exit 0
 
-CONF=/var/lib/seafile/shared/seafile/conf
+CONF=$HOME/.local/share/ryra/seafile/shared/seafile/conf
 
 # Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume
 echo "Waiting for $CONF/seahub_settings.py to appear (Seafile creates it on first boot)..."
@@ -166,7 +166,7 @@ OAUTH_USER_INFO_URL = "${OAUTH_INTERNAL_DOMAIN}/api/oidc/userinfo"
 OAUTH_SCOPE = ["openid", "profile", "email"]
 OAUTH_ATTRIBUTE_MAP = {"email": (True, "contact_email"), "name": (False, "name"), "sub": (False, "uid")}
 EOF
-chown seafile:seafile "$CONF/seahub_settings_oauth.py"
+# File is on the host bind mount — no chown needed
 
 # Append import line if not already present
 grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
