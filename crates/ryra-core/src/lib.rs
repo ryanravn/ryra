@@ -308,10 +308,11 @@ pub fn add_service(
     if enable_auth {
         // Find the auth provider's domain from installed services
         if let Some(auth_service) = config.services.iter().find(|s| s.name == "authelia")
-            && let Some(ref auth_domain) = auth_service.domain {
-                // Container host IP (podman's host.containers.internal resolves to this)
-                add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
-            }
+            && let Some(ref auth_domain) = auth_service.domain
+        {
+            // Container host IP (podman's host.containers.internal resolves to this)
+            add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
+        }
         // Mount Caddy's root CA cert so containers trust the self-signed HTTPS.
         // Export it on-demand if not already cached.
         let ca_cert = service_home("caddy")
@@ -566,37 +567,36 @@ pub fn add_service(
 
                     // Step 2: Add OIDC section + client to authelia config
                     if authelia_config_path.exists()
-                        && let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path) {
-                            let redirect_uri =
-                                service_url.map(|u| format!("{u}/.*")).unwrap_or_default();
-                            let client_block = format!(
-                                "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
-                            );
+                        && let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path)
+                    {
+                        let redirect_uri =
+                            service_url.map(|u| format!("{u}/.*")).unwrap_or_default();
+                        let client_block = format!(
+                            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
+                        );
 
-                            if !yaml.contains("identity_providers:") {
-                                // First OIDC client — add the entire OIDC section.
-                                // The RSA key is referenced via Authelia's template filter
-                                // (container path /config/oidc.jwk.rsa.pem).
-                                yaml.push_str(&format!(
+                        if !yaml.contains("identity_providers:") {
+                            // First OIDC client — add the entire OIDC section.
+                            // The RSA key is referenced via Authelia's template filter
+                            // (container path /config/oidc.jwk.rsa.pem).
+                            yaml.push_str(&format!(
                                     "\nidentity_providers:\n  oidc:\n    jwks:\n      - key_id: 'main'\n        algorithm: 'RS256'\n        use: 'sig'\n        key: {{{{ secret \"/config/oidc.jwk.rsa.pem\" | mindent 10 \"|\" | msquote }}}}\n    clients:{client_block}\n",
                                 ));
-                            } else if !yaml.contains(&client_id) {
-                                // OIDC section exists, append client
-                                yaml = yaml.replace(
-                                    "    clients:",
-                                    &format!("    clients:{client_block}"),
-                                );
-                            }
-
-                            steps.push(Step::WriteFile(GeneratedFile {
-                                path: authelia_config_path,
-                                content: yaml,
-                            }));
-
-                            // Note: authelia needs restart to pick up OIDC config.
-                            // This happens via the daemon-reload that follows, or
-                            // the user can manually restart authelia.
+                        } else if !yaml.contains(&client_id) {
+                            // OIDC section exists, append client
+                            yaml = yaml
+                                .replace("    clients:", &format!("    clients:{client_block}"));
                         }
+
+                        steps.push(Step::WriteFile(GeneratedFile {
+                            path: authelia_config_path,
+                            content: yaml,
+                        }));
+
+                        // Note: authelia needs restart to pick up OIDC config.
+                        // This happens via the daemon-reload that follows, or
+                        // the user can manually restart authelia.
+                    }
                 }
             }
             config::schema::AuthCredentials::External { .. } => {}
@@ -660,45 +660,46 @@ pub fn add_service(
     // Caddy reverse proxy: if a domain is provided and Caddy is installed,
     // add a site block to the Caddyfile and restart Caddy.
     if let Some(domain) = domain
-        && caddy::is_installed() {
-            let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
+        && caddy::is_installed()
+    {
+        let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
 
-            // Use forward_auth when:
-            // - User requested auth (--auth flag), AND
-            // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
-            // - The service is not the auth provider itself
-            let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
-            let is_auth_provider = service_name == "authelia";
-            let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
-                config
-                    .services
-                    .iter()
-                    .find(|s| s.name == "authelia")
-                    .and_then(|s| s.ports.values().next().copied())
-                    .map(|port| caddy::ForwardAuthParams {
-                        port,
-                        provider: caddy::AuthProvider::Authelia,
-                    })
-            } else {
-                None
-            };
+        // Use forward_auth when:
+        // - User requested auth (--auth flag), AND
+        // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
+        // - The service is not the auth provider itself
+        let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
+        let is_auth_provider = service_name == "authelia";
+        let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
+            config
+                .services
+                .iter()
+                .find(|s| s.name == "authelia")
+                .and_then(|s| s.ports.values().next().copied())
+                .map(|port| caddy::ForwardAuthParams {
+                    port,
+                    provider: caddy::AuthProvider::Authelia,
+                })
+        } else {
+            None
+        };
 
-            let block = caddy::render_site_block(&caddy::CaddySiteParams {
-                service_name: service_name.to_string(),
-                domain: domain.to_string(),
-                upstream_port,
-                forward_auth,
-            });
+        let block = caddy::render_site_block(&caddy::CaddySiteParams {
+            service_name: service_name.to_string(),
+            domain: domain.to_string(),
+            upstream_port,
+            forward_auth,
+        });
 
-            let current = std::fs::read_to_string(caddy::caddyfile_path()).unwrap_or_default();
-            let updated = caddy::add_route(&current, service_name, &block);
+        let current = std::fs::read_to_string(caddy::caddyfile_path()).unwrap_or_default();
+        let updated = caddy::add_route(&current, service_name, &block);
 
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: caddy::caddyfile_path(),
-                content: updated,
-            }));
-            steps.push(Step::ReloadCaddy);
-        }
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: caddy::caddyfile_path(),
+            content: updated,
+        }));
+        steps.push(Step::ReloadCaddy);
+    }
 
     Ok(AddResult {
         steps,
