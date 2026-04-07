@@ -26,11 +26,16 @@ pub async fn run(
     }
 
     let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
+    let interactive = std::io::stdin().is_terminal();
+
+    // Auto-install dependencies: caddy for --domain/--auth, authelia for --auth
+    if !dry_run {
+        ensure_dependencies(domain, auth, interactive, &repo_url, &repo_dir).await?;
+    }
 
     for service in services {
         let paths = ryra_core::config::ConfigPaths::resolve()?;
         let config = ryra_core::config::load_or_default(&paths.config_file)?;
-        let interactive = std::io::stdin().is_terminal();
 
         // Look up the service definition
         let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
@@ -274,6 +279,89 @@ pub async fn run(
     Ok(())
 }
 
+/// Auto-install caddy and authelia when --domain or --auth requires them.
+async fn ensure_dependencies(
+    domain: Option<&str>,
+    auth: bool,
+    interactive: bool,
+    repo_url: &str,
+    _repo_dir: &Path,
+) -> Result<()> {
+    let needs_caddy = (domain.is_some() || auth) && !ryra_core::caddy::is_installed();
+    let config = ryra_core::config::load_or_default(
+        &ryra_core::config::ConfigPaths::resolve()?.config_file,
+    )?;
+    let needs_authelia =
+        auth && !config.services.iter().any(|s| s.name == "authelia") && config.auth.is_none();
+
+    if !needs_caddy && !needs_authelia {
+        return Ok(());
+    }
+
+    // Install caddy first (authelia needs it for --domain)
+    if needs_caddy {
+        if interactive {
+            let confirm = Confirm::new()
+                .with_prompt("Caddy (reverse proxy) is not installed. Install it?")
+                .default(true)
+                .interact()?;
+            if !confirm {
+                bail!("caddy is required for --domain/--auth");
+            }
+        }
+        println!("\nInstalling caddy...\n");
+        Box::pin(run(
+            &["caddy".to_string()],
+            None,
+            false,
+            Some(repo_url),
+            false,
+        ))
+        .await?;
+    }
+
+    // Install authelia
+    if needs_authelia {
+        if interactive {
+            let confirm = Confirm::new()
+                .with_prompt("Authelia (SSO provider) is not installed. Install it?")
+                .default(true)
+                .interact()?;
+            if !confirm {
+                bail!("authelia is required for --auth");
+            }
+            // Prompt for authelia's domain
+            let authelia_domain: String = Input::new()
+                .with_prompt("Domain for Authelia (e.g. auth.example.com)")
+                .interact_text()?;
+            println!("\nInstalling authelia...\n");
+            Box::pin(run(
+                &["authelia".to_string()],
+                Some(&authelia_domain),
+                false,
+                Some(repo_url),
+                false,
+            ))
+            .await?;
+        } else {
+            // Non-interactive: need AUTHELIA_ADMIN_PASSWORD in env
+            let authelia_domain =
+                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.localhost".to_string());
+            println!("\nInstalling authelia...\n");
+            Box::pin(run(
+                &["authelia".to_string()],
+                Some(&authelia_domain),
+                false,
+                Some(repo_url),
+                false,
+            ))
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Ensure auth is configured, possibly installing authelia inline.
 /// Returns true if auth is ready, false if user cancelled.
 async fn ensure_auth_for_add(
@@ -298,13 +386,32 @@ async fn ensure_auth_for_add(
                 return Ok(false);
             }
 
-            println!();
-            println!("Installing authelia first...");
-            println!();
+            // Install caddy first if needed
+            if !ryra_core::caddy::is_installed() && !dry_run {
+                println!("\nInstalling caddy (needed for auth)...\n");
+                Box::pin(run(
+                    &["caddy".to_string()],
+                    None,
+                    false,
+                    Some(repo_url),
+                    dry_run,
+                ))
+                .await?;
+            }
+
+            // Prompt for authelia domain
+            let authelia_domain: String = if std::io::stdin().is_terminal() {
+                Input::new()
+                    .with_prompt("Domain for Authelia (e.g. auth.example.com)")
+                    .interact_text()?
+            } else {
+                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.localhost".to_string())
+            };
+            println!("\nInstalling authelia...\n");
             // Recursively install authelia, then reload config
             Box::pin(run(
                 &["authelia".to_string()],
-                None,
+                Some(&authelia_domain),
                 false,
                 Some(repo_url),
                 dry_run,
