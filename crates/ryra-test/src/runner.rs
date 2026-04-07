@@ -470,7 +470,7 @@ fn lifecycle_step_description(step: &StepEntry) -> String {
         StepEntry::Reset => "ryra reset".to_string(),
         StepEntry::Wait {
             service,
-            timeout_secs,
+            timeout_secs: _,
         } => format!("wait for {service}"),
         StepEntry::Run { name, .. } => format!("run: {name}"),
         StepEntry::Assert { name, .. } => format!("assert: {name}"),

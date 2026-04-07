@@ -307,12 +307,11 @@ pub fn add_service(
     let mut extra_volumes = Vec::new();
     if enable_auth {
         // Find the auth provider's domain from installed services
-        if let Some(auth_service) = config.services.iter().find(|s| s.name == "authelia") {
-            if let Some(ref auth_domain) = auth_service.domain {
+        if let Some(auth_service) = config.services.iter().find(|s| s.name == "authelia")
+            && let Some(ref auth_domain) = auth_service.domain {
                 // Container host IP (podman's host.containers.internal resolves to this)
                 add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
             }
-        }
         // Mount Caddy's root CA cert so containers trust the self-signed HTTPS.
         // Export it on-demand if not already cached.
         let ca_cert = service_home("caddy")
@@ -430,7 +429,8 @@ pub fn add_service(
         if !caddyfile.exists() {
             steps.push(Step::WriteFile(GeneratedFile {
                 path: caddyfile,
-                content: ":80 {\n\trespond 404\n}\n\n:443 {\n\ttls internal\n\trespond 404\n}\n".to_string(),
+                content: ":80 {\n\trespond 404\n}\n\n:443 {\n\ttls internal\n\trespond 404\n}\n"
+                    .to_string(),
             }));
         }
     }
@@ -446,7 +446,7 @@ pub fn add_service(
             let domain = domain.unwrap_or("localhost");
             let cookie_domain = if domain.contains('.') {
                 // Extract parent domain: auth.test.local → test.local
-                domain.splitn(2, '.').nth(1).unwrap_or(domain)
+                domain.split_once('.').map(|x| x.1).unwrap_or(domain)
             } else {
                 domain
             };
@@ -565,8 +565,8 @@ pub fn add_service(
                     }
 
                     // Step 2: Add OIDC section + client to authelia config
-                    if authelia_config_path.exists() {
-                        if let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path) {
+                    if authelia_config_path.exists()
+                        && let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path) {
                             let redirect_uri =
                                 service_url.map(|u| format!("{u}/.*")).unwrap_or_default();
                             let client_block = format!(
@@ -597,7 +597,6 @@ pub fn add_service(
                             // This happens via the daemon-reload that follows, or
                             // the user can manually restart authelia.
                         }
-                    }
                 }
             }
             config::schema::AuthCredentials::External { .. } => {}
@@ -660,8 +659,8 @@ pub fn add_service(
 
     // Caddy reverse proxy: if a domain is provided and Caddy is installed,
     // add a site block to the Caddyfile and restart Caddy.
-    if let Some(domain) = domain {
-        if caddy::is_installed() {
+    if let Some(domain) = domain
+        && caddy::is_installed() {
             let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
 
             // Use forward_auth when:
@@ -700,7 +699,6 @@ pub fn add_service(
             }));
             steps.push(Step::ReloadCaddy);
         }
-    }
 
     Ok(AddResult {
         steps,

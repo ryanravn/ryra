@@ -205,7 +205,7 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
 }
 
 /// Run the E2E test suite with the given arguments.
-pub async fn run(mut args: Args) -> Result<()> {
+pub async fn run(args: Args) -> Result<()> {
     install_signal_handler();
 
     let registry_path = resolve_registry_path(args.registry.as_ref())?;
