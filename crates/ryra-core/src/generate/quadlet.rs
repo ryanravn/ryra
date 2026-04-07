@@ -131,6 +131,9 @@ pub fn render_container(params: &QuadletParams) -> String {
         }
     }
 
+    // Skip redundant pulls — ryra pre-pulls images before starting services
+    lines.push("Pull=never".to_string());
+
     lines.push(String::new());
     lines.push("[Service]".to_string());
     if params.init {
@@ -140,6 +143,7 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push("Restart=always".to_string());
         lines.push("RestartSec=5".to_string());
     }
+    // Image pulls are handled by ryra, but first boot may still be slow
     lines.push("TimeoutStartSec=300".to_string());
 
     lines.push(String::new());
@@ -150,27 +154,23 @@ pub fn render_container(params: &QuadletParams) -> String {
 }
 
 /// Render a .network quadlet unit file.
+/// No [Install] section — networks are pulled in by container dependencies.
 pub fn render_network(name: &str) -> String {
     format!(
         "[Unit]\n\
          Description={name} network\n\
          \n\
-         [Network]\n\
-         \n\
-         [Install]\n\
-         WantedBy=default.target\n"
+         [Network]\n"
     )
 }
 
 /// Render a .volume quadlet unit file.
+/// No [Install] section — volumes are pulled in by container dependencies.
 pub fn render_volume(name: &str) -> String {
     format!(
         "[Unit]\n\
          Description={name} volume\n\
          \n\
-         [Volume]\n\
-         \n\
-         [Install]\n\
-         WantedBy=default.target\n"
+         [Volume]\n"
     )
 }
