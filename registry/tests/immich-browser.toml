@@ -1,0 +1,50 @@
+[test]
+name = "immich-browser"
+browser = true
+
+# Install immich
+[[steps]]
+action = "run"
+name = "add-immich"
+run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
+INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
+ryra add immich --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "immich"
+
+# Wait for immich HTTP to be ready
+[[steps]]
+action = "assert"
+name = "http-ready"
+run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+# Create admin user via API (needed for login test)
+[[steps]]
+action = "run"
+name = "create-admin"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+curl -sf -X POST "http://127.0.0.1:$PORT/api/auth/admin-sign-up" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@test.local","password":"testpassword123","name":"Admin"}' \
+  >/dev/null 2>&1 || true
+"""
+
+# Run playwright tests — bun + chromium are pre-installed in browser image
+[[steps]]
+action = "assert"
+name = "playwright-tests"
+run = """
+export PATH="$HOME/.bun/bin:$PATH"
+export RYRA_PORT_HTTP=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+export INIT_IMMICH_ADMIN_EMAIL=admin@test.local
+export INIT_IMMICH_ADMIN_PASSWORD=testpassword123
+cd /opt/ryra-test-registry/immich/tests
+ln -sf /opt/playwright/node_modules .
+bunx playwright test --reporter=list
+"""
+timeout = 120

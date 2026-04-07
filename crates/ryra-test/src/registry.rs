@@ -23,6 +23,8 @@ pub enum DiscoveredTest {
         name: String,
         images: Vec<String>,
         steps: Vec<StepEntry>,
+        /// Whether this test needs a browser-ready VM (bun + playwright + chromium).
+        browser: bool,
     },
 }
 
@@ -121,6 +123,10 @@ impl DiscoveredTest {
 
     pub fn is_lifecycle(&self) -> bool {
         matches!(self, DiscoveredTest::Lifecycle { .. })
+    }
+
+    pub fn needs_browser(&self) -> bool {
+        matches!(self, DiscoveredTest::Lifecycle { browser: true, .. })
     }
 }
 
@@ -396,6 +402,7 @@ fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
         name: parsed.test.name,
         images: parsed.test.images,
         steps,
+        browser: parsed.test.browser,
     })
 }
 
@@ -631,6 +638,9 @@ struct LifecycleMeta {
     /// Container images to pre-load into the VM.
     #[serde(default)]
     images: Vec<String>,
+    /// Whether this test needs a browser (bun + playwright + chromium).
+    #[serde(default)]
+    browser: bool,
 }
 
 #[derive(serde::Deserialize)]

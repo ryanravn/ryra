@@ -38,6 +38,13 @@ impl Distro {
         }
     }
 
+    fn browser_prepared_filename(&self) -> &str {
+        match self {
+            Distro::Debian13 => "debian-13-browser-arm64.qcow2",
+            Distro::Fedora43 => "fedora-43-browser-arm64.qcow2",
+        }
+    }
+
     /// Packages to install via cloud-init during image preparation.
     pub fn cloud_init_packages(&self) -> &[&str] {
         match self {
@@ -160,6 +167,110 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
         efi_vars_template: vars_template,
         prepared: true,
     })
+}
+
+/// Ensure a browser-ready image exists (base image + bun + playwright + chromium).
+/// Built on top of the base prepared image — one-time operation.
+pub async fn ensure_browser_image(
+    distro: &Distro,
+    redownload: bool,
+    use_kvm: bool,
+) -> Result<Image> {
+    // Ensure base image first
+    let base = ensure_image(distro, redownload, use_kvm).await?;
+    let cache = cache_dir()?;
+    let browser_path = cache.join(distro.browser_prepared_filename());
+
+    if redownload {
+        let _ = tokio::fs::remove_file(&browser_path).await;
+    }
+
+    if !browser_path.exists() {
+        println!("Preparing browser image (installing bun + playwright + chromium)...");
+        println!("  This is a one-time operation.");
+        prepare_browser_image(&base, &browser_path, use_kvm).await?;
+        println!("Browser image cached at: {}", browser_path.display());
+    } else {
+        println!("Using browser image: {}", browser_path.display());
+    }
+
+    Ok(Image {
+        path: browser_path,
+        efi_code: base.efi_code,
+        efi_vars_template: base.efi_vars_template,
+        prepared: true,
+    })
+}
+
+/// Boot the base prepared image, install bun + playwright + chromium, then snapshot.
+async fn prepare_browser_image(base: &Image, browser_path: &Path, use_kvm: bool) -> Result<()> {
+    use crate::machine::{Machine, SpawnOpts};
+    use crate::ports;
+
+    let id = crate::machine::random_id();
+    let ssh_port = ports::allocate_ssh_port();
+    let opts = SpawnOpts {
+        use_kvm,
+        memory_mb: 4096, // chromium install needs decent RAM
+        cpus: 2,
+    };
+
+    let vm = Machine::spawn(base, &id, ssh_port, &opts).await?;
+
+    // Install unzip (needed by bun installer), bun, playwright + chromium
+    let install_script = r#"
+set -e
+apt-get update -qq && apt-get install -y -qq unzip >/dev/null 2>&1
+curl -fsSL https://bun.sh/install | bash
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# Create a global playwright project so chromium is cached system-wide
+mkdir -p /opt/playwright
+cd /opt/playwright
+bun init -y >/dev/null 2>&1
+bun add playwright @playwright/test
+bunx playwright install chromium --with-deps
+
+# Add bun to PATH for all future SSH sessions
+echo 'export BUN_INSTALL="$HOME/.bun"' >> /root/.bashrc
+echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /root/.bashrc
+"#;
+
+    println!("  Installing bun + playwright + chromium in VM...");
+    let result = vm.exec(install_script).await;
+    if let Err(e) = &result {
+        let _ = vm.destroy().await;
+        anyhow::bail!("failed to install browser tools: {e:#}");
+    }
+
+    // Shut down and snapshot
+    let _ = vm.exec("sync && poweroff").await;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    // Copy the COW disk as the browser image (flatten the overlay)
+    let disk = vm.work_dir.join("disk.qcow2");
+    let status = Command::new("qemu-img")
+        .args([
+            "convert",
+            "-f",
+            "qcow2",
+            "-O",
+            "qcow2",
+            &disk.to_string_lossy(),
+            &browser_path.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("qemu-img convert failed")?;
+    if !status.success() {
+        anyhow::bail!("qemu-img convert failed for browser image");
+    }
+
+    let _ = vm.destroy().await;
+    Ok(())
 }
 
 struct EfiFirmware {

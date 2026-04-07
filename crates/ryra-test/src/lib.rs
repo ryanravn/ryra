@@ -259,7 +259,16 @@ pub async fn run(args: Args) -> Result<()> {
         anyhow::bail!("no tests found in registry at {}", registry_path.display());
     }
 
+    // Prepare browser image if any test needs it
+    let any_needs_browser = discovered.iter().any(|t| t.needs_browser());
+    let browser_image = if any_needs_browser {
+        Some(image::ensure_browser_image(&args.distro, args.redownload, use_kvm).await?)
+    } else {
+        None
+    };
+
     let base_image = std::sync::Arc::new(base_image);
+    let browser_image = browser_image.map(std::sync::Arc::new);
     let registry_path = std::sync::Arc::new(registry_path);
 
     // Filter tests
@@ -323,7 +332,14 @@ pub async fn run(args: Args) -> Result<()> {
 
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
-        let base_image = base_image.clone();
+        let test_image: std::sync::Arc<image::Image> = if test.needs_browser() {
+            browser_image
+                .as_ref()
+                .expect("browser image should be prepared")
+                .clone()
+        } else {
+            base_image.clone()
+        };
         let test_memory =
             memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, test));
         let spawn_opts = std::sync::Arc::new(SpawnOpts {
@@ -366,7 +382,7 @@ pub async fn run(args: Args) -> Result<()> {
             // Spawn VM
             let phase = std::time::Instant::now();
             println!("[{name}] booting VM...");
-            let vm = match Machine::spawn(&base_image, &id, ssh_port, &spawn_opts).await {
+            let vm = match Machine::spawn(&test_image, &id, ssh_port, &spawn_opts).await {
                 Ok(vm) => vm,
                 Err(e) => return fail_result(format!("failed to spawn VM: {e:#}")),
             };
