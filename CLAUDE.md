@@ -42,11 +42,47 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - Quadlet files go to `~/.config/containers/systemd/`
 - Service data goes to `~/.local/share/ryra/<name>/`
 - Warns if running as root
-- nginx runs as a root system quadlet with `Network=host` — the only privileged component
+
+## Auth and Caddy Integration
+
+### How `--domain` works
+
+When `ryra add <service> --domain foo.example.com` is called:
+1. The domain is passed to the template context as `{{service.domain}}`
+2. If Caddy is installed, a site block is added to the Caddyfile routing the domain to the service's port
+3. `caddy reload` applies the new route
+4. On `ryra remove`, the route is cleaned up (reload is skipped if the Caddyfile becomes empty)
+
+### How `--auth` works
+
+When `ryra add <service> --auth` is called:
+1. An OIDC client ID and secret are generated and injected into the template context (`{{auth.client_id}}`, `{{auth.client_secret}}`, `{{auth.issuer}}`, etc.)
+2. Services with native OIDC mappings (`[mappings.auth]` in service.toml) get OIDC env vars written to `.env`
+3. Post-start hooks (`[[post_start]]`) run after the service starts — these configure OIDC via APIs or config files
+4. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
+5. Container `--add-host` entries are added so containers can reach the auth provider domain
+6. If Caddy is running with HTTPS, its root CA cert is mounted into service containers
+
+### Post-start hooks
+
+Hooks in `[[post_start]]` run on the **host** (not inside containers), with the service's `.env` sourced into the environment. This means:
+- Use `$RYRA_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. directly — they're already in the environment
+- Use `$HOME/.local/share/ryra/<service>/` paths to access bind-mounted volumes on the host
+- Do NOT hardcode paths like `/var/lib/<service>/` — that's the container's view, not the host's
+
+### Template variables for auth
+
+Available when `--auth` is used and an auth provider (authelia) is installed:
+- `{{auth.url}}` — external URL of the auth provider
+- `{{auth.internal_url}}` — `http://host.containers.internal:<port>` for container-to-auth communication
+- `{{auth.issuer}}` — OIDC issuer URL (provider-specific)
+- `{{auth.client_id}}` — generated UUID for OIDC client
+- `{{auth.client_secret}}` — generated 64-char secret for OIDC client
+- `{{auth.provider}}` — provider name (e.g., "authelia")
 
 ## System Dependencies
 
-- `podman` — rootless containers for services, root containers for nginx
+- `podman` — rootless containers for services
 
 ## Debugging
 
@@ -65,9 +101,23 @@ Key points:
 - Test runner lives in `crates/ryra-test/`, VM orchestration in `crates/ryra-vm/`
 - Tests are defined in `registry/` via `[[tests]]` in service.toml and lifecycle test files in `registry/tests/`
 - VMs use cloud images + cloud-init for setup, SSH for command execution
-- `--parallel=N` controls concurrency, each VM gets a unique SSH port
+- `--parallel=N` controls concurrency (default 1), each VM gets a unique SSH port
+- VM memory is auto-sized per test based on `[requirements.ram]` in each service's service.toml
 - KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower)
-- `--keep-failed` keeps VMs alive and prints the SSH command for debugging
+- `--keep-alive` keeps the VM running after tests for interactive debugging
 - `--verbose` dumps the serial log on failure
 - Host prerequisites (Debian/Ubuntu): `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
 - Host prerequisites (Fedora): `qemu-system-aarch64 qemu-img edk2-aarch64 genisoimage openssh-clients curl`
+
+### Test types
+
+- **SingleService tests**: defined in `[[tests]]` within `service.toml` — auto-discovered, run `ryra add` then assertions
+- **Lifecycle tests**: defined in `registry/tests/<name>.toml` — multi-step sequences of add/remove/assert/wait/run steps
+
+### OIDC lifecycle tests
+
+OIDC tests must install caddy and authelia before adding services with `--auth --domain`. The test steps are:
+1. `ryra add caddy` — reverse proxy
+2. `ryra add authelia --domain auth.test.local` — OIDC provider
+3. `ryra add <service> --auth --domain <service>.test.local` — service with OIDC
+4. Assertions verify HTTP responds and OIDC is configured
