@@ -1,4 +1,5 @@
 pub mod registry;
+pub mod test_toml;
 mod runner;
 mod scenario;
 
@@ -85,6 +86,10 @@ pub struct Args {
     /// Path to registry directory (auto-detected if omitted)
     #[arg(long)]
     pub registry: Option<PathBuf>,
+
+    /// Path to a local project directory with quadlet files + ryra.toml
+    #[arg(long)]
+    pub project: Option<PathBuf>,
 
     /// List available tests
     #[arg(long)]
@@ -204,19 +209,71 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     anyhow::bail!("no registry found. Pass --registry <path> or run from the repo root")
 }
 
+/// Resolve a local project path — explicit arg, or auto-detect ryra.toml in cwd.
+fn resolve_project_path(explicit: Option<&PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p.clone());
+    }
+    // Auto-detect: if cwd contains a ryra.toml, use it
+    let cwd = std::env::current_dir().ok()?;
+    if cwd.join("ryra.toml").exists() {
+        return Some(cwd);
+    }
+    None
+}
+
 /// Run the E2E test suite with the given arguments.
 pub async fn run(args: Args) -> Result<()> {
     install_signal_handler();
 
-    let registry_path = resolve_registry_path(args.registry.as_ref())?;
-    let discovered = registry::discover(&registry_path)?;
+    // Check for local project first, then fall back to registry
+    let project_path = resolve_project_path(args.project.as_ref());
+    let registry_path = resolve_registry_path(args.registry.as_ref());
+
+    let mut discovered = Vec::new();
+
+    // Discover local project tests
+    if let Some(ref project_dir) = project_path {
+        match registry::discover_local_project(project_dir)? {
+            Some(test) => discovered.push(test),
+            None => {
+                if args.project.is_some() {
+                    anyhow::bail!(
+                        "no ryra.toml found in project directory: {}",
+                        project_dir.display()
+                    );
+                }
+            }
+        }
+    }
+
+    // Discover registry tests (only if no explicit --project or if registry is also available)
+    if let Ok(ref reg_path) = registry_path {
+        if let Ok(reg_tests) = registry::discover(reg_path) {
+            // If --project was explicitly passed, skip registry tests
+            if args.project.is_none() {
+                discovered.extend(reg_tests);
+            }
+        }
+    }
+
+    // Need a registry path for dependency resolution even with local projects
+    let registry_path = registry_path.unwrap_or_else(|_| PathBuf::from("registry"));
 
     if args.list {
-        println!("Tests from {}:", registry_path.display());
+        if !discovered.is_empty() {
+            println!("Available tests:");
+        }
         for test in &discovered {
             if test.is_lifecycle() {
                 println!(
                     "  {:<30} ({} steps, lifecycle)",
+                    test.name(),
+                    test.test_count(),
+                );
+            } else if test.is_local_project() {
+                println!(
+                    "  {:<30} ({} tests, local project)",
                     test.name(),
                     test.test_count(),
                 );
@@ -330,6 +387,8 @@ pub async fn run(args: Args) -> Result<()> {
     let mut handles = vec![];
     let total_tests = to_run.len();
 
+    let project_path = project_path.map(std::sync::Arc::new);
+
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
         let test_image: std::sync::Arc<image::Image> = if test.needs_browser() {
@@ -349,11 +408,13 @@ pub async fn run(args: Args) -> Result<()> {
         });
         let ryra_bin = ryra_bin.clone();
         let registry_path = registry_path.clone();
+        let project_path = project_path.clone();
         let keep_failed = args.keep_failed;
         let keep_alive = args.keep_alive;
         let verbose = args.verbose;
         let single_test = total_tests == 1;
         let name = test.name().to_string();
+        let is_local = test.is_local_project();
 
         handles.push(tokio::spawn(async move {
             let _permit = permit;
@@ -370,13 +431,23 @@ pub async fn run(args: Args) -> Result<()> {
             };
 
             // Re-discover tests inside task (DiscoveredTest isn't Send due to lifetime)
-            let discovered = match registry::discover(&registry_path) {
-                Ok(d) => d,
-                Err(e) => return fail_result(format!("registry discovery failed: {e:#}")),
-            };
-            let test = match discovered.iter().find(|t| t.name() == name) {
-                Some(t) => t,
-                None => return fail_result("test not found (internal error)".into()),
+            let test = if is_local {
+                let project_dir = project_path.as_ref()
+                    .expect("project_path must be set for local tests");
+                match registry::discover_local_project(project_dir) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => return fail_result("local project not found (internal error)".into()),
+                    Err(e) => return fail_result(format!("local project discovery failed: {e:#}")),
+                }
+            } else {
+                let discovered = match registry::discover(&registry_path) {
+                    Ok(d) => d,
+                    Err(e) => return fail_result(format!("registry discovery failed: {e:#}")),
+                };
+                match discovered.into_iter().find(|t| t.name() == name) {
+                    Some(t) => t,
+                    None => return fail_result("test not found (internal error)".into()),
+                }
             };
 
             // Spawn VM
@@ -395,15 +466,25 @@ pub async fn run(args: Args) -> Result<()> {
                 return fail_result(format!("failed to copy ryra to VM: {e:#}"));
             }
 
-            // Copy registry into VM
-            if let Err(e) = machine::copy_fixtures_to_vm(&vm, &registry_path).await {
-                let _ = vm.destroy().await;
-                return fail_result(format!("failed to copy registry to VM: {e:#}"));
+            // Copy registry into VM (needed for dependency resolution)
+            if registry_path.exists() {
+                if let Err(e) = machine::copy_fixtures_to_vm(&vm, &registry_path).await {
+                    let _ = vm.destroy().await;
+                    return fail_result(format!("failed to copy registry to VM: {e:#}"));
+                }
+            }
+
+            // Copy local project files into VM
+            if let Some(ref project_dir) = project_path {
+                if let Err(e) = machine::copy_project_to_vm(&vm, project_dir).await {
+                    let _ = vm.destroy().await;
+                    return fail_result(format!("failed to copy project to VM: {e:#}"));
+                }
             }
             println!("[{name}] files copied ({:.1}s)", phase.elapsed().as_secs_f64());
 
             // Load cached container images into VM
-            let images = registry::images_for_test(&registry_path, test);
+            let images = registry::images_for_test(&registry_path, &test);
             if !images.is_empty() {
                 let phase = std::time::Instant::now();
                 if let Err(e) = machine::load_images_into_vm(&vm, &images).await {
@@ -415,12 +496,20 @@ pub async fn run(args: Args) -> Result<()> {
 
             let setup_time = start.elapsed();
             println!("[{name}] running tests (setup took {:.1}s)...", setup_time.as_secs_f64());
-            let result = match test {
+            let result = match &test {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
                     runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry", verbose, single_test).await
                 }
+                registry::DiscoveredTest::LocalProject {
+                    service_names,
+                    dependencies,
+                    tests,
+                    ..
+                } => {
+                    runner::run_local_project_test(&vm, &name, service_names, dependencies, tests, "/opt/ryra-test-registry").await
+                }
                 _ => {
-                    runner::run_registry_test(&vm, test, "/opt/ryra-test-registry").await
+                    runner::run_registry_test(&vm, &test, "/opt/ryra-test-registry").await
                 }
             };
 
