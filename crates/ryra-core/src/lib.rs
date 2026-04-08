@@ -308,6 +308,7 @@ pub fn add_service(
     // When auth is enabled, containers need to reach the auth provider and trust Caddy's HTTPS.
     let mut add_hosts = Vec::new();
     let mut extra_volumes = Vec::new();
+    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
     if enable_auth {
         // Find the auth provider's domain from installed services
         if let Some(auth_service) = config.services.iter().find(|s| s.name == "authelia")
@@ -342,8 +343,28 @@ pub fn add_service(
                 "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",
                 ca_cert.display()
             ));
+            // Trust Caddy's self-signed CA for OIDC discovery over HTTPS.
+            // NODE_EXTRA_CA_CERTS adds the cert to Node.js's trust store.
+            // NODE_TLS_REJECT_UNAUTHORIZED=0 is a fallback for Node.js runtimes
+            // where undici/fetch doesn't honor NODE_EXTRA_CA_CERTS (similar to
+            // forgejo's ENABLE_OPENID_CONNECT_INSECURE_SKIP_VERIFY=true).
+            extra_env.insert(
+                "NODE_EXTRA_CA_CERTS".into(),
+                "/etc/ssl/certs/caddy-root-ca.crt".into(),
+            );
+            extra_env.insert(
+                "NODE_TLS_REJECT_UNAUTHORIZED".into(),
+                "0".into(),
+            );
         }
     }
+
+    // Join caddy's network when the service has a domain (so caddy can reach it by container name)
+    let extra_networks = if domain.is_some() && caddy::is_installed() && service_name != "caddy" {
+        vec!["caddy".to_string()]
+    } else {
+        vec![]
+    };
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
@@ -356,6 +377,8 @@ pub fn add_service(
         add_hosts,
         extra_volumes,
         domain,
+        extra_networks,
+        extra_env,
     })?;
     let generated = output.service;
 
@@ -448,10 +471,11 @@ pub fn add_service(
         // Only generate if they don't exist (first install)
         if !config_path.exists() {
             let domain = domain.unwrap_or("localhost");
-            let cookie_domain = if domain.contains('.') {
+            let cookie_domain = if domain.matches('.').count() >= 2 {
                 // Extract parent domain: auth.test.local → test.local
                 domain.split_once('.').map(|x| x.1).unwrap_or(domain)
             } else {
+                // Keep as-is for 2-label domains (auth.localhost) or bare names
                 domain
             };
             let authelia_url = format!("https://{domain}:8443");
@@ -670,7 +694,13 @@ pub fn add_service(
     if let Some(domain) = domain
         && caddy::is_installed()
     {
-        let upstream_port = allocated_ports.first().map(|(_, p)| *p).unwrap_or(8080);
+        // Use the first container port for the upstream (not the host-mapped port)
+        let container_port = reg_service
+            .def
+            .ports
+            .first()
+            .map(|p| p.container_port)
+            .unwrap_or(8080);
 
         // Use forward_auth when:
         // - User requested auth (--auth flag), AND
@@ -679,15 +709,15 @@ pub fn add_service(
         let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
         let is_auth_provider = service_name == "authelia";
         let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
-            config
-                .services
-                .iter()
-                .find(|s| s.name == "authelia")
-                .and_then(|s| s.ports.values().next().copied())
-                .map(|port| caddy::ForwardAuthParams {
-                    port,
-                    provider: caddy::AuthProvider::Authelia,
-                })
+            // Look up authelia's container port from the registry, not the host port
+            let authelia_container_port = registry::find_service(&repo_dir, "authelia")
+                .ok()
+                .and_then(|s| s.def.ports.first().map(|p| p.container_port))
+                .unwrap_or(9091);
+            Some(caddy::ForwardAuthParams {
+                container_port: authelia_container_port,
+                provider: caddy::AuthProvider::Authelia,
+            })
         } else {
             None
         };
@@ -695,7 +725,7 @@ pub fn add_service(
         let block = caddy::render_site_block(&caddy::CaddySiteParams {
             service_name: service_name.to_string(),
             domain: domain.to_string(),
-            upstream_port,
+            container_port,
             forward_auth,
         });
 
@@ -899,6 +929,12 @@ pub fn update_service(
         add_hosts: Vec::new(),
         extra_volumes: Vec::new(),
         domain: service.domain.as_deref(),
+        extra_networks: if service.domain.is_some() && caddy::is_installed() && service_name != "caddy" {
+            vec!["caddy".to_string()]
+        } else {
+            vec![]
+        },
+        extra_env: BTreeMap::new(),
     })?;
     let generated = output.service;
 

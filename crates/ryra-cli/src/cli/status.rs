@@ -38,10 +38,24 @@ fn print_global(info: &StatusInfo) {
     } else {
         println!("Services:");
         for svc in &info.services {
-            if let Some(ref domain) = svc.domain {
-                println!("  {} (https://{})", svc.name, domain);
-            } else {
-                println!("  {}", svc.name);
+            let ports: Vec<String> = svc
+                .ports
+                .iter()
+                .map(|(name, port)| format!("{name}={port}"))
+                .collect();
+            match (svc.domain.as_deref(), ports.is_empty()) {
+                (Some(domain), true) => {
+                    println!("  {} (https://{})", svc.name, domain);
+                }
+                (Some(domain), false) => {
+                    println!("  {} (https://{}) [{}]", svc.name, domain, ports.join(", "));
+                }
+                (None, true) => {
+                    println!("  {}", svc.name);
+                }
+                (None, false) => {
+                    println!("  {} [{}]", svc.name, ports.join(", "));
+                }
             }
         }
     }

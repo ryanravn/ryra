@@ -23,6 +23,8 @@ pub struct QuadletParams<'a> {
     pub add_hosts: &'a [(String, String)],
     /// Extra volume mounts (e.g., Caddy root CA cert).
     pub extra_volumes: &'a [String],
+    /// Additional networks to join (e.g., caddy's network for reverse proxy).
+    pub extra_networks: &'a [String],
 }
 
 pub struct PortMapping {
@@ -68,6 +70,9 @@ pub fn render_container(params: &QuadletParams) -> String {
         lines.push(format!("ContainerName={name}"));
     }
     lines.push(format!("Network={}.network", params.network));
+    for net in params.extra_networks {
+        lines.push(format!("Network={net}.network"));
+    }
 
     for (host, ip) in params.add_hosts {
         lines.push(format!("AddHost={host}:{ip}"));

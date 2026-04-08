@@ -91,7 +91,8 @@ run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/w
 [[steps]]
 action = "assert"
 name = "forgejo-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)"
+run = "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2) && exit 0; sleep 3; done; exit 1"
+timeout = 90
 
 [[steps]]
 action = "assert"

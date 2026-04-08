@@ -451,7 +451,9 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
         })
         .sum();
 
-    let total = service_ram + 512; // OS/podman overhead
+    // Browser tests need extra memory for chromium + playwright
+    let browser_overhead = if test.needs_browser() { 512 } else { 0 };
+    let total = service_ram + 512 + browser_overhead; // OS/podman + browser overhead
     let rounded = total.div_ceil(512) * 512; // round up to 512MB
     rounded.max(1024) as u32
 }

@@ -25,6 +25,7 @@ pub enum ProviderStatus {
 pub struct ServiceInfo {
     pub name: String,
     pub domain: Option<String>,
+    pub ports: std::collections::BTreeMap<String, u16>,
 }
 
 impl StatusInfo {
@@ -50,6 +51,7 @@ impl StatusInfo {
                 .map(|s| ServiceInfo {
                     name: s.name.clone(),
                     domain: s.domain.clone(),
+                    ports: s.ports.clone(),
                 })
                 .collect(),
         }

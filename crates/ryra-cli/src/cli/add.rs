@@ -89,7 +89,7 @@ pub async fn run(
                 // Non-interactive without --auth: don't auto-enable
                 None
             }
-        } else if interactive {
+        } else if interactive && !reg_service.def.integrations.auth.is_empty() {
             let items: Vec<String> = std::iter::once("None".to_string())
                 .chain(
                     reg_service
@@ -332,7 +332,8 @@ async fn ensure_dependencies(
             }
             // Prompt for authelia's domain
             let authelia_domain: String = Input::new()
-                .with_prompt("Domain for Authelia (e.g. auth.example.com)")
+                .with_prompt("Domain for Authelia")
+                .default("auth.localhost".to_string())
                 .interact_text()?;
             println!("\nInstalling authelia...\n");
             Box::pin(run(
@@ -402,7 +403,8 @@ async fn ensure_auth_for_add(
             // Prompt for authelia domain
             let authelia_domain: String = if std::io::stdin().is_terminal() {
                 Input::new()
-                    .with_prompt("Domain for Authelia (e.g. auth.example.com)")
+                    .with_prompt("Domain for Authelia")
+                    .default("auth.localhost".to_string())
                     .interact_text()?
             } else {
                 std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.localhost".to_string())

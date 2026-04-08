@@ -42,6 +42,10 @@ pub struct GenerateServiceParams<'a> {
     pub extra_volumes: Vec<String>,
     /// Domain for the service (used in templates as `{{service.domain}}`).
     pub domain: Option<&'a str>,
+    /// Additional networks to join (e.g., caddy's network for reverse proxy).
+    pub extra_networks: Vec<String>,
+    /// Extra env vars to append to the .env file (e.g., CA cert trust vars).
+    pub extra_env: BTreeMap<String, String>,
 }
 
 /// Generate all files for a service based on its deploy mode.
@@ -66,12 +70,17 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
 
     // Build .env file content
     let home_dir = crate::service_home(name);
-    let env_file = build_env_file(
+    let mut env_file = build_env_file(
         &home_dir,
         &rendered_env,
         params.service_def,
         params.host_port,
     );
+
+    // Append extra env vars (e.g., CA cert trust for OIDC)
+    for (key, value) in &params.extra_env {
+        env_file.content.push_str(&format!("{key}={value}\n"));
+    }
 
     let service = generate_quadlet(GenerateQuadletParams {
         name,
@@ -81,6 +90,7 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
         env_file,
         add_hosts: &params.add_hosts,
         extra_volumes: &params.extra_volumes,
+        extra_networks: &params.extra_networks,
     })?;
 
     Ok(GenerationOutput { service, ctx })
@@ -130,6 +140,7 @@ struct GenerateQuadletParams<'a> {
     env_file: GeneratedFile,
     add_hosts: &'a [(String, String)],
     extra_volumes: &'a [String],
+    extra_networks: &'a [String],
 }
 
 /// Generate quadlet files for a service (primary + sidecar containers).
@@ -211,6 +222,7 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
             init: false,
             add_hosts: params.add_hosts,
             extra_volumes: params.extra_volumes,
+            extra_networks: params.extra_networks,
         }),
     });
 
@@ -249,6 +261,7 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
                 init: container.init,
                 add_hosts: params.add_hosts,
                 extra_volumes: params.extra_volumes,
+                extra_networks: params.extra_networks,
             }),
         });
     }

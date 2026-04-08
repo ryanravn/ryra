@@ -42,9 +42,10 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let url = auth.url().to_string();
-        // auth.internal_url is how containers reach the auth provider.
+        // auth.internal_url is how containers reach the auth provider
+        // (via container DNS name on caddy's shared network).
         let internal_url = match auth.port() {
-            Some(port) => format!("http://host.containers.internal:{port}"),
+            Some(port) => format!("http://systemd-{}:{port}", auth.provider_name()),
             None => url.clone(),
         };
         ctx.insert("auth.url".into(), url.clone());
@@ -59,13 +60,15 @@ pub fn build_context(
             .and_then(|s| s.domain.as_ref())
             .map(|d| format!("https://{d}:8443"))
             .unwrap_or_else(|| url.clone());
-        ctx.insert("auth.external_url".into(), external_url);
+        ctx.insert("auth.external_url".into(), external_url.clone());
 
-        // OIDC issuer URL — differs per provider
+        // OIDC issuer URL — must be browser-reachable so authorization redirects work.
+        // Containers reach authelia via --add-host + Caddy CA cert when a domain is set.
         let issuer = match auth {
             crate::config::schema::AuthCredentials::Authelia { .. } => {
-                // Authelia's OIDC issuer is just its base URL
-                internal_url.clone()
+                // Use external URL (domain-based) so browsers can follow OIDC redirects.
+                // Falls back to localhost URL when no domain is configured.
+                external_url.clone()
             }
             crate::config::schema::AuthCredentials::External { .. } => url.clone(),
         };

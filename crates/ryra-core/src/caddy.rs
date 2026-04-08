@@ -19,13 +19,15 @@ pub fn is_installed() -> bool {
 pub struct CaddySiteParams {
     pub service_name: String,
     pub domain: String,
-    pub upstream_port: u16,
+    /// Container port the service listens on (used with container DNS name).
+    pub container_port: u16,
     pub forward_auth: Option<ForwardAuthParams>,
 }
 
 /// Forward auth configuration for services without native OIDC.
 pub struct ForwardAuthParams {
-    pub port: u16,
+    /// Container port authelia listens on.
+    pub container_port: u16,
     pub provider: AuthProvider,
 }
 
@@ -45,8 +47,8 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
 
     if let Some(ref auth) = params.forward_auth {
         block.push_str(&format!(
-            "    forward_auth host.containers.internal:{} {{\n",
-            auth.port
+            "    forward_auth systemd-authelia:{} {{\n",
+            auth.container_port
         ));
         match auth.provider {
             AuthProvider::Authelia => {
@@ -59,11 +61,10 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
         block.push_str("    }\n");
     }
 
-    // Use host.containers.internal so Caddy (in its own podman network)
-    // can reach services bound to 127.0.0.1 on the host.
+    // Use the container name on caddy's shared network for direct communication.
     block.push_str(&format!(
-        "    reverse_proxy host.containers.internal:{}\n",
-        params.upstream_port
+        "    reverse_proxy systemd-{}:{}\n",
+        params.service_name, params.container_port
     ));
     block.push_str("}\n");
     block
@@ -173,13 +174,13 @@ mod tests {
         let params = CaddySiteParams {
             service_name: "whoami".to_string(),
             domain: "whoami.example.com".to_string(),
-            upstream_port: 8080,
+            container_port: 8080,
             forward_auth: None,
         };
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
         assert!(block.contains("whoami.example.com {"));
-        assert!(block.contains("    reverse_proxy host.containers.internal:8080"));
+        assert!(block.contains("    reverse_proxy systemd-whoami:8080"));
         assert!(block.ends_with("}\n"));
     }
 
@@ -188,14 +189,14 @@ mod tests {
         let params = CaddySiteParams {
             service_name: "grafana".to_string(),
             domain: "grafana.example.com".to_string(),
-            upstream_port: 3000,
+            container_port: 3000,
             forward_auth: Some(ForwardAuthParams {
-                port: 9091,
+                container_port: 9091,
                 provider: AuthProvider::Authelia,
             }),
         };
         let block = render_site_block(&params);
-        assert!(block.contains("forward_auth host.containers.internal:9091"));
+        assert!(block.contains("forward_auth systemd-authelia:9091"));
         assert!(block.contains("uri /api/authz/forward-auth"));
         assert!(block.contains("copy_headers"));
     }
