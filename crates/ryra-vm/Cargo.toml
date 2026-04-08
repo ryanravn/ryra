@@ -11,7 +11,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal"] }
+tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal", "io-util"] }
 rand = "0.9"
 dirs = "6"
 libc = "0.2"

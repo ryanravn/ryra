@@ -1,7 +1,7 @@
 pub mod registry;
-pub mod test_toml;
 mod runner;
 mod scenario;
+pub mod test_toml;
 
 use std::path::{Path, PathBuf};
 

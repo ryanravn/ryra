@@ -138,7 +138,6 @@ async fn run_live_service(
     run_tests(&tests, &env_sources, verbose).await
 }
 
-
 async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) -> Result<()> {
     let mut passed = 0;
     let mut failed = 0;

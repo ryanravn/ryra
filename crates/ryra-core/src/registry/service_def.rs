@@ -330,7 +330,6 @@ impl ServiceDef {
             .map(|e| e.name.as_str())
             .collect()
     }
-
 }
 
 /// Detect the current system architecture using OCI/Docker naming conventions.

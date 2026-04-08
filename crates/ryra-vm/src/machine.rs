@@ -843,3 +843,35 @@ pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Resu
 
     Ok(())
 }
+
+/// Copy a local project directory (quadlet files + ryra.toml) into a running VM.
+///
+/// Files are placed at /opt/ryra-test-project/ so the test runner can copy them
+/// into the systemd quadlet directory.
+pub async fn copy_project_to_vm(machine: &Machine, project_dir: &Path) -> Result<()> {
+    if !project_dir.exists() {
+        anyhow::bail!("project directory not found: {}", project_dir.display());
+    }
+
+    machine.exec("mkdir -p /opt/ryra-test-project").await?;
+
+    // Copy individual files (not directories) — quadlet files and ryra.toml
+    let quadlet_extensions = ["container", "volume", "network", "pod", "kube", "toml"];
+    let mut entries = tokio::fs::read_dir(project_dir)
+        .await
+        .with_context(|| format!("failed to read project directory {}", project_dir.display()))?;
+
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if quadlet_extensions.contains(&ext) {
+                scp_to_vm(machine, &path, "/opt/ryra-test-project/").await?;
+            }
+        }
+    }
+
+    Ok(())
+}

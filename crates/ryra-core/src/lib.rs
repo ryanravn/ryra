@@ -352,10 +352,7 @@ pub fn add_service(
                 "NODE_EXTRA_CA_CERTS".into(),
                 "/etc/ssl/certs/caddy-root-ca.crt".into(),
             );
-            extra_env.insert(
-                "NODE_TLS_REJECT_UNAUTHORIZED".into(),
-                "0".into(),
-            );
+            extra_env.insert("NODE_TLS_REJECT_UNAUTHORIZED".into(), "0".into());
         }
     }
 
@@ -929,7 +926,10 @@ pub fn update_service(
         add_hosts: Vec::new(),
         extra_volumes: Vec::new(),
         domain: service.domain.as_deref(),
-        extra_networks: if service.domain.is_some() && caddy::is_installed() && service_name != "caddy" {
+        extra_networks: if service.domain.is_some()
+            && caddy::is_installed()
+            && service_name != "caddy"
+        {
             vec!["caddy".to_string()]
         } else {
             vec![]
@@ -1119,11 +1119,10 @@ pub async fn service_tests(
         });
     }
 
-    let content =
-        std::fs::read_to_string(&test_toml_path).map_err(|source| Error::FileRead {
-            path: test_toml_path.clone(),
-            source,
-        })?;
+    let content = std::fs::read_to_string(&test_toml_path).map_err(|source| Error::FileRead {
+        path: test_toml_path.clone(),
+        source,
+    })?;
 
     // Parse just the [[tests]] section — we only care about simple tests for live runs
     #[derive(serde::Deserialize)]

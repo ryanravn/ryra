@@ -160,7 +160,10 @@ run = "curl -sf http://localhost:8080"
 "#;
         let (_dir, path) = write_temp(toml);
         let parsed = TestToml::parse(&path).expect("parse");
-        assert_eq!(parsed.setup.as_ref().unwrap().services, vec!["caddy", "myapp"]);
+        assert_eq!(
+            parsed.setup.as_ref().unwrap().services,
+            vec!["caddy", "myapp"]
+        );
         assert_eq!(parsed.tests.len(), 1);
         assert_eq!(parsed.tests[0].name, "app responds");
         assert_eq!(parsed.tests[0].run, "curl -sf http://localhost:8080");
@@ -208,7 +211,10 @@ run = "curl -sf http://localhost:9000"
             parsed.setup.as_ref().unwrap().quadlets,
             vec!["myapp.container", "myapp-db.container"]
         );
-        assert_eq!(parsed.quadlet_files(), vec!["myapp.container", "myapp-db.container"]);
+        assert_eq!(
+            parsed.quadlet_files(),
+            vec!["myapp.container", "myapp-db.container"]
+        );
         assert_eq!(parsed.setup.as_ref().unwrap().services, vec!["caddy"]);
         assert_eq!(parsed.tests.len(), 1);
     }
@@ -270,6 +276,9 @@ args = "--domain proxy.test.local"
 "#;
         let (_dir, path) = write_temp(toml);
         let parsed = TestToml::parse(&path).expect("parse");
-        assert_eq!(parsed.steps[0].args.as_deref(), Some("--domain proxy.test.local"));
+        assert_eq!(
+            parsed.steps[0].args.as_deref(),
+            Some("--domain proxy.test.local")
+        );
     }
 }

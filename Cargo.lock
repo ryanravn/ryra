@@ -1051,6 +1051,7 @@ dependencies = [
  "libc",
  "ryra-vm",
  "serde",
+ "tempfile",
  "tokio",
  "toml",
 ]

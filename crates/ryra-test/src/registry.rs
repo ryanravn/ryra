@@ -188,7 +188,8 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
         .unwrap_or("project")
         .to_string();
 
-    let mut test = discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
+    let mut test =
+        discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
 
     // Populate quadlets from discovered files if not explicitly set in [setup]
     if let DiscoveredTest::Simple { ref mut setup, .. } = test {
@@ -245,10 +246,7 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "warning: failed to parse {}: {e}",
-                    test_toml_path.display()
-                );
+                eprintln!("warning: failed to parse {}: {e}", test_toml_path.display());
             }
         }
     }
@@ -274,14 +272,12 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
                 .to_string();
 
             match TestToml::parse(&path) {
-                Ok(parsed) => {
-                    match discover_from_test_toml(&path, &parsed, &file_stem, None) {
-                        Ok(test) => discovered.push(test),
-                        Err(e) => {
-                            eprintln!("warning: failed to process {}: {e}", path.display());
-                        }
+                Ok(parsed) => match discover_from_test_toml(&path, &parsed, &file_stem, None) {
+                    Ok(test) => discovered.push(test),
+                    Err(e) => {
+                        eprintln!("warning: failed to process {}: {e}", path.display());
                     }
-                }
+                },
                 Err(e) => {
                     eprintln!("warning: failed to parse {}: {e}", path.display());
                 }
@@ -402,16 +398,10 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
             }
             "run" => {
                 let name = s.name.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'run' requires a 'name' field in test '{}'",
-                        test_name
-                    )
+                    anyhow::anyhow!("step 'run' requires a 'name' field in test '{}'", test_name)
                 })?;
                 let run = s.run.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'run' requires a 'run' field in test '{}'",
-                        test_name
-                    )
+                    anyhow::anyhow!("step 'run' requires a 'run' field in test '{}'", test_name)
                 })?;
                 StepEntry::Run {
                     name,
@@ -439,11 +429,7 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                 }
             }
             other => {
-                anyhow::bail!(
-                    "unknown step action '{}' in test '{}'",
-                    other,
-                    test_name
-                );
+                anyhow::bail!("unknown step action '{}' in test '{}'", other, test_name);
             }
         };
         steps.push(step);

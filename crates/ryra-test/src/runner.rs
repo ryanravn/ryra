@@ -421,13 +421,7 @@ pub async fn run_lifecycle_test(
                     }
                     _ => format!("ryra add {service} --repo {repo_path}"),
                 };
-                let event = run_event(
-                    vm,
-                    EventKind::Step,
-                    &cmd,
-                    300,
-                )
-                .await;
+                let event = run_event(vm, EventKind::Step, &cmd, 300).await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
