@@ -1,3 +1,4 @@
+pub mod authelia;
 pub mod caddy;
 pub mod config;
 pub mod diff;
@@ -439,121 +440,17 @@ pub fn add_service(
     });
 
     // Register OIDC client with the auth provider
-    if let (Some(registry::service_def::AuthKind::Oidc), Some(auth)) =
-        (auth_kind.as_ref(), config.auth.as_ref())
+    if let (
+        Some(registry::service_def::AuthKind::Oidc),
+        Some(config::schema::AuthCredentials::Authelia { .. }),
+    ) = (auth_kind.as_ref(), config.auth.as_ref())
     {
-        let client_id = output.ctx.get("auth.client_id").cloned();
-        let client_secret = output.ctx.get("auth.client_secret").cloned();
-        let service_url = output.ctx.get("service.url").cloned();
-
-        match auth {
-            config::schema::AuthCredentials::Authelia { .. } => {
-                // Authelia: register OIDC client via configuration.yml
-                if let (Some(client_id), Some(client_secret)) = (client_id, client_secret) {
-                    let authelia_config_dir = service_home("authelia").join("config");
-                    let authelia_config_path = authelia_config_dir.join("configuration.yml");
-                    let rsa_key_path = authelia_config_dir.join("oidc.jwk.rsa.pem");
-
-                    // Step 1: Generate RSA key if not exists (for OIDC JWKS)
-                    if !rsa_key_path.exists() {
-                        let _ = std::process::Command::new("podman")
-                            .args([
-                                "run",
-                                "--rm",
-                                "-v",
-                                &format!("{}:/out:Z", authelia_config_dir.display()),
-                                "docker.io/authelia/authelia:4.39",
-                                "authelia",
-                                "crypto",
-                                "pair",
-                                "rsa",
-                                "generate",
-                                "--directory",
-                                "/out",
-                            ])
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-                        // Rename private.pem → oidc.jwk.rsa.pem
-                        let _ =
-                            std::fs::rename(authelia_config_dir.join("private.pem"), &rsa_key_path);
-                    }
-
-                    // Step 2: Add OIDC section + client to authelia config
-                    if authelia_config_path.exists()
-                        && let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path)
-                    {
-                        // Use domain-based URL for redirects (browser-accessible via Caddy)
-                        // Fall back to localhost-based URL if no domain
-                        // Construct the service's base URL for OIDC redirect_uris.
-                        let base_url = match domain {
-                            Some(d) => format!("https://{d}:8443"),
-                            None => service_url.unwrap_or_default(),
-                        };
-                        // Authelia uses exact-match for redirect_uris. We register the
-                        // service's external URL and its OIDC callback path. The callback
-                        // is read from [mappings.auth].OAUTH_REDIRECT_URL if present,
-                        // otherwise we use common OIDC callback patterns.
-                        let redirect_url_from_mappings = reg_service
-                            .def
-                            .mappings
-                            .auth
-                            .get("OAUTH_REDIRECT_URL")
-                            .map(|v| {
-                                v.replace("{{service.url}}", &base_url)
-                                    .replace("{{service.external_url}}", &base_url)
-                            });
-                        let mut redirect_uris = Vec::new();
-                        if let Some(ref url) = redirect_url_from_mappings {
-                            redirect_uris.push(url.clone());
-                        }
-                        // Always include the base URL with common callback paths.
-                        // Services like Forgejo construct their own callback URL from ROOT_URL.
-                        for suffix in [
-                            "/user/oauth2/Authelia/callback", // Forgejo/Gitea
-                            "/auth/login",                    // Immich
-                            "/oauth2/callback",               // generic
-                        ] {
-                            let uri = format!("{base_url}{suffix}");
-                            if !redirect_uris.contains(&uri) {
-                                redirect_uris.push(uri);
-                            }
-                        }
-                        let redirect_uris_yaml: String = redirect_uris
-                            .iter()
-                            .map(|u| format!("\n          - '{u}'"))
-                            .collect();
-                        let client_block = format!(
-                            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:{redirect_uris_yaml}\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
-                        );
-
-                        if !yaml.contains("identity_providers:") {
-                            // First OIDC client — add the entire OIDC section.
-                            // The RSA key is referenced via Authelia's template filter
-                            // (container path /config/oidc.jwk.rsa.pem).
-                            yaml.push_str(&format!(
-                                    "\nidentity_providers:\n  oidc:\n    jwks:\n      - key_id: 'main'\n        algorithm: 'RS256'\n        use: 'sig'\n        key: {{{{ secret \"/config/oidc.jwk.rsa.pem\" | mindent 10 \"|\" | msquote }}}}\n    clients:{client_block}\n",
-                                ));
-                        } else if !yaml.contains(&client_id) {
-                            // OIDC section exists, append client
-                            yaml = yaml
-                                .replace("    clients:", &format!("    clients:{client_block}"));
-                        }
-
-                        steps.push(Step::WriteFile(GeneratedFile {
-                            path: authelia_config_path,
-                            content: yaml,
-                        }));
-
-                        // Restart authelia to pick up the new OIDC config
-                        steps.push(Step::RestartService {
-                            unit: "authelia".to_string(),
-                        });
-                    }
-                }
-            }
-            config::schema::AuthCredentials::External { .. } => {}
-        }
+        steps.extend(authelia::register_oidc_client(
+            service_name,
+            &reg_service.def,
+            domain,
+            &output.ctx,
+        ));
     }
 
     // 6. Post-start hooks — run after service is active
@@ -764,14 +661,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
 
     // Auto-configure [auth] when an auth provider is installed
     if params.service_name == "authelia" {
-        let port = params
-            .allocated_ports
-            .iter()
-            .find(|(name, _)| name == "http")
-            .map(|(_, p)| *p)
-            .unwrap_or(9091);
-        let url = format!("http://localhost:{port}");
-        config.auth = Some(config::schema::AuthCredentials::Authelia { url, port });
+        config.auth = Some(authelia::auth_config(params.allocated_ports));
     }
 
     config::save_config(&paths.config_file, &config)?;
