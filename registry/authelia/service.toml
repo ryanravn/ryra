@@ -62,15 +62,79 @@ value = "admin@localhost"
 kind = "prompted"
 prompt = "Admin email"
 
+[[env]]
+name = "RYRA_DOMAIN"
+value = "{{ service.domain | default('localhost') }}"
+
 # Port for Caddy forward auth
 [[env]]
 name = "RYRA_AUTH_PORT"
 value = "9091"
 
+[[pre_start]]
+name = "generate-config"
+timeout = 60
+run = """
+CONFIG_DIR="$HOME/.local/share/ryra/authelia/config"
+CONFIG_FILE="$CONFIG_DIR/configuration.yml"
+[ -f "$CONFIG_FILE" ] && exit 0
+DOMAIN="${RYRA_DOMAIN:-localhost}"
+# Extract parent domain for session cookie: auth.test.local -> test.local
+COOKIE_DOMAIN="$DOMAIN"
+if echo "$DOMAIN" | grep -q '\\..*\\.'; then
+  COOKIE_DOMAIN="${DOMAIN#*.}"
+fi
+# Browser-facing URL for session cookies
+if [ "$DOMAIN" != "localhost" ] && systemctl --user is-active caddy.service >/dev/null 2>&1; then
+  AUTHELIA_URL="https://$DOMAIN:8443"
+else
+  AUTHELIA_URL="http://$DOMAIN:$RYRA_PORT_HTTP"
+fi
+cat > "$CONFIG_FILE" <<YAML
+---
+server:
+  address: 'tcp://0.0.0.0:9091'
+log:
+  level: 'info'
+authentication_backend:
+  file:
+    path: '/config/users_database.yml'
+session:
+  cookies:
+    - domain: '$COOKIE_DOMAIN'
+      authelia_url: '$AUTHELIA_URL'
+storage:
+  local:
+    path: '/config/db.sqlite3'
+notifier:
+  filesystem:
+    filename: '/config/notification.txt'
+access_control:
+  default_policy: 'one_factor'
+YAML
+"""
+
+[[pre_start]]
+name = "generate-users"
+timeout = 120
+run = """
+USERS_FILE="$HOME/.local/share/ryra/authelia/config/users_database.yml"
+[ -f "$USERS_FILE" ] && exit 0
+[ -z "$AUTHELIA_ADMIN_PASSWORD" ] && exit 0
+USERNAME="${AUTHELIA_ADMIN_USER:-admin}"
+EMAIL="${AUTHELIA_ADMIN_EMAIL:-admin@localhost}"
+HASH=$(podman run --rm docker.io/authelia/authelia:4.39 authelia crypto hash generate argon2 --password "$AUTHELIA_ADMIN_PASSWORD" | grep '^Digest:' | sed 's/^Digest: //')
+[ -z "$HASH" ] && exit 1
+cat > "$USERS_FILE" <<YAML
+---
+users:
+  $USERNAME:
+    displayname: "$USERNAME"
+    password: "$HASH"
+    email: "$EMAIL"
+YAML
+"""
+
 [integrations]
 auth = []
 smtp = false
-
-# Config files (configuration.yml, users_database.yml) are generated
-# by ryra core as WriteFile steps BEFORE authelia starts.
-# No post-start hooks needed — avoids shell escaping and timing issues.
