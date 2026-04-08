@@ -23,6 +23,10 @@ pub struct ServiceDef {
     pub mappings: Mappings,
     #[serde(default)]
     pub integrations: IntegrationFlags,
+    /// Commands that run on the host before the service container starts.
+    /// The service's .env is sourced and data dir exists at this point.
+    #[serde(default)]
+    pub pre_start: Vec<PostStartHookDef>,
     /// Commands that run on the host after the service is started and ports are reachable.
     /// Useful for services that need config injection into files created at runtime
     /// (e.g. Seafile writes OAuth config to seahub_settings.py after bootstrap).
