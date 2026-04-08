@@ -601,12 +601,46 @@ pub fn add_service(
                     {
                         // Use domain-based URL for redirects (browser-accessible via Caddy)
                         // Fall back to localhost-based URL if no domain
-                        let redirect_uri_regex = match domain {
-                            Some(d) => format!("^https://{d}:8443/.*$"),
-                            None => service_url.map(|u| format!("^{u}/.*$")).unwrap_or_default(),
+                        // Construct the service's base URL for OIDC redirect_uris.
+                        let base_url = match domain {
+                            Some(d) => format!("https://{d}:8443"),
+                            None => service_url.unwrap_or_default(),
                         };
+                        // Authelia uses exact-match for redirect_uris. We register the
+                        // service's external URL and its OIDC callback path. The callback
+                        // is read from [mappings.auth].OAUTH_REDIRECT_URL if present,
+                        // otherwise we use common OIDC callback patterns.
+                        let redirect_url_from_mappings = reg_service
+                            .def
+                            .mappings
+                            .auth
+                            .get("OAUTH_REDIRECT_URL")
+                            .map(|v| {
+                                v.replace("{{service.url}}", &base_url)
+                                    .replace("{{service.external_url}}", &base_url)
+                            });
+                        let mut redirect_uris = Vec::new();
+                        if let Some(ref url) = redirect_url_from_mappings {
+                            redirect_uris.push(url.clone());
+                        }
+                        // Always include the base URL with common callback paths.
+                        // Services like Forgejo construct their own callback URL from ROOT_URL.
+                        for suffix in [
+                            "/user/oauth2/Authelia/callback", // Forgejo/Gitea
+                            "/auth/login",                    // Immich
+                            "/oauth2/callback",               // generic
+                        ] {
+                            let uri = format!("{base_url}{suffix}");
+                            if !redirect_uris.contains(&uri) {
+                                redirect_uris.push(uri);
+                            }
+                        }
+                        let redirect_uris_yaml: String = redirect_uris
+                            .iter()
+                            .map(|u| format!("\n          - '{u}'"))
+                            .collect();
                         let client_block = format!(
-                            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris_regex:\n          - '{redirect_uri_regex}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
+                            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:{redirect_uris_yaml}\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
                         );
 
                         if !yaml.contains("identity_providers:") {
