@@ -188,7 +188,15 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
         .unwrap_or("project")
         .to_string();
 
-    let test = discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
+    let mut test = discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
+
+    // Populate quadlets from discovered files if not explicitly set in [setup]
+    if let DiscoveredTest::Simple { ref mut setup, .. } = test {
+        if setup.quadlets.is_empty() && !quadlet_files.is_empty() {
+            setup.quadlets = quadlet_files;
+        }
+    }
+
     Ok(Some(test))
 }
 

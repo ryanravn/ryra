@@ -15,12 +15,13 @@ fn print_event_result(prefix: &str, event: &Event) {
     }
 }
 
-/// Execute a registry-defined test suite inside a VM.
+/// Execute a simple (non-lifecycle) test suite inside a VM.
 ///
-/// 1. Runs `ryra init`
-/// 2. Deploys each service with `ryra add`
-/// 3. Sources `.env` files (unprefixed for single-service, prefixed for multi)
-/// 4. Runs each test command via SSH, checks exit code
+/// 1. Runs `ryra init` and deploys registry services with `ryra add`
+/// 2. Waits for declared ports
+/// 3. If quadlets are present, copies them to systemd dir, reloads, starts them
+/// 4. Sources `.env` files
+/// 5. Runs each test command via SSH, checks exit code
 pub async fn run_registry_test(
     vm: &Machine,
     test: &DiscoveredTest,
@@ -31,20 +32,35 @@ pub async fn run_registry_test(
     let mut events = Vec::new();
     let mut failed = false;
 
+    let (services, quadlets) = match test {
+        DiscoveredTest::Simple { setup, .. } => (&setup.services, &setup.quadlets),
+        DiscoveredTest::Lifecycle { .. } => {
+            // Lifecycle tests should use run_lifecycle_test instead
+            return ScenarioResult {
+                name: name.to_string(),
+                events: vec![],
+                duration: start.elapsed(),
+                outcome: Outcome::Failed("run_registry_test called for lifecycle test".to_string()),
+            };
+        }
+    };
+
     // Init
-    println!("[{name}]   ryra init...");
-    let init_event = run_event(
-        vm,
-        EventKind::Init,
-        &format!("ryra init --repo {repo_path}"),
-        30,
-    )
-    .await;
-    print_event_result(name, &init_event);
-    if init_event.outcome.is_fail() {
-        failed = true;
+    if !services.is_empty() || !quadlets.is_empty() {
+        println!("[{name}]   ryra init...");
+        let init_event = run_event(
+            vm,
+            EventKind::Init,
+            &format!("ryra init --repo {repo_path}"),
+            30,
+        )
+        .await;
+        print_event_result(name, &init_event);
+        if init_event.outcome.is_fail() {
+            failed = true;
+        }
+        events.push(init_event);
     }
-    events.push(init_event);
 
     // Collect env overrides from all tests — these may include values for
     // required env vars that `ryra add` needs to succeed non-interactively.
@@ -63,9 +79,9 @@ pub async fn run_registry_test(
         }
     }
 
-    // Deploy each service
+    // Deploy each registry service
     if !failed {
-        for service in test.services() {
+        for service in services {
             println!("[{name}]   ryra add {service}...");
             let step_event = run_event(
                 vm,
@@ -99,7 +115,7 @@ pub async fn run_registry_test(
     // Wait for declared ports to be reachable (services may need startup time
     // beyond what systemd "active" indicates).
     if !failed {
-        for service in test.services() {
+        for service in services {
             let port_cmd = format!(
                 "grep RYRA_PORT $HOME/.local/share/ryra/{service}/.env 2>/dev/null | cut -d= -f2"
             );
@@ -122,6 +138,56 @@ pub async fn run_registry_test(
             }
             if failed {
                 break;
+            }
+        }
+    }
+
+    // Deploy quadlet files if present
+    if !failed && !quadlets.is_empty() {
+        println!("[{name}]   deploying quadlet files...");
+        let deploy_cmd = "\
+            mkdir -p $HOME/.config/containers/systemd && \
+            cp /opt/ryra-test-project/*.container $HOME/.config/containers/systemd/ 2>/dev/null; \
+            cp /opt/ryra-test-project/*.volume $HOME/.config/containers/systemd/ 2>/dev/null; \
+            cp /opt/ryra-test-project/*.network $HOME/.config/containers/systemd/ 2>/dev/null; \
+            cp /opt/ryra-test-project/*.pod $HOME/.config/containers/systemd/ 2>/dev/null; \
+            systemctl --user daemon-reload";
+        let deploy_event = run_event(vm, EventKind::Step, deploy_cmd, 30).await;
+        print_event_result(name, &deploy_event);
+        if deploy_event.outcome.is_fail() {
+            failed = true;
+        }
+        events.push(deploy_event);
+
+        // Derive service names from .container file stems, start each
+        if !failed {
+            let quadlet_services: Vec<&str> = quadlets
+                .iter()
+                .filter(|q| q.ends_with(".container"))
+                .filter_map(|q| q.strip_suffix(".container"))
+                .collect();
+
+            for svc in &quadlet_services {
+                println!("[{name}]   starting {svc}...");
+                let start_cmd = format!("systemctl --user start {svc}.service");
+                let start_event = run_event(vm, EventKind::Step, &start_cmd, 120).await;
+                print_event_result(name, &start_event);
+                if start_event.outcome.is_fail() {
+                    failed = true;
+                    events.push(start_event);
+                    break;
+                }
+                events.push(start_event);
+
+                println!("[{name}]   waiting for {svc}...");
+                let wait_event = wait_for_service(vm, svc).await;
+                print_event_result(name, &wait_event);
+                if wait_event.outcome.is_fail() {
+                    failed = true;
+                    events.push(wait_event);
+                    break;
+                }
+                events.push(wait_event);
             }
         }
     }
@@ -239,23 +305,28 @@ async fn run_test_entry(vm: &Machine, entry: &TestEntry, env_prefix: &str) -> Ev
 /// Multi-service: reads each .env and exports with SERVICE__ prefix
 async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String> {
     match test {
-        DiscoveredTest::SingleService { service_name, .. } => {
-            Ok(format!(". $HOME/.local/share/ryra/{service_name}/.env"))
-        }
-        DiscoveredTest::MultiService { services, .. } => {
-            // For multi-service, we generate a script that reads each .env
-            // and re-exports vars with the service name prefix
-            let mut lines = Vec::new();
-            for service in services {
-                let prefix = service.to_uppercase();
-                // Read each line from the .env, prefix the var name, export it
-                lines.push(format!(
-                    "while IFS='=' read -r key val; do \
-                     [ -n \"$key\" ] && export {prefix}__$key=\"$val\"; \
-                     done < $HOME/.local/share/ryra/{service}/.env"
-                ));
+        DiscoveredTest::Simple { setup, .. } => {
+            if setup.services.len() == 1 {
+                Ok(format!(
+                    ". $HOME/.local/share/ryra/{}/.env",
+                    setup.services[0]
+                ))
+            } else if setup.services.len() > 1 {
+                // For multi-service, we generate a script that reads each .env
+                // and re-exports vars with the service name prefix
+                let mut lines = Vec::new();
+                for service in &setup.services {
+                    let prefix = service.to_uppercase();
+                    lines.push(format!(
+                        "while IFS='=' read -r key val; do \
+                         [ -n \"$key\" ] && export {prefix}__$key=\"$val\"; \
+                         done < $HOME/.local/share/ryra/{service}/.env"
+                    ));
+                }
+                Ok(lines.join(" && "))
+            } else {
+                Ok(String::new())
             }
-            Ok(lines.join(" && "))
         }
         DiscoveredTest::Lifecycle { .. } => {
             // Lifecycle tests handle env sourcing within their step commands
@@ -342,12 +413,18 @@ pub async fn run_lifecycle_test(
         }
 
         match step {
-            StepEntry::Add { service } => {
+            StepEntry::Add { service, args } => {
                 println!("{p}  ryra add {service}...");
+                let cmd = match args.as_deref() {
+                    Some(a) if !a.is_empty() => {
+                        format!("ryra add {service} {a} --repo {repo_path}")
+                    }
+                    _ => format!("ryra add {service} --repo {repo_path}"),
+                };
                 let event = run_event(
                     vm,
                     EventKind::Step,
-                    &format!("ryra add {service} --repo {repo_path}"),
+                    &cmd,
                     300,
                 )
                 .await;
@@ -465,7 +542,7 @@ pub async fn run_lifecycle_test(
 
 fn lifecycle_step_description(step: &StepEntry) -> String {
     match step {
-        StepEntry::Add { service } => format!("ryra add {service}"),
+        StepEntry::Add { service, .. } => format!("ryra add {service}"),
         StepEntry::Remove { service } => format!("ryra remove {service}"),
         StepEntry::Reset => "ryra reset".to_string(),
         StepEntry::Wait {

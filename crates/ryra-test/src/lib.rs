@@ -209,40 +209,24 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     anyhow::bail!("no registry found. Pass --registry <path> or run from the repo root")
 }
 
-/// Resolve a local project path — explicit arg, or auto-detect ryra.toml in cwd.
-fn resolve_project_path(explicit: Option<&PathBuf>) -> Option<PathBuf> {
-    if let Some(p) = explicit {
-        return Some(p.clone());
-    }
-    // Auto-detect: if cwd contains a ryra.toml, use it
-    let cwd = std::env::current_dir().ok()?;
-    if cwd.join("ryra.toml").exists() {
-        return Some(cwd);
-    }
-    None
-}
-
 /// Run the E2E test suite with the given arguments.
 pub async fn run(args: Args) -> Result<()> {
     install_signal_handler();
 
     // Check for local project first, then fall back to registry
-    let project_path = resolve_project_path(args.project.as_ref());
     let registry_path = resolve_registry_path(args.registry.as_ref());
 
     let mut discovered = Vec::new();
 
-    // Discover local project tests
-    if let Some(ref project_dir) = project_path {
+    // Discover local project tests (--project flag)
+    if let Some(ref project_dir) = args.project {
         match registry::discover_local_project(project_dir)? {
             Some(test) => discovered.push(test),
             None => {
-                if args.project.is_some() {
-                    anyhow::bail!(
-                        "no ryra.toml found in project directory: {}",
-                        project_dir.display()
-                    );
-                }
+                anyhow::bail!(
+                    "no test.toml found in project directory: {}",
+                    project_dir.display()
+                );
             }
         }
     }
@@ -271,9 +255,9 @@ pub async fn run(args: Args) -> Result<()> {
                     test.name(),
                     test.test_count(),
                 );
-            } else if test.is_local_project() {
+            } else if test.has_quadlets() {
                 println!(
-                    "  {:<30} ({} tests, local project)",
+                    "  {:<30} ({} tests, quadlets)",
                     test.name(),
                     test.test_count(),
                 );
@@ -387,8 +371,6 @@ pub async fn run(args: Args) -> Result<()> {
     let mut handles = vec![];
     let total_tests = to_run.len();
 
-    let project_path = project_path.map(std::sync::Arc::new);
-
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
         let test_image: std::sync::Arc<image::Image> = if test.needs_browser() {
@@ -408,13 +390,17 @@ pub async fn run(args: Args) -> Result<()> {
         });
         let ryra_bin = ryra_bin.clone();
         let registry_path = registry_path.clone();
-        let project_path = project_path.clone();
         let keep_failed = args.keep_failed;
         let keep_alive = args.keep_alive;
         let verbose = args.verbose;
         let single_test = total_tests == 1;
         let name = test.name().to_string();
-        let is_local = test.is_local_project();
+        let has_quadlets = test.has_quadlets();
+        // Extract quadlet_dir before spawning task (DiscoveredTest isn't Send)
+        let quadlet_dir = match test {
+            registry::DiscoveredTest::Simple { setup, .. } => setup.quadlet_dir.clone(),
+            registry::DiscoveredTest::Lifecycle { .. } => None,
+        };
 
         handles.push(tokio::spawn(async move {
             let _permit = permit;
@@ -431,10 +417,10 @@ pub async fn run(args: Args) -> Result<()> {
             };
 
             // Re-discover tests inside task (DiscoveredTest isn't Send due to lifetime)
-            let test = if is_local {
-                let project_dir = project_path.as_ref()
-                    .expect("project_path must be set for local tests");
-                match registry::discover_local_project(project_dir) {
+            let test = if has_quadlets {
+                let qdir = quadlet_dir.as_ref()
+                    .expect("quadlet_dir must be set for quadlet tests");
+                match registry::discover_local_project(qdir) {
                     Ok(Some(t)) => t,
                     Ok(None) => return fail_result("local project not found (internal error)".into()),
                     Err(e) => return fail_result(format!("local project discovery failed: {e:#}")),
@@ -474,9 +460,9 @@ pub async fn run(args: Args) -> Result<()> {
                 }
             }
 
-            // Copy local project files into VM
-            if let Some(ref project_dir) = project_path {
-                if let Err(e) = machine::copy_project_to_vm(&vm, project_dir).await {
+            // Copy quadlet project files into VM
+            if let Some(ref qdir) = quadlet_dir {
+                if let Err(e) = machine::copy_project_to_vm(&vm, qdir).await {
                     let _ = vm.destroy().await;
                     return fail_result(format!("failed to copy project to VM: {e:#}"));
                 }
@@ -500,15 +486,7 @@ pub async fn run(args: Args) -> Result<()> {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
                     runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry", verbose, single_test).await
                 }
-                registry::DiscoveredTest::LocalProject {
-                    service_names,
-                    dependencies,
-                    tests,
-                    ..
-                } => {
-                    runner::run_local_project_test(&vm, &name, service_names, dependencies, tests, "/opt/ryra-test-registry").await
-                }
-                _ => {
+                registry::DiscoveredTest::Simple { .. } => {
                     runner::run_registry_test(&vm, &test, "/opt/ryra-test-registry").await
                 }
             };
