@@ -1,14 +1,12 @@
 [test]
-name = "forgejo-auth-browser"
+name = "cross-app-sso-browser"
 browser = true
 
-# Set up /etc/hosts so browser can resolve .test.local domains
+# /etc/hosts for domain resolution
 [[steps]]
 action = "run"
 name = "setup-hosts"
-run = """
-echo '127.0.0.1 auth.test.local git.test.local' >> /etc/hosts
-"""
+run = "echo '127.0.0.1 auth.test.local git.test.local whoami.test.local' >> /etc/hosts"
 
 # Install caddy
 [[steps]]
@@ -31,7 +29,7 @@ timeout = 300
 action = "wait"
 service = "authelia"
 
-# Install forgejo with OIDC auth
+# Install forgejo with native OIDC
 [[steps]]
 action = "run"
 name = "add-forgejo"
@@ -42,31 +40,41 @@ timeout = 600
 action = "wait"
 service = "forgejo"
 
-# Wait for forgejo to respond via caddy
+# Install whoami with forward auth (no native OIDC)
+[[steps]]
+action = "run"
+name = "add-whoami"
+run = "ryra add whoami --auth --domain whoami.test.local --repo /opt/ryra-test-registry"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+# Wait for forgejo to respond
 [[steps]]
 action = "assert"
-name = "forgejo-via-caddy"
-run = "for i in $(seq 1 30); do curl -sk -o /dev/null -w '%{http_code}' --resolve git.test.local:8443:127.0.0.1 https://git.test.local:8443 | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+name = "forgejo-ready"
+run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)/api/v1/settings/api >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1"
 timeout = 90
 
-# Wait for authelia to respond via caddy
+# Wait for authelia via caddy
 [[steps]]
 action = "assert"
 name = "authelia-via-caddy"
-run = "curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443 | grep -qE '^(200|302)'"
+run = "for i in $(seq 1 20); do curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443 | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+timeout = 60
 
-# Run playwright auth flow tests
+# Run playwright cross-app SSO tests
 [[steps]]
 action = "assert"
-name = "playwright-auth-flow"
+name = "playwright-cross-app-sso"
 run = """
 export PATH="$HOME/.bun/bin:$PATH"
 export FORGEJO_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)
-export AUTHELIA_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/authelia/.env | cut -d= -f2)
 export AUTHELIA_USER=admin
 export AUTHELIA_PASSWORD=testpassword123
 cd /opt/ryra-test-registry/tests/browser
 ln -sf /opt/playwright/node_modules .
-bunx playwright test forgejo-auth.spec.ts --reporter=list
+bunx playwright test cross-app-sso.spec.ts --reporter=list
 """
 timeout = 120
