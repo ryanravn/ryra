@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::Parser;
 use tokio::process::Command;
 
-use ryra_core::registry::service_def::TestDef;
+use ryra_core::registry::test_def::TestDef;
 
 /// Parameters for [`run`].
 pub struct TestRunParams<'a> {
@@ -14,6 +14,7 @@ pub struct TestRunParams<'a> {
     pub suite: Option<&'a str>,
     pub test_filter: Option<&'a str>,
     pub repo: Option<&'a str>,
+    pub project: Option<&'a std::path::PathBuf>,
     pub vm: bool,
     pub keep_alive: bool,
     pub yes: bool,
@@ -24,13 +25,14 @@ pub struct TestRunParams<'a> {
 }
 
 pub async fn run(params: TestRunParams<'_>) -> Result<()> {
-    if params.vm || params.keep_alive || params.list {
+    if params.vm || params.keep_alive || params.list || params.project.is_some() {
         return run_vm(
             params.names,
             params.keep_alive,
             params.verbose,
             params.list,
             params.parallel,
+            params.project,
         )
         .await;
     }
@@ -297,6 +299,7 @@ async fn run_vm(
     verbose: bool,
     list: bool,
     parallel: Option<usize>,
+    project: Option<&std::path::PathBuf>,
 ) -> Result<()> {
     let mut args = ryra_test::Args::parse_from(std::iter::once("ryra-test"));
     args.verbose = verbose;
@@ -305,6 +308,7 @@ async fn run_vm(
     if let Some(n) = parallel {
         args.parallel = n;
     }
+    args.project = project.cloned();
     args.tests = names.to_vec();
     ryra_test::run(args).await
 }

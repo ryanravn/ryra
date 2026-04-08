@@ -1,5 +1,6 @@
 pub mod fetch;
 pub mod service_def;
+pub mod test_def;
 
 use std::path::{Path, PathBuf};
 

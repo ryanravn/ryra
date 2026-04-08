@@ -1092,87 +1092,39 @@ pub struct SearchResult {
 
 /// Get test definitions for an installed service.
 ///
-/// Looks up the service in the config, resolves its repo, and returns
-/// the `[[tests]]` from its `service.toml`. If `repo_override` is set,
-/// loads tests from that repo instead of the installed service's repo.
+/// NOTE: Being migrated to test.toml — not yet implemented.
 pub async fn service_tests(
     service_name: &str,
     repo_override: Option<&str>,
 ) -> Result<ServiceTestInfo> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
-
-    let installed = config
-        .services
-        .iter()
-        .find(|s| s.name == service_name)
-        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
-
-    let repo_url = repo_override.unwrap_or(&installed.repo);
-    let repo_dir = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
-    let reg_service = registry::find_service(&repo_dir, service_name)?;
-
-    let env_file = service_home(service_name).join(".env");
-
-    Ok(ServiceTestInfo {
-        service_name: service_name.to_string(),
-        repo_url: repo_url.to_string(),
-        tests: reg_service.def.tests,
-        env_file,
-    })
+    let _ = (service_name, repo_override);
+    Err(Error::Registry(
+        "service_tests() is being migrated to test.toml — not yet implemented".into(),
+    ))
 }
 
 pub struct ServiceTestInfo {
     pub service_name: String,
     pub repo_url: String,
-    pub tests: Vec<registry::service_def::TestDef>,
+    pub tests: Vec<registry::test_def::TestDef>,
     pub env_file: PathBuf,
 }
 
 /// Get test definitions for a multi-service test suite.
 ///
-/// Looks in the registry's `tests/` directory for a matching `.toml` file.
+/// NOTE: Being migrated to test.toml — not yet implemented.
 pub async fn suite_tests(suite_name: &str, repo_override: Option<&str>) -> Result<SuiteTestInfo> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
-
-    let repo_url =
-        repo_override.unwrap_or_else(|| config.default_repo.as_deref().unwrap_or(DEFAULT_REPO));
-    let repo_dir = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
-
-    let tests_dir = repo_dir.join("tests");
-    let suite_file = tests_dir.join(format!("{suite_name}.toml"));
-
-    if !suite_file.exists() {
-        return Err(Error::ServiceNotFound(format!(
-            "test suite '{suite_name}' not found at {}",
-            suite_file.display()
-        )));
-    }
-
-    let contents = std::fs::read_to_string(&suite_file).map_err(|source| Error::FileRead {
-        path: suite_file.clone(),
-        source,
-    })?;
-    let def: registry::service_def::MultiServiceTestDef =
-        toml::from_str(&contents).map_err(|source| Error::TomlParse {
-            path: suite_file,
-            source,
-        })?;
-
-    Ok(SuiteTestInfo {
-        name: def.test.name,
-        repo_url: repo_url.to_string(),
-        services: def.test.services,
-        tests: def.tests,
-    })
+    let _ = (suite_name, repo_override);
+    Err(Error::Registry(
+        "suite_tests() is being migrated to test.toml — not yet implemented".into(),
+    ))
 }
 
 pub struct SuiteTestInfo {
     pub name: String,
     pub repo_url: String,
     pub services: Vec<String>,
-    pub tests: Vec<registry::service_def::TestDef>,
+    pub tests: Vec<registry::test_def::TestDef>,
 }
 
 /// Get detailed info about a service from a repo.

@@ -23,8 +23,6 @@ pub struct ServiceDef {
     pub mappings: Mappings,
     #[serde(default)]
     pub integrations: IntegrationFlags,
-    #[serde(default)]
-    pub tests: Vec<TestDef>,
     /// Commands that run on the host after the service is started and ports are reachable.
     /// Useful for services that need config injection into files created at runtime
     /// (e.g. Seafile writes OAuth config to seahub_settings.py after bootstrap).
@@ -271,32 +269,6 @@ fn default_true() -> bool {
     true
 }
 
-/// A test defined in a service's `[[tests]]` section or a multi-service test file.
-///
-/// Tests are shell commands — exit 0 = pass, anything else = fail.
-/// Env vars from the service's `.env` are available in the command.
-///
-/// For single-service tests (inside `service.toml`), env vars are unprefixed.
-/// For multi-service tests (in `tests/*.toml`), env vars are prefixed
-/// with the service name: `WHOAMI__RYRA_PORT_HTTP`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestDef {
-    pub name: String,
-    /// Shell command to run inside the VM.
-    pub run: String,
-    /// Timeout in seconds (default: 30).
-    #[serde(default = "default_test_timeout")]
-    pub timeout: u64,
-    /// Env var overrides for this test. Used to provide values for required
-    /// env vars that have no default (e.g. `GITEA_DOMAIN = "localhost"`).
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-}
-
-fn default_test_timeout() -> u64 {
-    30
-}
-
 fn default_hook_timeout() -> u64 {
     300
 }
@@ -314,23 +286,6 @@ pub struct PostStartHookDef {
     /// Timeout in seconds (default: 300).
     #[serde(default = "default_hook_timeout")]
     pub timeout: u64,
-}
-
-/// A multi-service test file from the `tests/` directory in a registry.
-///
-/// Deploys multiple services, then runs tests with env vars from all
-/// services prefixed by service name (`WHOAMI__RYRA_PORT_HTTP`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MultiServiceTestDef {
-    pub test: MultiServiceTestMeta,
-    #[serde(default)]
-    pub tests: Vec<TestDef>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MultiServiceTestMeta {
-    pub name: String,
-    pub services: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -376,33 +331,6 @@ impl ServiceDef {
             .collect()
     }
 
-    /// Validate that all tests provide values for required env vars.
-    ///
-    /// Returns an error listing which tests are missing which vars.
-    pub fn validate_tests(&self) -> std::result::Result<(), Vec<String>> {
-        let required = self.required_env_vars();
-        if required.is_empty() || self.tests.is_empty() {
-            return Ok(());
-        }
-
-        let mut errors = Vec::new();
-        for test in &self.tests {
-            for var in &required {
-                if !test.env.contains_key(*var) {
-                    errors.push(format!(
-                        "test '{}' missing required env var '{}'",
-                        test.name, var
-                    ));
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
 }
 
 /// Detect the current system architecture using OCI/Docker naming conventions.
