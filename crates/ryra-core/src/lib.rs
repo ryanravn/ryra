@@ -420,20 +420,6 @@ pub fn add_service(
         }
     }
 
-    // 5a. Caddy: create an initial Caddyfile so the bind mount doesn't
-    // hide the container's default config with an empty directory.
-    // The catch-all block returns 404 until a real service route is added.
-    if service_name == "caddy" {
-        let caddyfile = caddy::caddyfile_path();
-        if !caddyfile.exists() {
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: caddyfile,
-                content: ":80 {\n\trespond 404\n}\n\n:8443 {\n\ttls internal\n\trespond 404\n}\n"
-                    .to_string(),
-            }));
-        }
-    }
-
     // Pre-start hooks — run before the container starts (e.g., generate config files).
     // The service's data dir and .env already exist at this point.
     for hook in &reg_service.def.pre_start {

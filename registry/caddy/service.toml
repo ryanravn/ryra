@@ -12,7 +12,7 @@ host_port = 8080
 
 [[ports]]
 name = "https"
-container_port = 443
+container_port = 8443
 host_port = 8443
 
 [[volumes]]
@@ -27,6 +27,24 @@ mount_path = "/config"
 name = "caddyfile-dir"
 mount_path = "/etc/caddy"
 host_path = "%h/config"
+
+[[pre_start]]
+name = "seed-caddyfile"
+timeout = 10
+run = """
+CADDYFILE="$HOME/.local/share/ryra/caddy/config/Caddyfile"
+[ -f "$CADDYFILE" ] && exit 0
+cat > "$CADDYFILE" <<'EOF'
+:80 {
+	respond 404
+}
+
+:8443 {
+	tls internal
+	respond 404
+}
+EOF
+"""
 
 [integrations]
 auth = []
