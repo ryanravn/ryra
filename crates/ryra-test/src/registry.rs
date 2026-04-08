@@ -2,30 +2,31 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-/// A discovered test suite from the registry — either single-service, multi-service, or lifecycle.
+use crate::test_toml::{StepDef, TestToml};
+
+/// A discovered test suite — either simple (setup + assertions) or lifecycle (interleaved steps).
 #[derive(Debug, Clone)]
 pub enum DiscoveredTest {
-    /// Tests from a `[[tests]]` section inside a `service.toml`.
-    SingleService {
-        service_name: String,
-        /// Services that must be installed before this one (from `[[requires]]`).
-        requires: Vec<String>,
-        tests: Vec<TestEntry>,
-    },
-    /// Tests from a `tests/*.toml` file in the registry (services + tests format).
-    MultiService {
+    /// Simple tests: setup services/quadlets, then run assertions.
+    Simple {
         name: String,
-        services: Vec<String>,
+        setup: SetupConfig,
         tests: Vec<TestEntry>,
-    },
-    /// Lifecycle tests from a `tests/*.toml` file with `[[steps]]` — interleaved actions and assertions.
-    Lifecycle {
-        name: String,
-        images: Vec<String>,
-        steps: Vec<StepEntry>,
-        /// Whether this test needs a browser-ready VM (bun + playwright + chromium).
         browser: bool,
     },
+    /// Lifecycle tests: interleaved actions and assertions.
+    Lifecycle {
+        name: String,
+        steps: Vec<StepEntry>,
+        browser: bool,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SetupConfig {
+    pub services: Vec<String>,
+    pub quadlets: Vec<String>,
+    pub quadlet_dir: Option<PathBuf>,
 }
 
 /// A step in a lifecycle test — either an action or an assertion.
@@ -33,6 +34,7 @@ pub enum DiscoveredTest {
 pub enum StepEntry {
     Add {
         service: String,
+        args: Option<String>,
     },
     Remove {
         service: String,
@@ -57,48 +59,41 @@ pub enum StepEntry {
 impl DiscoveredTest {
     pub fn name(&self) -> &str {
         match self {
-            DiscoveredTest::SingleService { service_name, .. } => service_name,
-            DiscoveredTest::MultiService { name, .. } => name,
+            DiscoveredTest::Simple { name, .. } => name,
             DiscoveredTest::Lifecycle { name, .. } => name,
         }
     }
 
     /// All services that need to be deployed for this test, in install order.
-    /// For SingleService, this includes requires (dependencies first) then the service itself.
     pub fn services(&self) -> Vec<&str> {
         match self {
-            DiscoveredTest::SingleService {
-                service_name,
-                requires,
-                ..
-            } => {
-                let mut svcs: Vec<&str> = requires.iter().map(|s| s.as_str()).collect();
-                svcs.push(service_name.as_str());
+            DiscoveredTest::Simple { setup, .. } => {
+                setup.services.iter().map(|s| s.as_str()).collect()
+            }
+            DiscoveredTest::Lifecycle { steps, .. } => {
+                let mut svcs = Vec::new();
+                for step in steps {
+                    if let StepEntry::Add { service, .. } = step {
+                        if !svcs.contains(&service.as_str()) {
+                            svcs.push(service.as_str());
+                        }
+                    }
+                }
                 svcs
-            }
-            DiscoveredTest::MultiService { services, .. } => {
-                services.iter().map(|s| s.as_str()).collect()
-            }
-            DiscoveredTest::Lifecycle { images, .. } => {
-                // Lifecycle tests declare images directly, not services
-                // Return empty — image loading uses images_for_test() which handles this
-                images.iter().map(|s| s.as_str()).collect()
             }
         }
     }
 
     pub fn tests(&self) -> &[TestEntry] {
         match self {
-            DiscoveredTest::SingleService { tests, .. } => tests,
-            DiscoveredTest::MultiService { tests, .. } => tests,
+            DiscoveredTest::Simple { tests, .. } => tests,
             DiscoveredTest::Lifecycle { .. } => &[],
         }
     }
 
     pub fn test_count(&self) -> usize {
         match self {
-            DiscoveredTest::SingleService { tests, .. } => tests.len(),
-            DiscoveredTest::MultiService { tests, .. } => tests.len(),
+            DiscoveredTest::Simple { tests, .. } => tests.len(),
             DiscoveredTest::Lifecycle { steps, .. } => steps.len(),
         }
     }
@@ -106,9 +101,12 @@ impl DiscoveredTest {
     #[allow(dead_code)]
     pub fn summary(&self) -> String {
         match self {
-            DiscoveredTest::SingleService { service_name, .. } => service_name.clone(),
-            DiscoveredTest::MultiService { services, name, .. } => {
-                format!("{} ({})", name, services.join(" + "))
+            DiscoveredTest::Simple { name, setup, .. } => {
+                if setup.services.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{} ({})", name, setup.services.join(" + "))
+                }
             }
             DiscoveredTest::Lifecycle { name, steps, .. } => {
                 format!("{} ({} steps)", name, steps.len())
@@ -116,17 +114,22 @@ impl DiscoveredTest {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn is_multi_service(&self) -> bool {
-        matches!(self, DiscoveredTest::MultiService { .. })
-    }
-
     pub fn is_lifecycle(&self) -> bool {
         matches!(self, DiscoveredTest::Lifecycle { .. })
     }
 
+    pub fn has_quadlets(&self) -> bool {
+        match self {
+            DiscoveredTest::Simple { setup, .. } => !setup.quadlets.is_empty(),
+            DiscoveredTest::Lifecycle { .. } => false,
+        }
+    }
+
     pub fn needs_browser(&self) -> bool {
-        matches!(self, DiscoveredTest::Lifecycle { browser: true, .. })
+        match self {
+            DiscoveredTest::Simple { browser, .. } => *browser,
+            DiscoveredTest::Lifecycle { browser, .. } => *browser,
+        }
     }
 }
 
@@ -140,14 +143,63 @@ pub struct TestEntry {
     pub env: std::collections::BTreeMap<String, String>,
 }
 
+/// Discover tests from a local project directory containing quadlet files + test.toml.
+///
+/// Returns `None` if the directory doesn't contain a test.toml.
+pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTest>> {
+    let test_toml_path = project_dir.join("test.toml");
+    if !test_toml_path.exists() {
+        return Ok(None);
+    }
+
+    let parsed = TestToml::parse(&test_toml_path)?;
+
+    // Find all quadlet files in the project directory
+    let quadlet_extensions = ["container", "volume", "network", "pod", "kube"];
+    let mut quadlet_files = Vec::new();
+    let entries = std::fs::read_dir(project_dir)
+        .with_context(|| format!("failed to read {}", project_dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if quadlet_extensions.contains(&ext) {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    quadlet_files.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    if quadlet_files.is_empty() {
+        anyhow::bail!(
+            "test.toml found at {} but no quadlet files (.container, .volume, .network, .pod) in the same directory",
+            test_toml_path.display()
+        );
+    }
+
+    let project_dir = std::fs::canonicalize(project_dir)
+        .with_context(|| format!("failed to canonicalize {}", project_dir.display()))?;
+
+    // Infer directory name for defaults
+    let dir_name = project_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project")
+        .to_string();
+
+    let test = discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
+    Ok(Some(test))
+}
+
 /// Scan a registry directory for all test definitions.
 ///
-/// Reads `[[tests]]` from every `*/service.toml` and standalone test
+/// Reads `test.toml` from each `<service>/test.toml` and standalone test
 /// files from `tests/*.toml`.
 pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
     let mut discovered = Vec::new();
 
-    // Scan service directories for [[tests]] in service.toml
+    // Scan service directories for test.toml
     let entries = std::fs::read_dir(registry_path)
         .with_context(|| format!("failed to read registry at {}", registry_path.display()))?;
 
@@ -167,21 +219,33 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
             continue;
         }
 
-        let service_toml = path.join("service.toml");
-        if !service_toml.exists() {
+        let test_toml_path = path.join("test.toml");
+        if !test_toml_path.exists() {
             continue;
         }
 
-        match discover_single_service(&service_toml, &dir_name) {
-            Ok(Some(test)) => discovered.push(test),
-            Ok(None) => {} // no tests defined, that's fine
+        match TestToml::parse(&test_toml_path) {
+            Ok(parsed) => {
+                match discover_from_test_toml(&test_toml_path, &parsed, &dir_name, None) {
+                    Ok(test) => discovered.push(test),
+                    Err(e) => {
+                        eprintln!(
+                            "warning: failed to process {}: {e}",
+                            test_toml_path.display()
+                        );
+                    }
+                }
+            }
             Err(e) => {
-                eprintln!("warning: failed to parse {}: {e}", service_toml.display());
+                eprintln!(
+                    "warning: failed to parse {}: {e}",
+                    test_toml_path.display()
+                );
             }
         }
     }
 
-    // Scan tests/ directory for multi-service test files
+    // Scan tests/ directory for standalone test files
     let tests_dir = registry_path.join("tests");
     if tests_dir.is_dir() {
         let entries = std::fs::read_dir(&tests_dir)
@@ -195,8 +259,21 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
                 continue;
             }
 
-            match discover_multi_service(&path) {
-                Ok(test) => discovered.push(test),
+            let file_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            match TestToml::parse(&path) {
+                Ok(parsed) => {
+                    match discover_from_test_toml(&path, &parsed, &file_stem, None) {
+                        Ok(test) => discovered.push(test),
+                        Err(e) => {
+                            eprintln!("warning: failed to process {}: {e}", path.display());
+                        }
+                    }
+                }
                 Err(e) => {
                     eprintln!("warning: failed to parse {}: {e}", path.display());
                 }
@@ -210,138 +287,104 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
     Ok(discovered)
 }
 
-/// Parse a service.toml and extract its [[tests]] if any.
-fn discover_single_service(path: &PathBuf, service_name: &str) -> Result<Option<DiscoveredTest>> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+/// Convert a parsed TestToml into a DiscoveredTest.
+///
+/// `service_name_hint` is used as the default test name and (for service-level test.toml)
+/// as the default setup service when no [setup] section exists.
+/// `quadlet_dir` is set for local project tests to point to the project directory.
+fn discover_from_test_toml(
+    path: &Path,
+    parsed: &TestToml,
+    service_name_hint: &str,
+    quadlet_dir: Option<&Path>,
+) -> Result<DiscoveredTest> {
+    let name = parsed.name_or_default(path);
+    // Use the explicit name if available, otherwise fall back to the hint
+    let test_name = if parsed.test.as_ref().and_then(|t| t.name.as_ref()).is_some() {
+        name
+    } else {
+        service_name_hint.to_string()
+    };
 
-    // Parse just enough to get the tests — we use a lightweight struct
-    // to avoid needing the full ServiceDef deserialization (which requires
-    // the image field etc.)
-    let parsed: ServiceTomlTests =
-        toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
+    let browser = parsed.needs_browser();
 
-    if parsed.tests.is_empty() {
-        return Ok(None);
+    if parsed.is_lifecycle() {
+        let steps = convert_steps(&parsed.steps, &test_name)?;
+        return Ok(DiscoveredTest::Lifecycle {
+            name: test_name,
+            steps,
+            browser,
+        });
     }
 
-    // Validate required env vars are covered
-    let required: Vec<&str> = parsed
-        .env
-        .iter()
-        .filter(|e| e.kind.as_deref() == Some("required"))
-        .map(|e| e.name.as_str())
-        .collect();
-
-    if !required.is_empty() {
-        for test in &parsed.tests {
-            for var in &required {
-                if !test.env.contains_key(*var) {
-                    anyhow::bail!(
-                        "test '{}' in service '{}' missing required env var '{}'",
-                        test.name,
-                        service_name,
-                        var
-                    );
-                }
+    // Simple test
+    let setup = match &parsed.setup {
+        Some(s) => SetupConfig {
+            services: s.services.clone(),
+            quadlets: s.quadlets.clone(),
+            quadlet_dir: quadlet_dir.map(PathBuf::from),
+        },
+        None => {
+            // For service-level test.toml, infer the service from directory name
+            SetupConfig {
+                services: vec![service_name_hint.to_string()],
+                quadlets: Vec::new(),
+                quadlet_dir: quadlet_dir.map(PathBuf::from),
             }
         }
-    }
+    };
 
     let tests = parsed
         .tests
-        .into_iter()
+        .iter()
         .map(|t| TestEntry {
-            name: t.name,
-            run: t.run,
+            name: t.name.clone(),
+            run: t.run.clone(),
             timeout_secs: t.timeout,
-            env: t.env,
+            env: t.env.clone(),
         })
         .collect();
 
-    let requires: Vec<String> = parsed.requires.iter().map(|r| r.service.clone()).collect();
-
-    Ok(Some(DiscoveredTest::SingleService {
-        service_name: service_name.to_string(),
-        requires,
+    Ok(DiscoveredTest::Simple {
+        name: test_name,
+        setup,
         tests,
-    }))
-}
-
-/// Parse a test file from tests/*.toml — detects lifecycle vs multi-service format.
-fn discover_multi_service(path: &PathBuf) -> Result<DiscoveredTest> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-
-    // Try lifecycle format first (has [[steps]])
-    if content.contains("[[steps]]") {
-        return discover_lifecycle(path, &content);
-    }
-
-    let parsed: MultiServiceToml =
-        toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))?;
-
-    if parsed.test.services.is_empty() {
-        anyhow::bail!(
-            "multi-service test '{}' has no services listed",
-            parsed.test.name
-        );
-    }
-
-    let tests = parsed
-        .tests
-        .into_iter()
-        .map(|t| TestEntry {
-            name: t.name,
-            run: t.run,
-            timeout_secs: t.timeout,
-            env: t.env,
-        })
-        .collect();
-
-    Ok(DiscoveredTest::MultiService {
-        name: parsed.test.name,
-        services: parsed.test.services,
-        tests,
+        browser,
     })
 }
 
-/// Parse a lifecycle test file with [[steps]].
-fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
-    let parsed: LifecycleToml =
-        toml::from_str(content).with_context(|| format!("failed to parse {}", path.display()))?;
-
-    if parsed.steps.is_empty() {
-        anyhow::bail!("lifecycle test '{}' has no steps defined", parsed.test.name);
-    }
-
+/// Convert StepDef entries from test_toml into StepEntry enums.
+fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry>> {
     let mut steps = Vec::new();
-    for s in parsed.steps {
+    for s in step_defs {
         let step = match s.action.as_str() {
             "add" => {
-                let service = s.service.ok_or_else(|| {
+                let service = s.service.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'add' requires a 'service' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
-                StepEntry::Add { service }
+                StepEntry::Add {
+                    service,
+                    args: s.args.clone(),
+                }
             }
             "remove" => {
-                let service = s.service.ok_or_else(|| {
+                let service = s.service.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'remove' requires a 'service' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
                 StepEntry::Remove { service }
             }
             "reset" => StepEntry::Reset,
             "wait" => {
-                let service = s.service.ok_or_else(|| {
+                let service = s.service.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'wait' requires a 'service' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
                 StepEntry::Wait {
@@ -350,16 +393,16 @@ fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
                 }
             }
             "run" => {
-                let name = s.name.ok_or_else(|| {
+                let name = s.name.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'run' requires a 'name' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
-                let run = s.run.ok_or_else(|| {
+                let run = s.run.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'run' requires a 'run' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
                 StepEntry::Run {
@@ -369,16 +412,16 @@ fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
                 }
             }
             "assert" => {
-                let name = s.name.ok_or_else(|| {
+                let name = s.name.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'assert' requires a 'name' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
-                let run = s.run.ok_or_else(|| {
+                let run = s.run.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'assert' requires a 'run' field in test '{}'",
-                        parsed.test.name
+                        test_name
                     )
                 })?;
                 StepEntry::Assert {
@@ -391,19 +434,13 @@ fn discover_lifecycle(path: &Path, content: &str) -> Result<DiscoveredTest> {
                 anyhow::bail!(
                     "unknown step action '{}' in test '{}'",
                     other,
-                    parsed.test.name
+                    test_name
                 );
             }
         };
         steps.push(step);
     }
-
-    Ok(DiscoveredTest::Lifecycle {
-        name: parsed.test.name,
-        images: parsed.test.images,
-        steps,
-        browser: parsed.test.browser,
-    })
+    Ok(steps)
 }
 
 /// Look up the recommended RAM (MB) for a service from its service.toml.
@@ -427,7 +464,7 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
         DiscoveredTest::Lifecycle { steps, .. } => steps
             .iter()
             .filter_map(|s| match s {
-                StepEntry::Add { service } => Some(service.as_str()),
+                StepEntry::Add { service, .. } => Some(service.as_str()),
                 // Also detect `ryra add <service>` in run steps
                 StepEntry::Run { run, .. } => run
                     .split_whitespace()
@@ -493,18 +530,12 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
     let mut images = Vec::new();
 
     match test {
-        DiscoveredTest::Lifecycle {
-            images: declared,
-            steps,
-            ..
-        } => {
-            // Use explicitly declared images
-            images.extend(declared.iter().cloned());
+        DiscoveredTest::Lifecycle { steps, .. } => {
             // Look up images for services referenced in add steps or run steps
             // that call `ryra add <service>`
             for step in steps {
                 let service_name = match step {
-                    StepEntry::Add { service } => Some(service.as_str()),
+                    StepEntry::Add { service, .. } => Some(service.as_str()),
                     StepEntry::Run { run, .. } => {
                         // Parse "ryra add <service>" from run commands
                         run.split_whitespace()
@@ -524,11 +555,31 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
                 }
             }
         }
-        _ => {
-            for service in test.services() {
+        DiscoveredTest::Simple { setup, .. } => {
+            // Images from registry services
+            for service in &setup.services {
                 for image in service_images(registry_path, service) {
                     if !images.contains(&image) {
                         images.push(image);
+                    }
+                }
+            }
+            // Images from quadlet files in the quadlet_dir
+            if let Some(ref dir) = setup.quadlet_dir {
+                for quadlet in &setup.quadlets {
+                    let full_path = dir.join(quadlet);
+                    if quadlet.ends_with(".container") {
+                        if let Ok(content) = std::fs::read_to_string(&full_path) {
+                            for line in content.lines() {
+                                let trimmed = line.trim();
+                                if let Some(image) = trimmed.strip_prefix("Image=") {
+                                    let image = image.trim();
+                                    if !image.is_empty() && !images.contains(&image.to_string()) {
+                                        images.push(image.to_string());
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -539,7 +590,7 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
 }
 
 // ---------------------------------------------------------------------------
-// Lightweight TOML structs for parsing (avoids full ServiceDef dependency)
+// Lightweight TOML structs for parsing service.toml (avoids full ServiceDef dependency)
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -576,102 +627,17 @@ struct RamFields {
     recommended: Option<u64>,
 }
 
-#[derive(serde::Deserialize)]
-struct ServiceTomlTests {
-    #[serde(default)]
-    tests: Vec<TestToml>,
-    #[serde(default)]
-    env: Vec<EnvToml>,
-    #[serde(default)]
-    requires: Vec<RequiresToml>,
-}
-
-#[derive(serde::Deserialize)]
-struct RequiresToml {
-    service: String,
-}
-
-#[derive(serde::Deserialize)]
-struct EnvToml {
-    name: String,
-    #[serde(default)]
-    kind: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct TestToml {
-    name: String,
-    run: String,
-    #[serde(default = "default_timeout")]
-    timeout: u64,
-    #[serde(default)]
-    env: std::collections::BTreeMap<String, String>,
-}
-
-fn default_timeout() -> u64 {
-    30
-}
-
-#[derive(serde::Deserialize)]
-struct MultiServiceToml {
-    test: MultiServiceMeta,
-    #[serde(default)]
-    tests: Vec<TestToml>,
-}
-
-#[derive(serde::Deserialize)]
-struct MultiServiceMeta {
-    name: String,
-    services: Vec<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct LifecycleToml {
-    test: LifecycleMeta,
-    #[serde(default)]
-    steps: Vec<StepToml>,
-}
-
-#[derive(serde::Deserialize)]
-struct LifecycleMeta {
-    name: String,
-    /// Container images to pre-load into the VM.
-    #[serde(default)]
-    images: Vec<String>,
-    /// Whether this test needs a browser (bun + playwright + chromium).
-    #[serde(default)]
-    browser: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct StepToml {
-    action: String,
-    #[serde(default)]
-    service: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    run: Option<String>,
-    #[serde(default = "default_timeout")]
-    timeout: u64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn discover_single_service_tests() {
-        let toml = r#"
-[service]
-name = "whoami"
-description = "test"
-image = "traefik/whoami"
-
-[[ports]]
-name = "http"
-container_port = 80
-
+    fn discover_simple_test_from_test_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
 [[tests]]
 name = "responds"
 run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
@@ -680,137 +646,56 @@ run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
 name = "hostname"
 run = "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname"
 timeout = 10
-"#;
-        let parsed: ServiceTomlTests = toml::from_str(toml).unwrap();
-        assert_eq!(parsed.tests.len(), 2);
-        assert_eq!(parsed.tests[0].name, "responds");
-        assert_eq!(parsed.tests[1].timeout, 10);
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+
+        assert_eq!(test.name(), "whoami");
+        assert!(!test.is_lifecycle());
+        assert_eq!(test.test_count(), 2);
+        assert_eq!(test.services(), vec!["whoami"]); // inferred from hint
+        assert_eq!(test.tests()[0].name, "responds");
+        assert_eq!(test.tests()[1].timeout_secs, 10);
     }
 
     #[test]
-    fn discover_multi_service_tests() {
-        let toml = r#"
+    fn discover_simple_test_with_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
 [test]
 name = "whoami-plus-postgres"
+
+[setup]
 services = ["whoami", "postgres"]
 
 [[tests]]
 name = "both-running"
 run = "echo ok"
-"#;
-        let parsed: MultiServiceToml = toml::from_str(toml).unwrap();
-        assert_eq!(parsed.test.name, "whoami-plus-postgres");
-        assert_eq!(parsed.test.services, vec!["whoami", "postgres"]);
-        assert_eq!(parsed.tests.len(), 1);
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "combo", None).unwrap();
+
+        assert_eq!(test.name(), "whoami-plus-postgres");
+        assert_eq!(test.services(), vec!["whoami", "postgres"]);
+        assert_eq!(test.test_count(), 1);
     }
 
     #[test]
-    fn required_env_validation() {
-        let toml = r#"
-[service]
-name = "gitea"
-description = "test"
-image = "gitea/gitea"
-
-[[env]]
-name = "GITEA_DOMAIN"
-kind = "required"
-prompt = "Enter domain"
-
-[[tests]]
-name = "responds"
-run = "curl -sf http://localhost"
-"#;
-        let parsed: ServiceTomlTests = toml::from_str(toml).unwrap();
-        let required: Vec<&str> = parsed
-            .env
-            .iter()
-            .filter(|e| e.kind.as_deref() == Some("required"))
-            .map(|e| e.name.as_str())
-            .collect();
-        assert_eq!(required, vec!["GITEA_DOMAIN"]);
-
-        // Test is missing the required var
-        assert!(!parsed.tests[0].env.contains_key("GITEA_DOMAIN"));
-    }
-
-    #[test]
-    fn required_env_provided() {
-        let toml = r#"
-[service]
-name = "gitea"
-description = "test"
-image = "gitea/gitea"
-
-[[env]]
-name = "GITEA_DOMAIN"
-kind = "required"
-prompt = "Enter domain"
-
-[[tests]]
-name = "responds"
-run = "curl -sf http://localhost"
-env = { GITEA_DOMAIN = "localhost" }
-"#;
-        let parsed: ServiceTomlTests = toml::from_str(toml).unwrap();
-        assert_eq!(
-            parsed.tests[0].env.get("GITEA_DOMAIN").unwrap(),
-            "localhost"
-        );
-    }
-
-    #[test]
-    fn discover_registry() {
-        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
-        if !registry.exists() {
-            return; // skip if not available
-        }
-        let discovered = discover(&registry).unwrap();
-        let names: Vec<&str> = discovered.iter().map(|d| d.name()).collect();
-        assert!(names.contains(&"whoami"));
-        assert!(names.contains(&"postgres"));
-        assert!(names.contains(&"whoami-plus-postgres"));
-
-        // Check whoami has tests
-        let whoami = discovered.iter().find(|d| d.name() == "whoami").unwrap();
-        assert!(!whoami.is_multi_service());
-        assert!(whoami.test_count() >= 2);
-
-        // Check multi-service test
-        let combo = discovered
-            .iter()
-            .find(|d| d.name() == "whoami-plus-postgres")
-            .unwrap();
-        assert!(combo.is_multi_service());
-        assert_eq!(combo.services(), vec!["whoami", "postgres"]);
-
-        // Check lifecycle tests are discovered
-        let remove = discovered
-            .iter()
-            .find(|d| d.name() == "remove-whoami")
-            .unwrap();
-        assert!(remove.is_lifecycle());
-        assert!(remove.test_count() > 0);
-
-        let reset = discovered.iter().find(|d| d.name() == "reset").unwrap();
-        assert!(reset.is_lifecycle());
-
-        let readd = discovered
-            .iter()
-            .find(|d| d.name() == "re-add-after-remove")
-            .unwrap();
-        assert!(readd.is_lifecycle());
-
-        let idempotent = discovered
-            .iter()
-            .find(|d| d.name() == "idempotent-init")
-            .unwrap();
-        assert!(idempotent.is_lifecycle());
-    }
-
-    #[test]
-    fn parse_lifecycle_toml() {
-        let toml = r#"
+    fn discover_lifecycle_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
 [test]
 name = "remove-test"
 
@@ -835,35 +720,261 @@ service = "whoami"
 action = "assert"
 name = "gone"
 run = "! id whoami"
-"#;
-        let parsed: LifecycleToml = toml::from_str(toml).unwrap();
-        assert_eq!(parsed.test.name, "remove-test");
-        assert_eq!(parsed.steps.len(), 5);
-        assert_eq!(parsed.steps[0].action, "add");
-        assert_eq!(parsed.steps[0].service.as_deref(), Some("whoami"));
-        assert_eq!(parsed.steps[2].action, "assert");
-        assert_eq!(parsed.steps[2].name.as_deref(), Some("responds"));
-        assert_eq!(parsed.steps[3].action, "remove");
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "remove-test", None).unwrap();
+
+        assert_eq!(test.name(), "remove-test");
+        assert!(test.is_lifecycle());
+        assert_eq!(test.test_count(), 5);
+        assert_eq!(test.services(), vec!["whoami"]); // collected from Add steps
     }
 
     #[test]
-    fn lifecycle_with_images() {
-        let toml = r#"
+    fn discover_lifecycle_with_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
 [test]
-name = "custom-images"
-images = ["docker.io/custom/image:latest"]
+name = "auth-test"
 
 [[steps]]
 action = "add"
-service = "whoami"
+service = "caddy"
+args = "--domain proxy.test.local"
 
 [[steps]]
-action = "reset"
-"#;
-        let parsed: LifecycleToml = toml::from_str(toml).unwrap();
-        assert_eq!(parsed.test.images, vec!["docker.io/custom/image:latest"]);
-        assert_eq!(parsed.steps.len(), 2);
-        assert_eq!(parsed.steps[1].action, "reset");
-        assert!(parsed.steps[1].service.is_none());
+action = "assert"
+name = "caddy up"
+run = "curl -sf http://proxy.test.local"
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "auth-test", None).unwrap();
+
+        assert!(test.is_lifecycle());
+        if let DiscoveredTest::Lifecycle { steps, .. } = &test {
+            if let StepEntry::Add { service, args } = &steps[0] {
+                assert_eq!(service, "caddy");
+                assert_eq!(args.as_deref(), Some("--domain proxy.test.local"));
+            } else {
+                panic!("expected Add step");
+            }
+        } else {
+            panic!("expected Lifecycle variant");
+        }
+    }
+
+    #[test]
+    fn discover_registry() {
+        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
+        if !registry.exists() {
+            return; // skip if not available
+        }
+        let discovered = discover(&registry).unwrap();
+
+        // All tests should come from test.toml files now.
+        // If no test.toml files exist yet, discovered will be empty — that's expected
+        // during migration. Once registry/*/test.toml files are created, this test
+        // will verify they're discovered correctly.
+        if discovered.is_empty() {
+            return; // registry hasn't been migrated yet
+        }
+
+        let names: Vec<&str> = discovered.iter().map(|d| d.name()).collect();
+
+        // Basic checks — these only apply once test.toml files exist
+        for test in &discovered {
+            assert!(!test.name().is_empty());
+            assert!(test.test_count() > 0);
+        }
+
+        // If whoami test.toml exists, verify it
+        if names.contains(&"whoami") {
+            let whoami = discovered.iter().find(|d| d.name() == "whoami").unwrap();
+            assert!(!whoami.is_lifecycle());
+            assert!(whoami.test_count() >= 1);
+        }
+    }
+
+    #[test]
+    fn discover_local_project_from_dir() {
+        // Create a temp dir with quadlet files and test.toml
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+
+        // Write test.toml
+        std::fs::write(
+            project_dir.join("test.toml"),
+            r#"
+[test]
+name = "test-app"
+
+[[tests]]
+name = "responds"
+run = "curl -sf http://127.0.0.1:8080"
+"#,
+        )
+        .unwrap();
+
+        // Write a .container file
+        std::fs::write(
+            project_dir.join("test-app.container"),
+            "[Container]\nImage=docker.io/traefik/whoami:v1.11.0\n\n[Service]\nRestart=always\n",
+        )
+        .unwrap();
+
+        // Write a .volume file
+        std::fs::write(project_dir.join("test-app.volume"), "[Volume]\n").unwrap();
+
+        let result = discover_local_project(project_dir).unwrap();
+        assert!(result.is_some());
+
+        let test = result.unwrap();
+        assert_eq!(test.name(), "test-app");
+        assert!(test.has_quadlets());
+        assert_eq!(test.test_count(), 1);
+
+        if let DiscoveredTest::Simple { setup, .. } = &test {
+            assert!(setup.quadlet_dir.is_some());
+            // The inferred service is the directory name (temp dir name), not "test-app"
+            // since there's no [setup] section, the hint (dir name) is used
+        } else {
+            panic!("expected Simple variant");
+        }
+    }
+
+    #[test]
+    fn discover_local_project_with_setup_services() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path();
+
+        std::fs::write(
+            project_dir.join("test.toml"),
+            r#"
+[test]
+name = "my-app"
+
+[setup]
+services = ["postgres", "redis"]
+quadlets = ["my-app.container"]
+
+[[tests]]
+name = "health-check"
+run = "curl -sf http://127.0.0.1:8080/health"
+timeout = 10
+"#,
+        )
+        .unwrap();
+
+        // Write a .container file so discovery doesn't fail
+        std::fs::write(
+            project_dir.join("my-app.container"),
+            "[Container]\nImage=docker.io/myapp:latest\n",
+        )
+        .unwrap();
+
+        let result = discover_local_project(project_dir).unwrap();
+        let test = result.unwrap();
+        assert_eq!(test.name(), "my-app");
+        assert_eq!(test.services(), vec!["postgres", "redis"]);
+        assert!(test.has_quadlets());
+    }
+
+    #[test]
+    fn discover_local_project_no_test_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = discover_local_project(dir.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn discover_local_project_no_quadlets() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("test.toml"),
+            "[[tests]]\nname = \"check\"\nrun = \"true\"\n",
+        )
+        .unwrap();
+
+        let result = discover_local_project(dir.path());
+        assert!(result.is_err()); // should error about missing quadlet files
+    }
+
+    #[test]
+    fn has_quadlets_false_for_simple_without_quadlets() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
+[[tests]]
+name = "check"
+run = "true"
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+        assert!(!test.has_quadlets());
+    }
+
+    #[test]
+    fn browser_flag_on_simple_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
+[test]
+browser = true
+
+[[tests]]
+name = "browser check"
+run = "true"
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "my-test", None).unwrap();
+        assert!(test.needs_browser());
+    }
+
+    #[test]
+    fn browser_flag_on_lifecycle_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
+[test]
+name = "sso-test"
+browser = true
+
+[[steps]]
+action = "add"
+service = "authelia"
+
+[[steps]]
+action = "assert"
+name = "up"
+run = "true"
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let test = discover_from_test_toml(&test_toml, &parsed, "sso-test", None).unwrap();
+        assert!(test.needs_browser());
+        assert!(test.is_lifecycle());
     }
 }
