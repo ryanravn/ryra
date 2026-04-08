@@ -26,17 +26,19 @@ test("login through Authelia grants access to forward-auth-protected service", a
   // 1. Try to access whoami through Caddy — should redirect to Authelia
   await page.goto(WHOAMI_CADDY_URL, { timeout: 15_000 });
 
-  // 2. Wait for Authelia's login form
-  const signInBtn = page.getByRole("button", { name: /sign in/i });
-  await expect(signInBtn).toBeVisible({ timeout: 15_000 });
+  // 2. Wait for Authelia's React app to hydrate and the input to be editable
+  const usernameInput = page.locator("#username-textfield");
+  await expect(usernameInput).toBeVisible({ timeout: 15_000 });
+  await expect(usernameInput).toBeEditable({ timeout: 5_000 });
 
   // 3. Fill credentials and submit
-  await page.locator("#username-textfield").fill(AUTHELIA_USER);
+  await usernameInput.fill(AUTHELIA_USER);
   await page.locator("#password-textfield").fill(AUTHELIA_PASSWORD);
-  await signInBtn.click();
+  await page.getByRole("button", { name: /sign in/i }).click();
 
   // 4. After login, Authelia should redirect back to whoami through Caddy
-  await page.waitForURL((url) => url.toString().includes("whoami.test.local"), {
+  //    (check hostname, not full URL — the rd= query param on the Authelia page also contains whoami.test.local)
+  await page.waitForURL((url) => new URL(url.toString()).hostname === "whoami.test.local", {
     timeout: 15_000,
   });
 

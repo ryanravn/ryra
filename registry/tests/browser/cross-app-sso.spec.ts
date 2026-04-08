@@ -8,9 +8,23 @@ const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 // Access whoami through Caddy (HTTPS with forward auth)
 const WHOAMI_CADDY_URL = "https://whoami.test.local:8443";
 
+// Forgejo's OIDC auto-discovery uses internal container URLs.
+const AUTHELIA_INTERNAL_HOST = "systemd-authelia:9091";
+const AUTHELIA_EXTERNAL = "https://auth.test.local:8443";
+
 test("cross-app SSO: login via forgejo OIDC, then access whoami without re-auth", async ({
   page,
 }) => {
+  // Intercept internal Authelia URLs and rewrite to external Caddy endpoint
+  await page.route(`**/*${AUTHELIA_INTERNAL_HOST}*/**`, async (route) => {
+    const url = route.request().url();
+    const rewritten = url.replace(
+      `http://${AUTHELIA_INTERNAL_HOST}`,
+      AUTHELIA_EXTERNAL,
+    );
+    await route.continue({ url: rewritten });
+  });
+
   // --- Phase 1: Log in to Forgejo via Authelia OIDC ---
 
   // 1. Go to forgejo and click SSO
@@ -19,12 +33,14 @@ test("cross-app SSO: login via forgejo OIDC, then access whoami without re-auth"
   await expect(autheliaLink).toBeVisible({ timeout: 15_000 });
   await autheliaLink.click();
 
-  // 2. Land on Authelia login page and authenticate
-  const signInBtn = page.getByRole("button", { name: /sign in/i });
-  await expect(signInBtn).toBeVisible({ timeout: 15_000 });
-  await page.locator("#username-textfield").fill(AUTHELIA_USER);
+  // 2. Land on Authelia login page — wait for React to hydrate
+  const usernameInput = page.locator("#username-textfield");
+  await expect(usernameInput).toBeVisible({ timeout: 15_000 });
+  await expect(usernameInput).toBeEditable({ timeout: 5_000 });
+
+  await usernameInput.fill(AUTHELIA_USER);
   await page.locator("#password-textfield").fill(AUTHELIA_PASSWORD);
-  await signInBtn.click();
+  await page.getByRole("button", { name: /sign in/i }).click();
 
   // 3. Accept consent if shown
   const consent = page.locator('button:has-text("Accept"), button#accept-btn');
@@ -35,7 +51,7 @@ test("cross-app SSO: login via forgejo OIDC, then access whoami without re-auth"
   }
 
   // 4. Should be back on Forgejo, authenticated
-  await page.waitForURL((url) => url.toString().includes(FORGEJO_URL), {
+  await page.waitForURL((url) => url.toString().startsWith(FORGEJO_URL), {
     timeout: 15_000,
   });
   const userMenu = page.locator(
