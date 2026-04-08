@@ -87,7 +87,7 @@ pub struct Args {
     #[arg(long)]
     pub registry: Option<PathBuf>,
 
-    /// Path to a local project directory with quadlet files + ryra.toml
+    /// Path to a local project directory with test.toml (+ optional quadlet files)
     #[arg(long)]
     pub project: Option<PathBuf>,
 

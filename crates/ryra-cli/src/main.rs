@@ -141,7 +141,7 @@ enum Command {
         /// Repo to load test definitions from (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
-        /// Test a local project directory with quadlet files + ryra.toml
+        /// Test a local project directory with test.toml (+ optional quadlet files)
         #[arg(long)]
         project: Option<std::path::PathBuf>,
         /// Keep VM alive after tests (or boot without tests for interactive use)
