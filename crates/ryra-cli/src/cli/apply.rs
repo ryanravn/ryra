@@ -160,6 +160,24 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             .with_context(|| format!("failed to remove directory {}", path.display())),
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
+        Step::PreStartHook {
+            name,
+            service_name,
+            run: hook_cmd,
+            timeout,
+        } => {
+            println!("  Running pre-start hook: {name}...");
+            let home = ryra_core::service_home(service_name);
+            let full_cmd = format!(
+                "sh -c {cmd}",
+                cmd = shell_escape(&format!(
+                    "set -a && . {home}/.env && set +a && timeout {timeout} sh -c {inner}",
+                    home = home.display(),
+                    inner = shell_escape(hook_cmd),
+                )),
+            );
+            run(&full_cmd)
+        }
         Step::PostStartHook {
             name,
             service_name,

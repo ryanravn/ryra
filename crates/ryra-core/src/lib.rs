@@ -64,6 +64,14 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Create a directory (with parents).
     CreateDir(PathBuf),
+    /// Run a pre-start hook — a shell command on the host before the service starts.
+    /// The service's .env is sourced before the command runs.
+    PreStartHook {
+        name: String,
+        service_name: String,
+        run: String,
+        timeout: u64,
+    },
     /// Run a post-start hook — a shell command on the host after the service is active.
     /// The service's .env is sourced before the command runs.
     PostStartHook {
@@ -88,6 +96,18 @@ impl Step {
             Step::RemoveFile(path) => format!("rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
+            Step::PreStartHook {
+                name,
+                service_name,
+                run,
+                ..
+            } => {
+                let home = service_home(service_name);
+                format!(
+                    "# pre-start hook '{name}' for {service_name}\nsh -c '. {}/.env && {run}'",
+                    home.display()
+                )
+            }
             Step::PostStartHook {
                 name,
                 service_name,
@@ -305,69 +325,18 @@ pub fn add_service(
     let home_dir = service_home(service_name);
     let quadlet_path = quadlet_dir();
 
-    // When auth is enabled, containers need to reach the auth provider and trust Caddy's HTTPS.
-    let mut add_hosts = Vec::new();
-    let mut extra_volumes = Vec::new();
-    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
-    if enable_auth {
-        // No AddHost needed for the auth domain — containers resolve it via
-        // network alias on the shared caddy network (set when authelia is installed).
-        // Mount Caddy's root CA cert so containers trust the self-signed HTTPS.
-        // Export it on-demand if not already cached.
-        let ca_cert = service_home("caddy")
-            .parent()
-            .unwrap_or(std::path::Path::new("/tmp"))
-            .join("caddy-root-ca.crt");
-        if !ca_cert.exists() {
-            // Try to export from running Caddy container
-            let _ = std::process::Command::new("podman")
-                .args([
-                    "exec",
-                    "systemd-caddy",
-                    "cat",
-                    "/data/caddy/pki/authorities/local/root.crt",
-                ])
-                .stdout(std::fs::File::create(&ca_cert).unwrap_or_else(|_| {
-                    std::fs::File::create("/dev/null").expect("can't open /dev/null")
-                }))
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-        if ca_cert.exists() && ca_cert.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-            extra_volumes.push(format!(
-                "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",
-                ca_cert.display()
-            ));
-            // Trust Caddy's self-signed CA for OIDC discovery over HTTPS.
-            // NODE_EXTRA_CA_CERTS adds the cert to Node.js's trust store.
-            // NODE_TLS_REJECT_UNAUTHORIZED=0 is a fallback for Node.js runtimes
-            // where undici/fetch doesn't honor NODE_EXTRA_CA_CERTS (similar to
-            // forgejo's ENABLE_OPENID_CONNECT_INSECURE_SKIP_VERIFY=true).
-            extra_env.insert(
-                "NODE_EXTRA_CA_CERTS".into(),
-                "/etc/ssl/certs/caddy-root-ca.crt".into(),
-            );
-            extra_env.insert("NODE_TLS_REJECT_UNAUTHORIZED".into(), "0".into());
-        }
-    }
+    let add_hosts = Vec::new();
+    let extra_volumes = Vec::new();
+    let extra_env: BTreeMap<String, String> = BTreeMap::new();
 
-    // Join caddy's network when the service has a domain (so caddy can reach it by container name).
-    // For the auth provider, add a network alias matching its domain so other containers
-    // on the caddy network can resolve the auth domain to this container's IP.
-    // This makes OIDC discovery return browser-reachable URLs.
-    let extra_networks = if let Some(ref d) = domain {
-        if caddy::is_installed() && service_name != "caddy" {
-            if service_name == "authelia" {
-                vec![format!("caddy:alias={d}")]
-            } else {
-                vec!["caddy".to_string()]
-            }
-        } else {
-            vec![]
-        }
-    } else {
-        vec![]
-    };
+    // Extra networks: join caddy's network for domain routing, authelia's for native OIDC.
+    let mut extra_networks = Vec::new();
+    if domain.is_some() && caddy::is_installed() && service_name != "caddy" {
+        extra_networks.push("caddy".to_string());
+    }
+    if enable_auth && !reg_service.def.mappings.auth.is_empty() && service_name != "authelia" {
+        extra_networks.push("authelia".to_string());
+    }
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
@@ -459,7 +428,7 @@ pub fn add_service(
         if !caddyfile.exists() {
             steps.push(Step::WriteFile(GeneratedFile {
                 path: caddyfile,
-                content: ":80 {\n\trespond 404\n}\n\n:443 {\n\ttls internal\n\trespond 404\n}\n"
+                content: ":80 {\n\trespond 404\n}\n\n:8443 {\n\ttls internal\n\trespond 404\n}\n"
                     .to_string(),
             }));
         }
@@ -481,7 +450,15 @@ pub fn add_service(
                 // Keep as-is for 2-label domains (auth.localhost) or bare names
                 domain
             };
-            let authelia_url = format!("https://{domain}:8443");
+            let authelia_port = output.ctx.get("RYRA_PORT_HTTP").map(|s| s.as_str()).unwrap_or("9091");
+            // authelia_url is browser-facing (session cookie config).
+            // With a domain + Caddy, the browser reaches authelia through Caddy (HTTPS).
+            // Without Caddy, the browser hits authelia directly (HTTP on host port).
+            let authelia_url = if domain != "localhost" && caddy::is_installed() {
+                format!("https://{domain}:8443")
+            } else {
+                format!("http://{domain}:{authelia_port}")
+            };
 
             let config_content = format!(
                 "---\nserver:\n  address: 'tcp://0.0.0.0:9091'\nlog:\n  level: 'info'\nauthentication_backend:\n  file:\n    path: '/config/users_database.yml'\nsession:\n  cookies:\n    - domain: '{cookie_domain}'\n      authelia_url: '{authelia_url}'\nstorage:\n  local:\n    path: '/config/db.sqlite3'\nnotifier:\n  filesystem:\n    filename: '/config/notification.txt'\naccess_control:\n  default_policy: 'one_factor'\n"
@@ -545,6 +522,17 @@ pub fn add_service(
                 }
             }
         }
+    }
+
+    // Pre-start hooks — run before the container starts (e.g., generate config files).
+    // The service's data dir and .env already exist at this point.
+    for hook in &reg_service.def.pre_start {
+        steps.push(Step::PreStartHook {
+            name: hook.name.clone(),
+            service_name: service_name.to_string(),
+            run: hook.run.clone(),
+            timeout: hook.timeout,
+        });
     }
 
     // 6. Reload and start via systemd
@@ -773,6 +761,7 @@ pub fn add_service(
             path: caddy::caddyfile_path(),
             content: updated,
         }));
+
         steps.push(Step::ReloadCaddy);
     }
 
@@ -828,6 +817,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
             path: caddy::caddyfile_path(),
             content: updated.clone(),
         }));
+
         // Only reload if there are routes left — caddy rejects an empty Caddyfile
         if !updated.trim().is_empty() {
             steps.push(Step::ReloadCaddy);
