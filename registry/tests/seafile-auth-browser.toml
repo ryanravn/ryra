@@ -2,12 +2,6 @@
 name = "seafile-auth-browser"
 browser = true
 
-# /etc/hosts for domain resolution
-[[steps]]
-action = "run"
-name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local seafile.test.local' >> /etc/hosts"
-
 # Install caddy
 [[steps]]
 action = "add"
@@ -41,6 +35,13 @@ timeout = 900
 [[steps]]
 action = "wait"
 service = "seafile"
+
+# Set up /etc/hosts AFTER containers are started so podman doesn't propagate
+# the host entry into containers (which would override the network alias DNS).
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local seafile.test.local' >> /etc/hosts"
 
 # Wait for seafile HTTP
 [[steps]]

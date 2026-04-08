@@ -2,12 +2,6 @@
 name = "cross-app-sso-browser"
 browser = true
 
-# /etc/hosts for domain resolution
-[[steps]]
-action = "run"
-name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local git.test.local whoami.test.local' >> /etc/hosts"
-
 # Install caddy
 [[steps]]
 action = "add"
@@ -49,6 +43,13 @@ run = "ryra add whoami --auth --domain whoami.test.local --repo /opt/ryra-test-r
 [[steps]]
 action = "wait"
 service = "whoami"
+
+# Set up /etc/hosts AFTER containers are started so podman doesn't propagate
+# the host entry into containers (which would override the network alias DNS).
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local git.test.local whoami.test.local' >> /etc/hosts"
 
 # Wait for forgejo to respond
 [[steps]]

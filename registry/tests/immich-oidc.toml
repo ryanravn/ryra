@@ -1,12 +1,6 @@
 [test]
 name = "immich-oidc-lifecycle"
 
-# /etc/hosts for domain resolution
-[[steps]]
-action = "run"
-name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local immich.test.local' >> /etc/hosts"
-
 # Install caddy (needed for --domain and --auth)
 [[steps]]
 action = "add"
@@ -40,6 +34,13 @@ timeout = 900
 [[steps]]
 action = "wait"
 service = "immich"
+
+# Set up /etc/hosts AFTER containers are started so podman doesn't propagate
+# the host entry into containers (which would override the network alias DNS).
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local immich.test.local' >> /etc/hosts"
 
 # Verify Immich responds
 [[steps]]
