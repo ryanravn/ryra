@@ -253,6 +253,24 @@ pub async fn init(config: Config) -> Result<InitResult> {
     Ok(InitResult { steps })
 }
 
+/// Determine which extra podman networks a service should join.
+fn resolve_extra_networks(
+    service_name: &str,
+    domain: Option<&str>,
+    caddy_installed: bool,
+    enable_auth: bool,
+    has_native_oidc: bool,
+) -> Vec<String> {
+    let mut networks = Vec::new();
+    if domain.is_some() && caddy_installed && service_name != "caddy" {
+        networks.push("caddy".to_string());
+    }
+    if enable_auth && has_native_oidc && service_name != "authelia" {
+        networks.push("authelia".to_string());
+    }
+    networks
+}
+
 /// Add a service: generate config, return steps to execute.
 /// `repo_url` and `repo_dir` come from `resolve_repo()`.
 pub fn add_service(
@@ -330,14 +348,13 @@ pub fn add_service(
     let extra_volumes = Vec::new();
     let extra_env: BTreeMap<String, String> = BTreeMap::new();
 
-    // Extra networks: join caddy's network for domain routing, authelia's for native OIDC.
-    let mut extra_networks = Vec::new();
-    if domain.is_some() && caddy::is_installed() && service_name != "caddy" {
-        extra_networks.push("caddy".to_string());
-    }
-    if enable_auth && !reg_service.def.mappings.auth.is_empty() && service_name != "authelia" {
-        extra_networks.push("authelia".to_string());
-    }
+    let extra_networks = resolve_extra_networks(
+        service_name,
+        domain,
+        caddy::is_installed(),
+        enable_auth,
+        !reg_service.def.mappings.auth.is_empty(),
+    );
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
@@ -997,4 +1014,51 @@ pub struct ServiceDetail {
     pub has_sidecars: bool,
     pub ports: Vec<(u16, registry::service_def::PortProtocol, String)>,
     pub env_vars: Vec<(String, Option<String>)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn networks_empty_when_no_domain_no_auth() {
+        let nets = resolve_extra_networks("whoami", None, false, false, false);
+        assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn networks_caddy_when_domain_and_caddy() {
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true, false, false);
+        assert_eq!(nets, vec!["caddy"]);
+    }
+
+    #[test]
+    fn networks_authelia_when_native_oidc() {
+        let nets = resolve_extra_networks("forgejo", None, false, true, true);
+        assert_eq!(nets, vec!["authelia"]);
+    }
+
+    #[test]
+    fn networks_both_when_domain_and_native_oidc() {
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true, true, true);
+        assert_eq!(nets, vec!["caddy", "authelia"]);
+    }
+
+    #[test]
+    fn networks_caddy_only_for_forward_auth() {
+        let nets = resolve_extra_networks("whoami", Some("whoami.test.local"), true, true, false);
+        assert_eq!(nets, vec!["caddy"]);
+    }
+
+    #[test]
+    fn networks_caddy_excluded_for_caddy_itself() {
+        let nets = resolve_extra_networks("caddy", Some("caddy.test.local"), true, false, false);
+        assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn networks_authelia_excluded_for_authelia_itself() {
+        let nets = resolve_extra_networks("authelia", None, false, true, true);
+        assert!(nets.is_empty());
+    }
 }
