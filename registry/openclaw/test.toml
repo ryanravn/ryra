@@ -1,0 +1,11 @@
+[setup]
+services = ["openclaw"]
+
+[[tests]]
+name = "http-responds"
+run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_GATEWAY && exit 0; sleep 2; done; exit 1"
+timeout = 90
+
+[[tests]]
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/openclaw"

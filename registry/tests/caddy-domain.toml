@@ -1,6 +1,5 @@
 [test]
 name = "caddy-domain"
-services = ["caddy", "whoami"]
 
 # Install Caddy (user quadlet — creates empty Caddyfile automatically)
 [[steps]]

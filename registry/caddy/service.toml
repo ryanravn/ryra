@@ -31,11 +31,3 @@ host_path = "%h/config"
 [integrations]
 auth = []
 smtp = false
-
-[[tests]]
-name = "responds-on-8080"
-run = "curl -sf http://127.0.0.1:8080 || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:8080 | grep -q '404\\|200'"
-
-[[tests]]
-name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/caddy"

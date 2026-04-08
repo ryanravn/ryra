@@ -1,0 +1,6 @@
+[setup]
+services = ["whoami-auth"]
+
+[[tests]]
+name = "http-responds"
+run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"

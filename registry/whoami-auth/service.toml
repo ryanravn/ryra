@@ -16,7 +16,3 @@ smtp = false
 OIDC_CLIENT_ID = "{{auth.client_id}}"
 OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
 OIDC_ISSUER = "{{auth.issuer}}"
-
-[[tests]]
-name = "http-responds"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"

@@ -1,5 +1,4 @@
-[test]
-name = "whoami-plus-postgres"
+[setup]
 services = ["whoami", "postgres"]
 
 [[tests]]

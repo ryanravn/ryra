@@ -74,12 +74,3 @@ smtp = false
 # Config files (configuration.yml, users_database.yml) are generated
 # by ryra core as WriteFile steps BEFORE authelia starts.
 # No post-start hooks needed — avoids shell escaping and timing issues.
-
-[[tests]]
-name = "health-check"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
-timeout = 30
-
-[[tests]]
-name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/authelia"

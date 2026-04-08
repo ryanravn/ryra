@@ -114,17 +114,3 @@ podman exec -u git systemd-forgejo forgejo admin auth add-oauth \
   --custom-profile-url "$OIDC_PROFILE_URL" \
   --scopes "openid email profile" 2>&1 || true
 """
-
-[[tests]]
-name = "forgejo-responds"
-run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1"
-timeout = 90
-
-[[tests]]
-name = "postgres-not-on-localhost"
-run = "! ss -tlnp | grep -q ':5432 '"
-timeout = 5
-
-[[tests]]
-name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/forgejo"

@@ -12,15 +12,3 @@ container_port = 80
 [integrations]
 auth = []
 smtp = false
-
-[[tests]]
-name = "http-responds"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
-
-[[tests]]
-name = "returns-hostname"
-run = "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname"
-
-[[tests]]
-name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/whoami"

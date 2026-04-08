@@ -1,6 +1,5 @@
 [test]
 name = "full-stack"
-services = ["caddy", "authelia", "postgres", "whoami", "forgejo", "vaultwarden", "uptime-kuma"]
 
 # Set up Caddy first
 [[steps]]

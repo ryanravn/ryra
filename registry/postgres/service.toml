@@ -37,12 +37,3 @@ value = "{{secret.postgres_password}}"
 [integrations]
 auth = []
 smtp = false
-
-[[tests]]
-name = "accepts-connections"
-run = "for i in $(seq 1 15); do PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -p $RYRA_PORT_TCP -U $POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1"
-timeout = 60
-
-[[tests]]
-name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/postgres"
