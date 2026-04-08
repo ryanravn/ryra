@@ -17,9 +17,6 @@ container_port = 80
 name = "data"
 mount_path = "/usr/share/nginx/html"
 
-[nginx]
-upstream_port = "http"
-
 [integrations]
 auth = []
 smtp = false

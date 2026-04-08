@@ -17,9 +17,6 @@ container_port = 3001
 name = "data"
 mount_path = "/app/data"
 
-[nginx]
-upstream_port = "http"
-
 [integrations]
 auth = []
 smtp = false

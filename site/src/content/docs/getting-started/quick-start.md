@@ -20,12 +20,10 @@ ryra add vaultwarden
 ```
 
 Ryra will:
-- Install system dependencies (podman, nginx, etc.) if needed
-- Create a `ryra-vaultwarden` Linux user
+- Install system dependencies (podman, etc.) if needed
 - Pull the container image
 - Generate systemd quadlet units
-- Configure nginx as a reverse proxy
-- Prompt you for exposure settings (local, tunnel, domain, etc.)
+- Start the service under your user via rootless Podman
 
 ## 3. Check the status
 
@@ -51,6 +49,6 @@ This shows all services available in the registry that you can deploy.
 
 ## Next steps
 
-- [Configure DNS, SSL, and SMTP](/guides/configuration/) for production use
-- [Learn about exposure modes](/guides/exposure-modes/) to control how services are accessed
-- [Rust Docs](https://docs.rs/ryra) for the full API and command reference
+- [Configure reverse proxy, SMTP, and auth](/guides/configuration/) for production use
+- Add `--domain` to expose services through Caddy with automatic HTTPS
+- Add `--auth` to enable SSO authentication via Authelia

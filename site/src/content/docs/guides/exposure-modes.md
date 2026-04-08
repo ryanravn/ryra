@@ -1,49 +1,52 @@
 ---
-title: Exposure Modes
+title: Exposing Services
 description: Control how your services are accessed from the network.
 ---
 
-Ryra supports several ways to expose services. You choose the mode when adding a service, or change it later:
+By default, services bind to a dynamically allocated port on localhost. To make them accessible via a domain name with HTTPS, use Caddy as a reverse proxy.
+
+## Local access (default)
+
+When you run `ryra add <service>` without any flags, the service is only accessible on the host via `localhost:<port>`. Check the assigned port with:
 
 ```bash
-ryra expose <service>
+ryra status <service>
 ```
 
-## Modes
+## Domain access with Caddy
 
-### `local`
+To expose a service on a domain with automatic HTTPS:
 
-The service is only accessible from the server itself (localhost). Use this for services that don't need to be accessed remotely, or for infrastructure services like databases.
+1. **Install Caddy** (if not already installed):
 
-### `host-port`
+   ```bash
+   ryra add caddy
+   ```
 
-Binds the service to a port on the host. Accessible from the local network without a reverse proxy. Useful for development or LAN-only services.
+2. **Add a service with `--domain`**:
 
-### `tunnel`
+   ```bash
+   ryra add vaultwarden --domain vault.example.com
+   ```
 
-Exposes the service via a **Cloudflare Tunnel**. No need to open ports on your firewall — traffic goes through Cloudflare's network. Requires Cloudflare DNS to be configured.
+Ryra adds a site block to the Caddyfile that routes `vault.example.com` to the service's port. Caddy handles TLS certificate provisioning automatically.
 
-### `proxy`
+When you remove a service with `ryra remove`, its Caddy route is cleaned up automatically.
 
-Routes traffic through **nginx** with a domain name. Ryra creates a DNS record pointing to your server and configures nginx with SSL termination. Requires:
-- Cloudflare DNS configured (`ryra config dns`)
-- SSL configured (`ryra config ssl`)
-- Ports 80/443 open on your firewall
+## Authentication with Authelia
 
-### `dns-only`
+To add SSO authentication to a service:
 
-Creates a DNS record but doesn't configure nginx. Useful when the service handles its own TLS or when you want to manage the reverse proxy yourself.
+1. **Install Authelia**:
 
-### `public`
+   ```bash
+   ryra add authelia --domain auth.example.com
+   ```
 
-Similar to `proxy` but marks the service as intentionally public-facing. Functionally the same as `proxy` — the distinction is for your own bookkeeping.
+2. **Add a service with `--auth`**:
 
-## Changing exposure
+   ```bash
+   ryra add forgejo --auth --domain git.example.com
+   ```
 
-You can change how a service is exposed at any time:
-
-```bash
-ryra expose vaultwarden
-```
-
-Ryra will prompt you to pick a new mode and reconfigure nginx and DNS accordingly.
+Services with native OIDC support (Forgejo, Immich, Seafile) get OIDC configured automatically. Other services get Caddy forward auth via Authelia.

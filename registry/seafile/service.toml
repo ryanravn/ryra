@@ -106,9 +106,6 @@ prompt = "Seafile admin password"
 name = "CACHE_PROVIDER"
 value = "redis"
 
-[nginx]
-upstream_port = "http"
-
 # --- Auth integration ---
 # Seafile reads OAuth config from seahub_settings.py (a Python file), not env
 # vars. The auth mappings below write OAUTH_* vars into the .env file.

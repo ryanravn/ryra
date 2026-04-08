@@ -113,7 +113,7 @@ fn cache_dir() -> Result<PathBuf> {
 
 /// Ensure the base cloud image, prepared image, and EFI firmware are available.
 ///
-/// The "prepared" image has all packages pre-installed (podman, nginx, git, etc.)
+/// The "prepared" image has all packages pre-installed (podman, git, etc.)
 /// so VMs boot in ~30s instead of ~6 minutes. It's created by booting the raw
 /// cloud image once with cloud-init, then snapshotting.
 pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> Result<Image> {
@@ -351,7 +351,7 @@ async fn download_image(distro: &Distro, dest: &PathBuf) -> Result<()> {
 
 /// Boot the raw cloud image, let cloud-init install packages, then snapshot it.
 ///
-/// This is a one-time operation. The resulting image has podman, nginx, git, etc.
+/// This is a one-time operation. The resulting image has podman, git, etc.
 /// already installed, so subsequent VMs skip the slow package install step.
 async fn prepare_image(
     distro: &Distro,

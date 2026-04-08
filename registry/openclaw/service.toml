@@ -34,9 +34,6 @@ value = ""
 kind = "prompted"
 prompt = "OpenAI API key (leave empty to skip)"
 
-[nginx]
-upstream_port = "gateway"
-
 [integrations]
 auth = []
 smtp = false

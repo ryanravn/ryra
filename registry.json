@@ -415,7 +415,7 @@
       "requirements": {
         "ram": {
           "min": 1024,
-          "recommended": 2048
+          "recommended": 2560
         }
       },
       "ports": [

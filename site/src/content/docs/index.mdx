@@ -11,7 +11,7 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
 
 Ryra is a CLI tool that deploys self-hosted services on a single Linux machine using **rootless Podman** and **systemd quadlets**.
 
-Instead of writing Docker Compose files, nginx configs, and systemd units by hand, you run `ryra add <service>` and Ryra scaffolds everything from a curated registry of service definitions.
+Instead of writing Docker Compose files, reverse proxy configs, and systemd units by hand, you run `ryra add <service>` and Ryra scaffolds everything from a curated registry of service definitions.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
@@ -20,11 +20,11 @@ curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
 <CardGrid>
   <Card title="One command" icon="rocket">
     `ryra add vaultwarden` — that's it. Ryra handles the container, systemd
-    unit, nginx config, DNS, and SSL.
+    unit, reverse proxy, and SSL.
   </Card>
   <Card title="Rootless by default" icon="approve-check">
-    Every service runs as its own Linux user with rootless Podman. No
-    containers running as root (except nginx).
+    Every service runs under your user with rootless Podman. No containers
+    running as root.
   </Card>
   <Card title="Native systemd" icon="setting">
     Services are Podman quadlets managed by systemd — not a custom daemon. Use
@@ -39,19 +39,18 @@ curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
 ## How it works
 
 1. **You run a command** like `ryra add vaultwarden`
-2. **Ryra creates a dedicated Linux user** for the service
-3. **Rootless Podman** runs the container under that user — no root containers
-4. **A systemd quadlet** manages the container lifecycle (start, stop, restart)
-5. **Nginx** is configured as a reverse proxy with SSL termination
-6. **DNS and SSL** are set up automatically via Cloudflare (optional)
+2. **Rootless Podman** runs the container under your user — no root containers
+3. **A systemd quadlet** manages the container lifecycle (start, stop, restart)
+4. **Caddy** (optional) is configured as a reverse proxy with automatic HTTPS
+5. **Authelia** (optional) provides SSO authentication via OIDC
 
-Every service is isolated: its own user, its own container runtime, its own systemd scope. If one service breaks, the others keep running.
+Every service is isolated in its own container and systemd scope. If one service breaks, the others keep running.
 
 ## Architecture
 
 - **`ryra-core`** — pure library that generates configs and returns typed steps
-- **`ryra-cli`** — thin shell that executes steps (creates users, writes files, runs systemctl)
-- **nginx** — the only root service, reverse-proxies all applications with `Network=host`
+- **`ryra-cli`** — thin shell that executes steps (writes files, runs systemctl)
+- **caddy** — optional reverse proxy with automatic HTTPS
 - **podman** — rootless containers for every service
 - **systemd** — manages everything via quadlet units and `loginctl` linger
 
@@ -64,6 +63,10 @@ Every service is isolated: its own user, its own container runtime, its own syst
 | **Uptime Kuma** | Monitoring and status pages |
 | **OpenClaw** | AI assistant gateway |
 | **PostgreSQL** | Database (standalone or as a dependency) |
+| **Immich** | Photo and video management |
+| **Seafile** | File sync and sharing |
+| **Caddy** | Reverse proxy with automatic HTTPS |
+| **Authelia** | SSO authentication provider |
 | **Whoami** | Simple HTTP echo for testing |
 
 ## What Ryra is not

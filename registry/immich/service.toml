@@ -106,9 +106,6 @@ value = ""
 kind = "required"
 prompt = "Immich admin password"
 
-[nginx]
-upstream_port = "http"
-
 # --- Auth integration ---
 # Immich configures OIDC via its admin API (PUT /system-config), not env vars.
 # The post_start hook waits for Immich to boot, creates the admin user,

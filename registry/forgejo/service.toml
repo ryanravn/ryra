@@ -79,9 +79,6 @@ value = "true"
 name = "FORGEJO__security__INSTALL_LOCK"
 value = "true"
 
-[nginx]
-upstream_port = "http"
-
 [integrations]
 auth = ["oidc"]
 smtp = false

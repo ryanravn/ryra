@@ -16,8 +16,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
         if std::io::stdin().is_terminal() {
             println!("This will:");
             println!("  - Stop and remove all installed services");
-            println!("  - Remove nginx container");
-            println!("  - Delete all certs, nginx configs, and ryra state");
+            println!("  - Delete all ryra state and configuration");
             println!();
 
             let input: String = Input::new()

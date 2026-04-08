@@ -9,9 +9,6 @@ architecture = ["amd64", "arm64"]
 name = "http"
 container_port = 80
 
-[nginx]
-upstream_port = "http"
-
 [integrations]
 auth = []
 smtp = false

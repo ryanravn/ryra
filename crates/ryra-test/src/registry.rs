@@ -488,7 +488,7 @@ pub fn service_images(registry_path: &Path, service_name: &str) -> Vec<String> {
     images
 }
 
-/// Get all container images needed for a test (including nginx for web services).
+/// Get all container images needed for a test.
 pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<String> {
     let mut images = Vec::new();
 
@@ -535,8 +535,6 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
         }
     }
 
-    // nginx is always needed (ryra deploys it for web services)
-    images.push("docker.io/library/nginx:alpine".to_string());
     images
 }
 

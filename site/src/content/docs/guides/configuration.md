@@ -5,34 +5,16 @@ description: Set up DNS, SSL, SMTP, and authentication for your services.
 
 Ryra stores its global configuration at `~/.config/ryra/config.toml`. You can view and edit it with `ryra config`.
 
-## DNS (Cloudflare)
+## Reverse proxy (Caddy)
 
-Ryra can automatically create DNS records for your services via the Cloudflare API:
-
-```bash
-ryra config dns
-```
-
-You'll be prompted for:
-- **API token** — a Cloudflare API token with DNS edit permissions
-- **Zone ID** — the zone ID for your domain (found in the Cloudflare dashboard)
-- **Domain** — your base domain (e.g., `example.com`)
-
-Once configured, services exposed via `proxy` or `dns-only` modes will get DNS records created automatically.
-
-## SSL
-
-Ryra supports automatic SSL via Let's Encrypt:
+Ryra uses Caddy as an optional reverse proxy with automatic HTTPS:
 
 ```bash
-ryra config ssl
+ryra add caddy
+ryra add vaultwarden --domain vault.example.com
 ```
 
-Two challenge types are available:
-- **DNS-01** — uses Cloudflare DNS to verify domain ownership (requires DNS config above). Works for wildcard certs.
-- **HTTP-01** — uses a file served by nginx. Requires port 80 to be publicly accessible.
-
-You can also use custom certificates by providing paths to your cert and key files.
+When you add a service with `--domain`, Ryra configures a Caddy site block that routes traffic to the service. Caddy handles TLS automatically.
 
 ## SMTP
 

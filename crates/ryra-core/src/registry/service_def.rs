@@ -16,9 +16,6 @@ pub struct ServiceDef {
     pub env: Vec<EnvVar>,
     #[serde(default)]
     pub requires: Vec<ServiceRequirement>,
-    /// Legacy — reads old service defs with [nginx], never used.
-    #[serde(default, skip_serializing)]
-    pub nginx: Option<NginxDef>,
     /// Sidecar containers for multi-container services.
     #[serde(default)]
     pub containers: Vec<ContainerDef>,
@@ -223,11 +220,6 @@ pub struct EnvVar {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceRequirement {
     pub service: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NginxDef {
-    pub upstream_port: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

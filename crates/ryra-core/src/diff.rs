@@ -44,8 +44,6 @@ pub enum Change {
         old: String,
         new: String,
     },
-    NginxAdded,
-    NginxRemoved,
     SmtpIntegrationChanged {
         old: bool,
         new: bool,
@@ -83,8 +81,6 @@ impl std::fmt::Display for Change {
             Change::EnvDefaultChanged { name, old, new } => {
                 write!(f, "env default changed: {name} ({old} → {new})")
             }
-            Change::NginxAdded => write!(f, "nginx proxy config added"),
-            Change::NginxRemoved => write!(f, "nginx proxy config removed"),
             Change::SmtpIntegrationChanged { old, new } => {
                 write!(f, "smtp integration: {old} → {new}")
             }
@@ -242,13 +238,6 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
                 name: old_env.name.clone(),
             });
         }
-    }
-
-    // Nginx
-    match (&old.nginx, &new.nginx) {
-        (None, Some(_)) => changes.push(Change::NginxAdded),
-        (Some(_), None) => changes.push(Change::NginxRemoved),
-        _ => {}
     }
 
     // Integrations

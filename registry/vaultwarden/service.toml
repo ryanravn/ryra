@@ -29,9 +29,6 @@ value = "false"
 name = "WEBSOCKET_ENABLED"
 value = "true"
 
-[nginx]
-upstream_port = "http"
-
 [integrations]
 auth = []
 smtp = true
