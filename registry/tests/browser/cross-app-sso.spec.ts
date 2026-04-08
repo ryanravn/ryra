@@ -28,10 +28,10 @@ test("cross-app SSO: login via forgejo OIDC, then access whoami without re-auth"
   await page.locator("#password-textfield").fill(AUTHELIA_PASSWORD);
   await page.getByRole("button", { name: /sign in/i }).click();
 
-  // 3. Accept consent if shown
-  const consent = page.locator('button:has-text("Accept"), button#accept-btn');
+  // 3. Accept consent if shown (Authelia shows this on first OIDC login)
   try {
-    await consent.click({ timeout: 5_000 });
+    const consent = page.getByRole("button", { name: /accept|consent|allow|approve/i });
+    await consent.click({ timeout: 10_000 });
   } catch {
     // No consent screen
   }

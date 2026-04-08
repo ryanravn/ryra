@@ -16,12 +16,12 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
   await page.locator("#password-textfield").fill(AUTHELIA_PASSWORD);
   await page.getByRole("button", { name: /sign in/i }).click();
 
-  // Accept consent screen if shown
-  const consent = page.locator('button:has-text("Accept"), button#accept-btn');
+  // Accept consent screen if shown (Authelia shows this on first OIDC login)
   try {
-    await consent.click({ timeout: 5_000 });
+    const consent = page.getByRole("button", { name: /accept|consent|allow|approve/i });
+    await consent.click({ timeout: 10_000 });
   } catch {
-    // No consent screen
+    // No consent screen — already authorized or auto-consented
   }
 }
 
