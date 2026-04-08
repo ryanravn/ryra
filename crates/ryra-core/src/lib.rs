@@ -310,13 +310,8 @@ pub fn add_service(
     let mut extra_volumes = Vec::new();
     let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
     if enable_auth {
-        // Find the auth provider's domain from installed services
-        if let Some(auth_service) = config.services.iter().find(|s| s.name == "authelia")
-            && let Some(ref auth_domain) = auth_service.domain
-        {
-            // Container host IP (podman's host.containers.internal resolves to this)
-            add_hosts.push((auth_domain.clone(), "169.254.1.2".to_string()));
-        }
+        // No AddHost needed for the auth domain — containers resolve it via
+        // network alias on the shared caddy network (set when authelia is installed).
         // Mount Caddy's root CA cert so containers trust the self-signed HTTPS.
         // Export it on-demand if not already cached.
         let ca_cert = service_home("caddy")
@@ -356,9 +351,20 @@ pub fn add_service(
         }
     }
 
-    // Join caddy's network when the service has a domain (so caddy can reach it by container name)
-    let extra_networks = if domain.is_some() && caddy::is_installed() && service_name != "caddy" {
-        vec!["caddy".to_string()]
+    // Join caddy's network when the service has a domain (so caddy can reach it by container name).
+    // For the auth provider, add a network alias matching its domain so other containers
+    // on the caddy network can resolve the auth domain to this container's IP.
+    // This makes OIDC discovery return browser-reachable URLs.
+    let extra_networks = if let Some(ref d) = domain {
+        if caddy::is_installed() && service_name != "caddy" {
+            if service_name == "authelia" {
+                vec![format!("caddy:alias={d}")]
+            } else {
+                vec!["caddy".to_string()]
+            }
+        } else {
+            vec![]
+        }
     } else {
         vec![]
     };
@@ -595,12 +601,12 @@ pub fn add_service(
                     {
                         // Use domain-based URL for redirects (browser-accessible via Caddy)
                         // Fall back to localhost-based URL if no domain
-                        let redirect_uri = match domain {
-                            Some(d) => format!("https://{d}:8443/.*"),
-                            None => service_url.map(|u| format!("{u}/.*")).unwrap_or_default(),
+                        let redirect_uri_regex = match domain {
+                            Some(d) => format!("^https://{d}:8443/.*$"),
+                            None => service_url.map(|u| format!("^{u}/.*$")).unwrap_or_default(),
                         };
                         let client_block = format!(
-                            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris:\n          - '{redirect_uri}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
+                            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        redirect_uris_regex:\n          - '{redirect_uri_regex}'\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n        authorization_policy: 'one_factor'"
                         );
 
                         if !yaml.contains("identity_providers:") {

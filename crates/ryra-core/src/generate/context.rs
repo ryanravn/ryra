@@ -25,10 +25,18 @@ pub fn build_context(
         Some(port) => format!("http://localhost:{port}"),
         None => "http://localhost".to_string(),
     };
-    ctx.insert("service.url".into(), url);
+    ctx.insert("service.url".into(), url.clone());
     if let Some(domain) = domain {
         ctx.insert("service.domain".into(), domain.to_string());
+        // service.external_url — browser-accessible URL via Caddy (HTTPS with domain).
+        // Use this for ROOT_URL and OIDC redirect_uri when a domain is configured.
+        ctx.insert(
+            "service.external_url".into(),
+            format!("https://{domain}:8443"),
+        );
     }
+    // service.external_url falls back to service.url when no domain is set.
+    ctx.entry("service.external_url".into()).or_insert(url);
 
     // smtp.*
     if let Some(smtp) = &config.smtp {
@@ -42,11 +50,20 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let url = auth.url().to_string();
-        // auth.internal_url is how containers reach the auth provider
-        // (via container DNS name on caddy's shared network).
-        let internal_url = match auth.port() {
-            Some(port) => format!("http://systemd-{}:{port}", auth.provider_name()),
-            None => url.clone(),
+        // auth.internal_url is how containers reach the auth provider.
+        // When the auth provider has a domain, use it (resolved via network alias)
+        // so that OIDC discovery returns browser-reachable URLs.
+        // Falls back to container DNS name for domain-less setups.
+        let auth_domain = config
+            .services
+            .iter()
+            .find(|s| s.name == auth.provider_name())
+            .and_then(|s| s.domain.as_ref());
+        let internal_url = match (auth_domain, auth.port()) {
+            (Some(domain), Some(port)) => format!("http://{domain}:{port}"),
+            (Some(domain), None) => format!("http://{domain}"),
+            (None, Some(port)) => format!("http://systemd-{}:{port}", auth.provider_name()),
+            (None, None) => url.clone(),
         };
         ctx.insert("auth.url".into(), url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());

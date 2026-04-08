@@ -24,6 +24,7 @@ pub struct QuadletParams<'a> {
     /// Extra volume mounts (e.g., Caddy root CA cert).
     pub extra_volumes: &'a [String],
     /// Additional networks to join (e.g., caddy's network for reverse proxy).
+    /// Format: network name, with optional alias (e.g., "caddy" or "caddy:alias=auth.test.local").
     pub extra_networks: &'a [String],
 }
 
@@ -71,7 +72,12 @@ pub fn render_container(params: &QuadletParams) -> String {
     }
     lines.push(format!("Network={}.network", params.network));
     for net in params.extra_networks {
-        lines.push(format!("Network={net}.network"));
+        // Support "caddy" (plain) or "caddy:alias=foo.local" (with options)
+        if let Some((name, opts)) = net.split_once(':') {
+            lines.push(format!("Network={name}.network:{opts}"));
+        } else {
+            lines.push(format!("Network={net}.network"));
+        }
     }
 
     for (host, ip) in params.add_hosts {

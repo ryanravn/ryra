@@ -2,14 +2,6 @@
 name = "forgejo-auth-browser"
 browser = true
 
-# Set up /etc/hosts so browser can resolve .test.local domains
-[[steps]]
-action = "run"
-name = "setup-hosts"
-run = """
-echo '127.0.0.1 auth.test.local git.test.local' >> /etc/hosts
-"""
-
 # Install caddy
 [[steps]]
 action = "add"
@@ -41,6 +33,14 @@ timeout = 600
 [[steps]]
 action = "wait"
 service = "forgejo"
+
+# Set up /etc/hosts AFTER containers are started so podman doesn't propagate
+# the host entry into containers (which would override the network alias DNS).
+# The browser (Playwright on the host) needs these to resolve .test.local domains.
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local git.test.local' >> /etc/hosts"
 
 # Wait for forgejo to respond via caddy
 [[steps]]
