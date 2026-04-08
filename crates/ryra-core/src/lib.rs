@@ -1090,17 +1090,59 @@ pub struct SearchResult {
     pub installed: bool,
 }
 
-/// Get test definitions for an installed service.
-///
-/// NOTE: Being migrated to test.toml — not yet implemented.
+/// Get test definitions for an installed service by reading its `test.toml`.
 pub async fn service_tests(
     service_name: &str,
     repo_override: Option<&str>,
 ) -> Result<ServiceTestInfo> {
-    let _ = (service_name, repo_override);
-    Err(Error::Registry(
-        "service_tests() is being migrated to test.toml — not yet implemented".into(),
-    ))
+    let paths = ConfigPaths::resolve()?;
+    let config = config::load_config(&paths.config_file)?;
+
+    let installed = config
+        .services
+        .iter()
+        .find(|s| s.name == service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    let repo_url = repo_override.unwrap_or(&installed.repo);
+    let repo_dir = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
+
+    let test_toml_path = repo_dir.join(service_name).join("test.toml");
+    let env_file = service_home(service_name).join(".env");
+
+    if !test_toml_path.exists() {
+        return Ok(ServiceTestInfo {
+            service_name: service_name.to_string(),
+            repo_url: repo_url.to_string(),
+            tests: vec![],
+            env_file,
+        });
+    }
+
+    let content =
+        std::fs::read_to_string(&test_toml_path).map_err(|source| Error::FileRead {
+            path: test_toml_path.clone(),
+            source,
+        })?;
+
+    // Parse just the [[tests]] section — we only care about simple tests for live runs
+    #[derive(serde::Deserialize)]
+    struct TestFile {
+        #[serde(default)]
+        tests: Vec<registry::test_def::TestDef>,
+    }
+
+    let parsed: TestFile = toml::from_str(&content).map_err(|source| Error::TomlParse {
+        path: test_toml_path,
+        source,
+    })?;
+
+    Ok(ServiceTestInfo {
+        service_name: service_name.to_string(),
+        repo_url: repo_url.to_string(),
+        tests: parsed.tests,
+        env_file,
+    })
 }
 
 pub struct ServiceTestInfo {
@@ -1108,23 +1150,6 @@ pub struct ServiceTestInfo {
     pub repo_url: String,
     pub tests: Vec<registry::test_def::TestDef>,
     pub env_file: PathBuf,
-}
-
-/// Get test definitions for a multi-service test suite.
-///
-/// NOTE: Being migrated to test.toml — not yet implemented.
-pub async fn suite_tests(suite_name: &str, repo_override: Option<&str>) -> Result<SuiteTestInfo> {
-    let _ = (suite_name, repo_override);
-    Err(Error::Registry(
-        "suite_tests() is being migrated to test.toml — not yet implemented".into(),
-    ))
-}
-
-pub struct SuiteTestInfo {
-    pub name: String,
-    pub repo_url: String,
-    pub services: Vec<String>,
-    pub tests: Vec<registry::test_def::TestDef>,
 }
 
 /// Get detailed info about a service from a repo.

@@ -135,15 +135,15 @@ enum Command {
         /// Service to test (live mode)
         #[arg(long)]
         service: Option<String>,
-        /// Run a multi-service test suite from the registry
-        #[arg(long)]
-        suite: Option<String>,
         /// Run only a specific test by name (live mode)
         #[arg(long)]
         test: Option<String>,
         /// Repo to load test definitions from (git URL or local path)
         #[arg(long)]
         repo: Option<String>,
+        /// Test a local project directory with quadlet files + ryra.toml
+        #[arg(long)]
+        project: Option<std::path::PathBuf>,
         /// Keep VM alive after tests (or boot without tests for interactive use)
         #[arg(long)]
         keep_alive: bool,
@@ -231,9 +231,9 @@ async fn main() -> anyhow::Result<()> {
             ref names,
             live,
             ref service,
-            ref suite,
             ref test,
             ref repo,
+            ref project,
             keep_alive,
             yes,
             verbose,
@@ -242,9 +242,9 @@ async fn main() -> anyhow::Result<()> {
         } => {
             cli::test::run(cli::test::TestRunParams {
                 service: service.as_deref(),
-                suite: suite.as_deref(),
                 test_filter: test.as_deref(),
                 repo: repo.as_deref(),
+                project: project.as_ref(),
                 vm: !live,
                 keep_alive,
                 yes,

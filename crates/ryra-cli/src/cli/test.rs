@@ -11,7 +11,6 @@ use ryra_core::registry::test_def::TestDef;
 /// Parameters for [`run`].
 pub struct TestRunParams<'a> {
     pub service: Option<&'a str>,
-    pub suite: Option<&'a str>,
     pub test_filter: Option<&'a str>,
     pub repo: Option<&'a str>,
     pub project: Option<&'a std::path::PathBuf>,
@@ -37,8 +36,8 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
         .await;
     }
 
-    match (params.service, params.suite) {
-        (Some(service), None) => {
+    match params.service {
+        Some(service) => {
             run_live_service(
                 service,
                 params.test_filter,
@@ -48,18 +47,7 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
             )
             .await
         }
-        (None, Some(suite)) => {
-            run_live_suite(
-                suite,
-                params.test_filter,
-                params.repo,
-                params.yes,
-                params.verbose,
-            )
-            .await
-        }
-        (Some(_), Some(_)) => anyhow::bail!("cannot specify both a service and --suite"),
-        (None, None) => anyhow::bail!("specify a service name or --suite <name>"),
+        None => anyhow::bail!("specify a service name with --service <name>"),
     }
 }
 
@@ -150,70 +138,6 @@ async fn run_live_service(
     run_tests(&tests, &env_sources, verbose).await
 }
 
-async fn run_live_suite(
-    suite: &str,
-    test_filter: Option<&str>,
-    repo: Option<&str>,
-    yes: bool,
-    verbose: bool,
-) -> Result<()> {
-    let info = ryra_core::suite_tests(suite, repo).await?;
-
-    warn_untrusted_repo(&info.repo_url, yes)?;
-
-    if info.tests.is_empty() {
-        println!("No tests defined in suite {suite}.");
-        return Ok(());
-    }
-
-    // Check all services are installed
-    for svc in &info.services {
-        let env_file = ryra_core::service_home(svc).join(".env");
-        if !env_file.exists() {
-            anyhow::bail!(
-                "env file not found for {svc} — is it installed and running?\n\
-                 Suite {suite} requires: {}",
-                info.services.join(", ")
-            );
-        }
-    }
-
-    let tests: Vec<&TestDef> = match test_filter {
-        Some(filter) => {
-            let filtered: Vec<_> = info.tests.iter().filter(|t| t.name == filter).collect();
-            if filtered.is_empty() {
-                let available: Vec<&str> = info.tests.iter().map(|t| t.name.as_str()).collect();
-                anyhow::bail!(
-                    "no test named '{filter}' in suite {suite}. Available: {}",
-                    available.join(", ")
-                );
-            }
-            filtered
-        }
-        None => info.tests.iter().collect(),
-    };
-
-    println!(
-        "Testing suite {suite} [{}] ({} tests)\n",
-        info.services.join(" + "),
-        tests.len()
-    );
-
-    // Build env sourcing: prefix each service's vars with SERVICE__
-    let mut env_sources = Vec::new();
-    for svc in &info.services {
-        let env_file = ryra_core::service_home(svc).join(".env");
-        let prefix = svc.to_uppercase();
-        env_sources.push(format!(
-            "while IFS='=' read -r key val; do \
-             [ -n \"$key\" ] && export {prefix}__$key=\"$val\"; \
-             done < {}",
-            env_file.display()
-        ));
-    }
-
-    run_tests(&tests, &env_sources, verbose).await
-}
 
 async fn run_tests(tests: &[&TestDef], env_sources: &[String], verbose: bool) -> Result<()> {
     let mut passed = 0;
