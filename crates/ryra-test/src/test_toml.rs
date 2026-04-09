@@ -22,6 +22,10 @@ pub struct TestMeta {
     pub name: Option<String>,
     #[serde(default)]
     pub browser: bool,
+    /// Optional RAM override (MB). When set, bypasses auto-calculation from
+    /// service requirements. Use for tests that run many services and need
+    /// more headroom than the sum of individual recommendations.
+    pub ram: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +96,11 @@ impl TestToml {
     /// True if this test requires a browser VM image.
     pub fn needs_browser(&self) -> bool {
         self.test.as_ref().map_or(false, |t| t.browser)
+    }
+
+    /// Explicit RAM override (MB) from [test] metadata, if set.
+    pub fn ram_override(&self) -> Option<u32> {
+        self.test.as_ref().and_then(|t| t.ram)
     }
 
     /// The test name from [test] metadata, or the file stem as a fallback.

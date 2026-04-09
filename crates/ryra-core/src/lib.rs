@@ -254,19 +254,16 @@ pub async fn init(config: Config) -> Result<InitResult> {
 }
 
 /// Determine which extra podman networks a service should join.
+/// Services with a domain join caddy's network for reverse proxy routing.
+/// OIDC auth also goes through caddy (for correct issuer in discovery).
 fn resolve_extra_networks(
     service_name: &str,
     domain: Option<&str>,
     caddy_installed: bool,
-    enable_auth: bool,
-    has_native_oidc: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
     if domain.is_some() && caddy_installed && service_name != "caddy" {
         networks.push("caddy".to_string());
-    }
-    if enable_auth && has_native_oidc && service_name != "authelia" {
-        networks.push("authelia".to_string());
     }
     networks
 }
@@ -345,15 +342,46 @@ pub fn add_service(
     let quadlet_path = quadlet_dir();
 
     let add_hosts = Vec::new();
-    let extra_volumes = Vec::new();
-    let extra_env: BTreeMap<String, String> = BTreeMap::new();
+    let mut extra_volumes = Vec::new();
+    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
+
+    // When auth is enabled and routes through Caddy (HTTPS), mount Caddy's
+    // root CA cert so containers trust the self-signed TLS.
+    if enable_auth && caddy::is_installed() {
+        let ca_cert = service_home("caddy")
+            .parent()
+            .unwrap_or(std::path::Path::new("/tmp"))
+            .join("caddy-root-ca.crt");
+        if !ca_cert.exists() {
+            let _ = std::process::Command::new("podman")
+                .args([
+                    "exec",
+                    "systemd-caddy",
+                    "cat",
+                    "/data/caddy/pki/authorities/local/root.crt",
+                ])
+                .stdout(std::fs::File::create(&ca_cert).unwrap_or_else(|_| {
+                    std::fs::File::create("/dev/null").expect("can't open /dev/null")
+                }))
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        if ca_cert.exists() && ca_cert.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+            extra_volumes.push(format!(
+                "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",
+                ca_cert.display()
+            ));
+            extra_env.insert(
+                "NODE_EXTRA_CA_CERTS".into(),
+                "/etc/ssl/certs/caddy-root-ca.crt".into(),
+            );
+        }
+    }
 
     let extra_networks = resolve_extra_networks(
         service_name,
         domain,
         caddy::is_installed(),
-        enable_auth,
-        !reg_service.def.mappings.auth.is_empty(),
     );
 
     let output = generate::generate_service(generate::GenerateServiceParams {
@@ -467,6 +495,8 @@ pub fn add_service(
             &reg_service.def,
             domain,
             &output.ctx,
+            &config,
+            &quadlet_path,
         ));
     }
 
@@ -1021,44 +1051,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn networks_empty_when_no_domain_no_auth() {
-        let nets = resolve_extra_networks("whoami", None, false, false, false);
+    fn networks_empty_when_no_domain() {
+        let nets = resolve_extra_networks("whoami", None, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_caddy_when_domain_and_caddy() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true, false, false);
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true);
         assert_eq!(nets, vec!["caddy"]);
     }
 
     #[test]
-    fn networks_authelia_when_native_oidc() {
-        let nets = resolve_extra_networks("forgejo", None, false, true, true);
-        assert_eq!(nets, vec!["authelia"]);
-    }
-
-    #[test]
-    fn networks_both_when_domain_and_native_oidc() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true, true, true);
-        assert_eq!(nets, vec!["caddy", "authelia"]);
-    }
-
-    #[test]
-    fn networks_caddy_only_for_forward_auth() {
-        let nets = resolve_extra_networks("whoami", Some("whoami.test.local"), true, true, false);
-        assert_eq!(nets, vec!["caddy"]);
-    }
-
-    #[test]
-    fn networks_caddy_excluded_for_caddy_itself() {
-        let nets = resolve_extra_networks("caddy", Some("caddy.test.local"), true, false, false);
+    fn networks_empty_when_domain_but_no_caddy() {
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), false);
         assert!(nets.is_empty());
     }
 
     #[test]
-    fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks("authelia", None, false, true, true);
+    fn networks_caddy_excluded_for_caddy_itself() {
+        let nets = resolve_extra_networks("caddy", Some("caddy.test.local"), true);
         assert!(nets.is_empty());
     }
 }

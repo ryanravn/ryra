@@ -13,12 +13,14 @@ pub enum DiscoveredTest {
         setup: SetupConfig,
         tests: Vec<TestEntry>,
         browser: bool,
+        ram_override: Option<u32>,
     },
     /// Lifecycle tests: interleaved actions and assertions.
     Lifecycle {
         name: String,
         steps: Vec<StepEntry>,
         browser: bool,
+        ram_override: Option<u32>,
     },
 }
 
@@ -129,6 +131,13 @@ impl DiscoveredTest {
         match self {
             DiscoveredTest::Simple { browser, .. } => *browser,
             DiscoveredTest::Lifecycle { browser, .. } => *browser,
+        }
+    }
+
+    pub fn ram_override(&self) -> Option<u32> {
+        match self {
+            DiscoveredTest::Simple { ram_override, .. } => *ram_override,
+            DiscoveredTest::Lifecycle { ram_override, .. } => *ram_override,
         }
     }
 }
@@ -311,6 +320,7 @@ fn discover_from_test_toml(
     };
 
     let browser = parsed.needs_browser();
+    let ram_override = parsed.ram_override();
 
     if parsed.is_lifecycle() {
         let steps = convert_steps(&parsed.steps, &test_name)?;
@@ -318,6 +328,7 @@ fn discover_from_test_toml(
             name: test_name,
             steps,
             browser,
+            ram_override,
         });
     }
 
@@ -354,6 +365,7 @@ fn discover_from_test_toml(
         setup,
         tests,
         browser,
+        ram_override,
     })
 }
 
@@ -454,6 +466,10 @@ pub fn service_recommended_ram(registry_path: &Path, service_name: &str) -> Resu
 /// recommended RAM. Adds 512MB OS overhead, rounds up to 512MB increments,
 /// with a 1024MB floor.
 pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
+    if let Some(ram) = test.ram_override() {
+        return ram;
+    }
+
     let services: Vec<&str> = match test {
         DiscoveredTest::Lifecycle { steps, .. } => steps
             .iter()

@@ -58,14 +58,14 @@ When `ryra add <service> --domain foo.example.com` is called:
 When `ryra add <service> --auth` is called:
 1. An OIDC client ID and secret are generated and injected into the template context (`{{auth.client_id}}`, `{{auth.client_secret}}`, `{{auth.issuer}}`, etc.)
 2. Services with native OIDC mappings (`[mappings.auth]` in service.toml) get OIDC env vars written to `.env`
-3. Post-start hooks (`[[post_start]]`) run after the service starts — these configure OIDC via APIs or config files
-4. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
-5. Container `--add-host` entries are added so containers can reach the auth provider domain
-6. If Caddy is running with HTTPS, its root CA cert is mounted into service containers
+3. Native OIDC services join the auth provider's podman network for direct HTTP communication
+4. OIDC client registration is handled by `authelia.rs` (edits authelia's configuration.yml)
+5. Post-start hooks (`[[post_start]]`) run after the service starts — these configure OIDC via APIs or config files
+6. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
 
-### Post-start hooks
+### Pre-start and post-start hooks
 
-Hooks in `[[post_start]]` run on the **host** (not inside containers), with the service's `.env` sourced into the environment. This means:
+Hooks in `[[pre_start]]` and `[[post_start]]` run on the **host** (not inside containers), with the service's `.env` sourced into the environment. Pre-start hooks run before the container starts (e.g., generating config files), post-start hooks run after. This means:
 - Use `$RYRA_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. directly — they're already in the environment
 - Use `$HOME/.local/share/ryra/<service>/` paths to access bind-mounted volumes on the host
 - Do NOT hardcode paths like `/var/lib/<service>/` — that's the container's view, not the host's
@@ -74,11 +74,21 @@ Hooks in `[[post_start]]` run on the **host** (not inside containers), with the 
 
 Available when `--auth` is used and an auth provider (authelia) is installed:
 - `{{auth.url}}` — external URL of the auth provider
-- `{{auth.internal_url}}` — `http://host.containers.internal:<port>` for container-to-auth communication
+- `{{auth.internal_url}}` — how containers reach the auth provider directly via HTTP (`http://systemd-authelia:<port>` on shared podman network)
 - `{{auth.issuer}}` — OIDC issuer URL (provider-specific)
 - `{{auth.client_id}}` — generated UUID for OIDC client
 - `{{auth.client_secret}}` — generated 64-char secret for OIDC client
 - `{{auth.provider}}` — provider name (e.g., "authelia")
+
+## Podman & Quadlet-Native Solutions
+
+Always prefer podman-native and quadlet-native features over workarounds:
+
+- **Networking**: Use podman networks for cross-container DNS resolution instead of `AddHost` with hardcoded IPs. Services with `--auth` join the auth provider's network for direct HTTP communication.
+- **Service discovery**: Containers on the same network can resolve each other by container name (e.g., `systemd-authelia`). Use this instead of `host.containers.internal` or IP addresses
+- **Volumes**: Use named volumes (`.volume` quadlet files) for data persistence, bind mounts only when host access is needed
+- **Dependencies**: Use `After=` and `Requires=` in quadlet `[Unit]` sections for startup ordering
+- **Health checks**: Use quadlet `HealthCmd=` instead of custom wait scripts
 
 ## System Dependencies
 

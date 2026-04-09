@@ -15,7 +15,7 @@ service = "caddy"
 [[steps]]
 action = "run"
 name = "add-authelia"
-run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
 ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
 timeout = 300
 
@@ -34,9 +34,7 @@ timeout = 600
 action = "wait"
 service = "forgejo"
 
-# Set up /etc/hosts AFTER containers are started so podman doesn't propagate
-# the host entry into containers (which would override the network alias DNS).
-# The browser (Playwright on the host) needs these to resolve .test.local domains.
+# The browser (Playwright on the host) needs /etc/hosts to resolve .test.local domains.
 [[steps]]
 action = "run"
 name = "setup-hosts"
@@ -63,7 +61,7 @@ run = """
 export PATH="$HOME/.bun/bin:$PATH"
 export FORGEJO_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)
 export AUTHELIA_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/authelia/.env | cut -d= -f2)
-export AUTHELIA_USER=admin
+export AUTHELIA_USER=testuser
 export AUTHELIA_PASSWORD=testpassword123
 cd /opt/ryra-test-registry/tests/browser
 ln -sf /opt/playwright/node_modules .

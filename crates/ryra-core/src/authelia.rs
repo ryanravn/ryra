@@ -1,17 +1,23 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
-use crate::config::schema::AuthCredentials;
+use crate::config::schema::{AuthCredentials, Config};
 use crate::generate::GeneratedFile;
 use crate::registry::service_def::ServiceDef;
 use crate::{Step, service_home};
 
 /// Register an OIDC client with authelia by editing its configuration.yml.
+/// Also ensures caddy has a network alias for the auth domain so OIDC
+/// discovery (which must go through Caddy for correct issuer URLs) works
+/// from service containers.
 /// Returns steps to write the updated config and restart authelia.
 pub fn register_oidc_client(
     service_name: &str,
     service_def: &ServiceDef,
     domain: Option<&str>,
     ctx: &BTreeMap<String, String>,
+    config: &Config,
+    quadlet_dir: &Path,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
 
@@ -112,6 +118,48 @@ pub fn register_oidc_client(
     steps.push(Step::RestartService {
         unit: "authelia".to_string(),
     });
+
+    // OIDC discovery must go through Caddy so authelia returns browser-reachable
+    // endpoints (authelia uses the request Host header as its issuer). Add the
+    // auth domain as a network alias on caddy's container so OIDC services on
+    // the caddy network can resolve it.
+    let auth_domain = config
+        .services
+        .iter()
+        .find(|s| s.name == "authelia")
+        .and_then(|s| s.domain.as_ref());
+    if let Some(auth_domain) = auth_domain {
+        let caddy_quadlet = quadlet_dir.join("caddy.container");
+        if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
+            let alias = format!("Network=caddy.network:alias={auth_domain}");
+            if !content.contains(&alias) {
+                let updated: String = content
+                    .lines()
+                    .map(|line| {
+                        if line == "Network=caddy.network"
+                            || line.starts_with("Network=caddy.network:")
+                        {
+                            alias.clone()
+                        } else {
+                            line.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+                if updated != content {
+                    steps.push(Step::WriteFile(GeneratedFile {
+                        path: caddy_quadlet,
+                        content: updated,
+                    }));
+                    steps.push(Step::DaemonReload);
+                    steps.push(Step::RestartService {
+                        unit: "caddy".to_string(),
+                    });
+                }
+            }
+        }
+    }
 
     steps
 }

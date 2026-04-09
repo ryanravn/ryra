@@ -2,12 +2,28 @@ import { test, expect } from "@playwright/test";
 
 const FORGEJO_PORT = process.env.FORGEJO_PORT || "3000";
 const FORGEJO_URL = `http://127.0.0.1:${FORGEJO_PORT}`;
-const AUTHELIA_USER = process.env.AUTHELIA_USER || "admin";
+// Domain-based URL through Caddy (HTTPS) — needed for OIDC flows so session
+// cookies match the callback URL (ROOT_URL uses the domain).
+const FORGEJO_DOMAIN_URL = "https://git.test.local:8443";
+const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
-  // Wait for Authelia's React app to hydrate — inputs must be editable
+  // Wait for Authelia's React app to fully hydrate before interacting.
+  // The HTML renders server-side but form submission requires React event handlers.
+  // Wait for the root element to have React's internal properties attached.
+  await page.waitForLoadState("networkidle");
+  await page.waitForFunction(
+    () => {
+      const root = document.getElementById("root");
+      // React 18+ attaches __reactFiber or _reactRootContainer to the root element
+      return root && (Object.keys(root).some(k => k.startsWith("__react")) || (root as any)._reactRootContainer);
+    },
+    { timeout: 10_000 },
+  ).catch(() => {
+    // Fallback: if React detection fails, just wait a bit
+  });
   const usernameInput = page.locator("#username-textfield");
   await expect(usernameInput).toBeVisible({ timeout: 15_000 });
   await expect(usernameInput).toBeEditable({ timeout: 5_000 });
@@ -48,10 +64,15 @@ test("clicking SSO button initiates OIDC flow", async ({ page }) => {
 });
 
 test("full OIDC login through Authelia creates a forgejo session", async ({
-  page,
+  browser,
 }) => {
-  // 1. Go to forgejo login and click SSO
-  await page.goto(`${FORGEJO_URL}/user/login`);
+  // Use the domain URL (through Caddy) so the session cookie domain matches
+  // the OIDC callback URL. Caddy uses a self-signed cert, so ignore HTTPS errors.
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  const page = await context.newPage();
+
+  // 1. Go to forgejo login via domain URL and click SSO
+  await page.goto(`${FORGEJO_DOMAIN_URL}/user/login`);
   const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');
   await expect(autheliaLink).toBeVisible({ timeout: 15_000 });
   await autheliaLink.click();
@@ -60,13 +81,14 @@ test("full OIDC login through Authelia creates a forgejo session", async ({
   await loginToAuthelia(page);
 
   // 3. Should be redirected back to forgejo, now authenticated
-  await page.waitForURL((url) => url.toString().startsWith(FORGEJO_URL), {
-    timeout: 15_000,
-  });
-
-  // 4. Verify we're logged in — forgejo shows the dashboard or user menu
-  const userMenu = page.locator(
-    '.user-menu, [aria-label="Profile and Settings"], img.ui.avatar',
+  await page.waitForURL(
+    (url) => url.hostname === "git.test.local" && !url.pathname.startsWith("/api/oidc"),
+    { timeout: 15_000 },
   );
-  await expect(userMenu).toBeVisible({ timeout: 10_000 });
+
+  // 4. Verify we're logged in — forgejo shows the user avatar in the navbar
+  const userAvatar = page.locator('nav img.ui.avatar').first();
+  await expect(userAvatar).toBeVisible({ timeout: 10_000 });
+
+  await context.close();
 });

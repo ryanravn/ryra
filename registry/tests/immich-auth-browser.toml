@@ -36,8 +36,7 @@ timeout = 900
 action = "wait"
 service = "immich"
 
-# Set up /etc/hosts AFTER containers are started so podman doesn't propagate
-# the host entry into containers (which would override the network alias DNS).
+# The browser (Playwright on the host) needs /etc/hosts to resolve .test.local domains.
 [[steps]]
 action = "run"
 name = "setup-hosts"

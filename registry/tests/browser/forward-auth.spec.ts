@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-const AUTHELIA_USER = process.env.AUTHELIA_USER || "admin";
+const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
 // Access whoami through Caddy (HTTPS with forward auth)
@@ -26,7 +26,8 @@ test("login through Authelia grants access to forward-auth-protected service", a
   // 1. Try to access whoami through Caddy — should redirect to Authelia
   await page.goto(WHOAMI_CADDY_URL, { timeout: 15_000 });
 
-  // 2. Wait for Authelia's React app to hydrate and the input to be editable
+  // 2. Wait for Authelia's React app to fully hydrate before interacting
+  await page.waitForLoadState("networkidle");
   const usernameInput = page.locator("#username-textfield");
   await expect(usernameInput).toBeVisible({ timeout: 15_000 });
   await expect(usernameInput).toBeEditable({ timeout: 5_000 });

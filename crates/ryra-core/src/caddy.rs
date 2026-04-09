@@ -42,7 +42,7 @@ pub enum AuthProvider {
 /// so that [`add_route`] and [`remove_route`] can locate it.
 pub fn render_site_block(params: &CaddySiteParams) -> String {
     let mut block = format!("# ryra:{}\n", params.service_name);
-    block.push_str(&format!("{} {{\n", params.domain));
+    block.push_str(&format!("{}:8443 {{\n", params.domain));
     block.push_str("    tls internal\n");
 
     if let Some(ref auth) = params.forward_auth {
@@ -179,7 +179,7 @@ mod tests {
         };
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
-        assert!(block.contains("whoami.example.com {"));
+        assert!(block.contains("whoami.example.com:8443 {"));
         assert!(block.contains("    reverse_proxy systemd-whoami:8080"));
         assert!(block.ends_with("}\n"));
     }

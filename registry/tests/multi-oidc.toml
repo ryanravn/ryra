@@ -1,5 +1,6 @@
 [test]
 name = "multi-oidc-lifecycle"
+ram = 5632
 
 # Install caddy (needed for --domain and --auth)
 [[steps]]

@@ -51,17 +51,17 @@ pub fn build_context(
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let url = auth.url().to_string();
         // auth.internal_url is how containers reach the auth provider.
-        // When the auth provider has a domain, use it (resolved via network alias)
-        // so that OIDC discovery returns browser-reachable URLs.
-        // Falls back to container DNS name for domain-less setups.
+        // When the auth provider has a domain, route through Caddy (HTTPS)
+        // so OIDC discovery returns browser-reachable URLs (authelia uses
+        // the request Host header as its issuer).
+        // Falls back to direct container DNS for domain-less setups.
         let auth_domain = config
             .services
             .iter()
             .find(|s| s.name == auth.provider_name())
             .and_then(|s| s.domain.as_ref());
         let internal_url = match (auth_domain, auth.port()) {
-            (Some(domain), Some(port)) => format!("http://{domain}:{port}"),
-            (Some(domain), None) => format!("http://{domain}"),
+            (Some(domain), _) => format!("https://{domain}:8443"),
             (None, Some(port)) => format!("http://systemd-{}:{port}", auth.provider_name()),
             (None, None) => url.clone(),
         };
@@ -69,7 +69,8 @@ pub fn build_context(
         ctx.insert("auth.internal_url".into(), internal_url.clone());
         ctx.insert("auth.provider".into(), auth.provider_name().to_string());
 
-        // auth.external_url — browser-accessible URL via Caddy (HTTPS with domain)
+        // auth.external_url — browser-accessible URL.
+        // Uses Caddy (HTTPS) when the auth provider has a domain, otherwise localhost.
         let external_url = config
             .services
             .iter()
@@ -80,11 +81,8 @@ pub fn build_context(
         ctx.insert("auth.external_url".into(), external_url.clone());
 
         // OIDC issuer URL — must be browser-reachable so authorization redirects work.
-        // Containers reach authelia via --add-host + Caddy CA cert when a domain is set.
         let issuer = match auth {
             crate::config::schema::AuthCredentials::Authelia { .. } => {
-                // Use external URL (domain-based) so browsers can follow OIDC redirects.
-                // Falls back to localhost URL when no domain is configured.
                 external_url.clone()
             }
             crate::config::schema::AuthCredentials::External { .. } => url.clone(),

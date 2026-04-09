@@ -32,7 +32,9 @@ host_path = "%h/config"
 name = "seed-caddyfile"
 timeout = 10
 run = """
-CADDYFILE="$HOME/.local/share/ryra/caddy/config/Caddyfile"
+CADDY_CONFIG="$HOME/.local/share/ryra/caddy/config"
+mkdir -p "$CADDY_CONFIG"
+CADDYFILE="$CADDY_CONFIG/Caddyfile"
 [ -f "$CADDYFILE" ] && exit 0
 cat > "$CADDYFILE" <<'EOF'
 :80 {

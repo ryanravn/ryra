@@ -76,20 +76,29 @@ name = "generate-config"
 timeout = 60
 run = """
 CONFIG_DIR="$HOME/.local/share/ryra/authelia/config"
+mkdir -p "$CONFIG_DIR"
 CONFIG_FILE="$CONFIG_DIR/configuration.yml"
 [ -f "$CONFIG_FILE" ] && exit 0
 DOMAIN="${RYRA_DOMAIN:-localhost}"
 # Extract parent domain for session cookie: auth.test.local -> test.local
-COOKIE_DOMAIN="$DOMAIN"
-if echo "$DOMAIN" | grep -q '\\..*\\.'; then
+# Authelia requires cookie domain to have at least one period or be an IP.
+if [ "$DOMAIN" = "localhost" ]; then
+  COOKIE_DOMAIN="127.0.0.1"
+elif echo "$DOMAIN" | grep -q '\\..*\\.'; then
   COOKIE_DOMAIN="${DOMAIN#*.}"
+else
+  COOKIE_DOMAIN="$DOMAIN"
 fi
-# Browser-facing URL for session cookies
+# authelia_url tells browsers where to find authelia for session validation.
+# Authelia requires HTTPS scheme. With a real domain + Caddy, use Caddy's port.
+# For standalone (localhost), use https://127.0.0.1 (authelia validates scheme only).
 if [ "$DOMAIN" != "localhost" ] && systemctl --user is-active caddy.service >/dev/null 2>&1; then
   AUTHELIA_URL="https://$DOMAIN:8443"
 else
-  AUTHELIA_URL="http://$DOMAIN:$RYRA_PORT_HTTP"
+  AUTHELIA_URL="https://$COOKIE_DOMAIN"
 fi
+SESSION_COOKIES="    - domain: '$COOKIE_DOMAIN'
+      authelia_url: '$AUTHELIA_URL'"
 cat > "$CONFIG_FILE" <<YAML
 ---
 server:
@@ -101,8 +110,7 @@ authentication_backend:
     path: '/config/users_database.yml'
 session:
   cookies:
-    - domain: '$COOKIE_DOMAIN'
-      authelia_url: '$AUTHELIA_URL'
+$SESSION_COOKIES
 storage:
   local:
     path: '/config/db.sqlite3'
@@ -118,7 +126,9 @@ YAML
 name = "generate-users"
 timeout = 120
 run = """
-USERS_FILE="$HOME/.local/share/ryra/authelia/config/users_database.yml"
+CONFIG_DIR="$HOME/.local/share/ryra/authelia/config"
+mkdir -p "$CONFIG_DIR"
+USERS_FILE="$CONFIG_DIR/users_database.yml"
 [ -f "$USERS_FILE" ] && exit 0
 [ -z "$AUTHELIA_ADMIN_PASSWORD" ] && exit 0
 USERNAME="${AUTHELIA_ADMIN_USER:-admin}"

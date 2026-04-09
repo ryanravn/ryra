@@ -160,16 +160,15 @@ pub async fn run(
             }
             println!();
         } else if !interactive {
-            // Non-interactive: read required env vars from the process environment,
-            // fail if any are still missing.
+            // Non-interactive: read env vars from the process environment.
+            // Required vars must be set; prompted vars use their default but
+            // can be overridden via the environment.
             let mut missing_required = Vec::new();
             for env in &promptable {
-                if env.kind == EnvKind::Required {
-                    if let Ok(val) = std::env::var(&env.name) {
-                        env_overrides.insert(env.name.clone(), val);
-                    } else {
-                        missing_required.push(env.name.as_str());
-                    }
+                if let Ok(val) = std::env::var(&env.name) {
+                    env_overrides.insert(env.name.clone(), val);
+                } else if env.kind == EnvKind::Required {
+                    missing_required.push(env.name.as_str());
                 }
             }
             if !missing_required.is_empty() {
