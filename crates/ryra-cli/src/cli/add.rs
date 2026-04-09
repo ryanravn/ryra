@@ -305,10 +305,6 @@ pub async fn run(
             println!();
             println!("Commands:");
             println!("  cat {}  # view config", env_path.display());
-            println!(
-                "  nano {}  # edit config, then restart to apply",
-                env_path.display()
-            );
             println!("  systemctl --user restart {service}  # restart (picks up .env changes)");
             println!("  systemctl --user status {service}  # check if running");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
