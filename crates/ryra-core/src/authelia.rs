@@ -30,7 +30,10 @@ pub fn register_oidc_client(
         None => return steps,
     };
 
-    let authelia_config_dir = service_home(SERVICE_AUTHELIA).join("config");
+    let Ok(authelia_home) = service_home(SERVICE_AUTHELIA) else {
+        return steps;
+    };
+    let authelia_config_dir = authelia_home.join("config");
     let authelia_config_path = authelia_config_dir.join("configuration.yml");
 
     // RSA key generation is handled by authelia's pre_start hook.
@@ -43,10 +46,12 @@ pub fn register_oidc_client(
         return steps;
     };
 
-    let service_url = ctx.get("service.url").cloned().unwrap_or_default();
     let base_url = match domain {
         Some(d) => format!("https://{d}:8443"),
-        None => service_url,
+        None => match ctx.get("service.url") {
+            Some(url) if !url.is_empty() => url.clone(),
+            _ => return steps, // no domain or service URL — cannot register OIDC client
+        },
     };
 
     // Build redirect_uris from mappings and common callback paths
@@ -143,12 +148,16 @@ pub fn register_oidc_client(
 }
 
 /// Build AuthCredentials for finalize_add when authelia is installed.
-pub fn auth_config(allocated_ports: &[(String, u16)]) -> AuthCredentials {
+pub fn auth_config(allocated_ports: &[(String, u16)]) -> crate::error::Result<AuthCredentials> {
     let port = allocated_ports
         .iter()
         .find(|(name, _)| name == "http")
         .map(|(_, p)| *p)
-        .unwrap_or(9091);
+        .ok_or_else(|| {
+            crate::error::Error::Registry(
+                "authelia has no 'http' port allocated — cannot configure auth".into(),
+            )
+        })?;
     let url = format!("http://localhost:{port}");
-    AuthCredentials::Authelia { url, port }
+    Ok(AuthCredentials::Authelia { url, port })
 }

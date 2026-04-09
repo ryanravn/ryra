@@ -258,7 +258,7 @@ pub async fn run(
                 env_content: &result.env_content,
                 domain: result.domain.as_deref(),
             })?;
-            let home_dir = ryra_core::service_home(service);
+            let home_dir = ryra_core::service_home(service)?;
             if let Some(ref domain) = result.domain {
                 println!("\n{service} is running at https://{domain}");
             } else {
@@ -490,7 +490,7 @@ async fn ensure_auth_for_add(
 /// Try to configure auth from an already-installed authelia instance.
 /// The .env is user-readable under ~/.local/share/ryra/authelia/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
-    let env_path = ryra_core::service_home(SERVICE_AUTHELIA).join(".env");
+    let env_path = ryra_core::service_home(SERVICE_AUTHELIA)?.join(".env");
     let env_content = match std::fs::read_to_string(&env_path) {
         Ok(content) => content,
         Err(_) => return Ok(false),

@@ -276,7 +276,7 @@ fn default_true() -> bool {
     true
 }
 
-fn default_hook_timeout() -> u64 {
+fn default_hook_timeout() -> u32 {
     300
 }
 
@@ -290,9 +290,9 @@ pub struct PostStartHookDef {
     pub name: String,
     /// Shell command to run on the host.
     pub run: String,
-    /// Timeout in seconds (default: 300).
+    /// Timeout in seconds (default: 300). Must be 1–3600.
     #[serde(default = "default_hook_timeout")]
-    pub timeout: u64,
+    pub timeout: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +336,19 @@ impl ServiceDef {
             .filter(|e| e.kind == EnvKind::Required)
             .map(|e| e.name.as_str())
             .collect()
+    }
+
+    /// Validate hook timeouts are within reasonable bounds (1–3600 seconds).
+    pub fn validate_hooks(&self) -> Result<(), String> {
+        for hook in self.pre_start.iter().chain(self.post_start.iter()) {
+            if hook.timeout == 0 || hook.timeout > 3600 {
+                return Err(format!(
+                    "hook '{}' has timeout {} — must be 1–3600 seconds",
+                    hook.name, hook.timeout,
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

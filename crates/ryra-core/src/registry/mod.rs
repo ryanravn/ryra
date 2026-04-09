@@ -32,6 +32,10 @@ pub fn find_service(repo_dir: &Path, name: &str) -> Result<RegistryService> {
         source,
     })?;
 
+    if let Err(msg) = def.validate_hooks() {
+        return Err(Error::Registry(format!("{name}: {msg}")));
+    }
+
     Ok(RegistryService {
         def,
         service_dir: svc_dir,

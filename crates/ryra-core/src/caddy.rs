@@ -4,15 +4,15 @@ use std::path::PathBuf;
 ///
 /// Lives inside the caddy service's data dir so the existing volume mount
 /// (`%h/config` -> `/etc/caddy/`) picks it up automatically.
-pub fn caddyfile_path() -> PathBuf {
-    crate::service_home(crate::SERVICE_CADDY)
+pub fn caddyfile_path() -> crate::error::Result<PathBuf> {
+    Ok(crate::service_home(crate::SERVICE_CADDY)?
         .join("config")
-        .join("Caddyfile")
+        .join("Caddyfile"))
 }
 
 /// Check if Caddy is installed (Caddyfile exists on disk).
 pub fn is_installed() -> bool {
-    caddyfile_path().exists()
+    caddyfile_path().map(|p| p.exists()).unwrap_or(false)
 }
 
 /// Parameters for generating a Caddy site block.
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn caddyfile_path_is_under_service_home() {
-        let path = caddyfile_path();
+        let path = caddyfile_path().expect("HOME should be set in test environment");
         assert!(
             path.ends_with("ryra/caddy/config/Caddyfile"),
             "unexpected caddyfile path: {path:?}"

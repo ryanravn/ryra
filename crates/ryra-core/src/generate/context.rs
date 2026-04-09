@@ -116,7 +116,10 @@ pub fn build_context(
         }
 
         // services.<name>.env.<VAR> — read from the service's .env file
-        let env_file = crate::service_home(name).join(".env");
+        let Ok(service_dir) = crate::service_home(name) else {
+            continue;
+        };
+        let env_file = service_dir.join(".env");
         if let Ok(content) = std::fs::read_to_string(&env_file) {
             for line in content.lines() {
                 let line = line.trim();

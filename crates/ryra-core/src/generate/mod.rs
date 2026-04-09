@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::schema::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::registry::service_def::{AuthKind, EnvVar, ServiceDef};
 
 /// Everything generated for a service, ready to be written to disk.
@@ -69,7 +69,7 @@ pub fn generate_service(params: GenerateServiceParams<'_>) -> Result<GenerationO
     )?;
 
     // Build .env file content
-    let home_dir = crate::service_home(name);
+    let home_dir = crate::service_home(name)?;
     let mut env_file = build_env_file(
         &home_dir,
         &rendered_env,
@@ -203,7 +203,7 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
         })
         .collect();
 
-    let primary_volumes = build_volume_mappings(name, &service_def.volumes);
+    let primary_volumes = build_volume_mappings(name, &service_def.volumes)?;
     let env_path = params.env_file.path.to_string_lossy().to_string();
 
     files.push(GeneratedFile {
@@ -237,7 +237,7 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
             .map(|d| format!("{name}-{d}"))
             .collect();
 
-        let sidecar_volumes = build_volume_mappings(name, &container.volumes);
+        let sidecar_volumes = build_volume_mappings(name, &container.volumes)?;
 
         files.push(GeneratedFile {
             path: params
@@ -277,9 +277,9 @@ fn generate_quadlet(params: GenerateQuadletParams<'_>) -> Result<GeneratedServic
 fn build_volume_mappings(
     service_name: &str,
     volumes: &[crate::registry::service_def::VolumeDef],
-) -> Vec<quadlet::VolumeMapping> {
-    let home = crate::service_home(service_name);
-    volumes
+) -> crate::error::Result<Vec<quadlet::VolumeMapping>> {
+    let home = crate::service_home(service_name)?;
+    Ok(volumes
         .iter()
         .map(|v| {
             if let Some(ref host_path) = v.host_path {
@@ -295,7 +295,7 @@ fn build_volume_mappings(
                 }
             }
         })
-        .collect()
+        .collect())
 }
 
 // --- Shared helpers ---
@@ -328,31 +328,37 @@ fn render_env_vars(
     if service_def.integrations.smtp {
         for (env_name, value_template) in &service_def.mappings.smtp {
             let value = template::render(value_template, ctx)?;
-            if !value.is_empty() {
-                rendered.push(EnvVar {
-                    name: env_name.clone(),
-                    value,
-                    kind: Default::default(),
-                    prompt: None,
-                    format: Default::default(),
-                    length: None,
-                });
+            if value.is_empty() {
+                return Err(Error::Template(format!(
+                    "SMTP mapping {env_name} rendered to empty value from template: {value_template}"
+                )));
             }
+            rendered.push(EnvVar {
+                name: env_name.clone(),
+                value,
+                kind: Default::default(),
+                prompt: None,
+                format: Default::default(),
+                length: None,
+            });
         }
     }
     if auth_kind.is_some() {
         for (env_name, value_template) in &service_def.mappings.auth {
             let value = template::render(value_template, ctx)?;
-            if !value.is_empty() {
-                rendered.push(EnvVar {
-                    name: env_name.clone(),
-                    value,
-                    kind: Default::default(),
-                    prompt: None,
-                    format: Default::default(),
-                    length: None,
-                });
+            if value.is_empty() {
+                return Err(Error::Template(format!(
+                    "auth mapping {env_name} rendered to empty value from template: {value_template}"
+                )));
             }
+            rendered.push(EnvVar {
+                name: env_name.clone(),
+                value,
+                kind: Default::default(),
+                prompt: None,
+                format: Default::default(),
+                length: None,
+            });
         }
     }
 

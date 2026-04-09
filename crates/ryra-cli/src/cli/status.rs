@@ -105,7 +105,7 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         .find(|s| s.name == service);
 
     if let Some(ref svc) = installed_service {
-        let home_dir = ryra_core::service_home(service);
+        let home_dir = ryra_core::service_home(service)?;
 
         println!();
         println!("Installed");

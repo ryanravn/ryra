@@ -16,17 +16,18 @@ pub struct ConfigPaths {
 
 impl ConfigPaths {
     pub fn resolve() -> Result<Self> {
+        let home = dirs::home_dir()
+            .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+            .ok_or_else(|| {
+                Error::Registry(
+                    "could not determine home directory: set $HOME".into(),
+                )
+            })?;
         let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-                    .join(".config")
-            })
+            .unwrap_or_else(|| home.join(".config"))
             .join("ryra");
         let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-                    .join(".cache")
-            })
+            .unwrap_or_else(|| home.join(".cache"))
             .join("ryra");
         let snapshots_dir = config_dir.join("snapshots");
         Ok(Self {
@@ -81,7 +82,7 @@ pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     let contents = toml::to_string_pretty(config)?;
     write_file(path, &contents)?;
     // Config contains credentials — owner-only access
-    let _ = set_permissions(path, 0o600);
+    set_permissions(path, 0o600)?;
     Ok(())
 }
 
@@ -112,9 +113,12 @@ pub fn load_snapshot(snapshots_dir: &Path, service_name: &str) -> Result<String>
 }
 
 /// Remove a snapshot when a service is removed.
-pub fn remove_snapshot(snapshots_dir: &Path, service_name: &str) {
+pub fn remove_snapshot(snapshots_dir: &Path, service_name: &str) -> Result<()> {
     let path = snapshots_dir.join(format!("{service_name}.toml"));
-    let _ = std::fs::remove_file(&path);
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|source| Error::FileWrite { path, source })?;
+    }
+    Ok(())
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<()> {

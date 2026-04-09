@@ -11,7 +11,7 @@ pub async fn run(services: &[String], yes: bool, dry_run: bool) -> Result<()> {
 
         if !yes && !dry_run {
             if std::io::stdin().is_terminal() {
-                let home_dir = ryra_core::service_home(service);
+                let home_dir = ryra_core::service_home(service)?;
                 println!("This will:");
                 println!("  - Stop and remove {service}");
                 println!("  - Delete all data and config at {}", home_dir.display());
