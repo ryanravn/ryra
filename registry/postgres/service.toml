@@ -5,7 +5,7 @@ url = "https://www.postgresql.org/docs/"
 image = "docker.io/library/postgres:17-alpine"
 architecture = ["amd64", "arm64"]
 kind = "infrastructure"
-note = "psql postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$RYRA_PORT_TCP/$POSTGRES_DB  # connect"
+note = "podman exec -it systemd-postgres psql -U $POSTGRES_USER $POSTGRES_DB  # connect"
 
 [requirements.ram]
 min = 128
