@@ -87,9 +87,7 @@ pub fn build_context(
 
         // OIDC issuer URL — must be browser-reachable so authorization redirects work.
         let issuer = match auth {
-            crate::config::schema::AuthCredentials::Authelia { .. } => {
-                external_url.clone()
-            }
+            crate::config::schema::AuthCredentials::Authelia { .. } => external_url.clone(),
             crate::config::schema::AuthCredentials::External { .. } => url.clone(),
         };
         ctx.insert("auth.issuer".into(), issuer);

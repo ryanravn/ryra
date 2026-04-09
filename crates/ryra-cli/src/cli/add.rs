@@ -6,10 +6,10 @@ use dialoguer::{Confirm, Input};
 
 use std::path::Path;
 
-use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::service_def::AuthKind;
+use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 
 use super::apply;
 use super::prompts;
@@ -283,11 +283,11 @@ pub async fn run(
                             .map(|(k, _)| k.to_lowercase().contains(secret_name))
                             .unwrap_or(false)
                     });
-                    if let Some(line) = matching_env {
-                        if let Some((key, val)) = line.split_once('=') {
-                            println!("    {key}={val}");
-                            continue;
-                        }
+                    if let Some(line) = matching_env
+                        && let Some((key, val)) = line.split_once('=')
+                    {
+                        println!("    {key}={val}");
+                        continue;
                     }
                     println!("    {secret_name} (see .env)");
                 }
@@ -304,7 +304,8 @@ pub async fn run(
                         if l.is_empty() || l.starts_with('#') {
                             return None;
                         }
-                        l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string()))
+                        l.split_once('=')
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
                 let mut resolved = note.clone();
@@ -342,8 +343,9 @@ async fn ensure_dependencies(
     let config = ryra_core::config::load_or_default(
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
-    let needs_authelia =
-        auth && !config.services.iter().any(|s| s.name == SERVICE_AUTHELIA) && config.auth.is_none();
+    let needs_authelia = auth
+        && !config.services.iter().any(|s| s.name == SERVICE_AUTHELIA)
+        && config.auth.is_none();
 
     if !needs_caddy && !needs_authelia {
         return Ok(());

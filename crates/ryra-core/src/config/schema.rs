@@ -115,3 +115,16 @@ pub struct InstalledService {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
 }
+
+impl Config {
+    /// Validate structural invariants after deserialization.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for svc in &self.services {
+            if !seen.insert(&svc.name) {
+                return Err(format!("duplicate service '{}' in config", svc.name));
+            }
+        }
+        Ok(())
+    }
+}

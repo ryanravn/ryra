@@ -29,7 +29,10 @@ fn home_dir() -> Result<PathBuf> {
     dirs::home_dir()
         .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
         .ok_or_else(|| {
-            Error::Registry("could not determine home directory: neither dirs::home_dir() nor $HOME are set".into())
+            Error::Registry(
+                "could not determine home directory: neither dirs::home_dir() nor $HOME are set"
+                    .into(),
+            )
         })
 }
 
@@ -38,7 +41,9 @@ pub fn service_home(service_name: &str) -> Result<PathBuf> {
     let base = dirs::data_local_dir()
         .or_else(|| home_dir().ok().map(|h| h.join(".local/share")))
         .ok_or_else(|| {
-            Error::Registry("could not determine data directory: set $HOME or $XDG_DATA_HOME".into())
+            Error::Registry(
+                "could not determine data directory: set $HOME or $XDG_DATA_HOME".into(),
+            )
         })?;
     Ok(base.join("ryra").join(service_name))
 }
@@ -48,7 +53,9 @@ pub fn quadlet_dir() -> Result<PathBuf> {
     let base = dirs::config_dir()
         .or_else(|| home_dir().ok().map(|h| h.join(".config")))
         .ok_or_else(|| {
-            Error::Registry("could not determine config directory: set $HOME or $XDG_CONFIG_HOME".into())
+            Error::Registry(
+                "could not determine config directory: set $HOME or $XDG_CONFIG_HOME".into(),
+            )
         })?;
     Ok(base.join("containers").join("systemd"))
 }
@@ -383,11 +390,7 @@ pub fn add_service(
         }
     }
 
-    let extra_networks = resolve_extra_networks(
-        service_name,
-        domain,
-        caddy::is_installed(),
-    );
+    let extra_networks = resolve_extra_networks(service_name, domain, caddy::is_installed());
 
     let output = generate::generate_service(generate::GenerateServiceParams {
         config: &config,
@@ -580,7 +583,7 @@ pub fn add_service(
         let is_auth_provider = service_name == SERVICE_AUTHELIA;
         let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
             // Look up authelia's container port from the registry, not the host port
-            let authelia_container_port = registry::find_service(&repo_dir, SERVICE_AUTHELIA)?
+            let authelia_container_port = registry::find_service(repo_dir, SERVICE_AUTHELIA)?
                 .def
                 .ports
                 .first()
@@ -918,10 +921,10 @@ pub fn reset() -> Result<ResetResult> {
     // 4. Remove service data directories
     if let Some(ref config) = config {
         for service in &config.services {
-            if let Ok(data_dir) = service_home(&service.name) {
-                if data_dir.exists() {
-                    steps.push(Step::RemoveDir(data_dir));
-                }
+            if let Ok(data_dir) = service_home(&service.name)
+                && data_dir.exists()
+            {
+                steps.push(Step::RemoveDir(data_dir));
             }
         }
     }

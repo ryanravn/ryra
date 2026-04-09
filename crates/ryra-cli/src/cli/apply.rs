@@ -41,15 +41,13 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::DaemonReload => run("systemctl --user daemon-reload"),
-        Step::StartService { unit } => {
-            run(&format!("systemctl --user start --no-block {unit}"))
-        }
+        Step::StartService { unit } => run(&format!("systemctl --user start --no-block {unit}")),
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped)
-            if let Err(e) = run(&format!("systemctl --user stop {unit}")) {
-                if ryra_core::verbose::is_enabled() {
-                    eprintln!("  Note: stopping {unit} failed (may already be stopped): {e}");
-                }
+            if let Err(e) = run(&format!("systemctl --user stop {unit}"))
+                && ryra_core::verbose::is_enabled()
+            {
+                eprintln!("  Note: stopping {unit} failed (may already be stopped): {e}");
             }
             Ok(())
         }
@@ -171,4 +169,3 @@ fn run(cmd: &str) -> Result<()> {
     }
     Ok(())
 }
-

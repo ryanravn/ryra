@@ -232,12 +232,12 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     // Discover registry tests (only if no explicit --project or if registry is also available)
-    if let Ok(ref reg_path) = registry_path {
-        if let Ok(reg_tests) = registry::discover(reg_path) {
-            // If --project was explicitly passed, skip registry tests
-            if args.project.is_none() {
-                discovered.extend(reg_tests);
-            }
+    if let Ok(ref reg_path) = registry_path
+        && let Ok(reg_tests) = registry::discover(reg_path)
+    {
+        // If --project was explicitly passed, skip registry tests
+        if args.project.is_none() {
+            discovered.extend(reg_tests);
         }
     }
 
@@ -453,20 +453,18 @@ pub async fn run(args: Args) -> Result<()> {
             }
 
             // Copy registry into VM (needed for dependency resolution)
-            if registry_path.exists() {
-                if let Err(e) = machine::copy_fixtures_to_vm(&vm, &registry_path).await {
+            if registry_path.exists()
+                && let Err(e) = machine::copy_fixtures_to_vm(&vm, &registry_path).await {
                     let _ = vm.destroy().await;
                     return fail_result(format!("failed to copy registry to VM: {e:#}"));
                 }
-            }
 
             // Copy quadlet project files into VM
-            if let Some(ref qdir) = quadlet_dir {
-                if let Err(e) = machine::copy_project_to_vm(&vm, qdir).await {
+            if let Some(ref qdir) = quadlet_dir
+                && let Err(e) = machine::copy_project_to_vm(&vm, qdir).await {
                     let _ = vm.destroy().await;
                     return fail_result(format!("failed to copy project to VM: {e:#}"));
                 }
-            }
             println!("[{name}] files copied ({:.1}s)", phase.elapsed().as_secs_f64());
 
             // Load cached container images into VM

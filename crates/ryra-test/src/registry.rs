@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::test_toml::{StepDef, TestToml};
+use crate::test_toml::{StepAction, StepDef, TestToml};
 
 /// A discovered test suite — either simple (setup + assertions) or lifecycle (interleaved steps).
 #[derive(Debug, Clone)]
@@ -75,10 +75,10 @@ impl DiscoveredTest {
             DiscoveredTest::Lifecycle { steps, .. } => {
                 let mut svcs = Vec::new();
                 for step in steps {
-                    if let StepEntry::Add { service, .. } = step {
-                        if !svcs.contains(&service.as_str()) {
-                            svcs.push(service.as_str());
-                        }
+                    if let StepEntry::Add { service, .. } = step
+                        && !svcs.contains(&service.as_str())
+                    {
+                        svcs.push(service.as_str());
                     }
                 }
                 svcs
@@ -171,12 +171,11 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if quadlet_extensions.contains(&ext) {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    quadlet_files.push(name.to_string());
-                }
-            }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && quadlet_extensions.contains(&ext)
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+        {
+            quadlet_files.push(name.to_string());
         }
     }
 
@@ -201,10 +200,11 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
         discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
 
     // Populate quadlets from discovered files if not explicitly set in [setup]
-    if let DiscoveredTest::Simple { ref mut setup, .. } = test {
-        if setup.quadlets.is_empty() && !quadlet_files.is_empty() {
-            setup.quadlets = quadlet_files;
-        }
+    if let DiscoveredTest::Simple { ref mut setup, .. } = test
+        && setup.quadlets.is_empty()
+        && !quadlet_files.is_empty()
+    {
+        setup.quadlets = quadlet_files;
     }
 
     Ok(Some(test))
@@ -373,8 +373,8 @@ fn discover_from_test_toml(
 fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry>> {
     let mut steps = Vec::new();
     for s in step_defs {
-        let step = match s.action.as_str() {
-            "add" => {
+        let step = match s.action {
+            StepAction::Add => {
                 let service = s.service.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'add' requires a 'service' field in test '{}'",
@@ -386,7 +386,7 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                     args: s.args.clone(),
                 }
             }
-            "remove" => {
+            StepAction::Remove => {
                 let service = s.service.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'remove' requires a 'service' field in test '{}'",
@@ -395,8 +395,8 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                 })?;
                 StepEntry::Remove { service }
             }
-            "reset" => StepEntry::Reset,
-            "wait" => {
+            StepAction::Reset => StepEntry::Reset,
+            StepAction::Wait => {
                 let service = s.service.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'wait' requires a 'service' field in test '{}'",
@@ -408,7 +408,7 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                     timeout_secs: if s.timeout > 0 { s.timeout } else { 60 },
                 }
             }
-            "run" => {
+            StepAction::Run => {
                 let name = s.name.clone().ok_or_else(|| {
                     anyhow::anyhow!("step 'run' requires a 'name' field in test '{}'", test_name)
                 })?;
@@ -421,7 +421,7 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                     timeout_secs: s.timeout,
                 }
             }
-            "assert" => {
+            StepAction::Assert => {
                 let name = s.name.clone().ok_or_else(|| {
                     anyhow::anyhow!(
                         "step 'assert' requires a 'name' field in test '{}'",
@@ -439,9 +439,6 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                     run,
                     timeout_secs: s.timeout,
                 }
-            }
-            other => {
-                anyhow::bail!("unknown step action '{}' in test '{}'", other, test_name);
             }
         };
         steps.push(step);
@@ -578,15 +575,15 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
             if let Some(ref dir) = setup.quadlet_dir {
                 for quadlet in &setup.quadlets {
                     let full_path = dir.join(quadlet);
-                    if quadlet.ends_with(".container") {
-                        if let Ok(content) = std::fs::read_to_string(&full_path) {
-                            for line in content.lines() {
-                                let trimmed = line.trim();
-                                if let Some(image) = trimmed.strip_prefix("Image=") {
-                                    let image = image.trim();
-                                    if !image.is_empty() && !images.contains(&image.to_string()) {
-                                        images.push(image.to_string());
-                                    }
+                    if quadlet.ends_with(".container")
+                        && let Ok(content) = std::fs::read_to_string(&full_path)
+                    {
+                        for line in content.lines() {
+                            let trimmed = line.trim();
+                            if let Some(image) = trimmed.strip_prefix("Image=") {
+                                let image = image.trim();
+                                if !image.is_empty() && !images.contains(&image.to_string()) {
+                                    images.push(image.to_string());
                                 }
                             }
                         }

@@ -48,7 +48,7 @@ pub struct TestDef {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StepDef {
-    pub action: String,
+    pub action: StepAction,
     #[serde(default)]
     pub service: Option<String>,
     #[serde(default)]
@@ -65,6 +65,31 @@ fn default_timeout() -> u64 {
     30
 }
 
+/// The action a lifecycle test step performs.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StepAction {
+    Add,
+    Remove,
+    Reset,
+    Wait,
+    Run,
+    Assert,
+}
+
+impl std::fmt::Display for StepAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StepAction::Add => write!(f, "add"),
+            StepAction::Remove => write!(f, "remove"),
+            StepAction::Reset => write!(f, "reset"),
+            StepAction::Wait => write!(f, "wait"),
+            StepAction::Run => write!(f, "run"),
+            StepAction::Assert => write!(f, "assert"),
+        }
+    }
+}
+
 impl TestToml {
     /// Read and deserialize a test.toml file, then validate it.
     pub fn parse(path: &Path) -> Result<Self> {
@@ -76,15 +101,49 @@ impl TestToml {
         Ok(parsed)
     }
 
-    /// Error if both [[tests]] and [[steps]] are present — they are mutually exclusive.
+    /// Validate structural invariants after deserialization.
     pub fn validate(&self, path: &Path) -> Result<()> {
+        let ctx = path.display();
+
         if !self.tests.is_empty() && !self.steps.is_empty() {
             anyhow::bail!(
-                "{}: test.toml cannot have both [[tests]] and [[steps]] — \
+                "{ctx}: test.toml cannot have both [[tests]] and [[steps]] — \
                  use [[tests]] for simple assertions or [[steps]] for lifecycle tests",
-                path.display()
             );
         }
+
+        // Validate step required fields based on action type
+        for (i, s) in self.steps.iter().enumerate() {
+            let default_name = format!("step {}", i + 1);
+            let step_ctx = s.name.as_deref().unwrap_or(&default_name);
+            match s.action {
+                StepAction::Add | StepAction::Remove | StepAction::Wait => {
+                    if s.service.is_none() {
+                        anyhow::bail!(
+                            "{ctx}: {step_ctx} (action={}) requires a 'service' field",
+                            s.action,
+                        );
+                    }
+                }
+                StepAction::Run | StepAction::Assert => {
+                    if s.name.is_none() {
+                        anyhow::bail!(
+                            "{ctx}: step {} (action={}) requires a 'name' field",
+                            i + 1,
+                            s.action,
+                        );
+                    }
+                    if s.run.is_none() {
+                        anyhow::bail!(
+                            "{ctx}: {step_ctx} (action={}) requires a 'run' field",
+                            s.action,
+                        );
+                    }
+                }
+                StepAction::Reset => {}
+            }
+        }
+
         Ok(())
     }
 
@@ -95,7 +154,7 @@ impl TestToml {
 
     /// True if this test requires a browser VM image.
     pub fn needs_browser(&self) -> bool {
-        self.test.as_ref().map_or(false, |t| t.browser)
+        self.test.as_ref().is_some_and(|t| t.browser)
     }
 
     /// Explicit RAM override (MB) from [test] metadata, if set.
@@ -105,10 +164,10 @@ impl TestToml {
 
     /// The test name from [test] metadata, or the file stem as a fallback.
     pub fn name_or_default(&self, path: &Path) -> String {
-        if let Some(ref meta) = self.test {
-            if let Some(ref name) = meta.name {
-                return name.clone();
-            }
+        if let Some(ref meta) = self.test
+            && let Some(ref name) = meta.name
+        {
+            return name.clone();
         }
         path.file_stem()
             .and_then(|s| s.to_str())
@@ -124,12 +183,11 @@ impl TestToml {
             .map_or_else(Vec::new, |s| s.services.clone());
 
         for step in &self.steps {
-            if step.action == "add" {
-                if let Some(ref svc) = step.service {
-                    if !services.contains(svc) {
-                        services.push(svc.clone());
-                    }
-                }
+            if step.action == StepAction::Add
+                && let Some(ref svc) = step.service
+                && !services.contains(svc)
+            {
+                services.push(svc.clone());
             }
         }
 
@@ -192,6 +250,7 @@ service = "authelia"
 
 [[steps]]
 action = "run"
+name = "check-auth"
 run = "curl -sf http://auth.test.local"
 "#;
         let (_dir, path) = write_temp(toml);
@@ -199,7 +258,7 @@ run = "curl -sf http://auth.test.local"
         assert!(parsed.needs_browser());
         assert!(parsed.is_lifecycle());
         assert_eq!(parsed.steps.len(), 2);
-        assert_eq!(parsed.steps[0].action, "add");
+        assert_eq!(parsed.steps[0].action, StepAction::Add);
         assert_eq!(parsed.steps[0].service.as_deref(), Some("authelia"));
     }
 

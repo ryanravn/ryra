@@ -19,9 +19,7 @@ impl ConfigPaths {
         let home = dirs::home_dir()
             .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
             .ok_or_else(|| {
-                Error::Registry(
-                    "could not determine home directory: set $HOME".into(),
-                )
+                Error::Registry("could not determine home directory: set $HOME".into())
             })?;
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| home.join(".config"))
@@ -64,10 +62,14 @@ pub fn load_config(path: &Path) -> Result<Config> {
         path: path.to_path_buf(),
         source,
     })?;
-    toml::from_str(&contents).map_err(|source| Error::TomlParse {
+    let config: Config = toml::from_str(&contents).map_err(|source| Error::TomlParse {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    if let Err(msg) = config.validate() {
+        return Err(Error::Registry(msg));
+    }
+    Ok(config)
 }
 
 /// Load config from path, returning a default config if the file doesn't exist.

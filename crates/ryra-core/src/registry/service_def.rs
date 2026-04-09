@@ -338,17 +338,123 @@ impl ServiceDef {
             .collect()
     }
 
-    /// Validate hook timeouts are within reasonable bounds (1–3600 seconds).
-    pub fn validate_hooks(&self) -> Result<(), String> {
+    /// Validate structural invariants that serde can't enforce.
+    /// Called once after deserialization — if this returns Ok, the definition
+    /// is safe to use without further checks.
+    pub fn validate(&self) -> Result<(), String> {
+        let name = &self.service.name;
+        let mut errors: Vec<String> = Vec::new();
+
+        // --- Duplicate names ---
+
+        let mut seen_ports = std::collections::HashSet::new();
+        for p in &self.ports {
+            if !seen_ports.insert(&p.name) {
+                errors.push(format!("duplicate port name '{}'", p.name));
+            }
+        }
+
+        let mut seen_envs = std::collections::HashSet::new();
+        for e in &self.env {
+            if !seen_envs.insert(&e.name) {
+                errors.push(format!("duplicate env var name '{}'", e.name));
+            }
+        }
+
+        let mut seen_volumes = std::collections::HashSet::new();
+        for v in &self.volumes {
+            if !seen_volumes.insert(&v.name) {
+                errors.push(format!("duplicate volume name '{}'", v.name));
+            }
+        }
+
+        let mut seen_containers = std::collections::HashSet::new();
+        for c in &self.containers {
+            if !seen_containers.insert(&c.name) {
+                errors.push(format!("duplicate container name '{}'", c.name));
+            }
+        }
+
+        // --- Env var name format ---
+        // Must be a valid shell variable name: starts with letter or _, contains only [A-Za-z0-9_]
+
+        for e in &self.env {
+            if e.name.is_empty() {
+                errors.push("env var has empty name".to_string());
+            } else if !e
+                .name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            {
+                errors.push(format!(
+                    "env var '{}' must start with a letter or _",
+                    e.name
+                ));
+            } else if !e
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                errors.push(format!(
+                    "env var '{}' contains invalid characters — must match [A-Za-z0-9_]",
+                    e.name
+                ));
+            }
+        }
+
+        // --- Env kind consistency ---
+
+        for e in &self.env {
+            if e.kind == EnvKind::Required && e.value.contains("{{secret.") {
+                errors.push(format!(
+                    "env var '{}' is kind=required but has a secret template default — use kind=prompted or kind=default",
+                    e.name
+                ));
+            }
+        }
+
+        // --- Container references ---
+
+        for c in &self.containers {
+            for dep in &c.depends_on {
+                if !self.containers.iter().any(|other| &other.name == dep) {
+                    errors.push(format!(
+                        "container '{}' depends on '{}' which is not defined",
+                        c.name, dep
+                    ));
+                }
+            }
+        }
+
+        // --- Hook timeouts ---
+
         for hook in self.pre_start.iter().chain(self.post_start.iter()) {
             if hook.timeout == 0 || hook.timeout > 3600 {
-                return Err(format!(
+                errors.push(format!(
                     "hook '{}' has timeout {} — must be 1–3600 seconds",
                     hook.name, hook.timeout,
                 ));
             }
         }
-        Ok(())
+
+        // --- RAM requirements consistency ---
+
+        if let Some(ref req) = self.requirements
+            && let Some(rec) = req.ram.recommended
+            && rec < req.ram.min
+        {
+            errors.push(format!(
+                "recommended RAM ({rec}MB) is less than minimum ({}MB)",
+                req.ram.min
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("{name}: {}", errors.join("; ")))
+        }
     }
 }
 
