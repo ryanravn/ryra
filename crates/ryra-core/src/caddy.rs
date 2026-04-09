@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Lives inside the caddy service's data dir so the existing volume mount
 /// (`%h/config` -> `/etc/caddy/`) picks it up automatically.
 pub fn caddyfile_path() -> PathBuf {
-    crate::service_home("caddy")
+    crate::service_home(crate::SERVICE_CADDY)
         .join("config")
         .join("Caddyfile")
 }

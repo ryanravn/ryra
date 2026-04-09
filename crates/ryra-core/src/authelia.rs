@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::config::schema::{AuthCredentials, Config};
 use crate::generate::GeneratedFile;
 use crate::registry::service_def::ServiceDef;
-use crate::{Step, service_home};
+use crate::{SERVICE_AUTHELIA, SERVICE_CADDY, Step, service_home};
 
 /// Register an OIDC client with authelia by editing its configuration.yml.
 /// Also ensures caddy has a network alias for the auth domain so OIDC
@@ -30,13 +30,13 @@ pub fn register_oidc_client(
         None => return steps,
     };
 
-    let authelia_config_dir = service_home("authelia").join("config");
+    let authelia_config_dir = service_home(SERVICE_AUTHELIA).join("config");
     let authelia_config_path = authelia_config_dir.join("configuration.yml");
     let rsa_key_path = authelia_config_dir.join("oidc.jwk.rsa.pem");
 
     // Generate RSA key if not exists (for OIDC JWKS)
     if !rsa_key_path.exists() {
-        let _ = std::process::Command::new("podman")
+        let status = std::process::Command::new("podman")
             .args([
                 "run",
                 "--rm",
@@ -54,7 +54,15 @@ pub fn register_oidc_client(
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
-        let _ = std::fs::rename(authelia_config_dir.join("private.pem"), &rsa_key_path);
+        if status.map(|s| s.success()).unwrap_or(false) {
+            // Authelia generates private.pem; rename to our expected path
+            if let Err(e) = std::fs::rename(authelia_config_dir.join("private.pem"), &rsa_key_path)
+            {
+                eprintln!("  Warning: failed to rename RSA key: {e}");
+            }
+        } else {
+            eprintln!("  Warning: failed to generate RSA key for OIDC");
+        }
     }
 
     // Add OIDC section + client to authelia config
@@ -116,7 +124,7 @@ pub fn register_oidc_client(
     }));
 
     steps.push(Step::RestartService {
-        unit: "authelia".to_string(),
+        unit: SERVICE_AUTHELIA.to_string(),
     });
 
     // OIDC discovery must go through Caddy so authelia returns browser-reachable
@@ -126,7 +134,7 @@ pub fn register_oidc_client(
     let auth_domain = config
         .services
         .iter()
-        .find(|s| s.name == "authelia")
+        .find(|s| s.name == SERVICE_AUTHELIA)
         .and_then(|s| s.domain.as_ref());
     if let Some(auth_domain) = auth_domain {
         let caddy_quadlet = quadlet_dir.join("caddy.container");
@@ -154,7 +162,7 @@ pub fn register_oidc_client(
                     }));
                     steps.push(Step::DaemonReload);
                     steps.push(Step::RestartService {
-                        unit: "caddy".to_string(),
+                        unit: SERVICE_CADDY.to_string(),
                     });
                 }
             }

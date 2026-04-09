@@ -6,7 +6,7 @@ use dialoguer::{Confirm, Input};
 
 use std::path::Path;
 
-use ryra_core::Warning;
+use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::service_def::AuthKind;
@@ -136,6 +136,16 @@ pub async fn run(
             .collect();
 
         if !promptable.is_empty() && interactive {
+            // Resolve template variables in defaults so prompts show real values
+            let config_for_defaults = ryra_core::config::load_or_default(&paths.config_file)?;
+            let default_ctx = ryra_core::generate::context::build_context(
+                &config_for_defaults,
+                &reg_service.def,
+                None,
+                auth_kind.as_ref(),
+                domain,
+            );
+
             println!("\nConfigure {service}:");
             for env in &promptable {
                 let prompt_text = env.prompt.as_deref().unwrap_or(&env.name);
@@ -148,12 +158,15 @@ pub async fn run(
                         .interact_text()?;
                     env_overrides.insert(env.name.clone(), value);
                 } else {
-                    // Prompted: has a default, user can accept or change
+                    // Resolve template in default value
+                    let resolved_default =
+                        ryra_core::generate::template::render(&env.value, &default_ctx)
+                            .unwrap_or_else(|_| env.value.clone());
                     let value: String = Input::new()
                         .with_prompt(format!("  {prompt_text}"))
-                        .default(env.value.clone())
+                        .default(resolved_default.clone())
                         .interact_text()?;
-                    if value != env.value {
+                    if value != resolved_default {
                         env_overrides.insert(env.name.clone(), value);
                     }
                 }
@@ -254,17 +267,39 @@ pub async fn run(
 
             // Connection info
             if !result.allocated_ports.is_empty() {
-                for (port_name, host_port) in &result.allocated_ports {
-                    println!("  Port ({port_name}): 127.0.0.1:{host_port}");
+                for (_, host_port) in &result.allocated_ports {
+                    println!("  URL: http://127.0.0.1:{host_port}");
                 }
             }
             if !result.generated_secrets.is_empty() {
-                println!(
-                    "  Secrets: {} (auto-generated)",
-                    result.generated_secrets.join(", ")
-                );
+                // Show generated secret values so the user can log in
+                let env_path = home_dir.join(".env");
+                let env_content = std::fs::read_to_string(&env_path).unwrap_or_default();
+                println!("  Secrets (auto-generated):");
+                for secret_name in &result.generated_secrets {
+                    // Find the env var that used this secret template
+                    let matching_env = env_content.lines().find(|l| {
+                        l.split_once('=')
+                            .map(|(k, _)| k.to_lowercase().contains(secret_name))
+                            .unwrap_or(false)
+                    });
+                    if let Some(line) = matching_env {
+                        if let Some((key, val)) = line.split_once('=') {
+                            println!("    {key}={val}");
+                            continue;
+                        }
+                    }
+                    println!("    {secret_name} (see .env)");
+                }
             }
             println!("  Config:  {}", home_dir.display());
+
+            if let Some(note) = &result.note {
+                println!();
+                for line in note.lines() {
+                    println!("  {line}");
+                }
+            }
 
             println!();
             println!("Useful commands:");
@@ -291,7 +326,7 @@ async fn ensure_dependencies(
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
     let needs_authelia =
-        auth && !config.services.iter().any(|s| s.name == "authelia") && config.auth.is_none();
+        auth && !config.services.iter().any(|s| s.name == SERVICE_AUTHELIA) && config.auth.is_none();
 
     if !needs_caddy && !needs_authelia {
         return Ok(());
@@ -310,7 +345,7 @@ async fn ensure_dependencies(
         }
         println!("\nInstalling caddy...\n");
         Box::pin(run(
-            &["caddy".to_string()],
+            &[SERVICE_CADDY.to_string()],
             None,
             false,
             Some(repo_url),
@@ -336,7 +371,7 @@ async fn ensure_dependencies(
                 .interact_text()?;
             println!("\nInstalling authelia...\n");
             Box::pin(run(
-                &["authelia".to_string()],
+                &[SERVICE_AUTHELIA.to_string()],
                 Some(&authelia_domain),
                 false,
                 Some(repo_url),
@@ -349,7 +384,7 @@ async fn ensure_dependencies(
                 std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.localhost".to_string());
             println!("\nInstalling authelia...\n");
             Box::pin(run(
-                &["authelia".to_string()],
+                &[SERVICE_AUTHELIA.to_string()],
                 Some(&authelia_domain),
                 false,
                 Some(repo_url),
@@ -375,7 +410,7 @@ async fn ensure_auth_for_add(
         prompts::AuthSetupChoice::External(_) => Ok(true),
         prompts::AuthSetupChoice::InstallAuthelia => {
             // Check if authelia is already installed but auth wasn't configured
-            let authelia_installed = config.services.iter().any(|s| s.name == "authelia");
+            let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
             if authelia_installed {
                 println!();
                 println!("Authelia is already installed — configuring auth...");
@@ -390,7 +425,7 @@ async fn ensure_auth_for_add(
             if !ryra_core::caddy::is_installed() && !dry_run {
                 println!("\nInstalling caddy (needed for auth)...\n");
                 Box::pin(run(
-                    &["caddy".to_string()],
+                    &[SERVICE_CADDY.to_string()],
                     None,
                     false,
                     Some(repo_url),
@@ -411,7 +446,7 @@ async fn ensure_auth_for_add(
             println!("\nInstalling authelia...\n");
             // Recursively install authelia, then reload config
             Box::pin(run(
-                &["authelia".to_string()],
+                &[SERVICE_AUTHELIA.to_string()],
                 Some(&authelia_domain),
                 false,
                 Some(repo_url),
@@ -438,14 +473,14 @@ async fn ensure_auth_for_add(
 /// Try to configure auth from an already-installed authelia instance.
 /// The .env is user-readable under ~/.local/share/ryra/authelia/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
-    let env_path = ryra_core::service_home("authelia").join(".env");
+    let env_path = ryra_core::service_home(SERVICE_AUTHELIA).join(".env");
     let env_content = match std::fs::read_to_string(&env_path) {
         Ok(content) => content,
         Err(_) => return Ok(false),
     };
 
     // Find the port from the installed service record
-    let service = config.services.iter().find(|s| s.name == "authelia");
+    let service = config.services.iter().find(|s| s.name == SERVICE_AUTHELIA);
     let port = service
         .and_then(|s| s.ports.values().next().copied())
         .unwrap_or(9091);

@@ -96,15 +96,13 @@ value = "http://machine-learning:3003"
 
 [[env]]
 name = "INIT_IMMICH_ADMIN_EMAIL"
-value = ""
-kind = "required"
-prompt = "Immich admin email"
+value = "{{admin.email | default('admin@localhost')}}"
+kind = "prompted"
+prompt = "Admin email"
 
 [[env]]
 name = "INIT_IMMICH_ADMIN_PASSWORD"
-value = ""
-kind = "required"
-prompt = "Immich admin password"
+value = "{{secret.admin_password}}"
 
 # --- Auth integration ---
 # Immich configures OIDC via its admin API (PUT /system-config), not env vars.
@@ -123,10 +121,8 @@ OAUTH_REDIRECT_URL = "{{service.url}}/auth/login"
 OAUTHLIB_INSECURE_TRANSPORT = "1"
 
 [[post_start]]
-name = "configure-immich-oidc"
+name = "create-immich-admin"
 run = """
-[ -z "$OAUTH_CLIENT_ID" ] && exit 0
-
 IMMICH_URL="http://127.0.0.1:$RYRA_PORT_HTTP"
 ADMIN_EMAIL="$INIT_IMMICH_ADMIN_EMAIL"
 ADMIN_PASSWORD="$INIT_IMMICH_ADMIN_PASSWORD"
@@ -134,7 +130,7 @@ ADMIN_PASSWORD="$INIT_IMMICH_ADMIN_PASSWORD"
 # Wait for Immich to be ready
 echo "Waiting for Immich API to be ready (up to 10 min)..."
 for i in $(seq 1 60); do
-  CODE=$(curl -so /dev/null -w '%{http_code}' "$IMMICH_URL/api/server/ping" 2>/dev/null)
+  CODE=$(curl -so /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$IMMICH_URL/api/server/ping" 2>/dev/null)
   [ "$CODE" = "200" ] && break
   echo "  not yet — retrying in 10s (${i}0s elapsed)"
   sleep 10
@@ -143,12 +139,24 @@ done
 echo "Immich API ready"
 
 # Create admin user (ignore error if already exists)
-curl -sf -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
+JSON=$(printf '{"email":"%s","password":"%s","name":"Admin"}' "$ADMIN_EMAIL" "$ADMIN_PASSWORD")
+curl -sf --max-time 30 -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\",\"name\":\"Admin\"}" \
+  -d "$JSON" \
   >/dev/null 2>&1 || true
+echo "Admin account ready"
+"""
+timeout = 660
 
-# Write a helper script to avoid shell quoting issues with inline python
+[[post_start]]
+name = "configure-immich-oidc"
+run = """
+[ -z "$OAUTH_CLIENT_ID" ] && exit 0
+
+IMMICH_URL="http://127.0.0.1:$RYRA_PORT_HTTP"
+ADMIN_EMAIL="$INIT_IMMICH_ADMIN_EMAIL"
+ADMIN_PASSWORD="$INIT_IMMICH_ADMIN_PASSWORD"
+
 cat > /tmp/immich-oidc-setup.py << PYEOF
 import sys, json, urllib.request
 
@@ -165,14 +173,8 @@ def api(method, path, data=None, token=None):
         headers["Authorization"] = f"Bearer {token}"
     body = json.dumps(data).encode() if data else None
     req = urllib.request.Request(f"{immich_url}/api{path}", data=body, headers=headers, method=method)
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
-
-# Create admin user (ignore if exists)
-try:
-    api("POST", "/auth/admin-sign-up", {"email": admin_email, "password": admin_password, "name": "Admin"})
-except Exception:
-    pass
 
 # Login
 resp = api("POST", "/auth/login", {"email": admin_email, "password": admin_password})
@@ -196,4 +198,4 @@ python3 /tmp/immich-oidc-setup.py \
   "$IMMICH_URL" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" \
   "$OAUTH_CLIENT_ID" "$OAUTH_CLIENT_SECRET" "$OAUTH_ISSUER_URL"
 """
-timeout = 660
+timeout = 60

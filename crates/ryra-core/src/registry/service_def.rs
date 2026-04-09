@@ -112,6 +112,9 @@ pub struct ServiceMeta {
     /// Empty means all architectures are supported.
     #[serde(default)]
     pub architecture: Vec<String>,
+    /// Optional message shown after install (e.g. pairing instructions).
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// What role this service plays in the system.

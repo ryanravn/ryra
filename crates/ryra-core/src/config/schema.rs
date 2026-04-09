@@ -10,6 +10,9 @@ pub struct Config {
     /// Legacy — reads old configs with [host], never written back.
     #[serde(default, skip_serializing)]
     pub host: HostConfig,
+    /// Admin email used as the default for services that need an admin account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admin_email: Option<String>,
     pub smtp: Option<SmtpCredentials>,
     pub auth: Option<AuthCredentials>,
     #[serde(default)]
@@ -31,6 +34,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             host: HostConfig::default(),
+            admin_email: None,
             smtp: None,
             auth: None,
             default_repo: Some(crate::DEFAULT_REPO.to_string()),

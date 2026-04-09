@@ -17,15 +17,23 @@ use config::schema::{Config, InstalledService};
 use error::{Error, Result};
 use generate::GeneratedFile;
 
+// Well-known infrastructure service names used for cross-service integration.
+// Using constants prevents typos and makes it easy to find all references.
+pub const SERVICE_CADDY: &str = "caddy";
+pub const SERVICE_AUTHELIA: &str = "authelia";
+
 // --- Path conventions ---
+
+/// Resolve the user's home directory, falling back to $HOME.
+fn home_dir() -> Option<PathBuf> {
+    dirs::home_dir().or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
+}
 
 /// Data directory for a service: ~/.local/share/ryra/<name>
 pub fn service_home(service_name: &str) -> PathBuf {
     dirs::data_local_dir()
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-                .join(".local/share")
-        })
+        .or_else(|| home_dir().map(|h| h.join(".local/share")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("ryra")
         .join(service_name)
 }
@@ -33,9 +41,8 @@ pub fn service_home(service_name: &str) -> PathBuf {
 /// Quadlet directory: ~/.config/containers/systemd
 pub fn quadlet_dir() -> PathBuf {
     dirs::config_dir()
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())).join(".config")
-        })
+        .or_else(|| home_dir().map(|h| h.join(".config")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("containers")
         .join("systemd")
 }
@@ -63,6 +70,8 @@ pub enum Step {
     RemoveFile(PathBuf),
     /// Remove a directory tree.
     RemoveDir(PathBuf),
+    /// Remove a podman named volume.
+    RemoveVolume { name: String },
     /// Create a directory (with parents).
     CreateDir(PathBuf),
     /// Run a pre-start hook — a shell command on the host before the service starts.
@@ -121,6 +130,7 @@ impl Step {
                     home.display()
                 )
             }
+            Step::RemoveVolume { name } => format!("podman volume rm {name}"),
         }
     }
 }
@@ -161,6 +171,8 @@ pub struct AddResult {
     pub env_content: String,
     /// Domain assigned to this service (if Caddy reverse proxy was configured).
     pub domain: Option<String>,
+    /// Optional note shown after install.
+    pub note: Option<String>,
 }
 
 pub struct RemoveResult {
@@ -228,9 +240,9 @@ pub async fn init(config: Config) -> Result<InitResult> {
     let paths = ConfigPaths::resolve()?;
 
     // Fetch default repo if configured (into cache, which may not exist yet)
-    let _ = paths.ensure_dirs();
+    paths.ensure_dirs()?;
     if let Some(ref repo_url) = config.default_repo {
-        let _ = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await;
+        registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
     }
 
     // Preserve installed services from existing config
@@ -262,8 +274,8 @@ fn resolve_extra_networks(
     caddy_installed: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
-    if domain.is_some() && caddy_installed && service_name != "caddy" {
-        networks.push("caddy".to_string());
+    if domain.is_some() && caddy_installed && service_name != SERVICE_CADDY {
+        networks.push(SERVICE_CADDY.to_string());
     }
     networks
 }
@@ -348,23 +360,24 @@ pub fn add_service(
     // When auth is enabled and routes through Caddy (HTTPS), mount Caddy's
     // root CA cert so containers trust the self-signed TLS.
     if enable_auth && caddy::is_installed() {
-        let ca_cert = service_home("caddy")
+        let ca_cert = service_home(SERVICE_CADDY)
             .parent()
-            .unwrap_or(std::path::Path::new("/tmp"))
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| std::env::temp_dir())
             .join("caddy-root-ca.crt");
         if !ca_cert.exists() {
-            let _ = std::process::Command::new("podman")
-                .args([
-                    "exec",
-                    "systemd-caddy",
-                    "cat",
-                    "/data/caddy/pki/authorities/local/root.crt",
-                ])
-                .stdout(std::fs::File::create(&ca_cert).unwrap_or_else(|_| {
-                    std::fs::File::create("/dev/null").expect("can't open /dev/null")
-                }))
-                .stderr(std::process::Stdio::null())
-                .status();
+            if let Ok(outfile) = std::fs::File::create(&ca_cert) {
+                let _ = std::process::Command::new("podman")
+                    .args([
+                        "exec",
+                        "systemd-caddy",
+                        "cat",
+                        "/data/caddy/pki/authorities/local/root.crt",
+                    ])
+                    .stdout(outfile)
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
         }
         if ca_cert.exists() && ca_cert.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             extra_volumes.push(format!(
@@ -572,10 +585,10 @@ pub fn add_service(
         // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
         // - The service is not the auth provider itself
         let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
-        let is_auth_provider = service_name == "authelia";
+        let is_auth_provider = service_name == SERVICE_AUTHELIA;
         let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
             // Look up authelia's container port from the registry, not the host port
-            let authelia_container_port = registry::find_service(&repo_dir, "authelia")
+            let authelia_container_port = registry::find_service(&repo_dir, SERVICE_AUTHELIA)
                 .ok()
                 .and_then(|s| s.def.ports.first().map(|p| p.container_port))
                 .unwrap_or(9091);
@@ -613,6 +626,7 @@ pub fn add_service(
         generated_secrets,
         env_content,
         domain: domain.map(|d| d.to_string()),
+        note: reg_service.def.service.note.clone(),
     })
 }
 
@@ -627,27 +641,43 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         .find(|s| s.name == service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
-    // Stop the service
-    let mut steps = vec![Step::StopService {
-        unit: service_name.to_string(),
-    }];
-
-    // Remove quadlet files matching {service_name}*
+    // Stop all units belonging to this service (main + sidecars).
+    // Quadlet files named {service_name}*.container each produce a systemd unit.
     let quadlet_path = quadlet_dir();
+    let mut steps = Vec::new();
+    let mut volume_names = Vec::new();
+
     if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
     {
         for entry in entries.flatten() {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
-            if name.starts_with(service_name) {
-                steps.push(Step::RemoveFile(entry.path()));
+            if !name.starts_with(service_name) {
+                continue;
             }
+            // Stop each .container unit before removing files
+            if name.ends_with(".container") {
+                let unit = name.trim_end_matches(".container").to_string();
+                steps.push(Step::StopService { unit });
+            }
+            // Track volume names for cleanup after containers are stopped
+            if name.ends_with(".volume") {
+                let vol = name.trim_end_matches(".volume").to_string();
+                // Quadlet prefixes volume names with "systemd-"
+                volume_names.push(format!("systemd-{vol}"));
+            }
+            steps.push(Step::RemoveFile(entry.path()));
         }
     }
 
     // Reload systemd after removing quadlet files
     steps.push(Step::DaemonReload);
+
+    // Remove podman volumes after containers and units are gone
+    for vol_name in volume_names {
+        steps.push(Step::RemoveVolume { name: vol_name });
+    }
 
     // Remove Caddy route if the service had a domain
     if installed.domain.is_some() && caddy::is_installed() {
@@ -707,7 +737,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     });
 
     // Auto-configure [auth] when an auth provider is installed
-    if params.service_name == "authelia" {
+    if params.service_name == SERVICE_AUTHELIA {
         config.auth = Some(authelia::auth_config(params.allocated_ports));
     }
 
@@ -719,7 +749,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         .join(params.service_name)
         .join("service.toml");
     if let Ok(content) = std::fs::read_to_string(&service_toml) {
-        let _ = config::save_snapshot(&paths.snapshots_dir, params.service_name, &content);
+        config::save_snapshot(&paths.snapshots_dir, params.service_name, &content)?;
     }
 
     Ok(())
@@ -791,9 +821,9 @@ pub fn update_service(
         domain: service.domain.as_deref(),
         extra_networks: if service.domain.is_some()
             && caddy::is_installed()
-            && service_name != "caddy"
+            && service_name != SERVICE_CADDY
         {
-            vec!["caddy".to_string()]
+            vec![SERVICE_CADDY.to_string()]
         } else {
             vec![]
         },
@@ -831,7 +861,7 @@ pub fn finalize_update(service_name: &str, repo_dir: &Path) -> Result<()> {
     // Update the snapshot
     let service_toml = repo_dir.join(service_name).join("service.toml");
     if let Ok(content) = std::fs::read_to_string(&service_toml) {
-        let _ = config::save_snapshot(&paths.snapshots_dir, service_name, &content);
+        config::save_snapshot(&paths.snapshots_dir, service_name, &content)?;
     }
 
     Ok(())
@@ -844,24 +874,35 @@ pub fn reset() -> ResetResult {
         .and_then(|p| config::load_config(&p.config_file).ok());
 
     let mut steps = Vec::new();
+    let mut volume_names = Vec::new();
 
-    // 1. Stop all services known from config
-    if let Some(ref config) = config {
-        for service in &config.services {
-            steps.push(Step::StopService {
-                unit: service.name.clone(),
-            });
-        }
-    }
-
-    // 2. Remove quadlet files
+    // 1. Scan quadlet dir to stop all container units and track volumes
     let quadlet_path = quadlet_dir();
     if quadlet_path.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&quadlet_path) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".container") {
+                    let unit = name.trim_end_matches(".container").to_string();
+                    steps.push(Step::StopService { unit });
+                }
+                if name.ends_with(".volume") {
+                    let vol = name.trim_end_matches(".volume").to_string();
+                    volume_names.push(format!("systemd-{vol}"));
+                }
+            }
+        }
         steps.push(Step::RemoveDir(quadlet_path));
     }
 
-    // 3. Reload user systemd after removing quadlets
+    // 2. Reload user systemd after removing quadlets
     steps.push(Step::DaemonReload);
+
+    // 3. Remove podman volumes
+    for vol_name in volume_names {
+        steps.push(Step::RemoveVolume { name: vol_name });
+    }
 
     // 4. Remove service data directories
     if let Some(ref config) = config {

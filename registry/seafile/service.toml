@@ -90,15 +90,13 @@ length = 32
 
 [[env]]
 name = "INIT_SEAFILE_ADMIN_EMAIL"
-value = ""
-kind = "required"
-prompt = "Seafile admin email"
+value = "{{admin.email | default('admin@localhost')}}"
+kind = "prompted"
+prompt = "Admin email"
 
 [[env]]
 name = "INIT_SEAFILE_ADMIN_PASSWORD"
-value = ""
-kind = "required"
-prompt = "Seafile admin password"
+value = "{{secret.admin_password}}"
 
 # --- Redis cache ---
 

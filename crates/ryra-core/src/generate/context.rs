@@ -38,6 +38,11 @@ pub fn build_context(
     // service.external_url falls back to service.url when no domain is set.
     ctx.entry("service.external_url".into()).or_insert(url);
 
+    // admin.*
+    if let Some(email) = &config.admin_email {
+        ctx.insert("admin.email".into(), email.clone());
+    }
+
     // smtp.*
     if let Some(smtp) = &config.smtp {
         ctx.insert("smtp.host".into(), smtp.host.clone());

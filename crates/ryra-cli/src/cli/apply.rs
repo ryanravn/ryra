@@ -111,7 +111,12 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             Ok(())
         }
         Step::StopService { unit } => {
-            let _ = run(&format!("systemctl --user stop {unit}"));
+            // Stop failures are non-fatal (service may already be stopped)
+            if let Err(e) = run(&format!("systemctl --user stop {unit}")) {
+                if ryra_core::verbose::is_enabled() {
+                    eprintln!("  Note: stopping {unit} failed (may already be stopped): {e}");
+                }
+            }
             Ok(())
         }
         Step::RestartService { unit } => run(&format!("systemctl --user restart {unit}")),
@@ -158,6 +163,19 @@ async fn execute(step: &Step, created: &mut Vec<Created>) -> Result<()> {
             .with_context(|| format!("failed to remove {}", path.display())),
         Step::RemoveDir(path) => std::fs::remove_dir_all(path)
             .with_context(|| format!("failed to remove directory {}", path.display())),
+        Step::RemoveVolume { name } => {
+            // Volume removal is best-effort — the volume may not exist if the
+            // container never started, or podman may need the container gone first.
+            let status = Command::new("podman")
+                .args(["volume", "rm", name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            if ryra_core::verbose::is_enabled() && !status.map(|s| s.success()).unwrap_or(false) {
+                eprintln!("  Note: volume {name} not removed (may not exist)");
+            }
+            Ok(())
+        }
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
         Step::PreStartHook {
