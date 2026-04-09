@@ -359,26 +359,13 @@ pub fn add_service(
 
     // When auth is enabled and routes through Caddy (HTTPS), mount Caddy's
     // root CA cert so containers trust the self-signed TLS.
+    // The cert is exported by caddy's post_start hook to a known path.
     if enable_auth && caddy::is_installed() {
         let ca_cert = service_home(SERVICE_CADDY)
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| std::env::temp_dir())
             .join("caddy-root-ca.crt");
-        if !ca_cert.exists() {
-            if let Ok(outfile) = std::fs::File::create(&ca_cert) {
-                let _ = std::process::Command::new("podman")
-                    .args([
-                        "exec",
-                        "systemd-caddy",
-                        "cat",
-                        "/data/caddy/pki/authorities/local/root.crt",
-                    ])
-                    .stdout(outfile)
-                    .stderr(std::process::Stdio::null())
-                    .status();
-            }
-        }
         if ca_cert.exists() && ca_cert.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             extra_volumes.push(format!(
                 "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",

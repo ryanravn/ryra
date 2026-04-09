@@ -32,38 +32,8 @@ pub fn register_oidc_client(
 
     let authelia_config_dir = service_home(SERVICE_AUTHELIA).join("config");
     let authelia_config_path = authelia_config_dir.join("configuration.yml");
-    let rsa_key_path = authelia_config_dir.join("oidc.jwk.rsa.pem");
 
-    // Generate RSA key if not exists (for OIDC JWKS)
-    if !rsa_key_path.exists() {
-        let status = std::process::Command::new("podman")
-            .args([
-                "run",
-                "--rm",
-                "-v",
-                &format!("{}:/out:Z", authelia_config_dir.display()),
-                "docker.io/authelia/authelia:4.39",
-                "authelia",
-                "crypto",
-                "pair",
-                "rsa",
-                "generate",
-                "--directory",
-                "/out",
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if status.map(|s| s.success()).unwrap_or(false) {
-            // Authelia generates private.pem; rename to our expected path
-            if let Err(e) = std::fs::rename(authelia_config_dir.join("private.pem"), &rsa_key_path)
-            {
-                eprintln!("  Warning: failed to rename RSA key: {e}");
-            }
-        } else {
-            eprintln!("  Warning: failed to generate RSA key for OIDC");
-        }
-    }
+    // RSA key generation is handled by authelia's pre_start hook.
 
     // Add OIDC section + client to authelia config
     if !authelia_config_path.exists() {
