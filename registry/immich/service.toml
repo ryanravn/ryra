@@ -103,6 +103,8 @@ prompt = "Admin email"
 [[env]]
 name = "INIT_IMMICH_ADMIN_PASSWORD"
 value = "{{secret.admin_password}}"
+kind = "prompted"
+prompt = "Admin password"
 
 # --- Auth integration ---
 # Immich configures OIDC via its admin API (PUT /system-config), not env vars.
