@@ -16,7 +16,18 @@ When adding new functionality, ask: "Can this state be invalid?" If yes, restruc
 - `if cmd.contains("start")` → use `match step { Step::StartService { .. } => .. }`
 - Optional fields that are only valid in certain states → put them inside enum variants
 
-## No Unwraps — Handle Every Error
+### Validate at the boundary
+
+All TOML files are validated immediately after deserialization — if parsing succeeds, the data is safe to use without further checks:
+
+- **`ServiceDef::validate()`** — duplicate names (ports, env, volumes, containers), env var name format, `depends_on` references, hook timeouts, RAM consistency, kind/template contradictions
+- **`TestToml::validate()`** — mutually exclusive `[[tests]]`/`[[steps]]`, required fields per step action type
+- **`Config::validate()`** — no duplicate service names
+- **`StepAction`** is an enum, not a string — serde rejects unknown actions at parse time
+
+When adding new fields or service definitions, the compiler and `validate()` should catch structural errors. Never silently default on missing/invalid data — error loudly at load time.
+
+## No Unwraps, No Silent Failures
 
 Never use `.unwrap()`, `.expect()`, or `panic!()`. Every fallible operation must be handled with `?`, `match`, or a meaningful default. This includes:
 
@@ -25,6 +36,12 @@ Never use `.unwrap()`, `.expect()`, or `panic!()`. Every fallible operation must
 - Indexing — use `.get()` instead of `[]` where bounds aren't guaranteed
 
 If something truly cannot fail, explain why in a comment and use `unwrap_or_else(|| unreachable!("reason"))` so the reasoning is documented.
+
+**No silent failures:** Never use `.ok()`, `let _ =`, or `unwrap_or_default()` to discard errors that could leave the system in a bad state. Specifically:
+- Don't fall back to `/tmp` or empty strings when paths/config can't be resolved — error instead
+- Don't silently skip template rendering errors — if auth/SMTP mappings render to empty, that's an error
+- Config file permission errors (`chmod 600`) must propagate — security-relevant
+- Use `|| true` in shell hooks only when failure is genuinely acceptable, and document why
 
 ## Commits
 
@@ -41,6 +58,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - All services run under the invoking user's rootless podman (`systemctl --user`)
 - Quadlet files go to `~/.config/containers/systemd/`
 - Service data goes to `~/.local/share/ryra/<name>/`
+- `service_home()` and `quadlet_dir()` return `Result<PathBuf>` — they error if `$HOME` is unset rather than silently falling back to `/tmp`
 - Warns if running as root
 
 ## Auth and Caddy Integration
