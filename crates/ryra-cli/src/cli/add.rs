@@ -295,8 +295,24 @@ pub async fn run(
             println!("  Config:  {}", home_dir.display());
 
             if let Some(note) = &result.note {
+                // Resolve $VAR references from the service's .env
+                let env_map: std::collections::BTreeMap<String, String> = result
+                    .env_content
+                    .lines()
+                    .filter_map(|l| {
+                        let l = l.trim();
+                        if l.is_empty() || l.starts_with('#') {
+                            return None;
+                        }
+                        l.split_once('=').map(|(k, v)| (k.to_string(), v.to_string()))
+                    })
+                    .collect();
+                let mut resolved = note.clone();
+                for (key, val) in &env_map {
+                    resolved = resolved.replace(&format!("${key}"), val);
+                }
                 println!();
-                for line in note.lines() {
+                for line in resolved.lines() {
                     println!("  {line}");
                 }
             }
