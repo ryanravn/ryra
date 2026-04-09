@@ -866,10 +866,10 @@ pub async fn copy_project_to_vm(machine: &Machine, project_dir: &Path) -> Result
         if !path.is_file() {
             continue;
         }
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if quadlet_extensions.contains(&ext) {
-                scp_to_vm(machine, &path, "/opt/ryra-test-project/").await?;
-            }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && quadlet_extensions.contains(&ext)
+        {
+            scp_to_vm(machine, &path, "/opt/ryra-test-project/").await?;
         }
     }
 
