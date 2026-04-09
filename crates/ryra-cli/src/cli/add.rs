@@ -301,12 +301,17 @@ pub async fn run(
                 }
             }
 
+            let env_path = home_dir.join(".env");
             println!();
-            println!("Useful commands:");
-            println!("  cat {}", home_dir.join(".env").display());
-            println!("  systemctl --user status {service}");
-            println!("  journalctl --user-unit {service}.service -f");
-            println!("  systemctl --user restart {service}");
+            println!("Commands:");
+            println!("  cat {}  # view config", env_path.display());
+            println!(
+                "  nano {}  # edit config, then restart to apply",
+                env_path.display()
+            );
+            println!("  systemctl --user restart {service}  # restart (picks up .env changes)");
+            println!("  systemctl --user status {service}  # check if running");
+            println!("  journalctl --user-unit {service}.service -f  # follow logs");
         }
     } // end for service in services
 
