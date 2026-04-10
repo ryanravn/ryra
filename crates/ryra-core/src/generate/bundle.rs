@@ -57,6 +57,9 @@ pub fn extract_images(files: &[GeneratedFile]) -> Vec<String> {
 /// Extract host directories from bind mount `Volume=` lines in processed `.container` files.
 /// Bind mounts are `Volume=/host/path:/container/path:flags` (NOT `.volume:` references).
 /// These directories must exist before the container starts.
+///
+/// File bind mounts (host path has a file extension like `.crt`, `.yml`) are skipped —
+/// only directory mounts need pre-creation.
 pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> Vec<std::path::PathBuf> {
     let mut dirs = Vec::new();
     for file in files {
@@ -74,9 +77,16 @@ pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> Vec<std::path::PathBu
                 // Bind mount format: /host/path:/container/path[:flags]
                 if let Some(colon_pos) = vol.find(':') {
                     let host_path = &vol[..colon_pos];
-                    if !host_path.is_empty() {
-                        dirs.push(std::path::PathBuf::from(host_path));
+                    if host_path.is_empty() {
+                        continue;
                     }
+                    // Skip file bind mounts — only directories need pre-creation.
+                    // A file mount has an extension in the final path component (e.g., .crt, .yml).
+                    let path = std::path::Path::new(host_path);
+                    if path.extension().is_some() {
+                        continue;
+                    }
+                    dirs.push(std::path::PathBuf::from(host_path));
                 }
             }
         }
@@ -601,6 +611,17 @@ mod tests {
         }];
         let dirs = extract_bind_mount_dirs(&files);
         assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn extract_bind_mount_dirs_skips_file_mounts() {
+        let files = vec![GeneratedFile {
+            path: PathBuf::from("/q/svc.container"),
+            content: "Volume=/path/to/ca.crt:/etc/ssl/certs/ca.crt:ro,Z\nVolume=/path/to/config:/config:Z\n".to_string(),
+        }];
+        let dirs = extract_bind_mount_dirs(&files);
+        // Only the directory mount, not the .crt file mount
+        assert_eq!(dirs, vec![PathBuf::from("/path/to/config")]);
     }
 
     #[test]
