@@ -3,14 +3,10 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use crate::generate::GeneratedFile;
 
-const SERVICE_HOME_PLACEHOLDER: &str = "__RYRA_SERVICE_HOME__";
-const QUADLET_DIR_PLACEHOLDER: &str = "__RYRA_QUADLET_DIR__";
-
 /// Parameters for [`process_quadlet_bundle`].
 pub struct ProcessBundleParams<'a> {
     pub service_dir: &'a Path,
     pub service_name: &'a str,
-    pub service_home: &'a Path,
     pub quadlet_dir: &'a Path,
     pub extra_networks: &'a [String],
     pub extra_volumes: &'a [String],
@@ -24,13 +20,6 @@ pub struct ProcessedBundle {
     pub images: Vec<String>,
     /// Host directories that must exist before containers start (bind mount sources).
     pub bind_mount_dirs: Vec<std::path::PathBuf>,
-}
-
-/// Replace `__RYRA_SERVICE_HOME__` and `__RYRA_QUADLET_DIR__` placeholders in quadlet file content.
-pub fn substitute_paths(content: &str, service_home: &Path, quadlet_dir: &Path) -> String {
-    content
-        .replace(SERVICE_HOME_PLACEHOLDER, &service_home.to_string_lossy())
-        .replace(QUADLET_DIR_PLACEHOLDER, &quadlet_dir.to_string_lossy())
 }
 
 /// Scan processed `.container` files for `Image=` lines. Deduplicate.
@@ -54,13 +43,15 @@ pub fn extract_images(files: &[GeneratedFile]) -> Vec<String> {
     images
 }
 
-/// Extract host directories from bind mount `Volume=` lines in processed `.container` files.
+/// Extract host directories from bind mount `Volume=` lines in `.container` files.
 /// Bind mounts are `Volume=/host/path:/container/path:flags` (NOT `.volume:` references).
 /// These directories must exist before the container starts.
 ///
+/// Expands `%h` to the user's home directory (systemd specifier).
 /// File bind mounts (host path has a file extension like `.crt`, `.yml`) are skipped —
 /// only directory mounts need pre-creation.
-pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> Vec<std::path::PathBuf> {
+pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> crate::error::Result<Vec<std::path::PathBuf>> {
+    let home = crate::home_dir()?;
     let mut dirs = Vec::new();
     for file in files {
         let path_str = file.path.to_string_lossy();
@@ -80,18 +71,19 @@ pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> Vec<std::path::PathBu
                     if host_path.is_empty() {
                         continue;
                     }
+                    // Expand %h systemd specifier to actual home directory
+                    let expanded = host_path.replace("%h", &home.to_string_lossy());
                     // Skip file bind mounts — only directories need pre-creation.
-                    // A file mount has an extension in the final path component (e.g., .crt, .yml).
-                    let path = std::path::Path::new(host_path);
+                    let path = std::path::Path::new(&expanded);
                     if path.extension().is_some() {
                         continue;
                     }
-                    dirs.push(std::path::PathBuf::from(host_path));
+                    dirs.push(std::path::PathBuf::from(expanded));
                 }
             }
         }
     }
-    dirs
+    Ok(dirs)
 }
 
 /// Append `Network=<name>.network` lines to the `[Container]` section of a quadlet file.
@@ -193,12 +185,10 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             continue;
         }
 
-        let content = std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
+        let mut content = std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
             path: path.clone(),
             source,
         })?;
-
-        let mut content = substitute_paths(&content, params.service_home, params.quadlet_dir);
 
         let file_name = path
             .file_name()
@@ -228,9 +218,10 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     quadlet_files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let images = extract_images(&quadlet_files);
-    let bind_mount_dirs = extract_bind_mount_dirs(&quadlet_files);
+    let bind_mount_dirs = extract_bind_mount_dirs(&quadlet_files)?;
 
-    let config_files = process_configs(params.service_dir, params.service_home, params.quadlet_dir)?;
+    let service_home = crate::service_home(params.service_name)?;
+    let config_files = process_configs(params.service_dir, &service_home)?;
 
     Ok(ProcessedBundle {
         quadlet_files,
@@ -240,12 +231,11 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     })
 }
 
-/// Read files from `<service_dir>/configs/` recursively, apply path substitution,
+/// Read files from `<service_dir>/configs/` recursively,
 /// map them to `<service_home>/configs/<relative_path>`.
 pub fn process_configs(
     service_dir: &Path,
     service_home: &Path,
-    quadlet_dir: &Path,
 ) -> Result<Vec<GeneratedFile>> {
     let configs_dir = service_dir.join("configs");
     if !configs_dir.is_dir() {
@@ -253,7 +243,7 @@ pub fn process_configs(
     }
 
     let mut files = Vec::new();
-    collect_configs_recursive(&configs_dir, &configs_dir, service_home, quadlet_dir, &mut files)?;
+    collect_configs_recursive(&configs_dir, &configs_dir, service_home, &mut files)?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }
@@ -262,7 +252,6 @@ fn collect_configs_recursive(
     base_dir: &Path,
     current_dir: &Path,
     service_home: &Path,
-    quadlet_dir: &Path,
     files: &mut Vec<GeneratedFile>,
 ) -> Result<()> {
     let entries = std::fs::read_dir(current_dir).map_err(|source| Error::FileRead {
@@ -278,7 +267,7 @@ fn collect_configs_recursive(
         let path = entry.path();
 
         if path.is_dir() {
-            collect_configs_recursive(base_dir, &path, service_home, quadlet_dir, files)?;
+            collect_configs_recursive(base_dir, &path, service_home, files)?;
         } else if path.is_file() {
             let relative = path
                 .strip_prefix(base_dir)
@@ -289,8 +278,6 @@ fn collect_configs_recursive(
                     path: path.clone(),
                     source,
                 })?;
-
-            let content = substitute_paths(&content, service_home, quadlet_dir);
 
             files.push(GeneratedFile {
                 path: service_home.join("configs").join(relative),
@@ -306,31 +293,6 @@ fn collect_configs_recursive(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn substitute_paths_replaces_both_placeholders() {
-        let content = "Volume=__RYRA_SERVICE_HOME__/data:/data\nEnvironmentFile=__RYRA_QUADLET_DIR__/.env";
-        let result = substitute_paths(
-            content,
-            Path::new("/home/user/.local/share/ryra/myservice"),
-            Path::new("/home/user/.config/containers/systemd"),
-        );
-        assert_eq!(
-            result,
-            "Volume=/home/user/.local/share/ryra/myservice/data:/data\nEnvironmentFile=/home/user/.config/containers/systemd/.env"
-        );
-    }
-
-    #[test]
-    fn substitute_paths_leaves_content_without_placeholders_unchanged() {
-        let content = "Image=docker.io/library/nginx:latest\nNetwork=mynet.network";
-        let result = substitute_paths(
-            content,
-            Path::new("/home/user/.local/share/ryra/svc"),
-            Path::new("/home/user/.config/containers/systemd"),
-        );
-        assert_eq!(result, content);
-    }
 
     #[test]
     fn extract_images_from_container_files_only() {
@@ -444,7 +406,6 @@ mod tests {
         let params = ProcessBundleParams {
             service_dir: Path::new("/nonexistent"),
             service_name: "test",
-            service_home: Path::new("/home/user/.local/share/ryra/test"),
             quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
             extra_networks: &[],
             extra_volumes: &[],
@@ -466,7 +427,7 @@ mod tests {
 
         std::fs::write(
             quadlets_dir.join("app.container"),
-            "[Container]\nImage=nginx:latest\nVolume=__RYRA_SERVICE_HOME__/data:/data\n\n[Service]\nRestart=always\n",
+            "[Container]\nImage=nginx:latest\nVolume=%h/.local/share/ryra/myservice/data:/data\n\n[Service]\nRestart=always\n",
         )
         .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
@@ -476,13 +437,11 @@ mod tests {
         )
         .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
-        let service_home = Path::new("/home/user/.local/share/ryra/myservice");
         let quadlet_dir = Path::new("/home/user/.config/containers/systemd");
 
         let params = ProcessBundleParams {
             service_dir: &service_dir,
             service_name: "myservice",
-            service_home,
             quadlet_dir,
             extra_networks: &["caddy".to_string()],
             extra_volumes: &[],
@@ -495,13 +454,13 @@ mod tests {
         assert_eq!(bundle.quadlet_files.len(), 2);
         assert_eq!(bundle.images, vec!["nginx:latest".to_string()]);
 
-        // Check substitution happened in the container file
+        // Check content is preserved as-is (no placeholder substitution)
         let container_file = bundle
             .quadlet_files
             .iter()
             .find(|f| f.path.to_string_lossy().ends_with(".container"))
             .unwrap_or_else(|| unreachable!("container file must exist"));
-        assert!(container_file.content.contains("/home/user/.local/share/ryra/myservice/data:/data"));
+        assert!(container_file.content.contains("%h/.local/share/ryra/myservice/data:/data"));
         // Check network injection happened
         assert!(container_file.content.contains("Network=caddy.network"));
 
@@ -528,7 +487,6 @@ mod tests {
         let params = ProcessBundleParams {
             service_dir: &service_dir,
             service_name: "empty",
-            service_home: Path::new("/home/user/.local/share/ryra/empty"),
             quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
             extra_networks: &[],
             extra_volumes: &[],
@@ -551,7 +509,7 @@ mod tests {
 
         std::fs::write(
             configs_dir.join("main.conf"),
-            "data_dir=__RYRA_SERVICE_HOME__/data\n",
+            "data_dir=/some/path\n",
         )
         .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
@@ -559,9 +517,8 @@ mod tests {
             .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
         let service_home = Path::new("/home/user/.local/share/ryra/svc");
-        let quadlet_dir = Path::new("/q");
 
-        let files = process_configs(&service_dir, service_home, quadlet_dir)
+        let files = process_configs(&service_dir, service_home)
             .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
 
         assert_eq!(files.len(), 2);
@@ -574,7 +531,7 @@ mod tests {
             main_conf.path,
             PathBuf::from("/home/user/.local/share/ryra/svc/configs/main.conf")
         );
-        assert!(main_conf.content.contains("/home/user/.local/share/ryra/svc/data"));
+        assert!(main_conf.content.contains("/some/path"));
 
         let nested_conf = files
             .iter()
@@ -589,18 +546,19 @@ mod tests {
 
     #[test]
     fn extract_bind_mount_dirs_finds_host_paths() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/test".to_string());
         let files = vec![
             GeneratedFile {
                 path: PathBuf::from("/q/immich.container"),
-                content: "[Container]\nVolume=/home/user/.local/share/ryra/immich/upload:/data:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
+                content: "Volume=%h/.local/share/ryra/immich/upload:/data:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
             },
             GeneratedFile {
                 path: PathBuf::from("/q/immich.network"),
                 content: "[Network]\n".to_string(),
             },
         ];
-        let dirs = extract_bind_mount_dirs(&files);
-        assert_eq!(dirs, vec![PathBuf::from("/home/user/.local/share/ryra/immich/upload")]);
+        let dirs = extract_bind_mount_dirs(&files).unwrap();
+        assert_eq!(dirs, vec![PathBuf::from(format!("{home}/.local/share/ryra/immich/upload"))]);
     }
 
     #[test]
@@ -609,7 +567,7 @@ mod tests {
             path: PathBuf::from("/q/svc.container"),
             content: "Volume=svc-data.volume:/data:U\n".to_string(),
         }];
-        let dirs = extract_bind_mount_dirs(&files);
+        let dirs = extract_bind_mount_dirs(&files).unwrap();
         assert!(dirs.is_empty());
     }
 
@@ -619,7 +577,7 @@ mod tests {
             path: PathBuf::from("/q/svc.container"),
             content: "Volume=/path/to/ca.crt:/etc/ssl/certs/ca.crt:ro,Z\nVolume=/path/to/config:/config:Z\n".to_string(),
         }];
-        let dirs = extract_bind_mount_dirs(&files);
+        let dirs = extract_bind_mount_dirs(&files).unwrap();
         // Only the directory mount, not the .crt file mount
         assert_eq!(dirs, vec![PathBuf::from("/path/to/config")]);
     }
@@ -637,7 +595,6 @@ mod tests {
         let files = process_configs(
             &service_dir,
             Path::new("/home/user/.local/share/ryra/svc"),
-            Path::new("/q"),
         )
         .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
 

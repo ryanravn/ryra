@@ -25,7 +25,7 @@ pub const SERVICE_AUTHELIA: &str = "authelia";
 // --- Path conventions ---
 
 /// Resolve the user's home directory, falling back to $HOME.
-fn home_dir() -> Result<PathBuf> {
+pub(crate) fn home_dir() -> Result<PathBuf> {
     dirs::home_dir()
         .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
         .ok_or_else(|| {
@@ -374,7 +374,6 @@ pub fn add_service(
         &generate::bundle::ProcessBundleParams {
             service_dir: &reg_service.service_dir,
             service_name,
-            service_home: &home_dir,
             quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &extra_volumes,
@@ -741,7 +740,6 @@ pub fn update_service(
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
-    let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
     // Determine host_port from installed service's port mappings
@@ -780,7 +778,6 @@ pub fn update_service(
         &generate::bundle::ProcessBundleParams {
             service_dir: &reg_service.service_dir,
             service_name,
-            service_home: &home_dir,
             quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &[],

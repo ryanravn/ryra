@@ -1,6 +1,7 @@
 [Unit]
 Description=Authelia SSO server
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=authelia.network
 After=authelia.network
 
@@ -9,18 +10,18 @@ Image=docker.io/authelia/authelia:4.39
 ContainerName=authelia
 Network=authelia.network
 PublishPort=${RYRA_PORT_HTTP}:9091
-Volume=__RYRA_SERVICE_HOME__/config:/config:Z
+Volume=%h/.local/share/ryra/authelia/config:/config:Z
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/authelia/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/authelia/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPre=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/generate-config.sh
-ExecStartPre=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/generate-users.sh
-ExecStartPre=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/generate-oidc-rsa-key.sh
+ExecStartPre=/bin/bash %h/.local/share/ryra/authelia/configs/scripts/generate-config.sh
+ExecStartPre=/bin/bash %h/.local/share/ryra/authelia/configs/scripts/generate-users.sh
+ExecStartPre=/bin/bash %h/.local/share/ryra/authelia/configs/scripts/generate-oidc-rsa-key.sh
 
 [Install]
 WantedBy=default.target

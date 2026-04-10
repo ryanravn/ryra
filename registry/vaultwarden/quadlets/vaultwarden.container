@@ -1,6 +1,7 @@
 [Unit]
 Description=Vaultwarden
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Container]
 ContainerName=vaultwarden
@@ -8,10 +9,10 @@ Image=docker.io/vaultwarden/server:1.35.4
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=vaultwarden-data.volume:/data:U
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

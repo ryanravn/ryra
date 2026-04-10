@@ -5,8 +5,6 @@
         "name": "authelia",
         "description": "Authelia - lightweight SSO and 2FA server",
         "url": "https://www.authelia.com/",
-        "image": "docker.io/authelia/authelia:4.39",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -25,13 +23,6 @@
           "container_port": 9091,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "config",
-          "mount_path": "/config",
-          "host_path": "%h/config"
         }
       ],
       "env": [
@@ -92,6 +83,14 @@
           "length": null
         },
         {
+          "name": "RYRA_DOMAIN",
+          "value": "{{ service.domain | default('localhost') }}",
+          "kind": "default",
+          "prompt": null,
+          "format": "string",
+          "length": null
+        },
+        {
           "name": "RYRA_AUTH_PORT",
           "value": "9091",
           "kind": "default",
@@ -101,7 +100,6 @@
         }
       ],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -109,30 +107,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "health-check",
-          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/health",
-          "timeout": 30,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/authelia",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "caddy": {
       "service": {
         "name": "caddy",
         "description": "Caddy - automatic HTTPS reverse proxy",
         "url": "https://caddyserver.com",
-        "image": "docker.io/library/caddy:2-alpine",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -149,31 +130,13 @@
         },
         {
           "name": "https",
-          "container_port": 443,
+          "container_port": 8443,
           "host_port": 8443,
           "protocol": "tcp"
         }
       ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/data",
-          "host_path": null
-        },
-        {
-          "name": "config-state",
-          "mount_path": "/config",
-          "host_path": null
-        },
-        {
-          "name": "caddyfile-dir",
-          "mount_path": "/etc/caddy",
-          "host_path": "%h/config"
-        }
-      ],
       "env": [],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -181,30 +144,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "responds-on-8080",
-          "run": "curl -sf http://127.0.0.1:8080 || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:8080 | grep -q '404\\|200'",
-          "timeout": 30,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/caddy",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "forgejo": {
       "service": {
         "name": "forgejo",
         "description": "Forgejo - self-hosted Git forge",
         "url": "https://forgejo.org/docs/",
-        "image": "codeberg.org/forgejo/forgejo:11",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -223,13 +169,6 @@
           "container_port": 3000,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/data",
-          "host_path": null
         }
       ],
       "env": [
@@ -307,7 +246,7 @@
         },
         {
           "name": "FORGEJO__server__ROOT_URL",
-          "value": "{{service.url}}/",
+          "value": "{{service.external_url}}/",
           "kind": "default",
           "prompt": null,
           "format": "string",
@@ -331,24 +270,6 @@
         }
       ],
       "requires": [],
-      "containers": [
-        {
-          "name": "postgres",
-          "image": "docker.io/library/postgres:17-alpine",
-          "command": null,
-          "volumes": [
-            {
-              "name": "db-data",
-              "mount_path": "/var/lib/postgresql/data",
-              "host_path": null
-            }
-          ],
-          "env_file": true,
-          "depends_on": [],
-          "healthcheck": null,
-          "init": false
-        }
-      ],
       "mappings": {
         "smtp": {},
         "auth": {
@@ -357,7 +278,7 @@
           "FORGEJO__oauth2_client__OPENID_CONNECT_SCOPES": "openid email profile",
           "FORGEJO__openid__ENABLE_OPENID_SIGNIN": "true",
           "FORGEJO__service__ENABLE_OPENID_SIGNIN": "true",
-          "OIDC_AUTH_URL": "{{auth.external_url}}/api/oidc/authorization",
+          "OIDC_AUTH_URL": "{{auth.internal_url}}/api/oidc/authorization",
           "OIDC_CLIENT_ID": "{{auth.client_id}}",
           "OIDC_CLIENT_SECRET": "{{auth.client_secret}}",
           "OIDC_DISCOVERY_URL": "{{auth.internal_url}}/.well-known/openid-configuration",
@@ -370,42 +291,13 @@
           "oidc"
         ],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "forgejo-responds",
-          "run": "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1",
-          "timeout": 90,
-          "env": {}
-        },
-        {
-          "name": "postgres-not-on-localhost",
-          "run": "! ss -tlnp | grep -q ':5432 '",
-          "timeout": 5,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/forgejo",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": [
-        {
-          "name": "register-oidc",
-          "run": "[ -z \"$OIDC_CLIENT_ID\" ] && exit 0\necho \"Waiting for Forgejo API...\"\nfor i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break; sleep 5; done\npodman exec -u git systemd-forgejo forgejo admin auth add-oauth --name \"Authelia\" --provider \"openidConnect\" --key \"$OIDC_CLIENT_ID\" --secret \"$OIDC_CLIENT_SECRET\" --auto-discover-url \"$OIDC_DISCOVERY_URL\" --custom-auth-url \"$OIDC_AUTH_URL\" --custom-token-url \"$OIDC_TOKEN_URL\" --custom-profile-url \"$OIDC_PROFILE_URL\" --scopes \"openid email profile\" 2>&1 || true\n",
-          "timeout": 300
-        }
-      ]
+      }
     },
     "immich": {
       "service": {
         "name": "immich",
         "description": "Immich - self-hosted photo & video management",
         "url": "https://immich.app/",
-        "image": "ghcr.io/immich-app/immich-server:release",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -424,13 +316,6 @@
           "container_port": 2283,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "upload",
-          "mount_path": "/data",
-          "host_path": "%h/upload"
         }
       ],
       "env": [
@@ -484,84 +369,22 @@
         },
         {
           "name": "INIT_IMMICH_ADMIN_EMAIL",
-          "value": "",
-          "kind": "required",
-          "prompt": "Immich admin email",
+          "value": "{{admin.email | default('admin@localhost')}}",
+          "kind": "prompted",
+          "prompt": "Admin email",
           "format": "string",
           "length": null
         },
         {
           "name": "INIT_IMMICH_ADMIN_PASSWORD",
-          "value": "",
-          "kind": "required",
-          "prompt": "Immich admin password",
+          "value": "{{secret.admin_password}}",
+          "kind": "prompted",
+          "prompt": "Admin password",
           "format": "string",
           "length": null
         }
       ],
       "requires": [],
-      "containers": [
-        {
-          "name": "machine-learning",
-          "image": "ghcr.io/immich-app/immich-machine-learning:release",
-          "command": null,
-          "volumes": [
-            {
-              "name": "model-cache",
-              "mount_path": "/cache",
-              "host_path": null
-            }
-          ],
-          "env_file": true,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "python3 -c 'import requests; requests.get(\"http://localhost:3003/ping\")' || exit 1",
-            "start_period": 60,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 10
-          },
-          "init": false
-        },
-        {
-          "name": "postgres",
-          "image": "ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0",
-          "command": null,
-          "volumes": [
-            {
-              "name": "db-data",
-              "mount_path": "/var/lib/postgresql/data",
-              "host_path": null
-            }
-          ],
-          "env_file": true,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "pg_isready -d $${DB_DATABASE_NAME:-immich} -U $${DB_USERNAME:-postgres}",
-            "start_period": 30,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 5
-          },
-          "init": false
-        },
-        {
-          "name": "valkey",
-          "image": "docker.io/valkey/valkey:9",
-          "command": null,
-          "volumes": [],
-          "env_file": false,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "redis-cli ping | grep PONG",
-            "start_period": 20,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 3
-          },
-          "init": false
-        }
-      ],
       "mappings": {
         "smtp": {},
         "auth": {
@@ -577,42 +400,13 @@
           "oidc"
         ],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "immich-responds",
-          "run": "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping && exit 0; sleep 5; done; exit 1",
-          "timeout": 360,
-          "env": {
-            "INIT_IMMICH_ADMIN_EMAIL": "admin@test.local",
-            "INIT_IMMICH_ADMIN_PASSWORD": "testpassword123"
-          }
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/immich",
-          "timeout": 30,
-          "env": {
-            "INIT_IMMICH_ADMIN_EMAIL": "admin@test.local",
-            "INIT_IMMICH_ADMIN_PASSWORD": "testpassword123"
-          }
-        }
-      ],
-      "post_start": [
-        {
-          "name": "configure-immich-oidc",
-          "run": "[ -z \"$OAUTH_CLIENT_ID\" ] && exit 0\n\nIMMICH_URL=\"http://127.0.0.1:$RYRA_PORT_HTTP\"\nADMIN_EMAIL=\"$INIT_IMMICH_ADMIN_EMAIL\"\nADMIN_PASSWORD=\"$INIT_IMMICH_ADMIN_PASSWORD\"\n\n# Wait for Immich to be ready\necho \"Waiting for Immich API to be ready (up to 10 min)...\"\nfor i in $(seq 1 60); do\n  CODE=$(curl -so /dev/null -w '%{http_code}' \"$IMMICH_URL/api/server/ping\" 2>/dev/null)\n  [ \"$CODE\" = \"200\" ] && break\n  echo \"  not yet — retrying in 10s (${i}0s elapsed)\"\n  sleep 10\ndone\n[ \"$CODE\" = \"200\" ] || { echo \"ERROR: Immich not ready after 600s\"; exit 1; }\necho \"Immich API ready\"\n\n# Create admin user (ignore error if already exists)\ncurl -sf -X POST \"$IMMICH_URL/api/auth/admin-sign-up\" -H \"Content-Type: application/json\" -d \"{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\",\"name\":\"Admin\"}\" >/dev/null 2>&1 || true\n\n# Write a helper script to avoid shell quoting issues with inline python\ncat > /tmp/immich-oidc-setup.py << PYEOF\nimport sys, json, urllib.request\n\nimmich_url = sys.argv[1]\nadmin_email = sys.argv[2]\nadmin_password = sys.argv[3]\nclient_id = sys.argv[4]\nclient_secret = sys.argv[5]\nissuer_url = sys.argv[6]\n\ndef api(method, path, data=None, token=None):\n    headers = {\"Content-Type\": \"application/json\"}\n    if token:\n        headers[\"Authorization\"] = f\"Bearer {token}\"\n    body = json.dumps(data).encode() if data else None\n    req = urllib.request.Request(f\"{immich_url}/api{path}\", data=body, headers=headers, method=method)\n    with urllib.request.urlopen(req) as resp:\n        return json.loads(resp.read())\n\n# Create admin user (ignore if exists)\ntry:\n    api(\"POST\", \"/auth/admin-sign-up\", {\"email\": admin_email, \"password\": admin_password, \"name\": \"Admin\"})\nexcept Exception:\n    pass\n\n# Login\nresp = api(\"POST\", \"/auth/login\", {\"email\": admin_email, \"password\": admin_password})\ntoken = resp[\"accessToken\"]\n\n# Get config, update OAuth, apply\nconfig = api(\"GET\", \"/system-config\", token=token)\nconfig[\"oauth\"][\"enabled\"] = True\nconfig[\"oauth\"][\"autoRegister\"] = True\nconfig[\"oauth\"][\"autoLaunch\"] = False\nconfig[\"oauth\"][\"clientId\"] = client_id\nconfig[\"oauth\"][\"clientSecret\"] = client_secret\nconfig[\"oauth\"][\"issuerUrl\"] = issuer_url\nconfig[\"oauth\"][\"scope\"] = \"openid email profile\"\nconfig[\"oauth\"][\"buttonText\"] = \"Login with SSO\"\napi(\"PUT\", \"/system-config\", data=config, token=token)\nprint(\"Immich OIDC configured successfully\")\nPYEOF\n\npython3 /tmp/immich-oidc-setup.py \"$IMMICH_URL\" \"$ADMIN_EMAIL\" \"$ADMIN_PASSWORD\" \"$OAUTH_CLIENT_ID\" \"$OAUTH_CLIENT_SECRET\" \"$OAUTH_ISSUER_URL\"\n",
-          "timeout": 660
-        }
-      ]
+      }
     },
     "openclaw": {
       "service": {
         "name": "openclaw",
         "description": "OpenClaw - self-hosted AI assistant gateway",
         "url": "https://docs.openclaw.ai/",
-        "image": "ghcr.io/openclaw/openclaw:2026.3.13-1",
-        "command": "sh -c \"echo '{\\\"gateway\\\":{\\\"mode\\\":\\\"local\\\",\\\"bind\\\":\\\"lan\\\",\\\"controlUi\\\":{\\\"dangerouslyAllowHostHeaderOriginFallback\\\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured\"",
         "kind": "application",
         "architecture": [
           "amd64",
@@ -631,13 +425,6 @@
           "container_port": 18789,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "config",
-          "mount_path": "/home/node/.openclaw",
-          "host_path": null
         }
       ],
       "env": [
@@ -667,7 +454,6 @@
         }
       ],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -675,30 +461,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "http-responds",
-          "run": "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_GATEWAY && exit 0; sleep 2; done; exit 1",
-          "timeout": 90,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/openclaw",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "postgres": {
       "service": {
         "name": "postgres",
         "description": "PostgreSQL - open source relational database",
         "url": "https://www.postgresql.org/docs/",
-        "image": "docker.io/library/postgres:17-alpine",
-        "command": null,
         "kind": "infrastructure",
         "architecture": [
           "amd64",
@@ -717,13 +486,6 @@
           "container_port": 5432,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/var/lib/postgresql/data",
-          "host_path": null
         }
       ],
       "env": [
@@ -753,7 +515,6 @@
         }
       ],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -761,30 +522,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "accepts-connections",
-          "run": "for i in $(seq 1 15); do PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -p $RYRA_PORT_TCP -U $POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1",
-          "timeout": 60,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/postgres",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "ryra-registry": {
       "service": {
         "name": "ryra-registry",
         "description": "Static file server hosting the ryra service registry",
         "url": "https://ryra.dev",
-        "image": "docker.io/library/nginx:1.29.6-alpine",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -805,16 +549,8 @@
           "protocol": "tcp"
         }
       ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/usr/share/nginx/html",
-          "host_path": null
-        }
-      ],
       "env": [],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -822,30 +558,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "http-responds",
-          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP",
-          "timeout": 30,
-          "env": {}
-        },
-        {
-          "name": "serves-content",
-          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/ | grep -qi nginx",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "seafile": {
       "service": {
         "name": "seafile",
         "description": "Seafile - file sync and share server",
         "url": "https://www.seafile.com/",
-        "image": "docker.io/seafileltd/seafile-mc:12.0-latest",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -864,13 +583,6 @@
           "container_port": 80,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/shared",
-          "host_path": "%h/shared"
         }
       ],
       "env": [
@@ -932,17 +644,17 @@
         },
         {
           "name": "INIT_SEAFILE_ADMIN_EMAIL",
-          "value": "",
-          "kind": "required",
-          "prompt": "Seafile admin email",
+          "value": "{{admin.email | default('admin@localhost')}}",
+          "kind": "prompted",
+          "prompt": "Admin email",
           "format": "string",
           "length": null
         },
         {
           "name": "INIT_SEAFILE_ADMIN_PASSWORD",
-          "value": "",
-          "kind": "required",
-          "prompt": "Seafile admin password",
+          "value": "{{secret.admin_password}}",
+          "kind": "default",
+          "prompt": null,
           "format": "string",
           "length": null
         },
@@ -956,46 +668,6 @@
         }
       ],
       "requires": [],
-      "containers": [
-        {
-          "name": "mariadb",
-          "image": "docker.io/library/mariadb:10.11",
-          "command": null,
-          "volumes": [
-            {
-              "name": "db-data",
-              "mount_path": "/var/lib/mysql",
-              "host_path": null
-            }
-          ],
-          "env_file": true,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "healthcheck.sh --connect --innodb_initialized",
-            "start_period": 20,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 5
-          },
-          "init": false
-        },
-        {
-          "name": "redis",
-          "image": "docker.io/library/redis:7-alpine",
-          "command": null,
-          "volumes": [],
-          "env_file": false,
-          "depends_on": [],
-          "healthcheck": {
-            "command": "redis-cli ping | grep PONG",
-            "start_period": 20,
-            "interval": 30,
-            "retries": 5,
-            "timeout": 3
-          },
-          "init": false
-        }
-      ],
       "mappings": {
         "smtp": {},
         "auth": {
@@ -1012,42 +684,13 @@
           "oidc"
         ],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "seafile-responds",
-          "run": "for i in $(seq 1 120); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1",
-          "timeout": 660,
-          "env": {
-            "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
-            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123"
-          }
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/seafile",
-          "timeout": 30,
-          "env": {
-            "INIT_SEAFILE_ADMIN_EMAIL": "admin@test.local",
-            "INIT_SEAFILE_ADMIN_PASSWORD": "testpassword123"
-          }
-        }
-      ],
-      "post_start": [
-        {
-          "name": "inject-seafile-oauth",
-          "run": "[ -z \"$OAUTH_CLIENT_ID\" ] && exit 0\n\nCONF=$HOME/.local/share/ryra/seafile/shared/seafile/conf\n\n# Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume\necho \"Waiting for $CONF/seahub_settings.py to appear (Seafile creates it on first boot)...\"\nfor i in $(seq 1 60); do\n  [ -f \"$CONF/seahub_settings.py\" ] && break\n  ELAPSED=$((i * 10))\n  echo \"  not yet — retrying in 10s (${ELAPSED}s elapsed)\"\n  sleep 10\ndone\n[ -f \"$CONF/seahub_settings.py\" ] || { echo \"ERROR: $CONF/seahub_settings.py not found after 600s — check: sudo -H -u seafile sh -c 'cd / && podman logs systemd-seafile'\"; exit 1; }\n\n# Write the OAuth Python config alongside seahub_settings.py\ncat > \"$CONF/seahub_settings_oauth.py\" << EOF\nENABLE_OAUTH = True\nOAUTH_CREATE_UNKNOWN_USER = True\nOAUTH_ACTIVATE_USER_AFTER_CREATION = True\nOAUTH_CLIENT_ID = \"$OAUTH_CLIENT_ID\"\nOAUTH_CLIENT_SECRET = \"$OAUTH_CLIENT_SECRET\"\nOAUTH_REDIRECT_URL = \"$OAUTH_REDIRECT_URL\"\nOAUTH_PROVIDER_DOMAIN = \"$OAUTH_PROVIDER_DOMAIN\"\nOAUTH_PROVIDER = \"authelia\"\nOAUTH_AUTHORIZATION_URL = \"${OAUTH_PROVIDER_DOMAIN}/api/oidc/authorization\"\nOAUTH_TOKEN_URL = \"${OAUTH_INTERNAL_DOMAIN}/api/oidc/token\"\nOAUTH_USER_INFO_URL = \"${OAUTH_INTERNAL_DOMAIN}/api/oidc/userinfo\"\nOAUTH_SCOPE = [\"openid\", \"profile\", \"email\"]\nOAUTH_ATTRIBUTE_MAP = {\"email\": (True, \"contact_email\"), \"name\": (False, \"name\"), \"sub\": (False, \"uid\")}\nEOF\n# File is on the host bind mount — no chown needed\n\n# Append import line if not already present\ngrep -q seahub_settings_oauth \"$CONF/seahub_settings.py\" || echo \"exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())\" >> \"$CONF/seahub_settings.py\"\n\necho \"OAuth config injected into seahub_settings.py\"\n",
-          "timeout": 660
-        }
-      ]
+      }
     },
     "uptime-kuma": {
       "service": {
         "name": "uptime-kuma",
         "description": "Uptime Kuma - self-hosted monitoring tool",
         "url": "https://github.com/louislam/uptime-kuma",
-        "image": "docker.io/louislam/uptime-kuma:1",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -1068,16 +711,8 @@
           "protocol": "tcp"
         }
       ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/app/data",
-          "host_path": null
-        }
-      ],
       "env": [],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -1085,30 +720,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "http-responds",
-          "run": "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1",
-          "timeout": 60,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/uptime-kuma",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "vaultwarden": {
       "service": {
         "name": "vaultwarden",
         "description": "Vaultwarden - lightweight Bitwarden-compatible server",
         "url": "https://github.com/dani-garcia/vaultwarden/wiki",
-        "image": "docker.io/vaultwarden/server:1.35.4",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -1127,13 +745,6 @@
           "container_port": 80,
           "host_port": null,
           "protocol": "tcp"
-        }
-      ],
-      "volumes": [
-        {
-          "name": "data",
-          "mount_path": "/data",
-          "host_path": null
         }
       ],
       "env": [
@@ -1163,7 +774,6 @@
         }
       ],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {
           "SMTP_FROM": "{{smtp.from}}",
@@ -1178,17 +788,13 @@
       "integrations": {
         "auth": [],
         "smtp": true
-      },
-      "tests": [],
-      "post_start": []
+      }
     },
     "whoami": {
       "service": {
         "name": "whoami",
         "description": "Traefik whoami - simple HTTP request echo",
         "url": "https://github.com/traefik/whoami",
-        "image": "docker.io/traefik/whoami:v1.11.0",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -1204,10 +810,8 @@
           "protocol": "tcp"
         }
       ],
-      "volumes": [],
       "env": [],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {}
@@ -1215,36 +819,13 @@
       "integrations": {
         "auth": [],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "http-responds",
-          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP",
-          "timeout": 30,
-          "env": {}
-        },
-        {
-          "name": "returns-hostname",
-          "run": "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname",
-          "timeout": 30,
-          "env": {}
-        },
-        {
-          "name": "data-dir-created",
-          "run": "test -d $HOME/.local/share/ryra/whoami",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     },
     "whoami-auth": {
       "service": {
         "name": "whoami-auth",
         "description": "whoami with OIDC auth integration (for testing)",
         "url": null,
-        "image": "docker.io/traefik/whoami:v1.11.0",
-        "command": null,
         "kind": "application",
         "architecture": [
           "amd64",
@@ -1260,10 +841,8 @@
           "protocol": "tcp"
         }
       ],
-      "volumes": [],
       "env": [],
       "requires": [],
-      "containers": [],
       "mappings": {
         "smtp": {},
         "auth": {
@@ -1277,16 +856,7 @@
           "oidc"
         ],
         "smtp": false
-      },
-      "tests": [
-        {
-          "name": "http-responds",
-          "run": "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP",
-          "timeout": 30,
-          "env": {}
-        }
-      ],
-      "post_start": []
+      }
     }
   }
 }

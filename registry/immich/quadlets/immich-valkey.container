@@ -1,21 +1,24 @@
 [Unit]
 Description=Immich Valkey cache
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=immich.network
 After=immich.network
 
 [Container]
 Image=docker.io/valkey/valkey:9
-ContainerName=valkey
-Network=immich.network
+ContainerName=immich-valkey
+Network=immich.network:alias=valkey
 HealthCmd=redis-cli ping | grep PONG
 HealthStartPeriod=20s
 HealthInterval=30s
 HealthRetries=5
 HealthTimeout=3s
 Pull=never
+EnvironmentFile=%h/.local/share/ryra/immich/.env
 
 [Service]
+EnvironmentFile=%h/.local/share/ryra/immich/.env
 Restart=always
 RestartSec=5
 

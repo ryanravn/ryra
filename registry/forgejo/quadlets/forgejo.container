@@ -1,6 +1,7 @@
 [Unit]
 Description=Forgejo git forge
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=forgejo.network forgejo-postgres.service
 After=forgejo.network forgejo-postgres.service
 
@@ -11,14 +12,14 @@ Network=forgejo.network
 PublishPort=${RYRA_PORT_HTTP}:3000
 Volume=forgejo-data.volume:/data:U
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/register-oidc.sh
+ExecStartPost=/bin/bash %h/.local/share/ryra/forgejo/configs/scripts/register-oidc.sh
 
 [Install]
 WantedBy=default.target

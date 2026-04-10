@@ -1,6 +1,7 @@
 [Unit]
 Description=Ryra Registry
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Container]
 ContainerName=ryra-registry
@@ -8,10 +9,10 @@ Image=docker.io/library/nginx:1.29.6-alpine
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=ryra-registry-data.volume:/usr/share/nginx/html:U
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/ryra-registry/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/ryra-registry/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

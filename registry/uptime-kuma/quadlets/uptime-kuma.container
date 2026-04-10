@@ -1,6 +1,7 @@
 [Unit]
 Description=Uptime Kuma
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Container]
 ContainerName=uptime-kuma
@@ -8,10 +9,10 @@ Image=docker.io/louislam/uptime-kuma:1
 PublishPort=${RYRA_PORT_HTTP}:3001
 Volume=uptime-kuma-data.volume:/app/data:U
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/uptime-kuma/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/uptime-kuma/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

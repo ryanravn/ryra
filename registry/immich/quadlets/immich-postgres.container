@@ -1,13 +1,14 @@
 [Unit]
 Description=Immich PostgreSQL database
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=immich.network
 After=immich.network
 
 [Container]
 Image=ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
-ContainerName=postgres
-Network=immich.network
+ContainerName=immich-postgres
+Network=immich.network:alias=postgres
 Volume=immich-db-data.volume:/var/lib/postgresql/data:U
 HealthCmd=pg_isready -d ${DB_DATABASE_NAME} -U ${DB_USERNAME}
 HealthStartPeriod=30s
@@ -15,10 +16,10 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=5s
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/immich/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/immich/.env
 Restart=always
 RestartSec=5
 

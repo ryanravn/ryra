@@ -1,19 +1,20 @@
 [Unit]
 Description=Forgejo PostgreSQL database
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=forgejo.network
 After=forgejo.network
 
 [Container]
 Image=docker.io/library/postgres:17-alpine
-ContainerName=postgres
-Network=forgejo.network
+ContainerName=forgejo-postgres
+Network=forgejo.network:alias=postgres
 Volume=forgejo-db-data.volume:/var/lib/postgresql/data:U
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 Restart=always
 RestartSec=5
 

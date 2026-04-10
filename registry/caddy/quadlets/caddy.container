@@ -1,6 +1,7 @@
 [Unit]
 Description=Caddy reverse proxy
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=caddy.network
 After=caddy.network
 
@@ -12,17 +13,17 @@ PublishPort=${RYRA_PORT_HTTP}:80
 PublishPort=${RYRA_PORT_HTTPS}:8443
 Volume=caddy-data.volume:/data:U
 Volume=caddy-config-state.volume:/config:U
-Volume=__RYRA_SERVICE_HOME__/config:/etc/caddy:Z
+Volume=%h/.local/share/ryra/caddy/config:/etc/caddy:Z
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/caddy/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/caddy/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPre=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/seed-caddyfile.sh
-ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/export-root-ca.sh
+ExecStartPre=/bin/bash %h/.local/share/ryra/caddy/configs/scripts/seed-caddyfile.sh
+ExecStartPost=/bin/bash %h/.local/share/ryra/caddy/configs/scripts/export-root-ca.sh
 
 [Install]
 WantedBy=default.target

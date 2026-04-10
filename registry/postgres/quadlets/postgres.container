@@ -1,6 +1,7 @@
 [Unit]
 Description=Postgres
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Container]
 ContainerName=postgres
@@ -8,10 +9,10 @@ Image=docker.io/library/postgres:17-alpine
 PublishPort=${RYRA_PORT_TCP}:5432
 Volume=postgres-data.volume:/var/lib/postgresql/data:U
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/postgres/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/postgres/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

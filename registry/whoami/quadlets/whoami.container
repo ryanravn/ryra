@@ -1,16 +1,17 @@
 [Unit]
 Description=Whoami
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Container]
 ContainerName=whoami
 Image=docker.io/traefik/whoami:v1.11.0
 PublishPort=${RYRA_PORT_HTTP}:80
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/whoami/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/whoami/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

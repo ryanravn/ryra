@@ -1,6 +1,7 @@
 [Unit]
 Description=Seafile file sync and share
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=seafile.network seafile-mariadb.service seafile-redis.service
 After=seafile.network seafile-mariadb.service seafile-redis.service
 
@@ -9,16 +10,16 @@ Image=docker.io/seafileltd/seafile-mc:12.0-latest
 ContainerName=seafile
 Network=seafile.network
 PublishPort=${RYRA_PORT_HTTP}:80
-Volume=__RYRA_SERVICE_HOME__/shared:/shared:Z
+Volume=%h/.local/share/ryra/seafile/shared:/shared:Z
 Pull=never
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/seafile/.env
 
 [Service]
-EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+EnvironmentFile=%h/.local/share/ryra/seafile/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/inject-oauth.sh
+ExecStartPost=/bin/bash %h/.local/share/ryra/seafile/configs/scripts/inject-oauth.sh
 
 [Install]
 WantedBy=default.target

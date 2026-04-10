@@ -1,21 +1,24 @@
 [Unit]
 Description=Seafile Redis cache
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=seafile.network
 After=seafile.network
 
 [Container]
 Image=docker.io/library/redis:7-alpine
-ContainerName=redis
-Network=seafile.network
+ContainerName=seafile-redis
+Network=seafile.network:alias=redis
 HealthCmd=redis-cli ping | grep PONG
 HealthStartPeriod=20s
 HealthInterval=30s
 HealthRetries=5
 HealthTimeout=3s
 Pull=never
+EnvironmentFile=%h/.local/share/ryra/seafile/.env
 
 [Service]
+EnvironmentFile=%h/.local/share/ryra/seafile/.env
 Restart=always
 RestartSec=5
 
