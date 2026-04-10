@@ -22,6 +22,8 @@ pub struct ProcessedBundle {
     pub quadlet_files: Vec<GeneratedFile>,
     pub config_files: Vec<GeneratedFile>,
     pub images: Vec<String>,
+    /// Host directories that must exist before containers start (bind mount sources).
+    pub bind_mount_dirs: Vec<std::path::PathBuf>,
 }
 
 /// Replace `__RYRA_SERVICE_HOME__` and `__RYRA_QUADLET_DIR__` placeholders in quadlet file content.
@@ -50,6 +52,36 @@ pub fn extract_images(files: &[GeneratedFile]) -> Vec<String> {
         }
     }
     images
+}
+
+/// Extract host directories from bind mount `Volume=` lines in processed `.container` files.
+/// Bind mounts are `Volume=/host/path:/container/path:flags` (NOT `.volume:` references).
+/// These directories must exist before the container starts.
+pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    for file in files {
+        let path_str = file.path.to_string_lossy();
+        if !path_str.ends_with(".container") {
+            continue;
+        }
+        for line in file.content.lines() {
+            let trimmed = line.trim();
+            if let Some(vol) = trimmed.strip_prefix("Volume=") {
+                // Skip named volume references (e.g., "myvolume.volume:/path:U")
+                if vol.contains(".volume:") {
+                    continue;
+                }
+                // Bind mount format: /host/path:/container/path[:flags]
+                if let Some(colon_pos) = vol.find(':') {
+                    let host_path = &vol[..colon_pos];
+                    if !host_path.is_empty() {
+                        dirs.push(std::path::PathBuf::from(host_path));
+                    }
+                }
+            }
+        }
+    }
+    dirs
 }
 
 /// Append `Network=<name>.network` lines to the `[Container]` section of a quadlet file.
@@ -186,6 +218,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     quadlet_files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let images = extract_images(&quadlet_files);
+    let bind_mount_dirs = extract_bind_mount_dirs(&quadlet_files);
 
     let config_files = process_configs(params.service_dir, params.service_home, params.quadlet_dir)?;
 
@@ -193,6 +226,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
         quadlet_files,
         config_files,
         images,
+        bind_mount_dirs,
     })
 }
 
@@ -541,6 +575,32 @@ mod tests {
             PathBuf::from("/home/user/.local/share/ryra/svc/configs/subdir/nested.conf")
         );
         assert_eq!(nested_conf.content, "no placeholders\n");
+    }
+
+    #[test]
+    fn extract_bind_mount_dirs_finds_host_paths() {
+        let files = vec![
+            GeneratedFile {
+                path: PathBuf::from("/q/immich.container"),
+                content: "[Container]\nVolume=/home/user/.local/share/ryra/immich/upload:/data:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
+            },
+            GeneratedFile {
+                path: PathBuf::from("/q/immich.network"),
+                content: "[Network]\n".to_string(),
+            },
+        ];
+        let dirs = extract_bind_mount_dirs(&files);
+        assert_eq!(dirs, vec![PathBuf::from("/home/user/.local/share/ryra/immich/upload")]);
+    }
+
+    #[test]
+    fn extract_bind_mount_dirs_skips_named_volumes() {
+        let files = vec![GeneratedFile {
+            path: PathBuf::from("/q/svc.container"),
+            content: "Volume=svc-data.volume:/data:U\n".to_string(),
+        }];
+        let dirs = extract_bind_mount_dirs(&files);
+        assert!(dirs.is_empty());
     }
 
     #[test]

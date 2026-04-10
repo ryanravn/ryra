@@ -433,7 +433,12 @@ pub fn add_service(
     // 5. Write .env file
     steps.push(Step::WriteFile(output.env_file));
 
-    // 6. Reload and start via systemd
+    // 6. Create bind mount directories (must exist before container starts)
+    for dir in &bundle.bind_mount_dirs {
+        steps.push(Step::CreateDir(dir.clone()));
+    }
+
+    // 7. Reload and start via systemd
     steps.push(Step::DaemonReload);
     // Start — dependencies start automatically via Requires=/After= in the quadlet
     steps.push(Step::StartService {
@@ -798,7 +803,12 @@ pub fn update_service(
     }
     steps.push(Step::WriteFile(output.env_file));
 
-    // 6. Reload and restart
+    // 6. Create bind mount directories
+    for dir in &bundle.bind_mount_dirs {
+        steps.push(Step::CreateDir(dir.clone()));
+    }
+
+    // 7. Reload and restart
     steps.push(Step::DaemonReload);
     steps.push(Step::StartService {
         unit: service_name.to_string(),
