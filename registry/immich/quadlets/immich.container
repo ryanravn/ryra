@@ -11,6 +11,7 @@ Network=immich.network
 PublishPort=${RYRA_PORT_HTTP}:2283
 Volume=__RYRA_SERVICE_HOME__/upload:/data:Z
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

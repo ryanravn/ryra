@@ -11,6 +11,7 @@ Network=seafile.network
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=__RYRA_SERVICE_HOME__/shared:/shared:Z
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

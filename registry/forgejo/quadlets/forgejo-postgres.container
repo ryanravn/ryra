@@ -10,6 +10,7 @@ ContainerName=postgres
 Network=forgejo.network
 Volume=forgejo-db-data.volume:/var/lib/postgresql/data:U
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

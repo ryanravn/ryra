@@ -7,6 +7,7 @@ Image=docker.io/library/postgres:17-alpine
 PublishPort=${RYRA_PORT_TCP}:5432
 Volume=postgres-data.volume:/var/lib/postgresql/data:U
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

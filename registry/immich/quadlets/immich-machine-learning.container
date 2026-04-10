@@ -15,6 +15,7 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=10s
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

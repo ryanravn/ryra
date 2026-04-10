@@ -13,6 +13,7 @@ Volume=caddy-data.volume:/data:U
 Volume=caddy-config-state.volume:/config:U
 Volume=__RYRA_SERVICE_HOME__/config:/etc/caddy:Z
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

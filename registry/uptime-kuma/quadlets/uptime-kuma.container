@@ -7,6 +7,7 @@ Image=docker.io/louislam/uptime-kuma:1
 PublishPort=${RYRA_PORT_HTTP}:3001
 Volume=uptime-kuma-data.volume:/app/data:U
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

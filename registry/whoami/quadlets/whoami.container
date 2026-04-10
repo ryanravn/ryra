@@ -6,6 +6,7 @@ StartLimitIntervalSec=0
 Image=docker.io/traefik/whoami:v1.11.0
 PublishPort=${RYRA_PORT_HTTP}:80
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

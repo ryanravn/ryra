@@ -11,6 +11,7 @@ Network=authelia.network
 PublishPort=${RYRA_PORT_HTTP}:9091
 Volume=__RYRA_SERVICE_HOME__/config:/config:Z
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env

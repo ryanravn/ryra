@@ -11,6 +11,7 @@ Network=forgejo.network
 PublishPort=${RYRA_PORT_HTTP}:3000
 Volume=forgejo-data.volume:/data:U
 Pull=never
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
 
 [Service]
 EnvironmentFile=__RYRA_SERVICE_HOME__/.env
