@@ -9,6 +9,8 @@ After=supabase.network supabase-db.service
 ContainerName=supabase-supavisor
 Image=docker.io/supabase/supavisor:2.7.4
 Network=supabase.network:alias=supavisor
+PublishPort=${RYRA_PORT_POSTGRES}:5432
+PublishPort=${RYRA_PORT_POOLER}:6543
 Volume=%h/.local/share/ryra/supabase/configs/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
 Entrypoint=/bin/sh
 Exec=-c /app/bin/migrate && /app/bin/supavisor eval "$$(cat /etc/pooler/pooler.exs)" && /app/bin/server

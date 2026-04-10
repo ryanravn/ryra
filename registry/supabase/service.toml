@@ -18,6 +18,18 @@ name = "https"
 container_port = 8443
 host_port = 54443
 
+[[ports]]
+name = "postgres"
+container_port = 5432
+host_port = 5432
+protocol = "tcp"
+
+[[ports]]
+name = "pooler"
+container_port = 6543
+host_port = 6543
+protocol = "tcp"
+
 # --- Shared secrets ---
 
 [[env]]
