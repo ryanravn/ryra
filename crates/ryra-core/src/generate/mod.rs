@@ -89,6 +89,9 @@ fn build_env_file(
         }
     }
 
+    // Expose service home path so scripts can reference it
+    lines.push(format!("RYRA_SERVICE_HOME={}", home_dir.display()));
+
     // Expose port as RYRA_PORT_* — use the fixed host_port from the port definition
     // if set, otherwise the allocated host port, otherwise the container port.
     for port_def in &service_def.ports {
