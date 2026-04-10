@@ -7,7 +7,7 @@ After=supabase.network supabase-db.service
 
 [Container]
 ContainerName=supabase-auth
-Image=docker.io/supabase/gotrue:v2.184.0
+Image=docker.io/supabase/gotrue:v2.186.0
 Network=supabase.network:alias=auth
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/supabase/.env

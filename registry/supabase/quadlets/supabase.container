@@ -7,13 +7,15 @@ After=supabase.network
 
 [Container]
 ContainerName=supabase-kong
-Image=docker.io/library/kong:2.8.1
+Image=docker.io/kong/kong:3.9.1
 Network=supabase.network:alias=kong
 PublishPort=${RYRA_PORT_HTTP}:8000
 PublishPort=${RYRA_PORT_HTTPS}:8443
 Volume=%h/.local/share/ryra/supabase/configs/api/kong.yml:/home/kong/temp.yml:ro,z
+Volume=%h/.local/share/ryra/supabase/configs/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro,z
 Environment=KONG_NGINX_PROXY_PROXY_BUFFERS="64 160k"
-Entrypoint=["bash", "-c", "eval \"echo \\\"$$(cat ~/temp.yml)\\\"\" > ~/kong.yml && /docker-entrypoint.sh kong docker-start"]
+Environment=KONG_DECLARATIVE_CONFIG=/tmp/kong.yml
+Entrypoint=["/home/kong/kong-entrypoint.sh"]
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 

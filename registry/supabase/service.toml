@@ -82,9 +82,7 @@ value = "5432"
 name = "KONG_DATABASE"
 value = "off"
 
-[[env]]
-name = "KONG_DECLARATIVE_CONFIG"
-value = "/home/kong/kong.yml"
+# KONG_DECLARATIVE_CONFIG set directly in supabase.container (/tmp/kong.yml for Kong 3.9+)
 
 [[env]]
 name = "KONG_DNS_ORDER"
@@ -92,7 +90,7 @@ value = "LAST,A,CNAME"
 
 [[env]]
 name = "KONG_PLUGINS"
-value = "request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction"
+value = "request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction,post-function"
 
 [[env]]
 name = "KONG_NGINX_PROXY_PROXY_BUFFER_SIZE"

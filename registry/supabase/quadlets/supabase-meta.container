@@ -7,7 +7,7 @@ After=supabase.network supabase-db.service
 
 [Container]
 ContainerName=supabase-meta
-Image=docker.io/supabase/postgres-meta:v0.95.1
+Image=docker.io/supabase/postgres-meta:v0.96.3
 Network=supabase.network:alias=meta
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
