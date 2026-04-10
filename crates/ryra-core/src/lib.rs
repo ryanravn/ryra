@@ -846,6 +846,10 @@ pub fn reset() -> Result<ResetResult> {
                     let unit = name.trim_end_matches(".container").to_string();
                     steps.push(Step::StopService { unit });
                 }
+                if name.ends_with(".network") {
+                    let unit = format!("{}-network", name.trim_end_matches(".network"));
+                    steps.push(Step::StopService { unit });
+                }
                 if name.ends_with(".volume") {
                     let vol = name.trim_end_matches(".volume").to_string();
                     volume_names.push(format!("systemd-{vol}"));

@@ -48,7 +48,7 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::DaemonReload => run("systemctl --user daemon-reload"),
-        Step::StartService { unit } => run(&format!("systemctl --user start --no-block {unit}")),
+        Step::StartService { unit } => run(&format!("systemctl --user start {unit}")),
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped)
             if let Err(e) = run(&format!("systemctl --user stop {unit}"))
