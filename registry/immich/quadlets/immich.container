@@ -1,0 +1,24 @@
+[Unit]
+Description=Immich photo management server
+StartLimitIntervalSec=0
+Requires=immich.network immich-postgres.service immich-machine-learning.service immich-valkey.service
+After=immich.network immich-postgres.service immich-machine-learning.service immich-valkey.service
+
+[Container]
+Image=ghcr.io/immich-app/immich-server:release
+ContainerName=immich-server
+Network=immich.network
+PublishPort=${RYRA_PORT_HTTP}:2283
+Volume=__RYRA_SERVICE_HOME__/upload:/data:Z
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/create-admin.sh
+ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/configure-oidc.sh
+
+[Install]
+WantedBy=default.target

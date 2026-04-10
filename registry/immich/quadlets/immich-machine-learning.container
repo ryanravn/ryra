@@ -1,0 +1,25 @@
+[Unit]
+Description=Immich machine learning
+StartLimitIntervalSec=0
+Requires=immich.network
+After=immich.network
+
+[Container]
+Image=ghcr.io/immich-app/immich-machine-learning:release
+ContainerName=machine-learning
+Network=immich.network
+Volume=immich-model-cache.volume:/cache:U
+HealthCmd=python3 -c 'import requests; requests.get("http://localhost:3003/ping")' || exit 1
+HealthStartPeriod=60s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=10s
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

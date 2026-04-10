@@ -1,0 +1,4 @@
+[Unit]
+Description=Immich database data
+
+[Volume]

@@ -1,0 +1,23 @@
+[Unit]
+Description=Seafile Redis cache
+StartLimitIntervalSec=0
+Requires=seafile.network
+After=seafile.network
+
+[Container]
+Image=docker.io/library/redis:7-alpine
+ContainerName=redis
+Network=seafile.network
+HealthCmd=redis-cli ping | grep PONG
+HealthStartPeriod=20s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=3s
+Pull=never
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

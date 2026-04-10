@@ -1,0 +1,25 @@
+[Unit]
+Description=Seafile MariaDB database
+StartLimitIntervalSec=0
+Requires=seafile.network
+After=seafile.network
+
+[Container]
+Image=docker.io/library/mariadb:10.11
+ContainerName=mariadb
+Network=seafile.network
+Volume=seafile-db-data.volume:/var/lib/mysql:U
+HealthCmd=healthcheck.sh --connect --innodb_initialized
+HealthStartPeriod=20s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=5s
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Forgejo git forge
+StartLimitIntervalSec=0
+Requires=forgejo.network forgejo-postgres.service
+After=forgejo.network forgejo-postgres.service
+
+[Container]
+Image=codeberg.org/forgejo/forgejo:11
+ContainerName=forgejo
+Network=forgejo.network
+PublishPort=${RYRA_PORT_HTTP}:3000
+Volume=forgejo-data.volume:/data:U
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/register-oidc.sh
+
+[Install]
+WantedBy=default.target
