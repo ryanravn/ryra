@@ -1,0 +1,18 @@
+[Unit]
+Description=Uptime Kuma
+StartLimitIntervalSec=0
+
+[Container]
+Image=docker.io/louislam/uptime-kuma:1
+PublishPort=${RYRA_PORT_HTTP}:3001
+Volume=uptime-kuma-data.volume:/app/data:U
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=Whoami
+StartLimitIntervalSec=0
+
+[Container]
+Image=docker.io/traefik/whoami:v1.11.0
+PublishPort=${RYRA_PORT_HTTP}:80
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

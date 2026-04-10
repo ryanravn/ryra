@@ -1,0 +1,19 @@
+[Unit]
+Description=Openclaw
+StartLimitIntervalSec=0
+
+[Container]
+Image=ghcr.io/openclaw/openclaw:2026.3.13-1
+PublishPort=${RYRA_PORT_GATEWAY}:18789
+Volume=openclaw-config.volume:/home/node/.openclaw:U
+Exec=sh -c "echo '{\"gateway\":{\"mode\":\"local\",\"bind\":\"lan\",\"auth\":{\"mode\":\"token\",\"token\":\"'\"$OPENCLAW_GATEWAY_TOKEN\"'\"},\"controlUi\":{\"dangerouslyAllowHostHeaderOriginFallback\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured"
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

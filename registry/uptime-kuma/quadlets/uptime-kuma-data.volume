@@ -1,0 +1,4 @@
+[Unit]
+Description=Uptime Kuma data
+
+[Volume]
