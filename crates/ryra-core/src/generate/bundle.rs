@@ -1,0 +1,565 @@
+use std::path::Path;
+
+use crate::error::{Error, Result};
+use crate::generate::GeneratedFile;
+
+const SERVICE_HOME_PLACEHOLDER: &str = "__RYRA_SERVICE_HOME__";
+const QUADLET_DIR_PLACEHOLDER: &str = "__RYRA_QUADLET_DIR__";
+
+/// Parameters for [`process_quadlet_bundle`].
+pub struct ProcessBundleParams<'a> {
+    pub service_dir: &'a Path,
+    pub service_name: &'a str,
+    pub service_home: &'a Path,
+    pub quadlet_dir: &'a Path,
+    pub extra_networks: &'a [String],
+    pub extra_volumes: &'a [String],
+}
+
+/// Result of processing a quadlet bundle from the registry.
+#[derive(Debug)]
+pub struct ProcessedBundle {
+    pub quadlet_files: Vec<GeneratedFile>,
+    pub config_files: Vec<GeneratedFile>,
+    pub images: Vec<String>,
+}
+
+/// Replace `__RYRA_SERVICE_HOME__` and `__RYRA_QUADLET_DIR__` placeholders in quadlet file content.
+pub fn substitute_paths(content: &str, service_home: &Path, quadlet_dir: &Path) -> String {
+    content
+        .replace(SERVICE_HOME_PLACEHOLDER, &service_home.to_string_lossy())
+        .replace(QUADLET_DIR_PLACEHOLDER, &quadlet_dir.to_string_lossy())
+}
+
+/// Scan processed `.container` files for `Image=` lines. Deduplicate.
+pub fn extract_images(files: &[GeneratedFile]) -> Vec<String> {
+    let mut images = Vec::new();
+    for file in files {
+        let path_str = file.path.to_string_lossy();
+        if !path_str.ends_with(".container") {
+            continue;
+        }
+        for line in file.content.lines() {
+            let trimmed = line.trim();
+            if let Some(image) = trimmed.strip_prefix("Image=") {
+                let image = image.trim().to_string();
+                if !image.is_empty() && !images.contains(&image) {
+                    images.push(image);
+                }
+            }
+        }
+    }
+    images
+}
+
+/// Append `Network=<name>.network` lines to the `[Container]` section of a quadlet file.
+/// Inserts just before `[Service]` section if it exists, otherwise appends at end.
+pub fn inject_networks(content: &str, networks: &[String]) -> String {
+    if networks.is_empty() {
+        return content.to_string();
+    }
+    let extra_lines: String = networks
+        .iter()
+        .map(|n| format!("Network={n}.network"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    inject_before_section(content, &extra_lines, "[Service]")
+}
+
+/// Append `Volume=` lines to the `[Container]` section of a quadlet file.
+/// Inserts just before `[Service]` section if it exists, otherwise appends at end.
+pub fn inject_extra_volumes(content: &str, volumes: &[String]) -> String {
+    if volumes.is_empty() {
+        return content.to_string();
+    }
+    let extra_lines: String = volumes
+        .iter()
+        .map(|v| format!("Volume={v}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    inject_before_section(content, &extra_lines, "[Service]")
+}
+
+/// Insert `extra_lines` just before the line matching `section_header`, or append at end.
+fn inject_before_section(content: &str, extra_lines: &str, section_header: &str) -> String {
+    let mut lines: Vec<&str> = content.lines().collect();
+    let insert_pos = lines.iter().position(|l| l.trim() == section_header);
+
+    match insert_pos {
+        Some(pos) => {
+            // Insert extra lines before the section header, with a blank line separator if needed
+            let needs_blank = pos > 0 && !lines[pos - 1].trim().is_empty();
+            let mut insert = Vec::new();
+            if needs_blank {
+                insert.push("");
+            }
+            for line in extra_lines.lines() {
+                insert.push(line);
+            }
+            // Splice in the extra lines
+            for (i, line) in insert.iter().enumerate() {
+                lines.insert(pos + i, line);
+            }
+            let mut result = lines.join("\n");
+            // Preserve trailing newline if original had one
+            if content.ends_with('\n') {
+                result.push('\n');
+            }
+            result
+        }
+        None => {
+            // No section header found — append at end
+            let mut result = content.to_string();
+            if !result.ends_with('\n') {
+                result.push('\n');
+            }
+            result.push_str(extra_lines);
+            result.push('\n');
+            result
+        }
+    }
+}
+
+/// Main entry point: read all quadlet files from `<service_dir>/quadlets/`,
+/// apply substitutions and injections, extract images, process config files.
+pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<ProcessedBundle> {
+    let quadlets_dir = params.service_dir.join("quadlets");
+
+    if !quadlets_dir.is_dir() {
+        return Err(Error::Registry(format!(
+            "quadlets/ directory not found for service '{}'",
+            params.service_name
+        )));
+    }
+
+    let mut quadlet_files = Vec::new();
+
+    let entries = std::fs::read_dir(&quadlets_dir).map_err(|source| Error::FileRead {
+        path: quadlets_dir.clone(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::FileRead {
+            path: quadlets_dir.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
+            path: path.clone(),
+            source,
+        })?;
+
+        let mut content = substitute_paths(&content, params.service_home, params.quadlet_dir);
+
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| Error::Registry(format!("invalid file path: {}", path.display())))?
+            .to_string_lossy();
+
+        // Only inject networks/volumes into .container files
+        if file_name.ends_with(".container") {
+            content = inject_networks(&content, params.extra_networks);
+            content = inject_extra_volumes(&content, params.extra_volumes);
+        }
+
+        quadlet_files.push(GeneratedFile {
+            path: params.quadlet_dir.join(file_name.as_ref()),
+            content,
+        });
+    }
+
+    if quadlet_files.is_empty() {
+        return Err(Error::Registry(format!(
+            "no quadlet files found in quadlets/ for service '{}'",
+            params.service_name
+        )));
+    }
+
+    // Sort for deterministic ordering
+    quadlet_files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let images = extract_images(&quadlet_files);
+
+    let config_files = process_configs(params.service_dir, params.service_home, params.quadlet_dir)?;
+
+    Ok(ProcessedBundle {
+        quadlet_files,
+        config_files,
+        images,
+    })
+}
+
+/// Read files from `<service_dir>/configs/` recursively, apply path substitution,
+/// map them to `<service_home>/configs/<relative_path>`.
+pub fn process_configs(
+    service_dir: &Path,
+    service_home: &Path,
+    quadlet_dir: &Path,
+) -> Result<Vec<GeneratedFile>> {
+    let configs_dir = service_dir.join("configs");
+    if !configs_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    collect_configs_recursive(&configs_dir, &configs_dir, service_home, quadlet_dir, &mut files)?;
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+fn collect_configs_recursive(
+    base_dir: &Path,
+    current_dir: &Path,
+    service_home: &Path,
+    quadlet_dir: &Path,
+    files: &mut Vec<GeneratedFile>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(current_dir).map_err(|source| Error::FileRead {
+        path: current_dir.to_path_buf(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::FileRead {
+            path: current_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_configs_recursive(base_dir, &path, service_home, quadlet_dir, files)?;
+        } else if path.is_file() {
+            let relative = path
+                .strip_prefix(base_dir)
+                .map_err(|e| Error::Registry(format!("failed to compute relative path: {e}")))?;
+
+            let content =
+                std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
+                    path: path.clone(),
+                    source,
+                })?;
+
+            let content = substitute_paths(&content, service_home, quadlet_dir);
+
+            files.push(GeneratedFile {
+                path: service_home.join("configs").join(relative),
+                content,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn substitute_paths_replaces_both_placeholders() {
+        let content = "Volume=__RYRA_SERVICE_HOME__/data:/data\nEnvironmentFile=__RYRA_QUADLET_DIR__/.env";
+        let result = substitute_paths(
+            content,
+            Path::new("/home/user/.local/share/ryra/myservice"),
+            Path::new("/home/user/.config/containers/systemd"),
+        );
+        assert_eq!(
+            result,
+            "Volume=/home/user/.local/share/ryra/myservice/data:/data\nEnvironmentFile=/home/user/.config/containers/systemd/.env"
+        );
+    }
+
+    #[test]
+    fn substitute_paths_leaves_content_without_placeholders_unchanged() {
+        let content = "Image=docker.io/library/nginx:latest\nNetwork=mynet.network";
+        let result = substitute_paths(
+            content,
+            Path::new("/home/user/.local/share/ryra/svc"),
+            Path::new("/home/user/.config/containers/systemd"),
+        );
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn extract_images_from_container_files_only() {
+        let files = vec![
+            GeneratedFile {
+                path: PathBuf::from("/q/myapp.container"),
+                content: "[Container]\nImage=docker.io/library/nginx:latest\n".to_string(),
+            },
+            GeneratedFile {
+                path: PathBuf::from("/q/myapp.network"),
+                content: "[Network]\nImage=should-be-ignored\n".to_string(),
+            },
+            GeneratedFile {
+                path: PathBuf::from("/q/myapp-db.container"),
+                content: "[Container]\nImage=docker.io/library/postgres:16\n".to_string(),
+            },
+        ];
+        let images = extract_images(&files);
+        assert_eq!(
+            images,
+            vec![
+                "docker.io/library/nginx:latest".to_string(),
+                "docker.io/library/postgres:16".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_images_deduplicates() {
+        let files = vec![
+            GeneratedFile {
+                path: PathBuf::from("/q/a.container"),
+                content: "Image=docker.io/img:1\n".to_string(),
+            },
+            GeneratedFile {
+                path: PathBuf::from("/q/b.container"),
+                content: "Image=docker.io/img:1\nImage=docker.io/img:2\n".to_string(),
+            },
+        ];
+        let images = extract_images(&files);
+        assert_eq!(
+            images,
+            vec![
+                "docker.io/img:1".to_string(),
+                "docker.io/img:2".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn inject_networks_before_service_section() {
+        let content = "[Container]\nImage=nginx\n\n[Service]\nRestart=always\n";
+        let result = inject_networks(content, &["caddy".to_string(), "auth".to_string()]);
+        assert_eq!(
+            result,
+            "[Container]\nImage=nginx\n\nNetwork=caddy.network\nNetwork=auth.network\n[Service]\nRestart=always\n"
+        );
+    }
+
+    #[test]
+    fn inject_networks_empty_is_noop() {
+        let content = "[Container]\nImage=nginx\n\n[Service]\nRestart=always\n";
+        let result = inject_networks(content, &[]);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn inject_networks_no_service_section_appends() {
+        let content = "[Container]\nImage=nginx\n";
+        let result = inject_networks(content, &["caddy".to_string()]);
+        assert_eq!(result, "[Container]\nImage=nginx\nNetwork=caddy.network\n");
+    }
+
+    #[test]
+    fn inject_extra_volumes_before_service_section() {
+        let content = "[Container]\nImage=nginx\n\n[Service]\nRestart=always\n";
+        let result = inject_extra_volumes(content, &["/host/ca.crt:/etc/ssl/ca.crt:ro".to_string()]);
+        assert_eq!(
+            result,
+            "[Container]\nImage=nginx\n\nVolume=/host/ca.crt:/etc/ssl/ca.crt:ro\n[Service]\nRestart=always\n"
+        );
+    }
+
+    #[test]
+    fn inject_extra_volumes_empty_is_noop() {
+        let content = "[Container]\nImage=nginx\n";
+        let result = inject_extra_volumes(content, &[]);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn inject_extra_volumes_no_service_section_appends() {
+        let content = "[Container]\nImage=nginx";
+        let result = inject_extra_volumes(content, &["/a:/b".to_string()]);
+        assert_eq!(result, "[Container]\nImage=nginx\nVolume=/a:/b\n");
+    }
+
+    #[test]
+    fn inject_networks_adds_blank_line_when_needed() {
+        let content = "[Container]\nImage=nginx\nNetwork=mynet.network\n[Service]\nRestart=always\n";
+        let result = inject_networks(content, &["caddy".to_string()]);
+        // Should insert blank line before injected content when previous line is not blank
+        assert_eq!(
+            result,
+            "[Container]\nImage=nginx\nNetwork=mynet.network\n\nNetwork=caddy.network\n[Service]\nRestart=always\n"
+        );
+    }
+
+    #[test]
+    fn process_quadlet_bundle_errors_on_missing_dir() {
+        let params = ProcessBundleParams {
+            service_dir: Path::new("/nonexistent"),
+            service_name: "test",
+            service_home: Path::new("/home/user/.local/share/ryra/test"),
+            quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
+            extra_networks: &[],
+            extra_volumes: &[],
+        };
+        let err = process_quadlet_bundle(&params).unwrap_err();
+        assert!(err.to_string().contains("quadlets/ directory not found"));
+    }
+
+    #[test]
+    fn process_quadlet_bundle_reads_and_processes_files() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
+            unreachable!("tempdir creation should not fail in tests: {e}")
+        });
+        let service_dir = tmp.path().join("myservice");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir).unwrap_or_else(|e| {
+            unreachable!("dir creation should not fail in tests: {e}")
+        });
+
+        std::fs::write(
+            quadlets_dir.join("app.container"),
+            "[Container]\nImage=nginx:latest\nVolume=__RYRA_SERVICE_HOME__/data:/data\n\n[Service]\nRestart=always\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        std::fs::write(
+            quadlets_dir.join("app.network"),
+            "[Network]\nDriver=bridge\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        let service_home = Path::new("/home/user/.local/share/ryra/myservice");
+        let quadlet_dir = Path::new("/home/user/.config/containers/systemd");
+
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "myservice",
+            service_home,
+            quadlet_dir,
+            extra_networks: &["caddy".to_string()],
+            extra_volumes: &[],
+        };
+
+        let bundle = process_quadlet_bundle(&params).unwrap_or_else(|e| {
+            unreachable!("process_quadlet_bundle should not fail: {e}")
+        });
+
+        assert_eq!(bundle.quadlet_files.len(), 2);
+        assert_eq!(bundle.images, vec!["nginx:latest".to_string()]);
+
+        // Check substitution happened in the container file
+        let container_file = bundle
+            .quadlet_files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with(".container"))
+            .unwrap_or_else(|| unreachable!("container file must exist"));
+        assert!(container_file.content.contains("/home/user/.local/share/ryra/myservice/data:/data"));
+        // Check network injection happened
+        assert!(container_file.content.contains("Network=caddy.network"));
+
+        // Network file should NOT have network injection
+        let network_file = bundle
+            .quadlet_files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with(".network"))
+            .unwrap_or_else(|| unreachable!("network file must exist"));
+        assert!(!network_file.content.contains("Network=caddy.network"));
+    }
+
+    #[test]
+    fn process_quadlet_bundle_errors_on_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
+            unreachable!("tempdir creation should not fail in tests: {e}")
+        });
+        let service_dir = tmp.path().join("empty");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir).unwrap_or_else(|e| {
+            unreachable!("dir creation should not fail in tests: {e}")
+        });
+
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "empty",
+            service_home: Path::new("/home/user/.local/share/ryra/empty"),
+            quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
+            extra_networks: &[],
+            extra_volumes: &[],
+        };
+        let err = process_quadlet_bundle(&params).unwrap_err();
+        assert!(err.to_string().contains("no quadlet files found"));
+    }
+
+    #[test]
+    fn process_configs_reads_recursively() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
+            unreachable!("tempdir creation should not fail in tests: {e}")
+        });
+        let service_dir = tmp.path().join("svc");
+        let configs_dir = service_dir.join("configs");
+        let sub_dir = configs_dir.join("subdir");
+        std::fs::create_dir_all(&sub_dir).unwrap_or_else(|e| {
+            unreachable!("dir creation should not fail in tests: {e}")
+        });
+
+        std::fs::write(
+            configs_dir.join("main.conf"),
+            "data_dir=__RYRA_SERVICE_HOME__/data\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        std::fs::write(sub_dir.join("nested.conf"), "no placeholders\n")
+            .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        let service_home = Path::new("/home/user/.local/share/ryra/svc");
+        let quadlet_dir = Path::new("/q");
+
+        let files = process_configs(&service_dir, service_home, quadlet_dir)
+            .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
+
+        assert_eq!(files.len(), 2);
+
+        let main_conf = files
+            .iter()
+            .find(|f| f.path.ends_with("main.conf"))
+            .unwrap_or_else(|| unreachable!("main.conf must exist"));
+        assert_eq!(
+            main_conf.path,
+            PathBuf::from("/home/user/.local/share/ryra/svc/configs/main.conf")
+        );
+        assert!(main_conf.content.contains("/home/user/.local/share/ryra/svc/data"));
+
+        let nested_conf = files
+            .iter()
+            .find(|f| f.path.ends_with("nested.conf"))
+            .unwrap_or_else(|| unreachable!("nested.conf must exist"));
+        assert_eq!(
+            nested_conf.path,
+            PathBuf::from("/home/user/.local/share/ryra/svc/configs/subdir/nested.conf")
+        );
+        assert_eq!(nested_conf.content, "no placeholders\n");
+    }
+
+    #[test]
+    fn process_configs_returns_empty_when_no_configs_dir() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
+            unreachable!("tempdir creation should not fail in tests: {e}")
+        });
+        let service_dir = tmp.path().join("svc");
+        std::fs::create_dir_all(&service_dir).unwrap_or_else(|e| {
+            unreachable!("dir creation should not fail in tests: {e}")
+        });
+
+        let files = process_configs(
+            &service_dir,
+            Path::new("/home/user/.local/share/ryra/svc"),
+            Path::new("/q"),
+        )
+        .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
+
+        assert!(files.is_empty());
+    }
+}

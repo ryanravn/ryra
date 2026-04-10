@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod context;
 pub mod quadlet;
 pub mod template;
@@ -14,6 +15,7 @@ pub struct GeneratedService {
     pub env_file: GeneratedFile,
 }
 
+#[derive(Debug)]
 pub struct GeneratedFile {
     pub path: PathBuf,
     pub content: String,
