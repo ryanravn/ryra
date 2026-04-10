@@ -33,10 +33,16 @@ length = 64
 [[env]]
 name = "ANON_KEY"
 value = "{{secret.anon_key}}"
+format = "jwt_hs256"
+jwt_signing_key = "jwt_secret"
+jwt_claims = { role = "anon", iss = "supabase" }
 
 [[env]]
 name = "SERVICE_ROLE_KEY"
 value = "{{secret.service_role_key}}"
+format = "jwt_hs256"
+jwt_signing_key = "jwt_secret"
+jwt_claims = { role = "service_role", iss = "supabase" }
 
 [[env]]
 name = "SECRET_KEY_BASE"

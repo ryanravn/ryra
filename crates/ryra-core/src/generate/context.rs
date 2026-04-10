@@ -132,7 +132,54 @@ pub fn build_context(
     }
 
     // secret.* — generate fresh values using the env var's format + length.
+    // Three passes:
+    // 1. Generate secrets that JWT signing keys depend on (e.g., jwt_secret)
+    // 2. Generate JWT secrets (which reference signing key secrets)
+    // 3. Generate remaining non-JWT secrets
+
+    // Pass 1: collect signing key names and generate them first
+    let jwt_signing_keys: Vec<String> = service_def
+        .env
+        .iter()
+        .filter(|e| e.format == EnvFormat::JwtHs256)
+        .filter_map(|e| e.jwt_signing_key.clone())
+        .collect();
     for env in &service_def.env {
+        if env.format == EnvFormat::JwtHs256 {
+            continue;
+        }
+        for secret_name in crate::generate::extract_secret_refs(&env.value) {
+            if jwt_signing_keys.contains(&secret_name) {
+                let key = format!("secret.{secret_name}");
+                ctx.entry(key)
+                    .or_insert_with(|| secret::generate(&env.format, env.length));
+            }
+        }
+    }
+
+    // Pass 2: generate JWT secrets using the signing keys
+    for env in &service_def.env {
+        if env.format != EnvFormat::JwtHs256 {
+            continue;
+        }
+        if let (Some(claims), Some(signing_key_name)) = (&env.jwt_claims, &env.jwt_signing_key) {
+            let signing_key = ctx
+                .get(&format!("secret.{signing_key_name}"))
+                .cloned()
+                .unwrap_or_default();
+            for secret_name in crate::generate::extract_secret_refs(&env.value) {
+                let key = format!("secret.{secret_name}");
+                ctx.entry(key)
+                    .or_insert_with(|| secret::generate_jwt_hs256(&signing_key, claims));
+            }
+        }
+    }
+
+    // Pass 3: generate remaining secrets
+    for env in &service_def.env {
+        if env.format == EnvFormat::JwtHs256 {
+            continue;
+        }
         for secret_name in crate::generate::extract_secret_refs(&env.value) {
             let key = format!("secret.{secret_name}");
             ctx.entry(key)

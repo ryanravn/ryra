@@ -1,6 +1,11 @@
+use base64::Engine;
+use hmac::{Hmac, Mac};
 use rand::Rng;
+use sha2::Sha256;
 
 use crate::registry::service_def::EnvFormat;
+
+type HmacSha256 = Hmac<Sha256>;
 
 const ALPHANUMERIC: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const HEX: &[u8] = b"0123456789abcdef";
@@ -10,7 +15,7 @@ fn default_length(format: &EnvFormat) -> Option<usize> {
     match format {
         EnvFormat::String => Some(32),
         EnvFormat::Hex => Some(64),
-        EnvFormat::Uuid => None,
+        EnvFormat::Uuid | EnvFormat::JwtHs256 => None,
     }
 }
 
@@ -59,7 +64,46 @@ pub fn generate(format: &EnvFormat, length: Option<u32>) -> String {
                 b[15]
             )
         }
+        // JWT secrets are generated via generate_jwt_hs256, not this function.
+        EnvFormat::JwtHs256 => String::new(),
     }
+}
+
+/// Generate an HS256-signed JWT with the given claims, signed by `signing_key`.
+/// Adds `iat` (now) and `exp` (now + 5 years) if not already present in claims.
+pub fn generate_jwt_hs256(
+    signing_key: &str,
+    claims: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> String {
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let header = r#"{"alg":"HS256","typ":"JWT"}"#;
+    let header_b64 = b64.encode(header.as_bytes());
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut payload_claims = claims.clone();
+    payload_claims
+        .entry("iat".to_string())
+        .or_insert(serde_json::Value::Number(now.into()));
+    payload_claims
+        .entry("exp".to_string())
+        .or_insert(serde_json::Value::Number((now + 157_680_000).into())); // 5 years
+
+    let payload_json = serde_json::to_string(&payload_claims).unwrap_or_default();
+    let payload_b64 = b64.encode(payload_json.as_bytes());
+
+    let message = format!("{header_b64}.{payload_b64}");
+
+    let mut mac = HmacSha256::new_from_slice(signing_key.as_bytes())
+        .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
+    mac.update(message.as_bytes());
+    let sig = b64.encode(mac.finalize().into_bytes());
+
+    format!("{message}.{sig}")
 }
 
 fn random_string(charset: &[u8], len: usize) -> String {

@@ -116,7 +116,7 @@ pub enum EnvKind {
 
 /// Format of an env var's value — used for secret generation and input validation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum EnvFormat {
     /// Free-form alphanumeric string (default).
     #[default]
@@ -125,6 +125,8 @@ pub enum EnvFormat {
     Hex,
     /// UUID v4.
     Uuid,
+    /// HS256-signed JWT. Requires `jwt_role` and `jwt_signing_key` on the env var.
+    JwtHs256,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,10 +141,17 @@ pub struct EnvVar {
     /// Value format — used to generate secrets and validate user input.
     #[serde(default)]
     pub format: EnvFormat,
-    /// Length for generated secrets. Ignored for `uuid` format.
+    /// Length for generated secrets. Ignored for `uuid` and `jwt_hs256` formats.
     /// Defaults to 32 for `string`, 64 for `hex`.
     #[serde(default)]
     pub length: Option<u32>,
+    /// JSON payload claims for `jwt_hs256` format (e.g., `{"role": "anon", "iss": "supabase"}`).
+    /// `iat` and `exp` are added automatically if not present.
+    #[serde(default)]
+    pub jwt_claims: Option<std::collections::BTreeMap<std::string::String, serde_json::Value>>,
+    /// Secret name used as the HS256 signing key (e.g., "jwt_secret"). Required for `jwt_hs256` format.
+    #[serde(default)]
+    pub jwt_signing_key: Option<std::string::String>,
 }
 
 /// A service that must already be installed on the system before this one.

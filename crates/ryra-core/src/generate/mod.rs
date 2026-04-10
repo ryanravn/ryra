@@ -132,6 +132,8 @@ fn render_env_vars(
                 prompt: None,
                 format: Default::default(),
                 length: None,
+                jwt_claims: None,
+                jwt_signing_key: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -151,6 +153,8 @@ fn render_env_vars(
                 prompt: None,
                 format: Default::default(),
                 length: None,
+                jwt_claims: None,
+                jwt_signing_key: None,
             });
         }
     }
@@ -169,6 +173,8 @@ fn render_env_vars(
                 prompt: None,
                 format: Default::default(),
                 length: None,
+                jwt_claims: None,
+                jwt_signing_key: None,
             });
         }
     }

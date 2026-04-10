@@ -1,5 +1,5 @@
 [Unit]
-Description=Supabase Kong API gateway
+Description=Supabase API gateway (Kong)
 StartLimitIntervalSec=60
 StartLimitBurst=3
 Requires=supabase.network
