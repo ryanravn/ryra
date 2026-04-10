@@ -472,7 +472,7 @@ pub fn add_service(
         .collect();
 
     // Secret names from env var templates (not stored in state)
-    let generated_secrets: Vec<String> = reg_service
+    let mut generated_secrets: Vec<String> = reg_service
         .def
         .env
         .iter()
@@ -492,6 +492,10 @@ pub fn add_service(
             secrets
         })
         .collect();
+    // Deduplicate — the same secret may be referenced by multiple env vars
+    generated_secrets.dedup();
+    generated_secrets.sort();
+    generated_secrets.dedup();
 
     // Caddy reverse proxy: if a domain is provided and Caddy is installed,
     // add a site block to the Caddyfile and restart Caddy.
