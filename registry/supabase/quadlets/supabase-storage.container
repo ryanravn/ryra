@@ -1,6 +1,6 @@
 [Unit]
 Description=Supabase Storage
-StartLimitIntervalSec=60
+StartLimitIntervalSec=300
 StartLimitBurst=3
 Requires=supabase.network supabase-db.service supabase-rest.service supabase-imgproxy.service
 After=supabase.network supabase-db.service supabase-rest.service supabase-imgproxy.service
@@ -20,7 +20,7 @@ HealthRetries=3
 [Service]
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 Restart=always
-RestartSec=5
+RestartSec=10
 TimeoutStartSec=300
 
 [Install]

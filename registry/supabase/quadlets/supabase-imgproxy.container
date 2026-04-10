@@ -1,6 +1,6 @@
 [Unit]
 Description=Supabase imgproxy
-StartLimitIntervalSec=60
+StartLimitIntervalSec=300
 StartLimitBurst=3
 Requires=supabase.network
 After=supabase.network
@@ -19,7 +19,7 @@ HealthRetries=3
 [Service]
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 Restart=always
-RestartSec=5
+RestartSec=10
 TimeoutStartSec=300
 
 [Install]

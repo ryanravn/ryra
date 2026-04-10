@@ -38,6 +38,13 @@ async fn execute(step: &Step) -> Result<()> {
             }
             std::fs::write(&file.path, &file.content)
                 .with_context(|| format!("failed to write {}", file.path.display()))?;
+            // Preserve executable permission for script files
+            #[cfg(unix)]
+            if file.path.extension().map(|e| e == "sh").unwrap_or(false) {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&file.path, std::fs::Permissions::from_mode(0o755))
+                    .with_context(|| format!("failed to set permissions on {}", file.path.display()))?;
+            }
             Ok(())
         }
         Step::DaemonReload => run("systemctl --user daemon-reload"),

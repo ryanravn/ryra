@@ -1,6 +1,6 @@
 [Unit]
 Description=Supabase Postgres Meta
-StartLimitIntervalSec=60
+StartLimitIntervalSec=300
 StartLimitBurst=3
 Requires=supabase.network supabase-db.service
 After=supabase.network supabase-db.service
@@ -15,7 +15,7 @@ EnvironmentFile=%h/.local/share/ryra/supabase/.env
 [Service]
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 Restart=always
-RestartSec=5
+RestartSec=10
 TimeoutStartSec=300
 
 [Install]

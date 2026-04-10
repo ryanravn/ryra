@@ -1,9 +1,9 @@
 [Unit]
 Description=Supabase API gateway (Kong)
-StartLimitIntervalSec=60
+StartLimitIntervalSec=300
 StartLimitBurst=3
-Requires=supabase.network
-After=supabase.network
+Requires=supabase.network supabase-db.service supabase-auth.service supabase-rest.service supabase-realtime.service supabase-storage.service supabase-imgproxy.service supabase-meta.service supabase-studio.service
+After=supabase.network supabase-db.service supabase-auth.service supabase-rest.service supabase-realtime.service supabase-storage.service supabase-imgproxy.service supabase-meta.service supabase-studio.service
 
 [Container]
 ContainerName=supabase-kong
@@ -13,7 +13,7 @@ PublishPort=${RYRA_PORT_HTTP}:8000
 PublishPort=${RYRA_PORT_HTTPS}:8443
 Volume=%h/.local/share/ryra/supabase/configs/api/kong.yml:/home/kong/temp.yml:ro,z
 Volume=%h/.local/share/ryra/supabase/configs/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro,z
-Environment=KONG_NGINX_PROXY_PROXY_BUFFERS="64 160k"
+Environment="KONG_NGINX_PROXY_PROXY_BUFFERS=64 160k"
 Environment=KONG_DECLARATIVE_CONFIG=/tmp/kong.yml
 Entrypoint=["/home/kong/kong-entrypoint.sh"]
 Pull=never
@@ -22,7 +22,7 @@ EnvironmentFile=%h/.local/share/ryra/supabase/.env
 [Service]
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 Restart=always
-RestartSec=5
+RestartSec=10
 TimeoutStartSec=300
 
 [Install]
