@@ -2,10 +2,8 @@
 name = "postgres"
 description = "PostgreSQL - open source relational database"
 url = "https://www.postgresql.org/docs/"
-image = "docker.io/library/postgres:17-alpine"
 architecture = ["amd64", "arm64"]
 kind = "infrastructure"
-note = "podman exec -it systemd-postgres psql -U $POSTGRES_USER $POSTGRES_DB  # connect"
 
 [requirements.ram]
 min = 128
@@ -14,10 +12,6 @@ recommended = 256
 [[ports]]
 name = "tcp"
 container_port = 5432
-
-[[volumes]]
-name = "data"
-mount_path = "/var/lib/postgresql/data"
 
 [[env]]
 name = "POSTGRES_USER"

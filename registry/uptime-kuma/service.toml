@@ -2,7 +2,6 @@
 name = "uptime-kuma"
 description = "Uptime Kuma - self-hosted monitoring tool"
 url = "https://github.com/louislam/uptime-kuma"
-image = "docker.io/louislam/uptime-kuma:1"
 architecture = ["amd64", "arm64"]
 
 [requirements.ram]
@@ -12,10 +11,6 @@ recommended = 256
 [[ports]]
 name = "http"
 container_port = 3001
-
-[[volumes]]
-name = "data"
-mount_path = "/app/data"
 
 [integrations]
 auth = []

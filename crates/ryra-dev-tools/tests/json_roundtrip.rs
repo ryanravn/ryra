@@ -75,11 +75,6 @@ fn json_registry_roundtrip() {
             "port count mismatch for {name}"
         );
         assert_eq!(
-            found.def.volumes.len(),
-            original.def.volumes.len(),
-            "volume count mismatch for {name}"
-        );
-        assert_eq!(
             found.def.env.len(),
             original.def.env.len(),
             "env count mismatch for {name}"

@@ -87,22 +87,6 @@ pub enum Step {
     RemoveVolume { name: String },
     /// Create a directory (with parents).
     CreateDir(PathBuf),
-    /// Run a pre-start hook — a shell command on the host before the service starts.
-    /// The service's .env is sourced before the command runs.
-    PreStartHook {
-        name: String,
-        service_name: String,
-        run: String,
-        timeout: u32,
-    },
-    /// Run a post-start hook — a shell command on the host after the service is active.
-    /// The service's .env is sourced before the command runs.
-    PostStartHook {
-        name: String,
-        service_name: String,
-        run: String,
-        timeout: u32,
-    },
 }
 
 impl Step {
@@ -119,32 +103,6 @@ impl Step {
             Step::RemoveFile(path) => format!("rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
-            Step::PreStartHook {
-                name,
-                service_name,
-                run,
-                ..
-            } => {
-                let home = service_home(service_name)
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "<unknown>".into());
-                format!(
-                    "# pre-start hook '{name}' for {service_name}\nsh -c '. {home}/.env && {run}'"
-                )
-            }
-            Step::PostStartHook {
-                name,
-                service_name,
-                run,
-                ..
-            } => {
-                let home = service_home(service_name)
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "<unknown>".into());
-                format!(
-                    "# post-start hook '{name}' for {service_name}\nsh -c '. {home}/.env && {run}'"
-                )
-            }
             Step::RemoveVolume { name } => format!("podman volume rm {name}"),
         }
     }
@@ -186,8 +144,6 @@ pub struct AddResult {
     pub env_content: String,
     /// Domain assigned to this service (if Caddy reverse proxy was configured).
     pub domain: Option<String>,
-    /// Optional note shown after install.
-    pub note: Option<String>,
 }
 
 pub struct RemoveResult {
@@ -278,15 +234,20 @@ pub async fn init(config: Config) -> Result<InitResult> {
 
 /// Determine which extra podman networks a service should join.
 /// Services with a domain join caddy's network for reverse proxy routing.
-/// OIDC auth also goes through caddy (for correct issuer in discovery).
+/// Services with auth join authelia's network for OIDC communication.
 fn resolve_extra_networks(
     service_name: &str,
     domain: Option<&str>,
+    enable_auth: bool,
     caddy_installed: bool,
+    authelia_installed: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
     if domain.is_some() && caddy_installed && service_name != SERVICE_CADDY {
         networks.push(SERVICE_CADDY.to_string());
+    }
+    if enable_auth && authelia_installed && service_name != SERVICE_AUTHELIA {
+        networks.push(SERVICE_AUTHELIA.to_string());
     }
     networks
 }
@@ -364,13 +325,12 @@ pub fn add_service(
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
-    let add_hosts = Vec::new();
     let mut extra_volumes = Vec::new();
     let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
 
     // When auth is enabled and routes through Caddy (HTTPS), mount Caddy's
     // root CA cert so containers trust the self-signed TLS.
-    // The cert is exported by caddy's post_start hook to a known path.
+    // The cert is exported by caddy's config scripts to a known path.
     if enable_auth && caddy::is_installed() {
         let caddy_home = service_home(SERVICE_CADDY)?;
         let ca_cert = caddy_home
@@ -390,23 +350,36 @@ pub fn add_service(
         }
     }
 
-    let extra_networks = resolve_extra_networks(service_name, domain, caddy::is_installed());
+    let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
+    let extra_networks = resolve_extra_networks(
+        service_name,
+        domain,
+        enable_auth,
+        caddy::is_installed(),
+        authelia_installed,
+    );
 
-    let output = generate::generate_service(generate::GenerateServiceParams {
+    let output = generate::generate_env(generate::GenerateEnvParams {
         config: &config,
         service_def: &reg_service.def,
         auth_kind: auth_kind.as_ref(),
         host_port,
-        quadlet_dir: &quadlet_path,
         env_overrides,
-        service_dir: &reg_service.service_dir,
-        add_hosts,
-        extra_volumes,
         domain,
-        extra_networks,
         extra_env,
     })?;
-    let generated = output.service;
+
+    // Process quadlet bundle from registry
+    let bundle = generate::bundle::process_quadlet_bundle(
+        &generate::bundle::ProcessBundleParams {
+            service_dir: &reg_service.service_dir,
+            service_name,
+            service_home: &home_dir,
+            quadlet_dir: &quadlet_path,
+            extra_networks: &extra_networks,
+            extra_volumes: &extra_volumes,
+        },
+    )?;
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -437,53 +410,28 @@ pub fn add_service(
     // 1. Create service data directory
     steps.push(Step::CreateDir(home_dir.clone()));
 
-    // Capture env content before it's moved into steps
-    let env_content = generated.env_file.content.clone();
+    // Capture env content before it is moved into steps
+    let env_content = output.env_file.content.clone();
 
-    // 2. Pull all images (primary + sidecars, deduplicated)
-    for image in reg_service.def.all_images() {
+    // 2. Pull all images (from quadlet bundle)
+    for image in &bundle.images {
         steps.push(Step::PullImage {
-            image: image.to_string(),
+            image: image.clone(),
         });
     }
 
-    // 3. Write quadlet + .env files
-    let generate::GeneratedService { files, env_file } = generated;
-
-    for file in files {
+    // 3. Write quadlet files from bundle
+    for file in bundle.quadlet_files {
         steps.push(Step::WriteFile(file));
     }
-    steps.push(Step::WriteFile(env_file));
 
-    // 4. Create bind mount directories (must exist before container starts)
-    let all_volumes = reg_service.def.volumes.iter().chain(
-        reg_service
-            .def
-            .containers
-            .iter()
-            .flat_map(|c| c.volumes.iter()),
-    );
-    for vol in all_volumes {
-        if let Some(ref host_path) = vol.host_path {
-            // Replace %h with actual home dir path
-            let resolved = host_path.replace("%h", &home_dir.to_string_lossy());
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: PathBuf::from(resolved).join(".keep"),
-                content: String::new(),
-            }));
-        }
+    // 4. Write config files from bundle
+    for file in bundle.config_files {
+        steps.push(Step::WriteFile(file));
     }
 
-    // Pre-start hooks — run before the container starts (e.g., generate config files).
-    // The service's data dir and .env already exist at this point.
-    for hook in &reg_service.def.pre_start {
-        steps.push(Step::PreStartHook {
-            name: hook.name.clone(),
-            service_name: service_name.to_string(),
-            run: hook.run.clone(),
-            timeout: hook.timeout,
-        });
-    }
+    // 5. Write .env file
+    steps.push(Step::WriteFile(output.env_file));
 
     // 6. Reload and start via systemd
     steps.push(Step::DaemonReload);
@@ -506,27 +454,6 @@ pub fn add_service(
             &config,
             &quadlet_path,
         ));
-    }
-
-    // 6. Post-start hooks — run after service is active
-    let has_hooks = !reg_service.def.post_start.is_empty();
-    for hook in &reg_service.def.post_start {
-        steps.push(Step::PostStartHook {
-            name: hook.name.clone(),
-            service_name: service_name.to_string(),
-            run: hook.run.clone(),
-            timeout: hook.timeout,
-        });
-    }
-
-    // Restart the service after post-start hooks so it picks up injected config
-    if has_hooks {
-        steps.push(Step::StopService {
-            unit: service_name.to_string(),
-        });
-        steps.push(Step::StartService {
-            unit: service_name.to_string(),
-        });
     }
 
     // Collect post-install info
@@ -633,7 +560,6 @@ pub fn add_service(
         generated_secrets,
         env_content,
         domain: domain.map(|d| d.to_string()),
-        note: reg_service.def.service.note.clone(),
     })
 }
 
@@ -810,10 +736,21 @@ pub fn update_service(
     let reg_service = registry::find_service(repo_dir, service_name)?;
     let changes = diff::compute_changes(&old, &reg_service.def);
 
+    let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
     // Determine host_port from installed service's port mappings
     let host_port = service.ports.values().next().copied();
+
+    let enable_auth = service.auth_kind.is_some();
+    let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
+    let extra_networks = resolve_extra_networks(
+        service_name,
+        service.domain.as_deref(),
+        enable_auth,
+        caddy::is_installed(),
+        authelia_installed,
+    );
 
     let mut steps = Vec::new();
 
@@ -822,45 +759,46 @@ pub fn update_service(
         unit: service_name.to_string(),
     });
 
-    // 2. Regenerate all files from the current registry definition
-    let output = generate::generate_service(generate::GenerateServiceParams {
+    // 2. Generate .env
+    let output = generate::generate_env(generate::GenerateEnvParams {
         config: &config,
         service_def: &reg_service.def,
         auth_kind: service.auth_kind.as_ref(),
         host_port,
-        quadlet_dir: &quadlet_path,
         env_overrides,
-        service_dir: &reg_service.service_dir,
-        add_hosts: Vec::new(),
-        extra_volumes: Vec::new(),
         domain: service.domain.as_deref(),
-        extra_networks: if service.domain.is_some()
-            && caddy::is_installed()
-            && service_name != SERVICE_CADDY
-        {
-            vec![SERVICE_CADDY.to_string()]
-        } else {
-            vec![]
-        },
         extra_env: BTreeMap::new(),
     })?;
-    let generated = output.service;
 
-    // 3. Pull all images (primary + sidecars)
-    for image in reg_service.def.all_images() {
+    // 3. Process quadlet bundle
+    let bundle = generate::bundle::process_quadlet_bundle(
+        &generate::bundle::ProcessBundleParams {
+            service_dir: &reg_service.service_dir,
+            service_name,
+            service_home: &home_dir,
+            quadlet_dir: &quadlet_path,
+            extra_networks: &extra_networks,
+            extra_volumes: &[],
+        },
+    )?;
+
+    // 4. Pull all images
+    for image in &bundle.images {
         steps.push(Step::PullImage {
-            image: image.to_string(),
+            image: image.clone(),
         });
     }
 
-    // 4. Write files and restart
-    let generate::GeneratedService { files, env_file } = generated;
-
-    for file in files {
+    // 5. Write files
+    for file in bundle.quadlet_files {
         steps.push(Step::WriteFile(file));
     }
-    steps.push(Step::WriteFile(env_file));
+    for file in bundle.config_files {
+        steps.push(Step::WriteFile(file));
+    }
+    steps.push(Step::WriteFile(output.env_file));
 
+    // 6. Reload and restart
     steps.push(Step::DaemonReload);
     steps.push(Step::StartService {
         unit: service_name.to_string(),
@@ -993,7 +931,6 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
             SearchResult {
                 name: name.clone(),
                 description: reg_svc.def.service.description,
-                has_sidecars: !reg_svc.def.containers.is_empty(),
                 installed,
             }
         })
@@ -1005,7 +942,6 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
 pub struct SearchResult {
     pub name: String,
     pub description: String,
-    pub has_sidecars: bool,
     pub installed: bool,
 }
 
@@ -1079,7 +1015,6 @@ pub fn service_info(repo_dir: &Path, service_name: &str) -> Result<ServiceDetail
         name: def.service.name.clone(),
         description: def.service.description.clone(),
         url: def.service.url.clone(),
-        has_sidecars: !def.containers.is_empty(),
         ports: def
             .ports
             .iter()
@@ -1097,7 +1032,6 @@ pub struct ServiceDetail {
     pub name: String,
     pub description: String,
     pub url: Option<String>,
-    pub has_sidecars: bool,
     pub ports: Vec<(u16, registry::service_def::PortProtocol, String)>,
     pub env_vars: Vec<(String, Option<String>)>,
 }
@@ -1108,25 +1042,38 @@ mod tests {
 
     #[test]
     fn networks_empty_when_no_domain() {
-        let nets = resolve_extra_networks("whoami", None, false);
+        let nets = resolve_extra_networks("whoami", None, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_caddy_when_domain_and_caddy() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true);
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), false, true, false);
         assert_eq!(nets, vec!["caddy"]);
     }
 
     #[test]
     fn networks_empty_when_domain_but_no_caddy() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), false);
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_caddy_excluded_for_caddy_itself() {
-        let nets = resolve_extra_networks("caddy", Some("caddy.test.local"), true);
+        let nets = resolve_extra_networks("caddy", Some("caddy.test.local"), false, true, false);
         assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn networks_authelia_when_auth_enabled() {
+        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true, true, true);
+        assert_eq!(nets, vec!["caddy", "authelia"]);
+    }
+
+    #[test]
+    fn networks_authelia_excluded_for_authelia_itself() {
+        let nets =
+            resolve_extra_networks("authelia", Some("auth.test.local"), true, true, true);
+        assert_eq!(nets, vec!["caddy"]);
     }
 }

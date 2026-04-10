@@ -1,7 +1,6 @@
 [service]
 name = "whoami-auth"
 description = "whoami with OIDC auth integration (for testing)"
-image = "docker.io/traefik/whoami:v1.11.0"
 architecture = ["amd64", "arm64"]
 
 [[ports]]

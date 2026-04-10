@@ -2,15 +2,7 @@
 name = "openclaw"
 description = "OpenClaw - self-hosted AI assistant gateway"
 url = "https://docs.openclaw.ai/"
-image = "ghcr.io/openclaw/openclaw:2026.3.13-1"
 architecture = ["amd64", "arm64"]
-command = '''sh -c "echo '{\"gateway\":{\"mode\":\"local\",\"bind\":\"lan\",\"auth\":{\"mode\":\"token\",\"token\":\"'\"$OPENCLAW_GATEWAY_TOKEN\"'\"},\"controlUi\":{\"dangerouslyAllowHostHeaderOriginFallback\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured"'''
-note = """Dashboard: http://127.0.0.1:$RYRA_PORT_GATEWAY/#token=$OPENCLAW_GATEWAY_TOKEN
-
-On first connect, approve your browser as a device:
-  podman exec systemd-openclaw openclaw devices list
-  podman exec systemd-openclaw openclaw devices approve <request-id>
-Then refresh the page. This is a one-time step per browser."""
 
 [requirements.ram]
 min = 1024
@@ -19,10 +11,6 @@ recommended = 2048
 [[ports]]
 name = "gateway"
 container_port = 18789
-
-[[volumes]]
-name = "config"
-mount_path = "/home/node/.openclaw"
 
 [[env]]
 name = "OPENCLAW_GATEWAY_TOKEN"

@@ -74,10 +74,6 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         println!("  Docs: {url}");
     }
 
-    if detail.has_sidecars {
-        println!("  Deploy: multi-container (quadlet)");
-    }
-
     if !detail.ports.is_empty() {
         println!();
         println!("Ports:");

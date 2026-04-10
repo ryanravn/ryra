@@ -11,28 +11,13 @@ pub struct ServiceDef {
     #[serde(default)]
     pub ports: Vec<PortDef>,
     #[serde(default)]
-    pub volumes: Vec<VolumeDef>,
-    #[serde(default)]
     pub env: Vec<EnvVar>,
     #[serde(default)]
     pub requires: Vec<ServiceRequirement>,
-    /// Sidecar containers for multi-container services.
-    #[serde(default)]
-    pub containers: Vec<ContainerDef>,
     #[serde(default)]
     pub mappings: Mappings,
     #[serde(default)]
     pub integrations: IntegrationFlags,
-    /// Commands that run on the host before the service container starts.
-    /// The service's .env is sourced and data dir exists at this point.
-    #[serde(default)]
-    pub pre_start: Vec<PostStartHookDef>,
-    /// Commands that run on the host after the service is started and ports are reachable.
-    /// Useful for services that need config injection into files created at runtime
-    /// (e.g. Seafile writes OAuth config to seahub_settings.py after bootstrap).
-    /// The service's .env is sourced before each hook runs.
-    #[serde(default)]
-    pub post_start: Vec<PostStartHookDef>,
 }
 
 /// System resource requirements for a service.
@@ -52,47 +37,6 @@ pub struct RamRequirement {
     pub recommended: Option<u64>,
 }
 
-/// A sidecar container that runs alongside the primary container.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContainerDef {
-    pub name: String,
-    pub image: String,
-    #[serde(default)]
-    pub command: Option<String>,
-    /// References to top-level [[volumes]] this sidecar also mounts.
-    #[serde(default)]
-    pub volumes: Vec<VolumeDef>,
-    /// Whether this container reads the shared .env file.
-    #[serde(default = "default_true")]
-    pub env_file: bool,
-    /// Names of other containers this one depends on (maps to After=/Requires=).
-    #[serde(default)]
-    pub depends_on: Vec<String>,
-    #[serde(default)]
-    pub healthcheck: Option<HealthcheckDef>,
-    /// If true, this is an init container — runs once, must exit 0 before
-    /// dependent containers start. Maps to Type=oneshot + RemainAfterExit=yes.
-    #[serde(default)]
-    pub init: bool,
-}
-
-/// Healthcheck configuration for a container.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthcheckDef {
-    pub command: String,
-    /// Start period in seconds.
-    #[serde(default)]
-    pub start_period: Option<u32>,
-    /// Interval in seconds.
-    #[serde(default)]
-    pub interval: Option<u32>,
-    /// Number of retries.
-    #[serde(default)]
-    pub retries: Option<u32>,
-    /// Timeout in seconds.
-    #[serde(default)]
-    pub timeout: Option<u32>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceMeta {
@@ -101,20 +45,12 @@ pub struct ServiceMeta {
     /// Optional URL to documentation or project homepage.
     #[serde(default)]
     pub url: Option<String>,
-    /// Container image for the primary container.
-    pub image: String,
-    /// Override the container CMD (maps to quadlet `Exec=`).
-    #[serde(default)]
-    pub command: Option<String>,
     #[serde(default)]
     pub kind: ServiceKind,
     /// Supported CPU architectures (e.g. ["amd64", "arm64"]).
     /// Empty means all architectures are supported.
     #[serde(default)]
     pub architecture: Vec<String>,
-    /// Optional message shown after install (e.g. pairing instructions).
-    #[serde(default)]
-    pub note: Option<String>,
 }
 
 /// What role this service plays in the system.
@@ -156,15 +92,6 @@ pub struct PortDef {
     pub protocol: PortProtocol,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VolumeDef {
-    pub name: String,
-    pub mount_path: String,
-    /// If set, this is a bind mount from a path relative to the service home dir.
-    /// The volume name is used for identification only.
-    #[serde(default)]
-    pub host_path: Option<String>,
-}
 
 /// How an env var is presented to the user during `ryra add`.
 ///
@@ -276,24 +203,6 @@ fn default_true() -> bool {
     true
 }
 
-fn default_hook_timeout() -> u32 {
-    300
-}
-
-/// A command that runs on the host after the service is started.
-///
-/// The service's `.env` file is sourced before the command runs, so all
-/// env vars (including auth mappings like `OAUTH_CLIENT_ID`) are available.
-/// The command runs as root with the service's home dir as working directory.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostStartHookDef {
-    pub name: String,
-    /// Shell command to run on the host.
-    pub run: String,
-    /// Timeout in seconds (default: 300). Must be 1–3600.
-    #[serde(default = "default_hook_timeout")]
-    pub timeout: u32,
-}
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -316,17 +225,6 @@ impl ServiceDef {
                 self.service.architecture.join(", "),
             ))
         }
-    }
-
-    /// All container images needed by this service (primary + sidecars), deduplicated.
-    pub fn all_images(&self) -> Vec<&str> {
-        let mut images = vec![self.service.image.as_str()];
-        for c in &self.containers {
-            if !images.contains(&c.image.as_str()) {
-                images.push(&c.image);
-            }
-        }
-        images
     }
 
     /// Returns env var names that are required — must be provided during install.
@@ -358,20 +256,6 @@ impl ServiceDef {
         for e in &self.env {
             if !seen_envs.insert(&e.name) {
                 errors.push(format!("duplicate env var name '{}'", e.name));
-            }
-        }
-
-        let mut seen_volumes = std::collections::HashSet::new();
-        for v in &self.volumes {
-            if !seen_volumes.insert(&v.name) {
-                errors.push(format!("duplicate volume name '{}'", v.name));
-            }
-        }
-
-        let mut seen_containers = std::collections::HashSet::new();
-        for c in &self.containers {
-            if !seen_containers.insert(&c.name) {
-                errors.push(format!("duplicate container name '{}'", c.name));
             }
         }
 
@@ -410,30 +294,6 @@ impl ServiceDef {
                 errors.push(format!(
                     "env var '{}' is kind=required but has a secret template default — use kind=prompted or kind=default",
                     e.name
-                ));
-            }
-        }
-
-        // --- Container references ---
-
-        for c in &self.containers {
-            for dep in &c.depends_on {
-                if !self.containers.iter().any(|other| &other.name == dep) {
-                    errors.push(format!(
-                        "container '{}' depends on '{}' which is not defined",
-                        c.name, dep
-                    ));
-                }
-            }
-        }
-
-        // --- Hook timeouts ---
-
-        for hook in self.pre_start.iter().chain(self.post_start.iter()) {
-            if hook.timeout == 0 || hook.timeout > 3600 {
-                errors.push(format!(
-                    "hook '{}' has timeout {} — must be 1–3600 seconds",
-                    hook.name, hook.timeout,
                 ));
             }
         }

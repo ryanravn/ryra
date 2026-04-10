@@ -2,7 +2,6 @@
 name = "caddy"
 description = "Caddy - automatic HTTPS reverse proxy"
 url = "https://caddyserver.com"
-image = "docker.io/library/caddy:2-alpine"
 architecture = ["amd64", "arm64"]
 
 [[ports]]
@@ -14,52 +13,6 @@ host_port = 8080
 name = "https"
 container_port = 8443
 host_port = 8443
-
-[[volumes]]
-name = "data"
-mount_path = "/data"
-
-[[volumes]]
-name = "config-state"
-mount_path = "/config"
-
-[[volumes]]
-name = "caddyfile-dir"
-mount_path = "/etc/caddy"
-host_path = "%h/config"
-
-[[pre_start]]
-name = "seed-caddyfile"
-timeout = 10
-run = """
-CADDY_CONFIG="$HOME/.local/share/ryra/caddy/config"
-mkdir -p "$CADDY_CONFIG"
-CADDYFILE="$CADDY_CONFIG/Caddyfile"
-[ -f "$CADDYFILE" ] && exit 0
-cat > "$CADDYFILE" <<'EOF'
-:80 {
-	respond 404
-}
-
-:8443 {
-	tls internal
-	respond 404
-}
-EOF
-"""
-
-[[post_start]]
-name = "export-root-ca"
-timeout = 30
-run = """
-CA_CERT="$HOME/.local/share/ryra/caddy-root-ca.crt"
-for i in $(seq 1 10); do
-  podman exec systemd-caddy cat /data/caddy/pki/authorities/local/root.crt > "$CA_CERT" 2>/dev/null && [ -s "$CA_CERT" ] && exit 0
-  sleep 1
-done
-echo "Note: CA cert not yet available (will be exported on next caddy restart)"
-exit 0
-"""
 
 [integrations]
 auth = []

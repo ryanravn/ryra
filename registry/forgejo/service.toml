@@ -2,7 +2,6 @@
 name = "forgejo"
 description = "Forgejo - self-hosted Git forge"
 url = "https://forgejo.org/docs/"
-image = "codeberg.org/forgejo/forgejo:11"
 architecture = ["amd64", "arm64"]
 
 [requirements.ram]
@@ -12,20 +11,6 @@ recommended = 512
 [[ports]]
 name = "http"
 container_port = 3000
-
-[[volumes]]
-name = "data"
-mount_path = "/data"
-
-# --- Sidecar: postgres ---
-
-[[containers]]
-name = "postgres"
-image = "docker.io/library/postgres:17-alpine"
-
-[[containers.volumes]]
-name = "db-data"
-mount_path = "/var/lib/postgresql/data"
 
 # --- Postgres env vars (shared via .env with the postgres sidecar) ---
 
@@ -95,22 +80,3 @@ OIDC_DISCOVERY_URL = "{{auth.internal_url}}/.well-known/openid-configuration"
 OIDC_AUTH_URL = "{{auth.internal_url}}/api/oidc/authorization"
 OIDC_TOKEN_URL = "{{auth.internal_url}}/api/oidc/token"
 OIDC_PROFILE_URL = "{{auth.internal_url}}/api/oidc/userinfo"
-
-[[post_start]]
-name = "register-oidc"
-timeout = 600
-run = """
-[ -z "$OIDC_CLIENT_ID" ] && exit 0
-echo "Waiting for Forgejo API..."
-for i in $(seq 1 120); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break; sleep 5; done
-podman exec -u git systemd-forgejo forgejo admin auth add-oauth \
-  --name "Authelia" \
-  --provider "openidConnect" \
-  --key "$OIDC_CLIENT_ID" \
-  --secret "$OIDC_CLIENT_SECRET" \
-  --auto-discover-url "$OIDC_DISCOVERY_URL" \
-  --custom-auth-url "$OIDC_AUTH_URL" \
-  --custom-token-url "$OIDC_TOKEN_URL" \
-  --custom-profile-url "$OIDC_PROFILE_URL" \
-  --scopes "openid email profile" 2>&1 || true
-"""

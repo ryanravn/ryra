@@ -2,7 +2,6 @@
 name = "whoami"
 description = "Traefik whoami - simple HTTP request echo"
 url = "https://github.com/traefik/whoami"
-image = "docker.io/traefik/whoami:v1.11.0"
 architecture = ["amd64", "arm64"]
 
 [[ports]]

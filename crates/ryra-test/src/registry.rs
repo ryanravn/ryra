@@ -502,30 +502,33 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
     rounded.max(1024) as u32
 }
 
-/// Look up the container image for a service from its service.toml.
+/// Look up the primary container image for a service from its quadlet files.
 pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<String>> {
-    let service_toml = registry_path.join(service_name).join("service.toml");
-    if !service_toml.exists() {
-        return Ok(None);
-    }
-    let content = std::fs::read_to_string(&service_toml)
-        .with_context(|| format!("failed to read {}", service_toml.display()))?;
-    let parsed: ServiceTomlAllImages = toml::from_str(&content)
-        .with_context(|| format!("failed to parse {}", service_toml.display()))?;
-    Ok(Some(parsed.service.image))
+    let images = service_images(registry_path, service_name);
+    Ok(images.into_iter().next())
 }
 
-/// Get all container images for a service (primary + sidecars).
+/// Get all container images for a service by scanning its `quadlets/` directory.
 pub fn service_images(registry_path: &Path, service_name: &str) -> Vec<String> {
-    let service_toml = registry_path.join(service_name).join("service.toml");
+    let quadlets_dir = registry_path.join(service_name).join("quadlets");
     let mut images = Vec::new();
-    if let Ok(content) = std::fs::read_to_string(&service_toml)
-        && let Ok(parsed) = toml::from_str::<ServiceTomlAllImages>(&content)
-    {
-        images.push(parsed.service.image);
-        for c in &parsed.containers {
-            if !images.contains(&c.image) {
-                images.push(c.image.clone());
+    if let Ok(entries) = std::fs::read_dir(&quadlets_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.ends_with(".container") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if let Some(image) = trimmed.strip_prefix("Image=") {
+                        let image = image.trim();
+                        if !image.is_empty() && !images.contains(&image.to_string()) {
+                            images.push(image.to_string());
+                        }
+                    }
+                }
             }
         }
     }
@@ -599,23 +602,6 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
 // ---------------------------------------------------------------------------
 // Lightweight TOML structs for parsing service.toml (avoids full ServiceDef dependency)
 // ---------------------------------------------------------------------------
-
-#[derive(serde::Deserialize)]
-struct ServiceTomlAllImages {
-    service: ServiceMetaImage,
-    #[serde(default)]
-    containers: Vec<ContainerImage>,
-}
-
-#[derive(serde::Deserialize)]
-struct ServiceMetaImage {
-    image: String,
-}
-
-#[derive(serde::Deserialize)]
-struct ContainerImage {
-    image: String,
-}
 
 #[derive(serde::Deserialize)]
 struct ServiceTomlRam {

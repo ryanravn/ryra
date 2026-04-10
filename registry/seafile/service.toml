@@ -2,7 +2,6 @@
 name = "seafile"
 description = "Seafile - file sync and share server"
 url = "https://www.seafile.com/"
-image = "docker.io/seafileltd/seafile-mc:12.0-latest"
 architecture = ["amd64", "arm64"]
 
 [requirements.ram]
@@ -12,43 +11,6 @@ recommended = 1024
 [[ports]]
 name = "http"
 container_port = 80
-
-[[volumes]]
-name = "data"
-mount_path = "/shared"
-host_path = "%h/shared"
-
-# --- Sidecar: mariadb ---
-
-[[containers]]
-name = "mariadb"
-image = "docker.io/library/mariadb:10.11"
-env_file = true
-
-[[containers.volumes]]
-name = "db-data"
-mount_path = "/var/lib/mysql"
-
-[containers.healthcheck]
-command = "healthcheck.sh --connect --innodb_initialized"
-start_period = 20
-interval = 30
-retries = 5
-timeout = 5
-
-# --- Sidecar: redis ---
-
-[[containers]]
-name = "redis"
-image = "docker.io/library/redis:7-alpine"
-env_file = false
-
-[containers.healthcheck]
-command = "redis-cli ping | grep PONG"
-start_period = 20
-interval = 30
-retries = 5
-timeout = 3
 
 # --- MariaDB env vars ---
 
@@ -107,8 +69,7 @@ value = "redis"
 # --- Auth integration ---
 # Seafile reads OAuth config from seahub_settings.py (a Python file), not env
 # vars. The auth mappings below write OAUTH_* vars into the .env file.
-# The post_start hook waits for Seafile's bootstrap to create seahub_settings.py,
-# then injects the OAuth config using those env vars.
+# Config scripts in configs/ handle OAuth injection into seahub_settings.py.
 
 [integrations]
 auth = ["oidc"]
@@ -122,51 +83,3 @@ OAUTH_PROVIDER_DOMAIN = "{{auth.url}}"
 OAUTH_INTERNAL_DOMAIN = "{{auth.internal_url}}"
 # oauthlib refuses http:// by default — allow it for local mode
 OAUTHLIB_INSECURE_TRANSPORT = "1"
-
-# --- Post-start: inject OAuth into seahub_settings.py ---
-# Seafile's bootstrap creates seahub_settings.py at runtime inside the container.
-# Because /shared is a bind mount, this hook writes the OAuth config and appends
-# the import line directly on the host filesystem — no podman exec needed.
-
-[[post_start]]
-name = "inject-seafile-oauth"
-run = """
-[ -z "$OAUTH_CLIENT_ID" ] && exit 0
-
-CONF=$HOME/.local/share/ryra/seafile/shared/seafile/conf
-
-# Wait for Seafile bootstrap to create seahub_settings.py on the bind-mounted volume
-echo "Waiting for $CONF/seahub_settings.py to appear (Seafile creates it on first boot)..."
-for i in $(seq 1 60); do
-  [ -f "$CONF/seahub_settings.py" ] && break
-  ELAPSED=$((i * 10))
-  echo "  not yet — retrying in 10s (${ELAPSED}s elapsed)"
-  sleep 10
-done
-[ -f "$CONF/seahub_settings.py" ] || { echo "ERROR: $CONF/seahub_settings.py not found after 600s — check: sudo -H -u seafile sh -c 'cd / && podman logs systemd-seafile'"; exit 1; }
-
-# Write the OAuth Python config alongside seahub_settings.py
-cat > "$CONF/seahub_settings_oauth.py" << EOF
-ENABLE_OAUTH = True
-OAUTH_CREATE_UNKNOWN_USER = True
-OAUTH_ACTIVATE_USER_AFTER_CREATION = True
-OAUTH_CLIENT_ID = "$OAUTH_CLIENT_ID"
-OAUTH_CLIENT_SECRET = "$OAUTH_CLIENT_SECRET"
-OAUTH_REDIRECT_URL = "$OAUTH_REDIRECT_URL"
-OAUTH_PROVIDER_DOMAIN = "$OAUTH_PROVIDER_DOMAIN"
-OAUTH_PROVIDER = "authelia"
-OAUTH_AUTHORIZATION_URL = "${OAUTH_PROVIDER_DOMAIN}/api/oidc/authorization"
-OAUTH_TOKEN_URL = "${OAUTH_INTERNAL_DOMAIN}/api/oidc/token"
-OAUTH_USER_INFO_URL = "${OAUTH_INTERNAL_DOMAIN}/api/oidc/userinfo"
-OAUTH_SCOPE = ["openid", "profile", "email"]
-OAUTH_ATTRIBUTE_MAP = {"email": (True, "contact_email"), "name": (False, "name"), "sub": (False, "uid")}
-EOF
-# File is on the host bind mount — no chown needed
-
-# Append import line if not already present
-grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
-  echo "exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())" >> "$CONF/seahub_settings.py"
-
-echo "OAuth config injected into seahub_settings.py"
-"""
-timeout = 660

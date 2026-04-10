@@ -8,10 +8,6 @@ use crate::registry::service_def::{AuthKind, ServiceDef};
 /// A single change between the installed snapshot and the current registry.
 #[derive(Debug)]
 pub enum Change {
-    ImageChanged {
-        old: String,
-        new: String,
-    },
     PortAdded {
         name: String,
         port: u16,
@@ -24,14 +20,6 @@ pub enum Change {
         name: String,
         old: u16,
         new: u16,
-    },
-    VolumeAdded {
-        name: String,
-        mount_path: String,
-    },
-    VolumeRemoved {
-        name: String,
-        mount_path: String,
     },
     EnvAdded {
         name: String,
@@ -64,25 +52,18 @@ pub enum Change {
 impl std::fmt::Display for Change {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Change::ImageChanged { old, new } => write!(f, "image: {old} → {new}"),
             Change::PortAdded { name, port } => write!(f, "port added: {name} ({port})"),
             Change::PortRemoved { name, port } => write!(f, "port removed: {name} ({port})"),
             Change::PortChanged { name, old, new } => {
-                write!(f, "port changed: {name} ({old} → {new})")
-            }
-            Change::VolumeAdded { name, mount_path } => {
-                write!(f, "volume added: {name} → {mount_path}")
-            }
-            Change::VolumeRemoved { name, mount_path } => {
-                write!(f, "volume removed: {name} → {mount_path}")
+                write!(f, "port changed: {name} ({old} -> {new})")
             }
             Change::EnvAdded { name } => write!(f, "env var added: {name}"),
             Change::EnvRemoved { name } => write!(f, "env var removed: {name}"),
             Change::EnvDefaultChanged { name, old, new } => {
-                write!(f, "env default changed: {name} ({old} → {new})")
+                write!(f, "env default changed: {name} ({old} -> {new})")
             }
             Change::SmtpIntegrationChanged { old, new } => {
-                write!(f, "smtp integration: {old} → {new}")
+                write!(f, "smtp integration: {old} -> {new}")
             }
             Change::AuthIntegrationChanged { old, new } => {
                 let fmt = |kinds: &[AuthKind]| {
@@ -96,10 +77,10 @@ impl std::fmt::Display for Change {
                             .join(", ")
                     }
                 };
-                write!(f, "auth integration: {} → {}", fmt(old), fmt(new))
+                write!(f, "auth integration: {} -> {}", fmt(old), fmt(new))
             }
             Change::DescriptionChanged { old, new } => {
-                write!(f, "description: \"{old}\" → \"{new}\"")
+                write!(f, "description: \"{old}\" -> \"{new}\"")
             }
             Change::RequirementsChanged { description } => {
                 write!(f, "requirements: {description}")
@@ -152,14 +133,6 @@ pub fn diff_service_from_paths(
 pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
     let mut changes = Vec::new();
 
-    // Image
-    if old.service.image != new.service.image {
-        changes.push(Change::ImageChanged {
-            old: old.service.image.clone(),
-            new: new.service.image.clone(),
-        });
-    }
-
     // Description
     if old.service.description != new.service.description {
         changes.push(Change::DescriptionChanged {
@@ -192,24 +165,6 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
             changes.push(Change::PortRemoved {
                 name: old_port.name.clone(),
                 port: old_port.container_port,
-            });
-        }
-    }
-
-    // Volumes
-    for new_vol in &new.volumes {
-        if !old.volumes.iter().any(|v| v.name == new_vol.name) {
-            changes.push(Change::VolumeAdded {
-                name: new_vol.name.clone(),
-                mount_path: new_vol.mount_path.clone(),
-            });
-        }
-    }
-    for old_vol in &old.volumes {
-        if !new.volumes.iter().any(|v| v.name == old_vol.name) {
-            changes.push(Change::VolumeRemoved {
-                name: old_vol.name.clone(),
-                mount_path: old_vol.mount_path.clone(),
             });
         }
     }
@@ -271,7 +226,7 @@ pub fn compute_changes(old: &ServiceDef, new: &ServiceDef) -> Vec<Change> {
                 || old_req.ram.recommended != new_req.ram.recommended
             {
                 changes.push(Change::RequirementsChanged {
-                    description: format!("RAM min {}MB → {}MB", old_req.ram.min, new_req.ram.min),
+                    description: format!("RAM min {}MB -> {}MB", old_req.ram.min, new_req.ram.min),
                 });
             }
         }
