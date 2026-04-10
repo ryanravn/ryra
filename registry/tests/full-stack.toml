@@ -1,12 +1,7 @@
 [test]
 name = "full-stack"
 
-# Set up Caddy first
-[[steps]]
-action = "run"
-name = "init-caddyfile"
-run = "mkdir -p $HOME/.local/share/ryra/caddy/config && touch $HOME/.local/share/ryra/caddy/config/Caddyfile"
-
+# Set up Caddy first (ExecStartPre seeds the Caddyfile automatically)
 [[steps]]
 action = "add"
 service = "caddy"
