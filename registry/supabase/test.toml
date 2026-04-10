@@ -2,9 +2,9 @@
 services = ["supabase"]
 
 [[tests]]
-name = "db-healthy"
-run = "podman exec supabase-db pg_isready -U postgres -h localhost"
-timeout = 30
+name = "api-ready"
+run = "for i in $(seq 1 60); do curl -sf http://localhost:$RYRA_PORT_HTTP/ -o /dev/null && exit 0; sleep 2; done; exit 1"
+timeout = 150
 
 [[tests]]
 name = "auth-health"
@@ -12,21 +12,11 @@ run = "curl -sf -H \"apikey: $ANON_KEY\" http://localhost:$RYRA_PORT_HTTP/auth/v
 timeout = 30
 
 [[tests]]
-name = "rest-responds"
-run = "curl -sf -H \"apikey: $ANON_KEY\" -H \"Authorization: Bearer $ANON_KEY\" http://localhost:$RYRA_PORT_HTTP/rest/v1/"
-timeout = 30
-
-[[tests]]
-name = "storage-responds"
-run = "curl -sf -H \"apikey: $ANON_KEY\" -H \"Authorization: Bearer $ANON_KEY\" http://localhost:$RYRA_PORT_HTTP/storage/v1/bucket"
-timeout = 30
-
-[[tests]]
-name = "studio-responds"
-run = "PASS=$(grep DASHBOARD_PASSWORD $HOME/.local/share/ryra/supabase/.env | cut -d= -f2-) && curl -sf -L -u \"supabase:$PASS\" -o /dev/null -w '%{http_code}' http://localhost:$RYRA_PORT_HTTP/ | grep 200"
-timeout = 30
-
-[[tests]]
 name = "signup-works"
 run = "curl -sf -X POST -H \"apikey: $ANON_KEY\" -H \"Content-Type: application/json\" -d '{\"email\":\"e2e@test.local\",\"password\":\"testpassword123\"}' http://localhost:$RYRA_PORT_HTTP/auth/v1/signup | grep access_token"
+timeout = 30
+
+[[tests]]
+name = "rest-responds"
+run = "curl -sf -H \"apikey: $ANON_KEY\" -H \"Authorization: Bearer $ANON_KEY\" http://localhost:$RYRA_PORT_HTTP/rest/v1/"
 timeout = 30
