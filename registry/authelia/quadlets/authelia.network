@@ -1,0 +1,4 @@
+[Unit]
+Description=Authelia network
+
+[Network]

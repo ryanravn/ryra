@@ -1,0 +1,26 @@
+[Unit]
+Description=Caddy reverse proxy
+StartLimitIntervalSec=0
+Requires=caddy.network
+After=caddy.network
+
+[Container]
+Image=docker.io/library/caddy:2-alpine
+Network=caddy.network
+PublishPort=${RYRA_PORT_HTTP}:80
+PublishPort=${RYRA_PORT_HTTPS}:8443
+Volume=caddy-data.volume:/data:U
+Volume=caddy-config-state.volume:/config:U
+Volume=__RYRA_SERVICE_HOME__/config:/etc/caddy:Z
+Pull=never
+
+[Service]
+EnvironmentFile=__RYRA_SERVICE_HOME__/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+ExecStartPre=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/seed-caddyfile.sh
+ExecStartPost=/bin/bash __RYRA_SERVICE_HOME__/configs/scripts/export-root-ca.sh
+
+[Install]
+WantedBy=default.target
