@@ -1,0 +1,22 @@
+[Unit]
+Description=Supabase Postgres Meta
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=supabase.network supabase-db.service
+After=supabase.network supabase-db.service
+
+[Container]
+ContainerName=supabase-meta
+Image=docker.io/supabase/postgres-meta:v0.95.1
+Network=supabase.network:alias=meta
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

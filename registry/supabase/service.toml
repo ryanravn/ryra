@@ -1,0 +1,486 @@
+[service]
+name = "supabase"
+description = "Supabase - open source Firebase alternative"
+url = "https://supabase.com/docs/guides/self-hosting"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 2048
+recommended = 4096
+
+[[ports]]
+name = "http"
+container_port = 8000
+host_port = 54321
+
+[[ports]]
+name = "https"
+container_port = 8443
+host_port = 54443
+
+# --- Shared secrets ---
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.postgres_password}}"
+
+[[env]]
+name = "JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+format = "hex"
+length = 64
+
+[[env]]
+name = "ANON_KEY"
+value = "{{secret.anon_key}}"
+
+[[env]]
+name = "SERVICE_ROLE_KEY"
+value = "{{secret.service_role_key}}"
+
+[[env]]
+name = "SECRET_KEY_BASE"
+value = "{{secret.secret_key_base}}"
+format = "hex"
+length = 64
+
+[[env]]
+name = "VAULT_ENC_KEY"
+value = "{{secret.vault_enc_key}}"
+format = "hex"
+length = 32
+
+[[env]]
+name = "PG_META_CRYPTO_KEY"
+value = "{{secret.pg_meta_crypto_key}}"
+format = "hex"
+length = 32
+
+# --- Database ---
+
+[[env]]
+name = "POSTGRES_HOST"
+value = "db"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "postgres"
+
+[[env]]
+name = "POSTGRES_PORT"
+value = "5432"
+
+# --- Kong ---
+
+[[env]]
+name = "KONG_DATABASE"
+value = "off"
+
+[[env]]
+name = "KONG_DECLARATIVE_CONFIG"
+value = "/home/kong/kong.yml"
+
+[[env]]
+name = "KONG_DNS_ORDER"
+value = "LAST,A,CNAME"
+
+[[env]]
+name = "KONG_PLUGINS"
+value = "request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction"
+
+[[env]]
+name = "KONG_NGINX_PROXY_PROXY_BUFFER_SIZE"
+value = "160k"
+
+# KONG_NGINX_PROXY_PROXY_BUFFERS set directly in supabase-kong.container (value has spaces)
+
+[[env]]
+name = "SUPABASE_ANON_KEY"
+value = "{{secret.anon_key}}"
+
+[[env]]
+name = "SUPABASE_SERVICE_KEY"
+value = "{{secret.service_role_key}}"
+
+[[env]]
+name = "DASHBOARD_USERNAME"
+value = "supabase"
+kind = "prompted"
+prompt = "Studio dashboard username"
+
+[[env]]
+name = "DASHBOARD_PASSWORD"
+value = "{{secret.dashboard_password}}"
+
+# --- Auth (GoTrue) ---
+
+[[env]]
+name = "GOTRUE_API_HOST"
+value = "0.0.0.0"
+
+[[env]]
+name = "GOTRUE_API_PORT"
+value = "9999"
+
+[[env]]
+name = "API_EXTERNAL_URL"
+value = "{{service.url}}"
+
+[[env]]
+name = "GOTRUE_DB_DRIVER"
+value = "postgres"
+
+[[env]]
+name = "GOTRUE_DB_DATABASE_URL"
+value = "postgres://supabase_auth_admin:{{secret.postgres_password}}@db:5432/postgres"
+
+[[env]]
+name = "GOTRUE_SITE_URL"
+value = "http://localhost:3000"
+
+[[env]]
+name = "GOTRUE_URI_ALLOW_LIST"
+value = ""
+
+[[env]]
+name = "GOTRUE_DISABLE_SIGNUP"
+value = "false"
+
+[[env]]
+name = "GOTRUE_JWT_ADMIN_ROLES"
+value = "service_role"
+
+[[env]]
+name = "GOTRUE_JWT_AUD"
+value = "authenticated"
+
+[[env]]
+name = "GOTRUE_JWT_DEFAULT_GROUP_NAME"
+value = "authenticated"
+
+[[env]]
+name = "GOTRUE_JWT_EXP"
+value = "3600"
+
+[[env]]
+name = "GOTRUE_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[[env]]
+name = "GOTRUE_EXTERNAL_EMAIL_ENABLED"
+value = "true"
+
+[[env]]
+name = "GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED"
+value = "false"
+
+[[env]]
+name = "GOTRUE_MAILER_AUTOCONFIRM"
+value = "true"
+
+[[env]]
+name = "GOTRUE_SMTP_ADMIN_EMAIL"
+value = "admin@localhost"
+
+[[env]]
+name = "GOTRUE_SMTP_HOST"
+value = ""
+
+[[env]]
+name = "GOTRUE_SMTP_PORT"
+value = "2500"
+
+[[env]]
+name = "GOTRUE_SMTP_USER"
+value = ""
+
+[[env]]
+name = "GOTRUE_SMTP_PASS"
+value = ""
+
+[[env]]
+name = "GOTRUE_SMTP_SENDER_NAME"
+value = "Supabase"
+
+[[env]]
+name = "GOTRUE_MAILER_URLPATHS_INVITE"
+value = "/auth/v1/verify"
+
+[[env]]
+name = "GOTRUE_MAILER_URLPATHS_CONFIRMATION"
+value = "/auth/v1/verify"
+
+[[env]]
+name = "GOTRUE_MAILER_URLPATHS_RECOVERY"
+value = "/auth/v1/verify"
+
+[[env]]
+name = "GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE"
+value = "/auth/v1/verify"
+
+[[env]]
+name = "GOTRUE_EXTERNAL_PHONE_ENABLED"
+value = "false"
+
+[[env]]
+name = "GOTRUE_SMS_AUTOCONFIRM"
+value = "true"
+
+# --- PostgREST ---
+
+[[env]]
+name = "PGRST_DB_URI"
+value = "postgres://authenticator:{{secret.postgres_password}}@db:5432/postgres"
+
+[[env]]
+name = "PGRST_DB_SCHEMAS"
+value = "public,storage,graphql_public"
+
+[[env]]
+name = "PGRST_DB_ANON_ROLE"
+value = "anon"
+
+[[env]]
+name = "PGRST_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[[env]]
+name = "PGRST_DB_USE_LEGACY_GUCS"
+value = "false"
+
+[[env]]
+name = "PGRST_APP_SETTINGS_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[[env]]
+name = "PGRST_APP_SETTINGS_JWT_EXP"
+value = "3600"
+
+# --- Realtime ---
+# PORT=4000 set directly in supabase-realtime.container (conflicts with other services in shared .env)
+
+[[env]]
+name = "DB_HOST"
+value = "db"
+
+[[env]]
+name = "DB_PORT"
+value = "5432"
+
+[[env]]
+name = "DB_USER"
+value = "supabase_admin"
+
+[[env]]
+name = "DB_PASSWORD"
+value = "{{secret.postgres_password}}"
+
+[[env]]
+name = "DB_NAME"
+value = "postgres"
+
+[[env]]
+name = "DB_AFTER_CONNECT_QUERY"
+value = "SET search_path TO _realtime"
+
+[[env]]
+name = "DB_ENC_KEY"
+value = "supabaserealtime"
+
+[[env]]
+name = "API_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[[env]]
+name = "APP_NAME"
+value = "realtime"
+
+[[env]]
+name = "SEED_SELF_HOST"
+value = "true"
+
+[[env]]
+name = "RUN_JANITOR"
+value = "true"
+
+[[env]]
+name = "ERL_AFLAGS"
+value = "-proto_dist inet_tcp"
+
+[[env]]
+name = "DNS_NODES"
+value = ""
+
+[[env]]
+name = "RLIMIT_NOFILE"
+value = "10000"
+
+# --- Storage ---
+
+[[env]]
+name = "POSTGREST_URL"
+value = "http://rest:3000"
+
+[[env]]
+name = "DATABASE_URL"
+value = "postgres://supabase_storage_admin:{{secret.postgres_password}}@db:5432/postgres"
+
+[[env]]
+name = "FILE_SIZE_LIMIT"
+value = "52428800"
+
+[[env]]
+name = "STORAGE_BACKEND"
+value = "file"
+
+[[env]]
+name = "FILE_STORAGE_BACKEND_PATH"
+value = "/var/lib/storage"
+
+[[env]]
+name = "TENANT_ID"
+value = "stub"
+
+[[env]]
+name = "REGION"
+value = "local"
+
+[[env]]
+name = "GLOBAL_S3_BUCKET"
+value = "stub"
+
+[[env]]
+name = "ENABLE_IMAGE_TRANSFORMATION"
+value = "true"
+
+[[env]]
+name = "IMGPROXY_URL"
+value = "http://imgproxy:5001"
+
+[[env]]
+name = "REQUEST_ALLOW_X_FORWARDED_PATH"
+value = "true"
+
+[[env]]
+name = "SERVICE_KEY"
+value = "{{secret.service_role_key}}"
+
+# --- imgproxy ---
+
+[[env]]
+name = "IMGPROXY_BIND"
+value = ":5001"
+
+[[env]]
+name = "IMGPROXY_LOCAL_FILESYSTEM_ROOT"
+value = "/"
+
+[[env]]
+name = "IMGPROXY_USE_ETAG"
+value = "true"
+
+[[env]]
+name = "IMGPROXY_ENABLE_WEBP_DETECTION"
+value = "true"
+
+# --- Studio ---
+
+[[env]]
+name = "HOSTNAME"
+value = "::"
+
+[[env]]
+name = "STUDIO_PG_META_URL"
+value = "http://meta:8080"
+
+[[env]]
+name = "DEFAULT_ORGANIZATION_NAME"
+value = "Default"
+
+[[env]]
+name = "DEFAULT_PROJECT_NAME"
+value = "dev"
+
+[[env]]
+name = "SUPABASE_URL"
+value = "http://kong:8000"
+
+[[env]]
+name = "SUPABASE_PUBLIC_URL"
+value = "{{service.url}}"
+
+[[env]]
+name = "AUTH_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[[env]]
+name = "NEXT_PUBLIC_ENABLE_LOGS"
+value = "false"
+
+[[env]]
+name = "NEXT_ANALYTICS_BACKEND_PROVIDER"
+value = "postgres"
+
+# --- Postgres Meta ---
+
+[[env]]
+name = "PG_META_PORT"
+value = "8080"
+
+[[env]]
+name = "PG_META_DB_HOST"
+value = "db"
+
+[[env]]
+name = "PG_META_DB_PORT"
+value = "5432"
+
+[[env]]
+name = "PG_META_DB_NAME"
+value = "postgres"
+
+[[env]]
+name = "PG_META_DB_USER"
+value = "supabase_admin"
+
+[[env]]
+name = "PG_META_DB_PASSWORD"
+value = "{{secret.postgres_password}}"
+
+[[env]]
+name = "CRYPTO_KEY"
+value = "{{secret.pg_meta_crypto_key}}"
+
+# --- Supavisor ---
+
+[[env]]
+name = "POOLER_TENANT_ID"
+value = "dev"
+
+[[env]]
+name = "POOLER_DEFAULT_POOL_SIZE"
+value = "20"
+
+[[env]]
+name = "POOLER_MAX_CLIENT_CONN"
+value = "100"
+
+[[env]]
+name = "POOLER_POOL_MODE"
+value = "transaction"
+
+[[env]]
+name = "POOLER_DB_POOL_SIZE"
+value = "5"
+
+[[env]]
+name = "CLUSTER_POSTGRES"
+value = "true"
+
+[[env]]
+name = "METRICS_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[integrations]
+auth = []
+smtp = false

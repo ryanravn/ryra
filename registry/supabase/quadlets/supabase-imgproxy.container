@@ -1,0 +1,26 @@
+[Unit]
+Description=Supabase imgproxy
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=supabase.network
+After=supabase.network
+
+[Container]
+ContainerName=supabase-imgproxy
+Image=docker.io/darthsim/imgproxy:v3.8.0
+Network=supabase.network:alias=imgproxy
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+HealthCmd=imgproxy health
+HealthInterval=5s
+HealthTimeout=5s
+HealthRetries=3
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

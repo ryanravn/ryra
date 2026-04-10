@@ -1,0 +1,28 @@
+[Unit]
+Description=Supabase Realtime
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=supabase.network supabase-db.service
+After=supabase.network supabase-db.service
+
+[Container]
+ContainerName=supabase-realtime
+Image=docker.io/supabase/realtime:v2.68.0
+HostName=realtime-dev.supabase-realtime
+Network=supabase.network:alias=realtime-dev.supabase-realtime
+Environment=PORT=4000
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+HealthCmd=curl -sSfL --head -o /dev/null http://localhost:4000/api/health
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

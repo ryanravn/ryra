@@ -1,0 +1,29 @@
+[Unit]
+Description=Supabase Supavisor (connection pooler)
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=supabase.network supabase-db.service
+After=supabase.network supabase-db.service
+
+[Container]
+ContainerName=supabase-supavisor
+Image=docker.io/supabase/supavisor:2.7.4
+Network=supabase.network:alias=supavisor
+Volume=%h/.local/share/ryra/supabase/configs/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
+Entrypoint=/bin/sh
+Exec=-c /app/bin/migrate && /app/bin/supavisor eval "$$(cat /etc/pooler/pooler.exs)" && /app/bin/server
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+HealthCmd=curl -sSfL --head -o /dev/null http://127.0.0.1:4000/api/health
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

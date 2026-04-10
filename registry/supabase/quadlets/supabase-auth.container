@@ -1,0 +1,26 @@
+[Unit]
+Description=Supabase Auth (GoTrue)
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=supabase.network supabase-db.service
+After=supabase.network supabase-db.service
+
+[Container]
+ContainerName=supabase-auth
+Image=docker.io/supabase/gotrue:v2.184.0
+Network=supabase.network:alias=auth
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+HealthCmd=wget --no-verbose --tries=1 --spider http://localhost:9999/health
+HealthInterval=5s
+HealthTimeout=5s
+HealthRetries=3
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/supabase/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
