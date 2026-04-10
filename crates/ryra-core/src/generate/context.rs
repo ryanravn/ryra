@@ -67,7 +67,7 @@ pub fn build_context(
             .and_then(|s| s.domain.as_ref());
         let internal_url = match (auth_domain, auth.port()) {
             (Some(domain), _) => format!("https://{domain}:8443"),
-            (None, Some(port)) => format!("http://systemd-{}:{port}", auth.provider_name()),
+            (None, Some(port)) => format!("http://{}:{port}", auth.provider_name()),
             (None, None) => url.clone(),
         };
         ctx.insert("auth.url".into(), url.clone());

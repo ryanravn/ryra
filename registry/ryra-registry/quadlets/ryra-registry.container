@@ -3,6 +3,7 @@ Description=Ryra Registry
 StartLimitIntervalSec=0
 
 [Container]
+ContainerName=ryra-registry
 Image=docker.io/library/nginx:1.29.6-alpine
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=ryra-registry-data.volume:/usr/share/nginx/html:U

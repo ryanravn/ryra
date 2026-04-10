@@ -5,7 +5,7 @@ for i in $(seq 1 120); do
   curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break
   sleep 5
 done
-podman exec -u git systemd-forgejo forgejo admin auth add-oauth \
+podman exec -u git forgejo forgejo admin auth add-oauth \
   --name "Authelia" \
   --provider "openidConnect" \
   --key "$OIDC_CLIENT_ID" \

@@ -98,7 +98,7 @@ impl Step {
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
             Step::RestartService { unit } => format!("systemctl --user restart {unit}"),
-            Step::ReloadCaddy => "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
+            Step::ReloadCaddy => "podman exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
             Step::PullImage { image } => format!("podman pull {image}"),
             Step::RemoveFile(path) => format!("rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),

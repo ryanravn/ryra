@@ -3,6 +3,7 @@ Description=Openclaw
 StartLimitIntervalSec=0
 
 [Container]
+ContainerName=openclaw
 Image=ghcr.io/openclaw/openclaw:2026.3.13-1
 PublishPort=${RYRA_PORT_GATEWAY}:18789
 Volume=openclaw-config.volume:/home/node/.openclaw:U

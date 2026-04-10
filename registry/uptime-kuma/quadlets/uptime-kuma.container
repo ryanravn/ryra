@@ -3,6 +3,7 @@ Description=Uptime Kuma
 StartLimitIntervalSec=0
 
 [Container]
+ContainerName=uptime-kuma
 Image=docker.io/louislam/uptime-kuma:1
 PublishPort=${RYRA_PORT_HTTP}:3001
 Volume=uptime-kuma-data.volume:/app/data:U

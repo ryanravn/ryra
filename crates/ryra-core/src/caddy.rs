@@ -47,7 +47,7 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
 
     if let Some(ref auth) = params.forward_auth {
         block.push_str(&format!(
-            "    forward_auth systemd-authelia:{} {{\n",
+            "    forward_auth authelia:{} {{\n",
             auth.container_port
         ));
         match auth.provider {
@@ -63,7 +63,7 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
 
     // Use the container name on caddy's shared network for direct communication.
     block.push_str(&format!(
-        "    reverse_proxy systemd-{}:{}\n",
+        "    reverse_proxy {}:{}\n",
         params.service_name, params.container_port
     ));
     block.push_str("}\n");
@@ -180,7 +180,7 @@ mod tests {
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
         assert!(block.contains("whoami.example.com:8443 {"));
-        assert!(block.contains("    reverse_proxy systemd-whoami:8080"));
+        assert!(block.contains("    reverse_proxy whoami:8080"));
         assert!(block.ends_with("}\n"));
     }
 
@@ -196,7 +196,7 @@ mod tests {
             }),
         };
         let block = render_site_block(&params);
-        assert!(block.contains("forward_auth systemd-authelia:9091"));
+        assert!(block.contains("forward_auth authelia:9091"));
         assert!(block.contains("uri /api/authz/forward-auth"));
         assert!(block.contains("copy_headers"));
     }

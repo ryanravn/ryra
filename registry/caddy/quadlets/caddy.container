@@ -5,6 +5,7 @@ Requires=caddy.network
 After=caddy.network
 
 [Container]
+ContainerName=caddy
 Image=docker.io/library/caddy:2-alpine
 Network=caddy.network
 PublishPort=${RYRA_PORT_HTTP}:80

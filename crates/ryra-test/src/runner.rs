@@ -652,8 +652,8 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
         // Check quadlet, container internals, and network
         let cmd = format!(
             "echo '=== quadlet ==='; grep -i exec $HOME/.config/containers/systemd/{svc}.container 2>/dev/null || true; \
-             echo '=== container process ==='; podman exec systemd-{svc} ps aux 2>&1 | head -10 || true; \
-             echo '=== container listeners ==='; podman exec systemd-{svc} cat /proc/net/tcp6 2>&1 | head -10 || true; \
+             echo '=== container process ==='; podman exec {svc} ps aux 2>&1 | head -10 || true; \
+             echo '=== container listeners ==='; podman exec {svc} cat /proc/net/tcp6 2>&1 | head -10 || true; \
              echo '=== host listeners ==='; ss -tlnp 2>/dev/null | head -20; \
              echo '=== curl ==='; curl -sv http://127.0.0.1:18789/ 2>&1 | head -10 || true"
         );

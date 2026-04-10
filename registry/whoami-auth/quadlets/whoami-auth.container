@@ -3,6 +3,7 @@ Description=Whoami (auth)
 StartLimitIntervalSec=0
 
 [Container]
+ContainerName=whoami-auth
 Image=docker.io/traefik/whoami:v1.11.0
 PublishPort=${RYRA_PORT_HTTP}:80
 Pull=never

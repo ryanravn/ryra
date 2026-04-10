@@ -57,7 +57,7 @@ async fn execute(step: &Step) -> Result<()> {
             // Wait for Caddy container to be running before reload
             for _ in 0..10 {
                 if Command::new("podman")
-                    .args(["exec", "systemd-caddy", "true"])
+                    .args(["exec", "caddy", "true"])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
@@ -65,7 +65,7 @@ async fn execute(step: &Step) -> Result<()> {
                     .unwrap_or(false)
                 {
                     return run(
-                        "podman exec systemd-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
+                        "podman exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
