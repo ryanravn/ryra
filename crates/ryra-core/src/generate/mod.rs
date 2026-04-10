@@ -136,7 +136,7 @@ fn render_env_vars(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    if service_def.integrations.smtp {
+    if service_def.integrations.smtp && ctx.contains_key("smtp.host") {
         for (env_name, value_template) in &service_def.mappings.smtp {
             let value = template::render(value_template, ctx)?;
             if value.is_empty() {
