@@ -362,7 +362,7 @@ async fn ensure_dependencies(
             // Prompt for authelia's domain
             let authelia_domain: String = Input::new()
                 .with_prompt("Domain for Authelia")
-                .default("auth.localhost".to_string())
+                .default("auth.local".to_string())
                 .interact_text()?;
             println!("\nInstalling authelia...\n");
             Box::pin(run(
@@ -376,7 +376,7 @@ async fn ensure_dependencies(
         } else {
             // Non-interactive: need AUTHELIA_ADMIN_PASSWORD in env
             let authelia_domain =
-                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.localhost".to_string());
+                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.local".to_string());
             println!("\nInstalling authelia...\n");
             Box::pin(run(
                 &[SERVICE_AUTHELIA.to_string()],
@@ -433,10 +433,10 @@ async fn ensure_auth_for_add(
             let authelia_domain: String = if std::io::stdin().is_terminal() {
                 Input::new()
                     .with_prompt("Domain for Authelia")
-                    .default("auth.localhost".to_string())
+                    .default("auth.local".to_string())
                     .interact_text()?
             } else {
-                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.localhost".to_string())
+                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.local".to_string())
             };
             println!("\nInstalling authelia...\n");
             // Recursively install authelia, then reload config
