@@ -52,7 +52,9 @@ pub fn extract_images(files: &[GeneratedFile]) -> Vec<String> {
 /// Expands `%h` to the user's home directory (systemd specifier).
 /// File bind mounts (host path has a file extension like `.crt`, `.yml`) are skipped —
 /// only directory mounts need pre-creation.
-pub fn extract_bind_mount_dirs(files: &[GeneratedFile]) -> crate::error::Result<Vec<std::path::PathBuf>> {
+pub fn extract_bind_mount_dirs(
+    files: &[GeneratedFile],
+) -> crate::error::Result<Vec<std::path::PathBuf>> {
     let home = crate::home_dir()?;
     let mut dirs = Vec::new();
     for file in files {
@@ -245,10 +247,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
 
 /// Read files from `<service_dir>/configs/` recursively,
 /// map them to `<service_home>/configs/<relative_path>`.
-pub fn process_configs(
-    service_dir: &Path,
-    service_home: &Path,
-) -> Result<Vec<GeneratedFile>> {
+pub fn process_configs(service_dir: &Path, service_home: &Path) -> Result<Vec<GeneratedFile>> {
     let configs_dir = service_dir.join("configs");
     if !configs_dir.is_dir() {
         return Ok(Vec::new());
@@ -285,11 +284,10 @@ fn collect_configs_recursive(
                 .strip_prefix(base_dir)
                 .map_err(|e| Error::Registry(format!("failed to compute relative path: {e}")))?;
 
-            let content =
-                std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
-                    path: path.clone(),
-                    source,
-                })?;
+            let content = std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
+                path: path.clone(),
+                source,
+            })?;
 
             files.push(GeneratedFile {
                 path: service_home.join("configs").join(relative),
@@ -347,10 +345,7 @@ mod tests {
         let images = extract_images(&files);
         assert_eq!(
             images,
-            vec![
-                "docker.io/img:1".to_string(),
-                "docker.io/img:2".to_string(),
-            ]
+            vec!["docker.io/img:1".to_string(), "docker.io/img:2".to_string(),]
         );
     }
 
@@ -381,7 +376,8 @@ mod tests {
     #[test]
     fn inject_extra_volumes_before_service_section() {
         let content = "[Container]\nImage=nginx\n\n[Service]\nRestart=always\n";
-        let result = inject_extra_volumes(content, &["/host/ca.crt:/etc/ssl/ca.crt:ro".to_string()]);
+        let result =
+            inject_extra_volumes(content, &["/host/ca.crt:/etc/ssl/ca.crt:ro".to_string()]);
         assert_eq!(
             result,
             "[Container]\nImage=nginx\n\nVolume=/host/ca.crt:/etc/ssl/ca.crt:ro\n[Service]\nRestart=always\n"
@@ -404,7 +400,8 @@ mod tests {
 
     #[test]
     fn inject_networks_adds_blank_line_when_needed() {
-        let content = "[Container]\nImage=nginx\nNetwork=mynet.network\n[Service]\nRestart=always\n";
+        let content =
+            "[Container]\nImage=nginx\nNetwork=mynet.network\n[Service]\nRestart=always\n";
         let result = inject_networks(content, &["caddy".to_string()]);
         // Should insert blank line before injected content when previous line is not blank
         assert_eq!(
@@ -429,14 +426,12 @@ mod tests {
 
     #[test]
     fn process_quadlet_bundle_reads_and_processes_files() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
-            unreachable!("tempdir creation should not fail in tests: {e}")
-        });
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
         let service_dir = tmp.path().join("myservice");
         let quadlets_dir = service_dir.join("quadlets");
-        std::fs::create_dir_all(&quadlets_dir).unwrap_or_else(|e| {
-            unreachable!("dir creation should not fail in tests: {e}")
-        });
+        std::fs::create_dir_all(&quadlets_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
 
         std::fs::write(
             quadlets_dir.join("app.container"),
@@ -461,9 +456,8 @@ mod tests {
             podman_args: &[],
         };
 
-        let bundle = process_quadlet_bundle(&params).unwrap_or_else(|e| {
-            unreachable!("process_quadlet_bundle should not fail: {e}")
-        });
+        let bundle = process_quadlet_bundle(&params)
+            .unwrap_or_else(|e| unreachable!("process_quadlet_bundle should not fail: {e}"));
 
         assert_eq!(bundle.quadlet_files.len(), 2);
         assert_eq!(bundle.images, vec!["nginx:latest".to_string()]);
@@ -474,7 +468,11 @@ mod tests {
             .iter()
             .find(|f| f.path.to_string_lossy().ends_with(".container"))
             .unwrap_or_else(|| unreachable!("container file must exist"));
-        assert!(container_file.content.contains("%h/.local/share/ryra/myservice/data:/data"));
+        assert!(
+            container_file
+                .content
+                .contains("%h/.local/share/ryra/myservice/data:/data")
+        );
         // Check network injection happened
         assert!(container_file.content.contains("Network=caddy.network"));
 
@@ -489,14 +487,12 @@ mod tests {
 
     #[test]
     fn process_quadlet_bundle_errors_on_empty_dir() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
-            unreachable!("tempdir creation should not fail in tests: {e}")
-        });
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
         let service_dir = tmp.path().join("empty");
         let quadlets_dir = service_dir.join("quadlets");
-        std::fs::create_dir_all(&quadlets_dir).unwrap_or_else(|e| {
-            unreachable!("dir creation should not fail in tests: {e}")
-        });
+        std::fs::create_dir_all(&quadlets_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
 
         let params = ProcessBundleParams {
             service_dir: &service_dir,
@@ -512,21 +508,16 @@ mod tests {
 
     #[test]
     fn process_configs_reads_recursively() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
-            unreachable!("tempdir creation should not fail in tests: {e}")
-        });
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
         let service_dir = tmp.path().join("svc");
         let configs_dir = service_dir.join("configs");
         let sub_dir = configs_dir.join("subdir");
-        std::fs::create_dir_all(&sub_dir).unwrap_or_else(|e| {
-            unreachable!("dir creation should not fail in tests: {e}")
-        });
+        std::fs::create_dir_all(&sub_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
 
-        std::fs::write(
-            configs_dir.join("main.conf"),
-            "data_dir=/some/path\n",
-        )
-        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+        std::fs::write(configs_dir.join("main.conf"), "data_dir=/some/path\n")
+            .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
         std::fs::write(sub_dir.join("nested.conf"), "no placeholders\n")
             .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
@@ -573,7 +564,12 @@ mod tests {
             },
         ];
         let dirs = extract_bind_mount_dirs(&files).unwrap();
-        assert_eq!(dirs, vec![PathBuf::from(format!("{home}/.local/share/ryra/immich/upload"))]);
+        assert_eq!(
+            dirs,
+            vec![PathBuf::from(format!(
+                "{home}/.local/share/ryra/immich/upload"
+            ))]
+        );
     }
 
     #[test]
@@ -599,19 +595,14 @@ mod tests {
 
     #[test]
     fn process_configs_returns_empty_when_no_configs_dir() {
-        let tmp = tempfile::tempdir().unwrap_or_else(|e| {
-            unreachable!("tempdir creation should not fail in tests: {e}")
-        });
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
         let service_dir = tmp.path().join("svc");
-        std::fs::create_dir_all(&service_dir).unwrap_or_else(|e| {
-            unreachable!("dir creation should not fail in tests: {e}")
-        });
+        std::fs::create_dir_all(&service_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
 
-        let files = process_configs(
-            &service_dir,
-            Path::new("/home/user/.local/share/ryra/svc"),
-        )
-        .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
+        let files = process_configs(&service_dir, Path::new("/home/user/.local/share/ryra/svc"))
+            .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
 
         assert!(files.is_empty());
     }

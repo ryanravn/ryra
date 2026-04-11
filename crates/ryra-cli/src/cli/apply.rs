@@ -43,7 +43,9 @@ async fn execute(step: &Step) -> Result<()> {
             if file.path.extension().map(|e| e == "sh").unwrap_or(false) {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&file.path, std::fs::Permissions::from_mode(0o755))
-                    .with_context(|| format!("failed to set permissions on {}", file.path.display()))?;
+                    .with_context(|| {
+                        format!("failed to set permissions on {}", file.path.display())
+                    })?;
             }
             Ok(())
         }

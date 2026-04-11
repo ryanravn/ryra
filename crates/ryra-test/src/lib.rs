@@ -320,7 +320,9 @@ pub async fn run(args: Args) -> Result<()> {
     // Prepare browser image only if a filtered test actually needs it
     let any_needs_browser = to_run.iter().any(|t| t.needs_browser());
     let browser_image = if any_needs_browser {
-        Some(std::sync::Arc::new(image::ensure_browser_image(&args.distro, args.redownload, use_kvm).await?))
+        Some(std::sync::Arc::new(
+            image::ensure_browser_image(&args.distro, args.redownload, use_kvm).await?,
+        ))
     } else {
         None
     };

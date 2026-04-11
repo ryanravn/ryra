@@ -21,9 +21,7 @@ pub fn build_context(
         ctx.insert("service.port".into(), port.to_string());
     }
     // service.url — localhost-based, always includes the port
-    let effective_port = host_port.or_else(|| {
-        service_def.ports.first().map(|p| p.container_port)
-    });
+    let effective_port = host_port.or_else(|| service_def.ports.first().map(|p| p.container_port));
     let url = match effective_port {
         Some(port) => format!("http://127.0.0.1:{port}"),
         None => "http://127.0.0.1".to_string(),

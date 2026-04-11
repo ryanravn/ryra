@@ -37,7 +37,6 @@ pub struct RamRequirement {
     pub recommended: Option<u64>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceMeta {
     pub name: String,
@@ -91,7 +90,6 @@ pub struct PortDef {
     #[serde(default)]
     pub protocol: PortProtocol,
 }
-
 
 /// How an env var is presented to the user during `ryra add`.
 ///
@@ -211,7 +209,6 @@ impl Default for IntegrationFlags {
 fn default_true() -> bool {
     true
 }
-
 
 // ---------------------------------------------------------------------------
 // Validation

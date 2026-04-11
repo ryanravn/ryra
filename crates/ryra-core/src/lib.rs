@@ -98,7 +98,10 @@ impl Step {
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
             Step::RestartService { unit } => format!("systemctl --user restart {unit}"),
-            Step::ReloadCaddy => "podman exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile".into(),
+            Step::ReloadCaddy => {
+                "podman exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
+                    .into()
+            }
             Step::PullImage { image } => format!("podman pull {image}"),
             Step::RemoveFile(path) => format!("rm -f {}", path.display()),
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
@@ -379,16 +382,15 @@ pub fn add_service(
     };
 
     // Process quadlet bundle from registry
-    let bundle = generate::bundle::process_quadlet_bundle(
-        &generate::bundle::ProcessBundleParams {
+    let bundle =
+        generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
             service_dir: &reg_service.service_dir,
             service_name,
             quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &extra_volumes,
             podman_args: &podman_args,
-        },
-    )?;
+        })?;
 
     // Generate warnings
     let mut warnings = Vec::new();
@@ -788,16 +790,15 @@ pub fn update_service(
     })?;
 
     // 3. Process quadlet bundle
-    let bundle = generate::bundle::process_quadlet_bundle(
-        &generate::bundle::ProcessBundleParams {
+    let bundle =
+        generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
             service_dir: &reg_service.service_dir,
             service_name,
             quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &[],
             podman_args: &[],
-        },
-    )?;
+        })?;
 
     // 4. Pull all images
     for image in &bundle.images {
@@ -852,36 +853,31 @@ pub fn reset() -> Result<ResetResult> {
 
     // 1. Stop and remove only ryra-managed quadlet files (scoped by installed service names)
     let quadlet_path = quadlet_dir()?;
-    if let Some(ref config) = config {
-        if quadlet_path.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&quadlet_path) {
-                for entry in entries.flatten() {
-                    let file_name = entry.file_name();
-                    let name = file_name.to_string_lossy();
-                    // Only touch files belonging to a ryra-installed service
-                    let is_ryra_file = config
-                        .services
-                        .iter()
-                        .any(|s| name.starts_with(&s.name));
-                    if !is_ryra_file {
-                        continue;
-                    }
-                    if name.ends_with(".container") {
-                        let unit = name.trim_end_matches(".container").to_string();
-                        steps.push(Step::StopService { unit });
-                    }
-                    if name.ends_with(".network") {
-                        let unit =
-                            format!("{}-network", name.trim_end_matches(".network"));
-                        steps.push(Step::StopService { unit });
-                    }
-                    if name.ends_with(".volume") {
-                        let vol = name.trim_end_matches(".volume").to_string();
-                        volume_names.push(format!("systemd-{vol}"));
-                    }
-                    steps.push(Step::RemoveFile(entry.path()));
-                }
+    if let Some(ref config) = config
+        && quadlet_path.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&quadlet_path)
+    {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            // Only touch files belonging to a ryra-installed service
+            let is_ryra_file = config.services.iter().any(|s| name.starts_with(&s.name));
+            if !is_ryra_file {
+                continue;
             }
+            if name.ends_with(".container") {
+                let unit = name.trim_end_matches(".container").to_string();
+                steps.push(Step::StopService { unit });
+            }
+            if name.ends_with(".network") {
+                let unit = format!("{}-network", name.trim_end_matches(".network"));
+                steps.push(Step::StopService { unit });
+            }
+            if name.ends_with(".volume") {
+                let vol = name.trim_end_matches(".volume").to_string();
+                volume_names.push(format!("systemd-{vol}"));
+            }
+            steps.push(Step::RemoveFile(entry.path()));
         }
     }
 
@@ -1109,8 +1105,7 @@ mod tests {
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets =
-            resolve_extra_networks("authelia", Some("auth.test.local"), true, true, true);
+        let nets = resolve_extra_networks("authelia", Some("auth.test.local"), true, true, true);
         assert_eq!(nets, vec!["caddy"]);
     }
 
