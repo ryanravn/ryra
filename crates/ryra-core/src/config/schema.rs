@@ -15,10 +15,7 @@ pub struct Config {
     pub admin_email: Option<String>,
     pub smtp: Option<SmtpCredentials>,
     pub auth: Option<AuthCredentials>,
-    #[serde(default)]
-    pub default_repo: Option<String>,
-    /// Legacy field — reads old configs with [[registries]], never written back.
-    #[serde(default, skip_serializing)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
     #[serde(default)]
     pub services: Vec<InstalledService>,
@@ -37,7 +34,6 @@ impl Default for Config {
             admin_email: None,
             smtp: None,
             auth: None,
-            default_repo: Some(crate::DEFAULT_REPO.to_string()),
             registries: vec![],
             services: vec![],
         }

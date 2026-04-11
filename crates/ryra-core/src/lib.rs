@@ -165,55 +165,37 @@ pub struct UpdateResult {
     pub changes: Vec<diff::Change>,
 }
 
-pub const DEFAULT_REPO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry");
-
-/// Resolve which repo to use and ensure it's cached.
-/// Returns (repo_url, repo_dir).
-///
-/// Resolution order:
-/// 1. Explicit `--repo` argument
-/// 2. `default_repo` from ryra.toml config
-/// 3. Legacy `[[registries]]` from config
-/// 4. Local `./registry/` directory (for development)
-/// 5. Hardcoded default (GitHub)
-pub async fn resolve_repo(repo: Option<&str>) -> Result<(String, PathBuf)> {
+/// Resolve the registry directory for a service reference.
+pub async fn resolve_registry_dir(
+    service_ref: &registry::resolve::ServiceRef,
+) -> Result<PathBuf> {
     let paths = ConfigPaths::resolve()?;
-
-    let repo_url = match repo {
-        Some(url) => url.to_string(),
-        None => {
-            let config = config::load_or_default(&paths.config_file)?;
-            config
-                .default_repo
-                .clone()
-                .or_else(|| config.registries.first().map(|r| r.url.clone()))
-                .or_else(|| {
-                    // Auto-detect local registry directory
-                    let local = PathBuf::from("registry");
-                    if local.is_dir() {
-                        Some(local.to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| DEFAULT_REPO.to_string())
-        }
-    };
-
     paths.ensure_cache_dir()?;
-    let repo_dir = registry::fetch::ensure_repo(&repo_url, &paths.cache_dir).await?;
-    Ok((repo_url, repo_dir))
+    let config = config::load_or_default(&paths.config_file)?;
+    registry::resolve::resolve_registry_dir(service_ref, &config, &paths.cache_dir).await
+}
+
+/// Build a ServiceRef from an installed service's stored registry name.
+pub fn service_ref_from_installed(
+    installed: &InstalledService,
+) -> registry::resolve::ServiceRef {
+    if installed.repo.is_empty() || installed.repo == "bundled" {
+        registry::resolve::ServiceRef::Bundled(installed.name.clone())
+    } else {
+        registry::resolve::ServiceRef::Custom {
+            registry: installed.repo.clone(),
+            service: installed.name.clone(),
+        }
+    }
 }
 
 /// Initialize a new ryra project.
 pub async fn init(config: Config) -> Result<InitResult> {
     let paths = ConfigPaths::resolve()?;
-
-    // Fetch default repo if configured (into cache, which may not exist yet)
     paths.ensure_dirs()?;
-    if let Some(ref repo_url) = config.default_repo {
-        registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
-    }
+
+    // Extract bundled registry to cache
+    registry::bundled::ensure_bundled(&paths.cache_dir)?;
 
     // Preserve installed services from existing config
     let mut config = config;
@@ -257,14 +239,13 @@ fn resolve_extra_networks(
 }
 
 /// Add a service: generate config, return steps to execute.
-/// `repo_url` and `repo_dir` come from `resolve_repo()`.
 pub fn add_service(
     service_name: &str,
     domain: Option<&str>,
     auth_kind: Option<registry::service_def::AuthKind>,
     enable_auth: bool,
     env_overrides: &BTreeMap<String, String>,
-    repo_url: &str,
+    registry_name: &str,
     repo_dir: &Path,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
@@ -575,7 +556,7 @@ pub fn add_service(
     Ok(AddResult {
         steps,
         warnings,
-        repo_url: repo_url.to_string(),
+        repo_url: registry_name.to_string(),
         allocated_ports,
         generated_secrets,
         env_content,
@@ -671,7 +652,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
 pub struct FinalizeAddParams<'a> {
     pub service_name: &'a str,
     pub auth_kind: Option<registry::service_def::AuthKind>,
-    pub repo: &'a str,
+    pub registry_name: &'a str,
     pub allocated_ports: &'a [(String, u16)],
     pub repo_dir: &'a Path,
     /// The generated .env content, used for post-install config (e.g., auth auto-setup).
@@ -691,7 +672,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
     config.services.push(InstalledService {
         name: params.service_name.to_string(),
         version: "0.1.0".to_string(),
-        repo: params.repo.to_string(),
+        repo: params.registry_name.to_string(),
         ports,
         auth_kind: params.auth_kind,
         domain: params.domain.map(|d| d.to_string()),
@@ -979,10 +960,7 @@ pub struct SearchResult {
 }
 
 /// Get test definitions for an installed service by reading its `test.toml`.
-pub async fn service_tests(
-    service_name: &str,
-    repo_override: Option<&str>,
-) -> Result<ServiceTestInfo> {
+pub async fn service_tests(service_name: &str) -> Result<ServiceTestInfo> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
@@ -992,8 +970,8 @@ pub async fn service_tests(
         .find(|s| s.name == service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
-    let repo_url = repo_override.unwrap_or(&installed.repo);
-    let repo_dir = registry::fetch::ensure_repo(repo_url, &paths.cache_dir).await?;
+    let service_ref = service_ref_from_installed(installed);
+    let repo_dir = resolve_registry_dir(&service_ref).await?;
 
     let test_toml_path = repo_dir.join(service_name).join("test.toml");
     let env_file = service_home(service_name)?.join(".env");
@@ -1001,7 +979,7 @@ pub async fn service_tests(
     if !test_toml_path.exists() {
         return Ok(ServiceTestInfo {
             service_name: service_name.to_string(),
-            repo_url: repo_url.to_string(),
+            registry_name: service_ref.registry_name().to_string(),
             tests: vec![],
             env_file,
         });
@@ -1012,7 +990,6 @@ pub async fn service_tests(
         source,
     })?;
 
-    // Parse just the [[tests]] section — we only care about simple tests for live runs
     #[derive(serde::Deserialize)]
     struct TestFile {
         #[serde(default)]
@@ -1026,7 +1003,7 @@ pub async fn service_tests(
 
     Ok(ServiceTestInfo {
         service_name: service_name.to_string(),
-        repo_url: repo_url.to_string(),
+        registry_name: service_ref.registry_name().to_string(),
         tests: parsed.tests,
         env_file,
     })
@@ -1034,7 +1011,7 @@ pub async fn service_tests(
 
 pub struct ServiceTestInfo {
     pub service_name: String,
-    pub repo_url: String,
+    pub registry_name: String,
     pub tests: Vec<registry::test_def::TestDef>,
     pub env_file: PathBuf,
 }

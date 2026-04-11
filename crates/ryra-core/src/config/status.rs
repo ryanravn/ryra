@@ -13,7 +13,6 @@ pub struct StatusInfo {
     pub config_path: PathBuf,
     pub smtp: ProviderStatus,
     pub auth: ProviderStatus,
-    pub default_repo: Option<String>,
     pub services: Vec<ServiceInfo>,
 }
 
@@ -44,7 +43,6 @@ impl StatusInfo {
                     name: format!("{} ({})", auth.provider_name(), auth.url()),
                 },
             },
-            default_repo: config.default_repo.clone(),
             services: config
                 .services
                 .iter()

@@ -90,7 +90,7 @@ impl std::fmt::Display for Change {
 }
 
 /// Compare the installed snapshot of a service against the current registry version.
-pub async fn diff_service(service_name: &str, repo: Option<&str>) -> Result<Vec<Change>> {
+pub async fn diff_service(service_name: &str) -> Result<Vec<Change>> {
     let paths = ConfigPaths::resolve()?;
 
     // Load the snapshot from install time
@@ -101,12 +101,19 @@ pub async fn diff_service(service_name: &str, repo: Option<&str>) -> Result<Vec<
             source,
         })?;
 
-    // Load the current version from the registry
-    let (_repo_url, repo_dir) = crate::resolve_repo(repo).await?;
-    let current = registry::find_service(&repo_dir, service_name)?;
-    let new = &current.def;
+    // Look up which registry this service was installed from
+    let config = config::load_or_default(&paths.config_file)?;
+    let installed = config
+        .services
+        .iter()
+        .find(|s| s.name == service_name)
+        .ok_or_else(|| crate::error::Error::ServiceNotInstalled(service_name.to_string()))?;
 
-    Ok(compute_changes(&old, new))
+    let service_ref = crate::service_ref_from_installed(installed);
+    let repo_dir = crate::resolve_registry_dir(&service_ref).await?;
+    let current = registry::find_service(&repo_dir, service_name)?;
+
+    Ok(compute_changes(&old, &current.def))
 }
 
 /// Load a snapshot from a specific path (for testing or custom paths).
