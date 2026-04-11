@@ -1,0 +1,23 @@
+[Unit]
+Description=PostHog Celery worker
+StartLimitIntervalSec=300
+StartLimitBurst=5
+Requires=posthog-postgres.service posthog-redis.service posthog-clickhouse.service posthog-kafka.service
+After=posthog-postgres.service posthog-redis.service posthog-clickhouse.service posthog-kafka.service posthog.service
+
+[Container]
+Image=docker.io/posthog/posthog:latest
+ContainerName=posthog-worker
+Network=posthog.network
+Exec=./bin/docker-worker-celery --with-scheduler
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

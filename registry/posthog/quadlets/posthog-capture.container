@@ -1,0 +1,22 @@
+[Unit]
+Description=PostHog event capture (Rust)
+StartLimitIntervalSec=60
+StartLimitBurst=5
+Requires=posthog-kafka.service posthog-redis.service
+After=posthog-kafka.service posthog-redis.service
+
+[Container]
+Image=ghcr.io/posthog/posthog/capture:master
+ContainerName=posthog-capture
+Network=posthog.network:alias=capture
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

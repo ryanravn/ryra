@@ -1,0 +1,28 @@
+[Unit]
+Description=PostHog ClickHouse
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=posthog-kafka.service posthog-zookeeper.service
+After=posthog-kafka.service posthog-zookeeper.service
+
+[Container]
+Image=docker.io/clickhouse/clickhouse-server:24.8.5.115
+ContainerName=posthog-clickhouse
+Network=posthog.network:alias=clickhouse
+Volume=posthog-clickhouse-data.volume:/var/lib/clickhouse:U
+Volume=%h/.local/share/ryra/posthog/configs/clickhouse/config.xml:/etc/clickhouse-server/config.d/config.xml:ro,z
+Volume=%h/.local/share/ryra/posthog/configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro,z
+HealthCmd=wget --spider -q http://localhost:8123/ping
+HealthStartPeriod=30s
+HealthInterval=3s
+HealthRetries=10
+HealthTimeout=5s
+Pull=never
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,17 @@
+[setup]
+services = ["posthog"]
+
+[[tests]]
+name = "health-check"
+run = "for i in $(seq 1 90); do curl -sf http://localhost:$RYRA_PORT_HTTP/_health && exit 0; sleep 2; done; exit 1"
+timeout = 240
+
+[[tests]]
+name = "login-page"
+run = "curl -sf http://localhost:$RYRA_PORT_HTTP/login | grep -q posthog"
+timeout = 30
+
+[[tests]]
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/posthog"
+timeout = 5

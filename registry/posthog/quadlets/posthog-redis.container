@@ -1,0 +1,26 @@
+[Unit]
+Description=PostHog Redis
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=posthog.network
+After=posthog.network
+
+[Container]
+Image=docker.io/library/redis:7.2-alpine
+ContainerName=posthog-redis
+Network=posthog.network:alias=redis7
+Volume=posthog-redis-data.volume:/data:U
+HealthCmd=redis-cli ping
+HealthStartPeriod=15s
+HealthInterval=3s
+HealthRetries=10
+HealthTimeout=5s
+Pull=never
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

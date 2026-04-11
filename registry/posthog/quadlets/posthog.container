@@ -1,0 +1,32 @@
+[Unit]
+Description=PostHog web application
+StartLimitIntervalSec=300
+StartLimitBurst=5
+Requires=posthog-postgres.service posthog-redis.service posthog-clickhouse.service posthog-kafka.service posthog-objectstorage.service
+After=posthog-postgres.service posthog-redis.service posthog-clickhouse.service posthog-kafka.service posthog-objectstorage.service
+Wants=posthog-worker.service posthog-plugins.service posthog-capture.service
+
+[Container]
+Image=docker.io/posthog/posthog:latest
+ContainerName=posthog-web
+Network=posthog.network:alias=web
+PublishPort=${RYRA_PORT_HTTP}:8000
+Volume=%h/.local/share/ryra/posthog/configs/scripts/start-web.sh:/compose/start:ro,z
+Entrypoint=/bin/bash
+Exec=/compose/start
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+HealthCmd=curl -sSfL -o /dev/null http://localhost:8000/_health
+HealthStartPeriod=120s
+HealthInterval=10s
+HealthRetries=15
+HealthTimeout=5s
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+Restart=always
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

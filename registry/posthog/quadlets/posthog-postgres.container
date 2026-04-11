@@ -1,0 +1,29 @@
+[Unit]
+Description=PostHog PostgreSQL
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=posthog.network
+After=posthog.network
+
+[Container]
+Image=docker.io/library/postgres:15-alpine
+ContainerName=posthog-postgres
+Network=posthog.network:alias=db
+Volume=posthog-db-data.volume:/var/lib/postgresql/data:U
+Environment=POSTGRES_USER=posthog
+Environment=POSTGRES_PASSWORD=posthog
+Environment=POSTGRES_DB=posthog
+HealthCmd=pg_isready -U posthog
+HealthStartPeriod=30s
+HealthInterval=5s
+HealthRetries=30
+HealthTimeout=5s
+Pull=never
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

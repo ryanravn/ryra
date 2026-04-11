@@ -1,0 +1,27 @@
+[Unit]
+Description=PostHog Kafka (Redpanda)
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=posthog-zookeeper.service
+After=posthog-zookeeper.service
+
+[Container]
+Image=docker.redpanda.com/redpandadata/redpanda:v25.1.9
+ContainerName=posthog-kafka
+Network=posthog.network:alias=kafka
+Volume=posthog-kafka-data.volume:/var/lib/redpanda/data:U
+Exec=redpanda start --smp 1 --memory 1G --mode dev-container --kafka-addr PLAINTEXT://0.0.0.0:9092 --advertise-kafka-addr PLAINTEXT://kafka:9092 --pandaproxy-addr PLAINTEXT://0.0.0.0:8082 --advertise-pandaproxy-addr PLAINTEXT://kafka:8082
+HealthCmd=curl -f http://localhost:9644/v1/status/ready
+HealthStartPeriod=30s
+HealthInterval=3s
+HealthRetries=10
+HealthTimeout=5s
+Pull=never
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

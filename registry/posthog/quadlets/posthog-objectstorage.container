@@ -1,0 +1,25 @@
+[Unit]
+Description=PostHog MinIO object storage
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=posthog.network
+After=posthog.network
+
+[Container]
+Image=docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+ContainerName=posthog-objectstorage
+Network=posthog.network:alias=objectstorage
+Volume=posthog-objectstorage-data.volume:/data:U
+Exec=server /data --address :19000 --console-address :19001
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/posthog/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+ExecStartPost=/bin/bash %h/.local/share/ryra/posthog/configs/scripts/create-buckets.sh
+
+[Install]
+WantedBy=default.target

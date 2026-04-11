@@ -1,0 +1,4 @@
+[Unit]
+Description=PostHog Redis data
+
+[Volume]
