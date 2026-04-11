@@ -20,11 +20,13 @@ action = "assert"
 name = "diff-no-changes"
 run = "ryra diff whoami 2>&1 | grep -q 'up to date'"
 
-# Modify the registry service.toml to simulate an upstream change
+# Modify the extracted bundled registry to simulate an upstream change.
+# The bundled registry is extracted to ~/.cache/ryra/bundled/ on first use
+# and won't be re-extracted until the binary version changes.
 [[steps]]
 action = "run"
 name = "simulate-upstream-change"
-run = """cat >> /opt/ryra-test-registry/whoami/service.toml <<'TOML'
+run = """cat >> $HOME/.cache/ryra/bundled/whoami/service.toml <<'TOML'
 
 [[env]]
 name = "NEW_VAR"

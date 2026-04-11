@@ -15,11 +15,12 @@ action = "assert"
 name = "responds-before-update"
 run = "curl -sf http://127.0.0.1:10000"
 
-# Simulate upstream change: add an env var
+# Simulate upstream change by modifying the extracted bundled registry.
+# The bundled registry lives at ~/.cache/ryra/bundled/ after first use.
 [[steps]]
 action = "run"
 name = "simulate-upstream-change"
-run = """cat >> /opt/ryra-test-registry/whoami/service.toml <<'TOML'
+run = """cat >> $HOME/.cache/ryra/bundled/whoami/service.toml <<'TOML'
 
 [[env]]
 name = "NEW_VAR"
