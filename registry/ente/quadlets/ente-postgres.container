@@ -1,0 +1,28 @@
+[Unit]
+Description=Ente PostgreSQL database
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=ente.network
+After=ente.network
+
+[Container]
+Image=docker.io/library/postgres:15-alpine
+ContainerName=ente-postgres
+Network=ente.network:alias=postgres
+Volume=ente-db-data.volume:/var/lib/postgresql/data:U
+HealthCmd=pg_isready -q -d ${POSTGRES_DB} -U ${POSTGRES_USER}
+HealthStartPeriod=30s
+HealthInterval=10s
+HealthRetries=5
+HealthTimeout=5s
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/ente/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/ente/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

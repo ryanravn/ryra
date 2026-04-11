@@ -1,0 +1,168 @@
+[service]
+name = "ente"
+description = "Ente - end-to-end encrypted photo storage and 2FA"
+url = "https://ente.io"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 512
+recommended = 1024
+
+[[ports]]
+name = "http"
+container_port = 8080
+
+[[ports]]
+name = "photos"
+container_port = 3000
+
+[[ports]]
+name = "albums"
+container_port = 3002
+
+[[ports]]
+name = "auth"
+container_port = 3003
+
+# --- Shared (Postgres) ---
+
+[[env]]
+name = "POSTGRES_USER"
+value = "pguser"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "ente_db"
+
+# --- MinIO ---
+
+[[env]]
+name = "MINIO_ROOT_USER"
+value = "{{secret.minio_user}}"
+format = "hex"
+
+[[env]]
+name = "MINIO_ROOT_PASSWORD"
+value = "{{secret.minio_password}}"
+
+# --- Museum (API server) ---
+
+[[env]]
+name = "ENTE_DB_HOST"
+value = "postgres"
+
+[[env]]
+name = "ENTE_DB_PORT"
+value = "5432"
+
+[[env]]
+name = "ENTE_DB_NAME"
+value = "ente_db"
+
+[[env]]
+name = "ENTE_DB_USER"
+value = "pguser"
+
+[[env]]
+name = "ENTE_DB_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "ENTE_DB_SSLMODE"
+value = "disable"
+
+[[env]]
+name = "ENTE_KEY_ENCRYPTION"
+value = "{{secret.key_encryption}}"
+
+[[env]]
+name = "ENTE_KEY_HASH"
+value = "{{secret.key_hash}}"
+
+[[env]]
+name = "ENTE_JWT_SECRET"
+value = "{{secret.jwt_secret}}"
+
+[[env]]
+name = "ENTE_S3_ARE_LOCAL_BUCKETS"
+value = "true"
+
+[[env]]
+name = "ENTE_S3_USE_PATH_STYLE_URLS"
+value = "true"
+
+[[env]]
+name = "ENTE_S3_B2_EU_CEN_KEY"
+value = "{{secret.minio_user}}"
+
+[[env]]
+name = "ENTE_S3_B2_EU_CEN_SECRET"
+value = "{{secret.minio_password}}"
+
+[[env]]
+name = "ENTE_S3_B2_EU_CEN_ENDPOINT"
+value = "minio:3200"
+
+[[env]]
+name = "ENTE_S3_B2_EU_CEN_REGION"
+value = "eu-central-2"
+
+[[env]]
+name = "ENTE_S3_B2_EU_CEN_BUCKET"
+value = "b2-eu-cen"
+
+[[env]]
+name = "ENTE_S3_WASABI_EU_CENTRAL_2_V3_KEY"
+value = "{{secret.minio_user}}"
+
+[[env]]
+name = "ENTE_S3_WASABI_EU_CENTRAL_2_V3_SECRET"
+value = "{{secret.minio_password}}"
+
+[[env]]
+name = "ENTE_S3_WASABI_EU_CENTRAL_2_V3_ENDPOINT"
+value = "minio:3200"
+
+[[env]]
+name = "ENTE_S3_WASABI_EU_CENTRAL_2_V3_REGION"
+value = "eu-central-2"
+
+[[env]]
+name = "ENTE_S3_WASABI_EU_CENTRAL_2_V3_BUCKET"
+value = "wasabi-eu-central-2-v3"
+
+[[env]]
+name = "ENTE_S3_WASABI_EU_CENTRAL_2_V3_COMPLIANCE"
+value = "false"
+
+[[env]]
+name = "ENTE_S3_SCW_EU_FR_V3_KEY"
+value = "{{secret.minio_user}}"
+
+[[env]]
+name = "ENTE_S3_SCW_EU_FR_V3_SECRET"
+value = "{{secret.minio_password}}"
+
+[[env]]
+name = "ENTE_S3_SCW_EU_FR_V3_ENDPOINT"
+value = "minio:3200"
+
+[[env]]
+name = "ENTE_S3_SCW_EU_FR_V3_REGION"
+value = "eu-central-2"
+
+[[env]]
+name = "ENTE_S3_SCW_EU_FR_V3_BUCKET"
+value = "scw-eu-fr-v3"
+
+[[env]]
+name = "ENTE_CREDENTIALS_FILE"
+value = ""
+
+[integrations]
+auth = []
+smtp = false
