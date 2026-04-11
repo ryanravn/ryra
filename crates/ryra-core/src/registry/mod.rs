@@ -1,3 +1,4 @@
+pub mod bundled;
 pub mod fetch;
 pub mod service_def;
 pub mod test_def;
