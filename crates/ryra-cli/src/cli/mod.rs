@@ -5,6 +5,7 @@ pub mod diff;
 pub mod init;
 pub mod list;
 pub mod prompts;
+pub mod registry_cmd;
 pub mod remove;
 pub mod reset;
 pub mod search;

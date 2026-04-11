@@ -502,6 +502,51 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
     rounded.max(1024) as u32
 }
 
+/// Look up the minimum disk (GB) for a service from its service.toml.
+pub fn service_min_disk(registry_path: &Path, service_name: &str) -> Result<Option<u32>> {
+    let service_toml = registry_path.join(service_name).join("service.toml");
+    if !service_toml.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&service_toml)
+        .with_context(|| format!("failed to read {}", service_toml.display()))?;
+    let parsed: ServiceTomlDisk = toml::from_str(&content)
+        .with_context(|| format!("failed to parse {}", service_toml.display()))?;
+    Ok(parsed
+        .requirements
+        .and_then(|r| r.disk)
+        .map(|d| d.min))
+}
+
+/// Compute the VM disk size (GB) needed for a test. Takes the max of all
+/// services' disk requirements, with a 20GB floor.
+pub fn vm_disk_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
+    let services: Vec<&str> = match test {
+        DiscoveredTest::Lifecycle { steps, .. } => steps
+            .iter()
+            .filter_map(|s| match s {
+                StepEntry::Add { service, .. } => Some(service.as_str()),
+                StepEntry::Run { run, .. } => run
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .windows(3)
+                    .find(|w| w[0] == "ryra" && w[1] == "add")
+                    .map(|w| w[2]),
+                _ => None,
+            })
+            .collect(),
+        _ => test.services(),
+    };
+
+    let max_disk: u32 = services
+        .iter()
+        .filter_map(|svc| service_min_disk(registry_path, svc).ok().flatten())
+        .max()
+        .unwrap_or(0);
+
+    max_disk.max(20)
+}
+
 /// Look up the primary container image for a service from its quadlet files.
 pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<String>> {
     let images = service_images(registry_path, service_name);
@@ -607,6 +652,23 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
 struct ServiceTomlRam {
     #[serde(default)]
     requirements: Option<RequirementsRam>,
+}
+
+#[derive(serde::Deserialize)]
+struct ServiceTomlDisk {
+    #[serde(default)]
+    requirements: Option<RequirementsDisk>,
+}
+
+#[derive(serde::Deserialize)]
+struct RequirementsDisk {
+    #[serde(default)]
+    disk: Option<DiskFields>,
+}
+
+#[derive(serde::Deserialize)]
+struct DiskFields {
+    min: u32,
 }
 
 #[derive(serde::Deserialize)]

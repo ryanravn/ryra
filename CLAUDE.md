@@ -53,7 +53,6 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - `ryra-cli`: thin shell that calls core and handles sudo/system interaction
 - `ryra-vm`: QEMU/SSH/cloud-init VM orchestration library
 - `ryra-test`: E2E test runner, depends on ryra-vm
-- `ryra-dev-tools`: build tooling (generate-registry)
 - Core returns typed results describing what needs to happen; CLI decides whether to apply or print
 - All services run under the invoking user's rootless podman (`systemctl --user`)
 - Quadlet files go to `~/.config/containers/systemd/`

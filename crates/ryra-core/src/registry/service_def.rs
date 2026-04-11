@@ -25,6 +25,9 @@ pub struct ServiceDef {
 pub struct Requirements {
     /// RAM requirements in megabytes.
     pub ram: RamRequirement,
+    /// Disk requirements in gigabytes.
+    #[serde(default)]
+    pub disk: Option<DiskRequirement>,
 }
 
 /// RAM requirement with minimum and recommended thresholds.
@@ -35,6 +38,13 @@ pub struct RamRequirement {
     /// Recommended RAM in MB — service will run well at this level.
     #[serde(default)]
     pub recommended: Option<u64>,
+}
+
+/// Disk requirement in gigabytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskRequirement {
+    /// Minimum disk in GB — container images + data must fit.
+    pub min: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
