@@ -142,8 +142,8 @@ impl Machine {
             .await
             .context("failed to copy SSH key")?;
 
-        // Build QEMU args — must match snapshot's device topology exactly
-        let memory = opts.memory_mb.to_string();
+        // Build QEMU args — memory must match the snapshot's size exactly
+        let memory = snapshot.memory_mb.to_string();
         let cpus = opts.cpus.to_string();
         let efi_code_arg = format!(
             "if=pflash,format=raw,file={},readonly=on",

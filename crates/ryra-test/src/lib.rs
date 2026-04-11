@@ -290,7 +290,18 @@ pub async fn run(args: Args) -> Result<()> {
         None => find_ryra_binary()?,
     };
 
-    let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm).await?;
+    // Compute max RAM needed across all tests for snapshot sizing.
+    // The snapshot must be created at this size so all VMs can restore from it.
+    let max_memory: u32 = discovered
+        .iter()
+        .map(|t| {
+            memory_override
+                .unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t))
+        })
+        .max()
+        .unwrap_or(1024);
+
+    let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm, max_memory).await?;
 
     // --keep-alive with no tests: boot a VM and block until Ctrl-C
     if args.keep_alive && args.tests.is_empty() {
@@ -322,7 +333,7 @@ pub async fn run(args: Args) -> Result<()> {
     let any_needs_browser = to_run.iter().any(|t| t.needs_browser());
     let browser_image = if any_needs_browser {
         Some(std::sync::Arc::new(
-            image::ensure_browser_image(&args.distro, args.redownload, use_kvm).await?,
+            image::ensure_browser_image(&args.distro, args.redownload, use_kvm, max_memory).await?,
         ))
     } else {
         None

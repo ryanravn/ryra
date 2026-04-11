@@ -45,17 +45,17 @@ impl Distro {
         }
     }
 
-    fn snapshot_filename(&self) -> &str {
+    fn snapshot_base(&self) -> &str {
         match self {
-            Distro::Debian13 => "debian-13-snapshot-arm64.qcow2",
-            Distro::Fedora43 => "fedora-43-snapshot-arm64.qcow2",
+            Distro::Debian13 => "debian-13-arm64",
+            Distro::Fedora43 => "fedora-43-arm64",
         }
     }
 
-    fn browser_snapshot_filename(&self) -> &str {
+    fn browser_snapshot_base(&self) -> &str {
         match self {
-            Distro::Debian13 => "debian-13-browser-snapshot-arm64.qcow2",
-            Distro::Fedora43 => "fedora-43-browser-snapshot-arm64.qcow2",
+            Distro::Debian13 => "debian-13-browser-arm64",
+            Distro::Fedora43 => "fedora-43-browser-arm64",
         }
     }
 
@@ -133,6 +133,8 @@ pub struct SnapshotFiles {
     pub seed_iso: PathBuf,
     /// SSH private key baked into the snapshot via cloud-init.
     pub ssh_key: PathBuf,
+    /// RAM size (MB) the snapshot was created with. VMs must use the same size.
+    pub memory_mb: u32,
 }
 
 /// Cache directory for downloaded images.
@@ -146,7 +148,12 @@ fn cache_dir() -> Result<PathBuf> {
 /// The "prepared" image has all packages pre-installed (podman, git, etc.)
 /// so VMs boot in ~30s instead of ~6 minutes. It's created by booting the raw
 /// cloud image once with cloud-init, then snapshotting.
-pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> Result<Image> {
+pub async fn ensure_image(
+    distro: &Distro,
+    redownload: bool,
+    use_kvm: bool,
+    max_memory_mb: u32,
+) -> Result<Image> {
     let cache = cache_dir()?;
     tokio::fs::create_dir_all(&cache)
         .await
@@ -191,10 +198,13 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
         println!("Using prepared image: {}", prepared_path.display());
     }
 
-    // Create VM snapshot for instant boot (if not already created)
-    let snapshot_disk = cache.join(distro.snapshot_filename());
-    let snapshot_efivars = cache.join("snapshot-efivars.qcow2");
-    let snapshot_seed = cache.join("snapshot-seed.iso");
+    // Create VM snapshot for instant boot (if not already created).
+    // Snapshot is cached per memory size — if tests need more RAM than the
+    // cached snapshot, a new one is created at the larger size.
+    let snapshot_prefix = format!("{}-snapshot-{max_memory_mb}", distro.snapshot_base());
+    let snapshot_disk = cache.join(format!("{snapshot_prefix}.qcow2"));
+    let snapshot_efivars = cache.join(format!("{snapshot_prefix}-efivars.qcow2"));
+    let snapshot_seed = cache.join(format!("{snapshot_prefix}-seed.iso"));
     let snapshot_key = cache.join("test-ssh-key");
 
     let snapshot = if snapshot_disk.exists() && snapshot_key.exists() {
@@ -203,6 +213,7 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
             efivars: snapshot_efivars,
             seed_iso: snapshot_seed,
             ssh_key: snapshot_key,
+            memory_mb: max_memory_mb,
         })
     } else {
         match create_snapshot(
@@ -213,17 +224,19 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
             &snapshot_efivars,
             &snapshot_seed,
             &snapshot_key,
+            max_memory_mb,
             use_kvm,
         )
         .await
         {
             Ok(()) => {
-                println!("  VM snapshot created for instant boot");
+                println!("  VM snapshot created for instant boot ({max_memory_mb}MB)");
                 Some(SnapshotFiles {
                     disk: snapshot_disk,
                     efivars: snapshot_efivars,
                     seed_iso: snapshot_seed,
                     ssh_key: snapshot_key,
+                    memory_mb: max_memory_mb,
                 })
             }
             Err(e) => {
@@ -248,9 +261,10 @@ pub async fn ensure_browser_image(
     distro: &Distro,
     redownload: bool,
     use_kvm: bool,
+    max_memory_mb: u32,
 ) -> Result<Image> {
-    // Ensure base image first
-    let base = ensure_image(distro, redownload, use_kvm).await?;
+    // Ensure base image first (use default RAM for base — browser snapshot overrides)
+    let base = ensure_image(distro, redownload, use_kvm, max_memory_mb).await?;
     let cache = cache_dir()?;
     let browser_path = cache.join(distro.browser_prepared_filename());
 
@@ -269,9 +283,10 @@ pub async fn ensure_browser_image(
 
     // Create browser-specific snapshot
     let cache = cache_dir()?;
-    let snap_disk = cache.join(distro.browser_snapshot_filename());
-    let snap_efivars = cache.join("browser-snapshot-efivars.qcow2");
-    let snap_seed = cache.join("browser-snapshot-seed.iso");
+    let snap_prefix = format!("{}-snapshot-{max_memory_mb}", distro.browser_snapshot_base());
+    let snap_disk = cache.join(format!("{snap_prefix}.qcow2"));
+    let snap_efivars = cache.join(format!("{snap_prefix}-efivars.qcow2"));
+    let snap_seed = cache.join(format!("{snap_prefix}-seed.iso"));
     let snap_key = cache.join("test-ssh-key");
 
     let snapshot = if snap_disk.exists() && snap_key.exists() {
@@ -280,6 +295,7 @@ pub async fn ensure_browser_image(
             efivars: snap_efivars,
             seed_iso: snap_seed,
             ssh_key: snap_key,
+            memory_mb: max_memory_mb,
         })
     } else {
         match create_snapshot(
@@ -290,6 +306,7 @@ pub async fn ensure_browser_image(
             &snap_efivars,
             &snap_seed,
             &snap_key,
+            max_memory_mb,
             use_kvm,
         )
         .await
@@ -299,6 +316,7 @@ pub async fn ensure_browser_image(
                 efivars: snap_efivars,
                 seed_iso: snap_seed,
                 ssh_key: snap_key,
+                memory_mb: max_memory_mb,
             }),
             Err(e) => {
                 eprintln!("  Warning: failed to create browser VM snapshot: {e:#}");
@@ -776,6 +794,7 @@ async fn create_snapshot(
     snapshot_efivars: &Path,
     snapshot_seed: &Path,
     ssh_key_path: &Path,
+    memory_mb: u32,
     use_kvm: bool,
 ) -> Result<()> {
     let work_dir = cache_dir()?.join("prepare-snapshot");
@@ -882,10 +901,11 @@ async fn create_snapshot(
         host_store.display()
     );
 
+    let memory_str = memory_mb.to_string();
     let mut args: Vec<&str> = vec![
         "-machine", "virt",
         "-cpu", if use_kvm { "host" } else { "max" },
-        "-m", "1024",
+        "-m", &memory_str,
         "-smp", "2",
         "-drive", &efi_code_arg,
         "-drive", &efi_vars_arg,
