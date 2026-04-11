@@ -430,14 +430,10 @@ pub fn add_service(
         steps.push(Step::CreateDir(dir.clone()));
     }
 
-    // 7. Reload and start via systemd
-    steps.push(Step::DaemonReload);
-    // Start — dependencies start automatically via Requires=/After= in the quadlet
-    steps.push(Step::StartService {
-        unit: service_name.to_string(),
-    });
-
-    // Register OIDC client with the auth provider
+    // 7. Register OIDC client with the auth provider BEFORE starting the service.
+    // This must happen first because the service's ExecStartPost (e.g., register-oidc.sh)
+    // needs the auth provider configured and caddy's network alias in place so OIDC
+    // discovery URLs resolve correctly from within the service container.
     if let (
         Some(registry::service_def::AuthKind::Oidc),
         Some(config::schema::AuthCredentials::Authelia { .. }),
@@ -452,6 +448,13 @@ pub fn add_service(
             &quadlet_path,
         ));
     }
+
+    // 8. Reload and start via systemd
+    steps.push(Step::DaemonReload);
+    // Start — dependencies start automatically via Requires=/After= in the quadlet
+    steps.push(Step::StartService {
+        unit: service_name.to_string(),
+    });
 
     // Collect post-install info
     let allocated_ports: Vec<(String, u16)> = reg_service

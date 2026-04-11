@@ -40,6 +40,21 @@ action = "run"
 name = "setup-hosts"
 run = "echo '127.0.0.1 auth.test.local git.test.local' >> /etc/hosts"
 
+# Wait for OIDC provider registration (ExecStartPost runs register-oidc.sh)
+[[steps]]
+action = "assert"
+name = "oidc-registered"
+run = """FORGEJO_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)
+for i in $(seq 1 60); do
+  curl -sf http://127.0.0.1:$FORGEJO_PORT/user/login 2>/dev/null | grep -q 'oauth2/Authelia' && exit 0
+  sleep 2
+done
+echo "OIDC provider not found after 120s"
+podman exec -u git forgejo forgejo admin auth list 2>&1 || true
+journalctl --user -u forgejo.service --no-pager -n 20 2>&1 | grep -iE 'oidc|oauth|error|fail' || true
+exit 1"""
+timeout = 150
+
 # Wait for forgejo to respond via caddy
 [[steps]]
 action = "assert"
