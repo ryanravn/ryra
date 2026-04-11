@@ -19,8 +19,6 @@ value = "{{service.external_url}}"
 [[env]]
 name = "JELLYFIN_MEDIA_DIR"
 value = ""
-kind = "prompted"
-prompt = "Path to your media library on the host (e.g. /home/user/media)"
 
 [integrations]
 auth = ["oidc"]

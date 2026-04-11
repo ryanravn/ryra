@@ -5,9 +5,9 @@ services = ["jellyfin"]
 name = "jellyfin-responds"
 run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/health && exit 0; sleep 5; done; exit 1"
 timeout = 180
-env = { JELLYFIN_MEDIA_DIR = "/tmp/jellyfin-test-media" }
+env = {}
 
 [[tests]]
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/jellyfin"
-env = { JELLYFIN_MEDIA_DIR = "/tmp/jellyfin-test-media" }
+env = {}

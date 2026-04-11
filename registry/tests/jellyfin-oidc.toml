@@ -26,8 +26,7 @@ service = "authelia"
 [[steps]]
 action = "run"
 name = "add-jellyfin"
-run = """JELLYFIN_MEDIA_DIR=/tmp/jellyfin-media \
-ryra add jellyfin --auth --domain jellyfin.test.local --repo /opt/ryra-test-registry"""
+run = "ryra add jellyfin --auth --domain jellyfin.test.local --repo /opt/ryra-test-registry"
 timeout = 300
 
 [[steps]]
@@ -38,7 +37,7 @@ service = "jellyfin"
 [[steps]]
 action = "run"
 name = "setup"
-run = "mkdir -p /tmp/jellyfin-media && echo '127.0.0.1 auth.test.local jellyfin.test.local' >> /etc/hosts"
+run = "echo '127.0.0.1 auth.test.local jellyfin.test.local' >> /etc/hosts"
 
 # Wait for Jellyfin HTTP
 [[steps]]
