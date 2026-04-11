@@ -1,4 +1,0 @@
-[Unit]
-Description=PostHog MinIO data
-
-[Volume]
