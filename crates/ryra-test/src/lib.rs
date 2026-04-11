@@ -374,10 +374,15 @@ pub async fn run(args: Args) -> Result<()> {
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
         let test_image: std::sync::Arc<image::Image> = if test.needs_browser() {
-            browser_image
-                .as_ref()
-                .expect("browser image should be prepared")
-                .clone()
+            match browser_image.as_ref() {
+                Some(img) => img.clone(),
+                None => {
+                    anyhow::bail!(
+                        "test '{}' requires a browser image but none was prepared",
+                        test.name()
+                    );
+                }
+            }
         } else {
             base_image.clone()
         };
@@ -418,8 +423,10 @@ pub async fn run(args: Args) -> Result<()> {
 
             // Re-discover tests inside task (DiscoveredTest isn't Send due to lifetime)
             let test = if has_quadlets {
-                let qdir = quadlet_dir.as_ref()
-                    .expect("quadlet_dir must be set for quadlet tests");
+                let qdir = match quadlet_dir.as_ref() {
+                    Some(d) => d,
+                    None => return fail_result("quadlet_dir must be set for quadlet tests".into()),
+                };
                 match registry::discover_local_project(qdir) {
                     Ok(Some(t)) => t,
                     Ok(None) => return fail_result("local project not found (internal error)".into()),

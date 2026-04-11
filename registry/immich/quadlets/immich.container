@@ -6,7 +6,7 @@ Requires=immich.network immich-postgres.service immich-machine-learning.service 
 After=immich.network immich-postgres.service immich-machine-learning.service immich-valkey.service
 
 [Container]
-Image=ghcr.io/immich-app/immich-server:release
+Image=ghcr.io/immich-app/immich-server:v2.7.4
 ContainerName=immich-server
 Network=immich.network
 PublishPort=${RYRA_PORT_HTTP}:2283
