@@ -243,7 +243,8 @@ fn resolve_extra_networks(
     authelia_installed: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
-    if domain.is_some() && caddy_installed && service_name != SERVICE_CADDY {
+    let needs_caddy = domain.is_some() || (enable_auth && caddy_installed);
+    if needs_caddy && caddy_installed && service_name != SERVICE_CADDY {
         networks.push(SERVICE_CADDY.to_string());
     }
     if enable_auth && authelia_installed && service_name != SERVICE_AUTHELIA {
@@ -839,28 +840,39 @@ pub fn reset() -> Result<ResetResult> {
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
 
-    // 1. Scan quadlet dir to stop all container units and track volumes
+    // 1. Stop and remove only ryra-managed quadlet files (scoped by installed service names)
     let quadlet_path = quadlet_dir()?;
-    if quadlet_path.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&quadlet_path) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if name.ends_with(".container") {
-                    let unit = name.trim_end_matches(".container").to_string();
-                    steps.push(Step::StopService { unit });
-                }
-                if name.ends_with(".network") {
-                    let unit = format!("{}-network", name.trim_end_matches(".network"));
-                    steps.push(Step::StopService { unit });
-                }
-                if name.ends_with(".volume") {
-                    let vol = name.trim_end_matches(".volume").to_string();
-                    volume_names.push(format!("systemd-{vol}"));
+    if let Some(ref config) = config {
+        if quadlet_path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&quadlet_path) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name();
+                    let name = file_name.to_string_lossy();
+                    // Only touch files belonging to a ryra-installed service
+                    let is_ryra_file = config
+                        .services
+                        .iter()
+                        .any(|s| name.starts_with(&s.name));
+                    if !is_ryra_file {
+                        continue;
+                    }
+                    if name.ends_with(".container") {
+                        let unit = name.trim_end_matches(".container").to_string();
+                        steps.push(Step::StopService { unit });
+                    }
+                    if name.ends_with(".network") {
+                        let unit =
+                            format!("{}-network", name.trim_end_matches(".network"));
+                        steps.push(Step::StopService { unit });
+                    }
+                    if name.ends_with(".volume") {
+                        let vol = name.trim_end_matches(".volume").to_string();
+                        volume_names.push(format!("systemd-{vol}"));
+                    }
+                    steps.push(Step::RemoveFile(entry.path()));
                 }
             }
         }
-        steps.push(Step::RemoveDir(quadlet_path));
     }
 
     // 2. Reload user systemd after removing quadlets
@@ -1090,5 +1102,12 @@ mod tests {
         let nets =
             resolve_extra_networks("authelia", Some("auth.test.local"), true, true, true);
         assert_eq!(nets, vec!["caddy"]);
+    }
+
+    #[test]
+    fn networks_caddy_when_auth_without_domain() {
+        // Services with auth but no domain still need caddy network for OIDC discovery
+        let nets = resolve_extra_networks("jellyfin", None, true, true, true);
+        assert_eq!(nets, vec!["caddy", "authelia"]);
     }
 }
