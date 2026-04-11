@@ -307,6 +307,29 @@ pub async fn run(
     Ok(())
 }
 
+/// Ensure a hostname resolves on the host via /etc/hosts.
+/// Needed so the browser can reach Caddy's network alias for auth domains.
+fn ensure_hosts_entry(hostname: &str) {
+    let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+    if hosts.lines().any(|l| {
+        let l = l.trim();
+        !l.starts_with('#') && l.split_whitespace().any(|w| w == hostname)
+    }) {
+        return;
+    }
+    println!("  Adding '{hostname}' to /etc/hosts (requires sudo)...");
+    let status = std::process::Command::new("sudo")
+        .args(["sh", "-c", &format!("echo '127.0.0.1 {hostname}' >> /etc/hosts")])
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        _ => {
+            println!("  Could not add /etc/hosts entry. Run manually:");
+            println!("    echo '127.0.0.1 {hostname}' | sudo tee -a /etc/hosts");
+        }
+    }
+}
+
 /// Auto-install caddy and authelia when --domain or --auth requires them.
 async fn ensure_dependencies(
     domain: Option<&str>,
@@ -373,6 +396,7 @@ async fn ensure_dependencies(
                 false,
             ))
             .await?;
+            ensure_hosts_entry(&authelia_domain);
         } else {
             // Non-interactive: need AUTHELIA_ADMIN_PASSWORD in env
             let authelia_domain =
@@ -386,6 +410,7 @@ async fn ensure_dependencies(
                 false,
             ))
             .await?;
+            ensure_hosts_entry(&authelia_domain);
         }
     }
 
@@ -448,6 +473,9 @@ async fn ensure_auth_for_add(
                 dry_run,
             ))
             .await?;
+            if !dry_run {
+                ensure_hosts_entry(&authelia_domain);
+            }
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.auth.is_some() {
