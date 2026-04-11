@@ -10,7 +10,7 @@ run = "test -f $HOME/.config/ryra/ryra.toml"
 [[steps]]
 action = "run"
 name = "second-init"
-run = "ryra init --repo /opt/ryra-test-registry"
+run = "ryra init"
 timeout = 30
 
 [[steps]]
@@ -30,7 +30,7 @@ service = "whoami"
 [[steps]]
 action = "run"
 name = "third-init"
-run = "ryra init --repo /opt/ryra-test-registry"
+run = "ryra init"
 timeout = 30
 
 [[steps]]

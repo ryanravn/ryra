@@ -282,6 +282,7 @@ pub async fn run(args: Args) -> Result<()> {
         use_kvm,
         memory_mb: memory_override.unwrap_or(2048),
         cpus: args.cpus,
+        disk_gb: 20,
     });
 
     let ryra_bin = match &args.ryra_bin {
@@ -389,10 +390,12 @@ pub async fn run(args: Args) -> Result<()> {
         };
         let test_memory =
             memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, test));
+        let test_disk = registry::vm_disk_for_test(&registry_path, test);
         let spawn_opts = std::sync::Arc::new(SpawnOpts {
             use_kvm,
             memory_mb: test_memory,
             cpus: args.cpus,
+            disk_gb: test_disk,
         });
         let ryra_bin = ryra_bin.clone();
         let registry_path = registry_path.clone();
@@ -490,10 +493,10 @@ pub async fn run(args: Args) -> Result<()> {
             println!("[{name}] running tests (setup took {:.1}s)...", setup_time.as_secs_f64());
             let result = match &test {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
-                    runner::run_lifecycle_test(&vm, &name, steps, "/opt/ryra-test-registry", verbose, single_test).await
+                    runner::run_lifecycle_test(&vm, &name, steps, verbose, single_test).await
                 }
                 registry::DiscoveredTest::Simple { .. } => {
-                    runner::run_registry_test(&vm, &test, "/opt/ryra-test-registry").await
+                    runner::run_registry_test(&vm, &test).await
                 }
             };
 

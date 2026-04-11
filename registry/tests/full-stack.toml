@@ -14,7 +14,7 @@ service = "caddy"
 [[steps]]
 action = "run"
 name = "add-authelia"
-run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"
+run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --domain auth.test.local"
 
 [[steps]]
 action = "wait"
@@ -33,7 +33,7 @@ service = "postgres"
 [[steps]]
 action = "run"
 name = "add-whoami"
-run = "ryra add whoami --domain whoami.test.local --auth --repo /opt/ryra-test-registry"
+run = "ryra add whoami --domain whoami.test.local --auth"
 
 [[steps]]
 action = "wait"
@@ -43,7 +43,7 @@ service = "whoami"
 [[steps]]
 action = "run"
 name = "add-forgejo"
-run = "ryra add forgejo --domain git.test.local --repo /opt/ryra-test-registry"
+run = "ryra add forgejo --domain git.test.local"
 timeout = 300
 
 [[steps]]
@@ -54,7 +54,7 @@ service = "forgejo"
 [[steps]]
 action = "run"
 name = "add-vaultwarden"
-run = "ryra add vaultwarden --domain vault.test.local --repo /opt/ryra-test-registry"
+run = "ryra add vaultwarden --domain vault.test.local"
 
 [[steps]]
 action = "wait"
@@ -64,7 +64,7 @@ service = "vaultwarden"
 [[steps]]
 action = "run"
 name = "add-uptime-kuma"
-run = "ryra add uptime-kuma --domain status.test.local --repo /opt/ryra-test-registry"
+run = "ryra add uptime-kuma --domain status.test.local"
 
 [[steps]]
 action = "wait"

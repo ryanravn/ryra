@@ -18,7 +18,7 @@ run = "test -f $HOME/.config/ryra/snapshots/whoami.toml"
 [[steps]]
 action = "assert"
 name = "diff-no-changes"
-run = "ryra diff whoami --repo /opt/ryra-test-registry 2>&1 | grep -q 'up to date'"
+run = "ryra diff whoami 2>&1 | grep -q 'up to date'"
 
 # Modify the registry service.toml to simulate an upstream change
 [[steps]]
@@ -34,7 +34,7 @@ TOML"""
 [[steps]]
 action = "assert"
 name = "diff-shows-change"
-run = "ryra diff whoami --repo /opt/ryra-test-registry 2>&1 | grep -q 'env var added: NEW_VAR'"
+run = "ryra diff whoami 2>&1 | grep -q 'env var added: NEW_VAR'"
 
 # Remove and verify snapshot is cleaned up
 [[steps]]

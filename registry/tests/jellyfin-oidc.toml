@@ -15,7 +15,7 @@ service = "caddy"
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+ryra add authelia --domain auth.test.local"""
 timeout = 300
 
 [[steps]]
@@ -26,7 +26,7 @@ service = "authelia"
 [[steps]]
 action = "run"
 name = "add-jellyfin"
-run = "ryra add jellyfin --auth --domain jellyfin.test.local --repo /opt/ryra-test-registry"
+run = "ryra add jellyfin --auth --domain jellyfin.test.local"
 timeout = 300
 
 [[steps]]

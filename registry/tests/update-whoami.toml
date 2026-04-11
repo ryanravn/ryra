@@ -30,7 +30,7 @@ TOML"""
 [[steps]]
 action = "run"
 name = "run-update"
-run = "ryra update whoami --repo /opt/ryra-test-registry --yes"
+run = "ryra update whoami --yes"
 
 [[steps]]
 action = "wait"
@@ -52,4 +52,4 @@ run = "grep -q 'NEW_VAR=hello' $HOME/.local/share/ryra/whoami/.env"
 [[steps]]
 action = "assert"
 name = "snapshot-updated"
-run = "ryra diff whoami --repo /opt/ryra-test-registry 2>&1 | grep -q 'up to date'"
+run = "ryra diff whoami 2>&1 | grep -q 'up to date'"

@@ -8,7 +8,7 @@ action = "run"
 name = "add-immich"
 run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
 INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
-ryra add immich --repo /opt/ryra-test-registry"""
+ryra add immich"""
 timeout = 300
 
 [[steps]]

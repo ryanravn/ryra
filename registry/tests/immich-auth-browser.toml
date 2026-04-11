@@ -16,7 +16,7 @@ service = "caddy"
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+ryra add authelia --domain auth.test.local"""
 timeout = 300
 
 [[steps]]
@@ -29,7 +29,7 @@ action = "run"
 name = "add-immich"
 run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
 INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
-ryra add immich --auth --domain immich.test.local --repo /opt/ryra-test-registry"""
+ryra add immich --auth --domain immich.test.local"""
 timeout = 900
 
 [[steps]]

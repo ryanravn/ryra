@@ -25,7 +25,6 @@ fn print_event_result(prefix: &str, event: &Event) {
 pub async fn run_registry_test(
     vm: &Machine,
     test: &DiscoveredTest,
-    repo_path: &str,
 ) -> ScenarioResult {
     let start = Instant::now();
     let name = test.name();
@@ -51,7 +50,7 @@ pub async fn run_registry_test(
         let init_event = run_event(
             vm,
             EventKind::Init,
-            &format!("ryra init --repo {repo_path}"),
+            "ryra init",
             30,
         )
         .await;
@@ -86,7 +85,7 @@ pub async fn run_registry_test(
             let step_event = run_event(
                 vm,
                 EventKind::Step,
-                &format!("{add_env_prefix}ryra add {service} --repo {repo_path}"),
+                &format!("{add_env_prefix}ryra add {service}"),
                 300,
             )
             .await;
@@ -369,7 +368,6 @@ pub async fn run_lifecycle_test(
     vm: &Machine,
     name: &str,
     steps: &[StepEntry],
-    repo_path: &str,
     verbose: bool,
     single_test: bool,
 ) -> ScenarioResult {
@@ -388,7 +386,7 @@ pub async fn run_lifecycle_test(
     let init_event = run_event(
         vm,
         EventKind::Init,
-        &format!("ryra init --repo {repo_path}"),
+        "ryra init",
         30,
     )
     .await;
@@ -417,9 +415,9 @@ pub async fn run_lifecycle_test(
                 println!("{p}  ryra add {service}...");
                 let cmd = match args.as_deref() {
                     Some(a) if !a.is_empty() => {
-                        format!("ryra add {service} {a} --repo {repo_path}")
+                        format!("ryra add {service} {a}")
                     }
-                    _ => format!("ryra add {service} --repo {repo_path}"),
+                    _ => format!("ryra add {service}"),
                 };
                 let event = run_event(vm, EventKind::Step, &cmd, 300).await;
                 print_event_result(&p, &event);

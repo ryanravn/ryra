@@ -14,7 +14,7 @@ service = "caddy"
 [[steps]]
 action = "run"
 name = "add-whoami-with-domain"
-run = "ryra add whoami --domain whoami.test.local --repo /opt/ryra-test-registry"
+run = "ryra add whoami --domain whoami.test.local"
 
 [[steps]]
 action = "wait"
