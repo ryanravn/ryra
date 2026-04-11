@@ -101,6 +101,124 @@ impl Machine {
         ssh_port: u16,
         opts: &SpawnOpts,
     ) -> Result<Self> {
+        if let Some(ref snapshot) = image.snapshot {
+            return Self::spawn_from_snapshot(image, snapshot, test_id, ssh_port, opts).await;
+        }
+        Self::spawn_cold(image, test_id, ssh_port, opts).await
+    }
+
+    /// Instant boot: restore from a saved QEMU snapshot (<1s to SSH).
+    async fn spawn_from_snapshot(
+        image: &Image,
+        snapshot: &crate::image::SnapshotFiles,
+        test_id: &str,
+        ssh_port: u16,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
+        let name = format!("ryra-test-{test_id}");
+        let work_dir = vm_work_base_dir()?.join(&name);
+        tokio::fs::create_dir_all(&work_dir)
+            .await
+            .context("failed to create VM work directory")?;
+
+        // Reflink-copy snapshot files for per-VM isolation (instant on btrfs)
+        let disk = work_dir.join("disk.qcow2");
+        let efi_vars = work_dir.join("efivars.qcow2");
+        let seed_iso = work_dir.join("seed.iso");
+
+        run_cmd("cp", &["--reflink=auto", &snapshot.disk.to_string_lossy(), &disk.to_string_lossy()])
+            .await
+            .context("failed to copy snapshot disk")?;
+        run_cmd("cp", &["--reflink=auto", &snapshot.efivars.to_string_lossy(), &efi_vars.to_string_lossy()])
+            .await
+            .context("failed to copy snapshot efivars")?;
+        run_cmd("cp", &["--reflink=auto", &snapshot.seed_iso.to_string_lossy(), &seed_iso.to_string_lossy()])
+            .await
+            .context("failed to copy snapshot seed ISO")?;
+
+        // Copy shared SSH key to work dir (ssh_key_path() expects it there)
+        let key_path = work_dir.join("id_ed25519");
+        tokio::fs::copy(&snapshot.ssh_key, &key_path)
+            .await
+            .context("failed to copy SSH key")?;
+
+        // Build QEMU args — must match snapshot's device topology exactly
+        let memory = opts.memory_mb.to_string();
+        let cpus = opts.cpus.to_string();
+        let efi_code_arg = format!(
+            "if=pflash,format=raw,file={},readonly=on",
+            image.efi_code.display()
+        );
+        let efi_vars_arg = format!("if=pflash,format=qcow2,file={}", efi_vars.display());
+        let disk_arg = format!("if=virtio,file={},format=qcow2", disk.display());
+        let seed_arg = format!("if=virtio,file={},format=raw,readonly=on", seed_iso.display());
+        let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
+        let serial_log = work_dir.join("serial.log");
+        let serial_arg = format!("file:{}", serial_log.display());
+        let host_store = host_podman_graph_root().await?;
+        let virtfs_arg = format!(
+            "local,path={},mount_tag=images,security_model=none,readonly=on",
+            host_store.display()
+        );
+
+        let mut args: Vec<&str> = vec![
+            "-machine", "virt",
+            "-cpu", if opts.use_kvm { "host" } else { "max" },
+            "-m", &memory,
+            "-smp", &cpus,
+            "-drive", &efi_code_arg,
+            "-drive", &efi_vars_arg,
+            "-drive", &disk_arg,
+            "-drive", &seed_arg,
+            "-nic", &nic_arg,
+            "-nographic",
+            "-serial", &serial_arg,
+            "-monitor", "none",
+            "-virtfs", &virtfs_arg,
+            "-loadvm", "ready",
+        ];
+
+        if opts.use_kvm {
+            args.extend(crate::accel_args());
+        }
+
+        let process = Command::new("qemu-system-aarch64")
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("failed to start QEMU — is qemu-system-aarch64 installed?")?;
+
+        let machine = Machine {
+            name,
+            ssh_host: "127.0.0.1".to_string(),
+            ssh_port,
+            work_dir,
+            process,
+        };
+
+        if let Some(pid) = machine.process.id() {
+            register_vm(pid, &machine.work_dir);
+        }
+
+        // Wait for SSH — should be nearly instant since we're restoring from snapshot
+        machine
+            .wait_for_ssh(std::time::Duration::from_secs(30))
+            .await?;
+
+        // Fix clock skew: the snapshot's system clock is frozen at save time
+        let _ = machine.exec("date -s \"$(date -u -R)\" >/dev/null 2>&1").await;
+
+        Ok(machine)
+    }
+
+    /// Cold boot: traditional boot with cloud-init (fallback when no snapshot).
+    async fn spawn_cold(
+        image: &Image,
+        test_id: &str,
+        ssh_port: u16,
+        opts: &SpawnOpts,
+    ) -> Result<Self> {
         let name = format!("ryra-test-{test_id}");
         let work_dir = vm_work_base_dir()?.join(&name);
         tokio::fs::create_dir_all(&work_dir)
@@ -173,10 +291,6 @@ impl Machine {
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
 
-        // Share the host's podman container storage with the VM via 9p virtfs.
-        // The VM configures additionalimagestores to read images directly from
-        // this store — no podman load needed, images are available instantly.
-        // Only available on Linux — macOS QEMU lacks 9p support.
         let host_store = host_podman_graph_root().await?;
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
@@ -184,32 +298,20 @@ impl Machine {
         );
 
         let mut args: Vec<&str> = vec![
-            "-machine",
-            "virt",
-            "-cpu",
-            if opts.use_kvm { "host" } else { "max" },
-            "-m",
-            &memory,
-            "-smp",
-            &cpus,
-            "-drive",
-            &efi_code_arg,
-            "-drive",
-            &efi_vars_arg,
-            "-drive",
-            &disk_arg,
-            "-drive",
-            &seed_arg,
-            "-nic",
-            &nic_arg,
+            "-machine", "virt",
+            "-cpu", if opts.use_kvm { "host" } else { "max" },
+            "-m", &memory,
+            "-smp", &cpus,
+            "-drive", &efi_code_arg,
+            "-drive", &efi_vars_arg,
+            "-drive", &disk_arg,
+            "-drive", &seed_arg,
+            "-nic", &nic_arg,
             "-nographic",
-            "-serial",
-            &serial_arg,
-            "-monitor",
-            "none",
+            "-serial", &serial_arg,
+            "-monitor", "none",
+            "-virtfs", &virtfs_arg,
         ];
-
-        args.extend(["-virtfs", &virtfs_arg]);
 
         if opts.use_kvm {
             args.extend(crate::accel_args());
@@ -230,17 +332,13 @@ impl Machine {
             process,
         };
 
-        // Register for signal cleanup
         if let Some(pid) = machine.process.id() {
             register_vm(pid, &machine.work_dir);
         }
 
-        // Wait for SSH to come up (cloud-init installs sshd + packages first)
         let boot_timeout = opts.boot_timeout();
         machine.wait_for_ssh(boot_timeout).await?;
 
-        // Wait for cloud-init to finish (packages installed, files written)
-        // cloud-init status --wait blocks until all stages complete
         machine
             .exec("cloud-init status --wait")
             .await
@@ -518,7 +616,7 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
 
 /// Build a minimal cloud-init seed ISO — just SSH key, no package installs.
 /// Used for test VMs backed by a prepared image that already has packages.
-async fn build_seed_iso(
+pub(crate) async fn build_seed_iso(
     work_dir: &Path,
     output: &Path,
     hostname: &str,
@@ -648,7 +746,7 @@ async fn write_seed_iso(
 
 /// Cache directory for saved container images on the host.
 /// Get the host's podman container storage root (e.g., ~/.local/share/containers/storage).
-async fn host_podman_graph_root() -> Result<PathBuf> {
+pub async fn host_podman_graph_root() -> Result<PathBuf> {
     let output = Command::new("podman")
         .args(["info", "--format", "{{.Store.GraphRoot}}"])
         .output()

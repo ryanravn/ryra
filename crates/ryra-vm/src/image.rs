@@ -45,6 +45,20 @@ impl Distro {
         }
     }
 
+    fn snapshot_filename(&self) -> &str {
+        match self {
+            Distro::Debian13 => "debian-13-snapshot-arm64.qcow2",
+            Distro::Fedora43 => "fedora-43-snapshot-arm64.qcow2",
+        }
+    }
+
+    fn browser_snapshot_filename(&self) -> &str {
+        match self {
+            Distro::Debian13 => "debian-13-browser-snapshot-arm64.qcow2",
+            Distro::Fedora43 => "fedora-43-browser-snapshot-arm64.qcow2",
+        }
+    }
+
     /// Packages to install via cloud-init during image preparation.
     pub fn cloud_init_packages(&self) -> &[&str] {
         match self {
@@ -103,6 +117,22 @@ pub struct Image {
     pub efi_vars_template: PathBuf,
     /// If true, cloud-init packages are already installed — skip package install.
     pub prepared: bool,
+    /// Snapshot boot files (if available). When present, VMs restore from a
+    /// saved QEMU snapshot instead of cold-booting — SSH is ready in <1s.
+    pub snapshot: Option<SnapshotFiles>,
+}
+
+/// Files needed for QEMU snapshot restore.
+pub struct SnapshotFiles {
+    /// qcow2 disk with the "ready" snapshot saved inside.
+    pub disk: PathBuf,
+    /// qcow2 EFI vars with snapshot state (QEMU splits snapshots across drives).
+    pub efivars: PathBuf,
+    /// cloud-init seed ISO (must be present for device topology match, but is
+    /// not re-processed — cloud-init already ran in the snapshot).
+    pub seed_iso: PathBuf,
+    /// SSH private key baked into the snapshot via cloud-init.
+    pub ssh_key: PathBuf,
 }
 
 /// Cache directory for downloaded images.
@@ -161,11 +191,54 @@ pub async fn ensure_image(distro: &Distro, redownload: bool, use_kvm: bool) -> R
         println!("Using prepared image: {}", prepared_path.display());
     }
 
+    // Create VM snapshot for instant boot (if not already created)
+    let snapshot_disk = cache.join(distro.snapshot_filename());
+    let snapshot_efivars = cache.join("snapshot-efivars.qcow2");
+    let snapshot_seed = cache.join("snapshot-seed.iso");
+    let snapshot_key = cache.join("test-ssh-key");
+
+    let snapshot = if snapshot_disk.exists() && snapshot_key.exists() {
+        Some(SnapshotFiles {
+            disk: snapshot_disk,
+            efivars: snapshot_efivars,
+            seed_iso: snapshot_seed,
+            ssh_key: snapshot_key,
+        })
+    } else {
+        match create_snapshot(
+            &prepared_path,
+            &efi.code,
+            &vars_template,
+            &snapshot_disk,
+            &snapshot_efivars,
+            &snapshot_seed,
+            &snapshot_key,
+            use_kvm,
+        )
+        .await
+        {
+            Ok(()) => {
+                println!("  VM snapshot created for instant boot");
+                Some(SnapshotFiles {
+                    disk: snapshot_disk,
+                    efivars: snapshot_efivars,
+                    seed_iso: snapshot_seed,
+                    ssh_key: snapshot_key,
+                })
+            }
+            Err(e) => {
+                eprintln!("  Warning: failed to create VM snapshot (falling back to cold boot): {e:#}");
+                None
+            }
+        }
+    };
+
     Ok(Image {
         path: prepared_path,
         efi_code: efi.code,
         efi_vars_template: vars_template,
         prepared: true,
+        snapshot,
     })
 }
 
@@ -194,11 +267,52 @@ pub async fn ensure_browser_image(
         println!("Using browser image: {}", browser_path.display());
     }
 
+    // Create browser-specific snapshot
+    let cache = cache_dir()?;
+    let snap_disk = cache.join(distro.browser_snapshot_filename());
+    let snap_efivars = cache.join("browser-snapshot-efivars.qcow2");
+    let snap_seed = cache.join("browser-snapshot-seed.iso");
+    let snap_key = cache.join("test-ssh-key");
+
+    let snapshot = if snap_disk.exists() && snap_key.exists() {
+        Some(SnapshotFiles {
+            disk: snap_disk,
+            efivars: snap_efivars,
+            seed_iso: snap_seed,
+            ssh_key: snap_key,
+        })
+    } else {
+        match create_snapshot(
+            &browser_path,
+            &base.efi_code,
+            &base.efi_vars_template,
+            &snap_disk,
+            &snap_efivars,
+            &snap_seed,
+            &snap_key,
+            use_kvm,
+        )
+        .await
+        {
+            Ok(()) => Some(SnapshotFiles {
+                disk: snap_disk,
+                efivars: snap_efivars,
+                seed_iso: snap_seed,
+                ssh_key: snap_key,
+            }),
+            Err(e) => {
+                eprintln!("  Warning: failed to create browser VM snapshot: {e:#}");
+                None
+            }
+        }
+    };
+
     Ok(Image {
         path: browser_path,
         efi_code: base.efi_code,
         efi_vars_template: base.efi_vars_template,
         prepared: true,
+        snapshot,
     })
 }
 
@@ -213,6 +327,7 @@ async fn prepare_browser_image(base: &Image, browser_path: &Path, use_kvm: bool)
         use_kvm,
         memory_mb: 4096, // chromium install needs decent RAM
         cpus: 2,
+        disk_gb: 20,
     };
 
     let vm = Machine::spawn(base, &id, ssh_port, &opts).await?;
@@ -645,5 +760,249 @@ async fn prepare_image(
     // Clean up work dir
     let _ = tokio::fs::remove_dir_all(&work_dir).await;
 
+    Ok(())
+}
+
+/// Create a QEMU snapshot for instant VM boot.
+///
+/// Boots the prepared image, waits for SSH, then saves a VM snapshot.
+/// Subsequent VMs restore from this snapshot in <1s instead of cold-booting.
+#[allow(clippy::too_many_arguments)]
+async fn create_snapshot(
+    prepared_path: &Path,
+    efi_code: &Path,
+    efi_vars_template: &Path,
+    snapshot_disk: &Path,
+    snapshot_efivars: &Path,
+    snapshot_seed: &Path,
+    ssh_key_path: &Path,
+    use_kvm: bool,
+) -> Result<()> {
+    let work_dir = cache_dir()?.join("prepare-snapshot");
+    let _ = tokio::fs::remove_dir_all(&work_dir).await;
+    tokio::fs::create_dir_all(&work_dir)
+        .await
+        .context("failed to create snapshot work dir")?;
+
+    // Generate shared test SSH key (reused by all VMs)
+    if !ssh_key_path.exists() {
+        let status = Command::new("ssh-keygen")
+            .args([
+                "-t",
+                "ed25519",
+                "-f",
+                &ssh_key_path.to_string_lossy(),
+                "-N",
+                "",
+                "-q",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .context("ssh-keygen failed")?;
+        if !status.success() {
+            anyhow::bail!("ssh-keygen failed for test SSH key");
+        }
+    }
+
+    let pub_key = tokio::fs::read_to_string(format!("{}.pub", ssh_key_path.display()))
+        .await
+        .context("failed to read test SSH public key")?;
+
+    // Create COW overlay for snapshot boot
+    let disk = work_dir.join("disk.qcow2");
+    let status = Command::new("qemu-img")
+        .args([
+            "create",
+            "-f",
+            "qcow2",
+            "-b",
+            &prepared_path.to_string_lossy(),
+            "-F",
+            "qcow2",
+            &disk.to_string_lossy(),
+            "20G",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("qemu-img create failed")?;
+    if !status.success() {
+        anyhow::bail!("qemu-img create failed for snapshot disk");
+    }
+
+    // Convert EFI vars to qcow2 (required for snapshot support)
+    let efivars = work_dir.join("efivars.qcow2");
+    let status = Command::new("qemu-img")
+        .args([
+            "convert",
+            "-f",
+            "raw",
+            "-O",
+            "qcow2",
+            &efi_vars_template.to_string_lossy(),
+            &efivars.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .context("qemu-img convert failed for efivars")?;
+    if !status.success() {
+        anyhow::bail!("failed to convert EFI vars to qcow2");
+    }
+
+    // Build seed ISO with the shared SSH key
+    let seed_iso = work_dir.join("seed.iso");
+    crate::machine::build_seed_iso(&work_dir, &seed_iso, "snapshot-prep", pub_key.trim()).await?;
+
+    // Boot with HMP monitor for savevm
+    let ssh_port: u16 = 10098;
+    let serial_log = work_dir.join("serial.log");
+    let port_str = ssh_port.to_string();
+
+    // Discover host podman store for virtfs (must match what Machine::spawn uses)
+    let host_store = crate::machine::host_podman_graph_root().await?;
+
+    let efi_code_arg = format!(
+        "if=pflash,format=raw,file={},readonly=on",
+        efi_code.display()
+    );
+    let efi_vars_arg = format!("if=pflash,format=qcow2,file={}", efivars.display());
+    let disk_arg = format!("if=virtio,file={},format=qcow2", disk.display());
+    let seed_arg = format!("if=virtio,file={},format=raw,readonly=on", seed_iso.display());
+    let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
+    let serial_arg = format!("file:{}", serial_log.display());
+    let mon_sock = work_dir.join("mon.sock");
+    let mon_arg = format!("unix:{},server,nowait", mon_sock.display());
+    let virtfs_arg = format!(
+        "local,path={},mount_tag=images,security_model=none,readonly=on",
+        host_store.display()
+    );
+
+    let mut args: Vec<&str> = vec![
+        "-machine", "virt",
+        "-cpu", if use_kvm { "host" } else { "max" },
+        "-m", "1024",
+        "-smp", "2",
+        "-drive", &efi_code_arg,
+        "-drive", &efi_vars_arg,
+        "-drive", &disk_arg,
+        "-drive", &seed_arg,
+        "-nic", &nic_arg,
+        "-nographic",
+        "-serial", &serial_arg,
+        "-monitor", &mon_arg,
+        "-virtfs", &virtfs_arg,
+    ];
+    if use_kvm {
+        args.extend(crate::accel_args().iter().copied());
+    }
+
+    let mut qemu = Command::new("qemu-system-aarch64")
+        .args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to start QEMU for snapshot creation")?;
+
+    // Wait for SSH
+    let timeout = std::time::Duration::from_secs(if use_kvm { 120 } else { 600 });
+    let start = std::time::Instant::now();
+    loop {
+        let result = Command::new("ssh")
+            .args([
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-o", "ConnectTimeout=2",
+                "-o", "BatchMode=yes",
+                "-i", &ssh_key_path.to_string_lossy(),
+                "-p", &port_str,
+                "root@127.0.0.1", "true",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        if let Ok(s) = result
+            && s.success()
+        {
+            break;
+        }
+        if start.elapsed() > timeout {
+            let _ = qemu.kill().await;
+            anyhow::bail!("timed out waiting for SSH during snapshot creation");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    // Wait for cloud-init
+    let _ = Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", "BatchMode=yes",
+            "-i", &ssh_key_path.to_string_lossy(),
+            "-p", &port_str,
+            "root@127.0.0.1", "cloud-init status --wait",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+
+    // Save snapshot via HMP monitor using socat
+    let socat_result = std::process::Command::new("socat")
+        .args([
+            "-",
+            &format!("UNIX-CONNECT:{}", mon_sock.display()),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(b"savevm ready\n")?;
+                stdin.flush()?;
+            }
+            child.stdin.take();
+            Ok(child)
+        });
+
+    match socat_result {
+        Ok(mut child) => {
+            // Wait for savevm to complete (writes memory to disk)
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Err(e) => {
+            let _ = qemu.kill().await;
+            anyhow::bail!("failed to save VM snapshot via socat: {e}. Is socat installed?");
+        }
+    }
+
+    let _ = qemu.kill().await;
+    let _ = qemu.wait().await;
+
+    // Move snapshot files to their final locations
+    tokio::fs::rename(&disk, snapshot_disk)
+        .await
+        .context("failed to move snapshot disk")?;
+    tokio::fs::rename(&efivars, snapshot_efivars)
+        .await
+        .context("failed to move snapshot efivars")?;
+    tokio::fs::rename(&seed_iso, snapshot_seed)
+        .await
+        .context("failed to move snapshot seed ISO")?;
+
+    let _ = tokio::fs::remove_dir_all(&work_dir).await;
     Ok(())
 }
