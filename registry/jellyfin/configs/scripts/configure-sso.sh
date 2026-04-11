@@ -16,6 +16,19 @@ fi
 
 mkdir -p "$CONFIG_DIR"
 
+# Write branding config with SSO login button
+BRANDING_DIR="$RYRA_SERVICE_HOME/config/config"
+BRANDING_FILE="$BRANDING_DIR/branding.xml"
+if [ ! -f "$BRANDING_FILE" ] || ! grep -q "sso/OID" "$BRANDING_FILE"; then
+  mkdir -p "$BRANDING_DIR"
+  cat > "$BRANDING_FILE" <<'BRANDING'
+<?xml version="1.0" encoding="utf-8"?>
+<BrandingOptions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <LoginDisclaimer>&lt;form action="/sso/OID/start/authelia"&gt;&lt;button class="raised block emby-button button-submit"&gt;Sign in with SSO&lt;/button&gt;&lt;/form&gt;</LoginDisclaimer>
+</BrandingOptions>
+BRANDING
+fi
+
 cat > "$CONFIG_FILE" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <PluginConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">

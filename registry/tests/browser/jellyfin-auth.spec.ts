@@ -2,15 +2,12 @@ import { test, expect } from "@playwright/test";
 
 const JELLYFIN_PORT = process.env.JELLYFIN_PORT || "8096";
 const JELLYFIN_URL = `http://127.0.0.1:${JELLYFIN_PORT}`;
-// Domain-based URL through Caddy (HTTPS) — needed for OIDC flows so session
-// cookies work with the callback URL.
 const JELLYFIN_DOMAIN_URL = "https://jellyfin.test.local:8443";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
-  // Wait for Authelia's React app to fully hydrate before interacting.
   await page.waitForLoadState("networkidle");
   await page
     .waitForFunction(
@@ -24,9 +21,7 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
       },
       { timeout: 10_000 },
     )
-    .catch(() => {
-      // Fallback: if React detection fails, just wait a bit
-    });
+    .catch(() => {});
   const usernameInput = page.locator("#username-textfield");
   await expect(usernameInput).toBeVisible({ timeout: 15_000 });
   await expect(usernameInput).toBeEditable({ timeout: 5_000 });
@@ -35,55 +30,44 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
   await page.locator("#password-textfield").fill(AUTHELIA_PASSWORD);
   await page.getByRole("button", { name: /sign in/i }).click();
 
-  // Accept consent screen if shown (Authelia shows this on first OIDC login)
   try {
     const consent = page.getByRole("button", {
       name: /accept|consent|allow|approve/i,
     });
     await consent.click({ timeout: 10_000 });
   } catch {
-    // No consent screen — already authorized or auto-consented
+    // No consent screen
   }
 }
 
-test("full OIDC login through Authelia creates a jellyfin session", async ({
-  browser,
-}) => {
+test("SSO login through Authelia", async ({ browser }) => {
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
-  // 1. Navigate to the SSO start endpoint — this redirects to Authelia
-  console.log(`Navigating to: ${JELLYFIN_DOMAIN_URL}/sso/OID/start/authelia`);
+  // Verify the SSO button is configured in branding (rendered by the SPA on the login page)
+  const brandingResp = await page.request.get(
+    `${JELLYFIN_URL}/Branding/Configuration`,
+  );
+  const branding = await brandingResp.json();
+  expect(branding.LoginDisclaimer).toContain("sso/OID/start/authelia");
+
+  // Start the SSO flow through Caddy (HTTPS) — this is what clicking the button does
   await page.goto(`${JELLYFIN_DOMAIN_URL}/sso/OID/start/authelia`);
 
-  // 2. Wait for navigation — could be Authelia or an error page
-  await page.waitForLoadState("domcontentloaded");
-  const currentUrl = page.url();
-  console.log(`After SSO start, URL is: ${currentUrl}`);
-  console.log(`Page title: ${await page.title()}`);
-
-  // 3. Should be on Authelia login now
+  // Should redirect to Authelia login
   await page.waitForURL((url) => url.hostname === "auth.test.local", {
-    timeout: 15_000,
+    timeout: 10_000,
   });
-  console.log(`On Authelia, URL: ${page.url()}`);
 
-  // 4. Fill in Authelia credentials
+  // Fill in Authelia credentials
   await loginToAuthelia(page);
 
-  // Log where we are after login
-  console.log(`After Authelia login, URL: ${page.url()}`);
-
-  // 5. Should be redirected back to Jellyfin after authentication.
+  // Should be redirected back to Jellyfin
   await page.waitForURL(
     (url) => url.hostname === "jellyfin.test.local",
-    { timeout: 30_000 },
+    { timeout: 15_000 },
   );
 
-  // 6. Verify we ended up back on Jellyfin (not stuck on an error page)
-  const finalUrl = page.url();
-  console.log(`Final URL: ${finalUrl}`);
-  expect(finalUrl).toContain("jellyfin.test.local");
-
+  expect(page.url()).toContain("jellyfin.test.local");
   await context.close();
 });

@@ -118,6 +118,8 @@ Always prefer podman-native and quadlet-native features over workarounds:
 
 ## Debugging
 
+Avoid long timeouts in tests. If something needs more than a few seconds to be ready, investigate why rather than adding a larger timeout. Timeouts mask real issues and make tests slow. Prefer polling with short intervals over a single large sleep.
+
 When tests fail, don't just increase timeouts. SSH into the VM and study the actual logs to find the root cause:
 - `journalctl --user -u <service>.service` for service logs
 - `podman ps -a` to see container state
