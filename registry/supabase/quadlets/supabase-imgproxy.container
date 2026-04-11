@@ -2,8 +2,8 @@
 Description=Supabase imgproxy
 StartLimitIntervalSec=300
 StartLimitBurst=3
-Requires=supabase.network
-After=supabase.network
+Requires=supabase-network.service
+After=supabase-network.service
 
 [Container]
 ContainerName=supabase-imgproxy

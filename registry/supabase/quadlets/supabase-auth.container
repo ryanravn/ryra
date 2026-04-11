@@ -2,8 +2,8 @@
 Description=Supabase Auth (GoTrue)
 StartLimitIntervalSec=300
 StartLimitBurst=3
-Requires=supabase.network supabase-db.service
-After=supabase.network supabase-db.service
+Requires=supabase-db.service
+After=supabase-db.service
 
 [Container]
 ContainerName=supabase-auth

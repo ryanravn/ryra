@@ -470,6 +470,14 @@ value = "{{secret.pg_meta_crypto_key}}"
 # --- Supavisor ---
 
 [[env]]
+name = "PROXY_PORT_TRANSACTION"
+value = "5432"
+
+[[env]]
+name = "PROXY_PORT_SESSION"
+value = "6543"
+
+[[env]]
 name = "POOLER_TENANT_ID"
 value = "dev"
 

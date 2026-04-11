@@ -2,8 +2,9 @@
 Description=Supabase API gateway (Kong)
 StartLimitIntervalSec=300
 StartLimitBurst=3
-Requires=supabase.network supabase-db.service supabase-auth.service supabase-rest.service supabase-realtime.service supabase-storage.service supabase-imgproxy.service supabase-meta.service supabase-studio.service
-After=supabase.network supabase-db.service supabase-auth.service supabase-rest.service supabase-realtime.service supabase-storage.service supabase-imgproxy.service supabase-meta.service supabase-studio.service
+Requires=supabase-db.service supabase-auth.service supabase-rest.service supabase-realtime.service supabase-storage.service supabase-imgproxy.service supabase-meta.service supabase-studio.service
+After=supabase-db.service supabase-auth.service supabase-rest.service supabase-realtime.service supabase-storage.service supabase-imgproxy.service supabase-meta.service supabase-studio.service
+Wants=supabase-supavisor.service
 
 [Container]
 ContainerName=supabase-kong

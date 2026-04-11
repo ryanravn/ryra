@@ -2,8 +2,8 @@
 Description=Supabase Storage
 StartLimitIntervalSec=300
 StartLimitBurst=3
-Requires=supabase.network supabase-db.service supabase-rest.service supabase-imgproxy.service
-After=supabase.network supabase-db.service supabase-rest.service supabase-imgproxy.service
+Requires=supabase-db.service supabase-rest.service supabase-imgproxy.service
+After=supabase-db.service supabase-rest.service supabase-imgproxy.service
 
 [Container]
 ContainerName=supabase-storage
