@@ -21,6 +21,7 @@ EnvironmentFile=%h/.local/share/ryra/jellyfin/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
+ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/setup-network.sh
 ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/link-media.sh
 ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/install-sso-plugin.sh
 ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/configure-sso.sh

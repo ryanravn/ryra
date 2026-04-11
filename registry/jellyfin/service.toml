@@ -30,4 +30,4 @@ smtp = false
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
 OAUTH_ISSUER_URL = "{{auth.issuer}}"
-OAUTH_REDIRECT_URL = "{{service.url}}/sso/OID/redirect/authelia"
+OAUTH_REDIRECT_URL = "{{service.external_url}}/sso/OID/redirect/authelia"

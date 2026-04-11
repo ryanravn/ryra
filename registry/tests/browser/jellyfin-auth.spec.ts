@@ -49,32 +49,40 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
 test("full OIDC login through Authelia creates a jellyfin session", async ({
   browser,
 }) => {
-  // Use the domain URL (through Caddy) so the OIDC redirect_uri matches.
-  // The SSO plugin doesn't add a button to the login page — navigate directly
-  // to the SSO start endpoint which begins the OIDC authorization flow.
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
   // 1. Navigate to the SSO start endpoint — this redirects to Authelia
+  console.log(`Navigating to: ${JELLYFIN_DOMAIN_URL}/sso/OID/start/authelia`);
   await page.goto(`${JELLYFIN_DOMAIN_URL}/sso/OID/start/authelia`);
 
-  // 2. Should redirect to Authelia login
+  // 2. Wait for navigation — could be Authelia or an error page
+  await page.waitForLoadState("domcontentloaded");
+  const currentUrl = page.url();
+  console.log(`After SSO start, URL is: ${currentUrl}`);
+  console.log(`Page title: ${await page.title()}`);
+
+  // 3. Should be on Authelia login now
   await page.waitForURL((url) => url.hostname === "auth.test.local", {
     timeout: 15_000,
   });
+  console.log(`On Authelia, URL: ${page.url()}`);
 
-  // 3. Fill in Authelia credentials
+  // 4. Fill in Authelia credentials
   await loginToAuthelia(page);
 
-  // 4. Should be redirected back to Jellyfin after authentication.
-  // The SSO plugin callback returns HTML that completes the login client-side.
+  // Log where we are after login
+  console.log(`After Authelia login, URL: ${page.url()}`);
+
+  // 5. Should be redirected back to Jellyfin after authentication.
   await page.waitForURL(
     (url) => url.hostname === "jellyfin.test.local",
-    { timeout: 15_000 },
+    { timeout: 30_000 },
   );
 
-  // 5. Verify we ended up back on Jellyfin (not stuck on an error page)
+  // 6. Verify we ended up back on Jellyfin (not stuck on an error page)
   const finalUrl = page.url();
+  console.log(`Final URL: ${finalUrl}`);
   expect(finalUrl).toContain("jellyfin.test.local");
 
   await context.close();

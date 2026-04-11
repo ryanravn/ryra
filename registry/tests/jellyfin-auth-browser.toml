@@ -15,7 +15,7 @@ service = "caddy"
 [[steps]]
 action = "run"
 name = "add-authelia"
-run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
 ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
 timeout = 300
 
@@ -48,37 +48,47 @@ name = "jellyfin-http-ready"
 run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)/health && exit 0; sleep 5; done; exit 1"
 timeout = 360
 
-# Complete the startup wizard via API (POST returns 204, not 200)
+# Complete the startup wizard via API — Jellyfin may briefly restart between steps
 [[steps]]
 action = "run"
 name = "complete-wizard"
 run = """
 PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
 BASE="http://127.0.0.1:$PORT"
+wait_ready() { for i in $(seq 1 30); do curl -sf "$BASE/health" >/dev/null 2>&1 && return 0; sleep 2; done; return 1; }
+wait_ready
 curl -X POST "$BASE/Startup/Configuration" \
   -H 'Content-Type: application/json' \
-  -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' -o /dev/null
+  -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' -o /dev/null -s
+wait_ready
 curl -X POST "$BASE/Startup/User" \
   -H 'Content-Type: application/json' \
-  -d '{"Name":"admin","Password":"testpassword123"}' -o /dev/null
+  -d '{"Name":"admin","Password":"testpassword123"}' -o /dev/null -s
+wait_ready
 curl -X POST "$BASE/Startup/RemoteAccess" \
   -H 'Content-Type: application/json' \
-  -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' -o /dev/null
-curl -X POST "$BASE/Startup/Complete" -o /dev/null
+  -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' -o /dev/null -s
+wait_ready
+curl -X POST "$BASE/Startup/Complete" -o /dev/null -s
+wait_ready
 """
-timeout = 30
+timeout = 120
 
-# Verify SSO plugin is configured (config was pre-written by ExecStartPre)
+# Verify SSO plugin is configured — may need a moment for the SSO controller to init
 [[steps]]
 action = "assert"
 name = "sso-plugin-loaded"
 run = """
 PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
-NAMES=$(curl -sf "http://127.0.0.1:$PORT/sso/OID/GetNames")
-echo "SSO providers: $NAMES"
-echo "$NAMES" | grep -q "authelia"
+for i in $(seq 1 30); do
+  NAMES=$(curl -sf "http://127.0.0.1:$PORT/sso/OID/GetNames" 2>/dev/null)
+  if echo "$NAMES" | grep -q "authelia"; then echo "SSO ready: $NAMES"; exit 0; fi
+  sleep 2
+done
+echo "SSO plugin not loaded after 60s"
+exit 1
 """
-timeout = 30
+timeout = 90
 
 # Run playwright SSO tests
 [[steps]]
