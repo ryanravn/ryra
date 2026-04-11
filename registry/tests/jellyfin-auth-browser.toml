@@ -1,0 +1,94 @@
+[test]
+name = "jellyfin-auth-browser"
+browser = true
+
+# Install caddy
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia
+[[steps]]
+action = "run"
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install jellyfin with OIDC auth
+[[steps]]
+action = "run"
+name = "add-jellyfin"
+run = """JELLYFIN_MEDIA_DIR=/tmp/jellyfin-media \
+ryra add jellyfin --auth --domain jellyfin.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "jellyfin"
+
+# Set up /etc/hosts for domain resolution inside the VM
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local jellyfin.test.local' >> /etc/hosts && mkdir -p /tmp/jellyfin-media"
+
+# Wait for Jellyfin HTTP
+[[steps]]
+action = "assert"
+name = "jellyfin-http-ready"
+run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)/health && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+# Complete the startup wizard via API (POST returns 204, not 200)
+[[steps]]
+action = "run"
+name = "complete-wizard"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
+BASE="http://127.0.0.1:$PORT"
+curl -X POST "$BASE/Startup/Configuration" \
+  -H 'Content-Type: application/json' \
+  -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' -o /dev/null
+curl -X POST "$BASE/Startup/User" \
+  -H 'Content-Type: application/json' \
+  -d '{"Name":"admin","Password":"testpassword123"}' -o /dev/null
+curl -X POST "$BASE/Startup/RemoteAccess" \
+  -H 'Content-Type: application/json' \
+  -d '{"EnableRemoteAccess":true,"EnableAutomaticPortMapping":false}' -o /dev/null
+curl -X POST "$BASE/Startup/Complete" -o /dev/null
+"""
+timeout = 30
+
+# Verify SSO plugin is configured (config was pre-written by ExecStartPre)
+[[steps]]
+action = "assert"
+name = "sso-plugin-loaded"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
+NAMES=$(curl -sf "http://127.0.0.1:$PORT/sso/OID/GetNames")
+echo "SSO providers: $NAMES"
+echo "$NAMES" | grep -q "authelia"
+"""
+timeout = 30
+
+# Run playwright SSO tests
+[[steps]]
+action = "assert"
+name = "playwright-sso-tests"
+run = """
+export PATH="$HOME/.bun/bin:$PATH"
+export JELLYFIN_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
+cd /opt/ryra-test-registry/tests/browser
+ln -sf /opt/playwright/node_modules .
+bunx playwright test jellyfin-auth.spec.ts --reporter=list
+"""
+timeout = 120

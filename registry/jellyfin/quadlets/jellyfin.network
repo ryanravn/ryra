@@ -1,0 +1,4 @@
+[Unit]
+Description=Jellyfin network
+
+[Network]

@@ -98,6 +98,10 @@ Available when `--auth` is used and an auth provider (authelia) is installed:
 - `{{auth.client_secret}}` — generated 64-char secret for OIDC client
 - `{{auth.provider}}` — provider name (e.g., "authelia")
 
+## Service Configuration Philosophy
+
+Prefer environment variables and declarative config for all service setup. When a service can't be fully configured through envs alone (e.g., it requires plugin installation, API calls, or config file generation), use pre-start/post-start hooks to automate those steps. The goal is that `ryra add <service>` is turnkey — the user shouldn't need to manually configure the service afterward. If some manual steps are truly unavoidable (e.g., initial web wizard, admin account creation via UI), document them clearly in the service description and guide the user through them after installation.
+
 ## Podman & Quadlet-Native Solutions
 
 Always prefer podman-native and quadlet-native features over workarounds:

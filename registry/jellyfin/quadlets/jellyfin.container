@@ -1,0 +1,29 @@
+[Unit]
+Description=Jellyfin media server
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=jellyfin.network
+After=jellyfin.network
+
+[Container]
+Image=docker.io/jellyfin/jellyfin:latest
+ContainerName=jellyfin
+Network=jellyfin.network
+PublishPort=${RYRA_PORT_HTTP}:8096
+Volume=%h/.local/share/ryra/jellyfin/config:/config:Z
+Volume=jellyfin-cache.volume:/cache:U
+Volume=%h/.local/share/ryra/jellyfin/media:/media:ro,Z
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/jellyfin/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/jellyfin/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/link-media.sh
+ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/install-sso-plugin.sh
+ExecStartPre=/bin/bash %h/.local/share/ryra/jellyfin/configs/scripts/configure-sso.sh
+
+[Install]
+WantedBy=default.target

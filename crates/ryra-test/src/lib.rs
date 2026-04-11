@@ -300,16 +300,7 @@ pub async fn run(args: Args) -> Result<()> {
         anyhow::bail!("no tests found in registry at {}", registry_path.display());
     }
 
-    // Prepare browser image if any test needs it
-    let any_needs_browser = discovered.iter().any(|t| t.needs_browser());
-    let browser_image = if any_needs_browser {
-        Some(image::ensure_browser_image(&args.distro, args.redownload, use_kvm).await?)
-    } else {
-        None
-    };
-
     let base_image = std::sync::Arc::new(base_image);
-    let browser_image = browser_image.map(std::sync::Arc::new);
     let registry_path = std::sync::Arc::new(registry_path);
 
     // Filter tests
@@ -325,6 +316,14 @@ pub async fn run(args: Args) -> Result<()> {
     if to_run.is_empty() {
         anyhow::bail!("no tests matched the given filters");
     }
+
+    // Prepare browser image only if a filtered test actually needs it
+    let any_needs_browser = to_run.iter().any(|t| t.needs_browser());
+    let browser_image = if any_needs_browser {
+        Some(std::sync::Arc::new(image::ensure_browser_image(&args.distro, args.redownload, use_kvm).await?))
+    } else {
+        None
+    };
 
     // Pre-pull all container images before spawning VMs.
     let mut all_images: Vec<String> = to_run

@@ -1,0 +1,33 @@
+[service]
+name = "jellyfin"
+description = "Jellyfin - free software media system"
+url = "https://jellyfin.org/docs/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 256
+recommended = 1024
+
+[[ports]]
+name = "http"
+container_port = 8096
+
+[[env]]
+name = "JELLYFIN_PublishedServerUrl"
+value = "{{service.external_url}}"
+
+[[env]]
+name = "JELLYFIN_MEDIA_DIR"
+value = ""
+kind = "prompted"
+prompt = "Path to your media library on the host (e.g. /home/user/media)"
+
+[integrations]
+auth = ["oidc"]
+smtp = false
+
+[mappings.auth]
+OAUTH_CLIENT_ID = "{{auth.client_id}}"
+OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
+OAUTH_ISSUER_URL = "{{auth.issuer}}"
+OAUTH_REDIRECT_URL = "{{service.url}}/sso/OID/redirect/authelia"

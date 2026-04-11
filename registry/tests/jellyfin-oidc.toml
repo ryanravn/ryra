@@ -1,0 +1,78 @@
+[test]
+name = "jellyfin-oidc-lifecycle"
+
+# Install caddy (needed for --domain and --auth)
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia (OIDC provider)
+[[steps]]
+action = "run"
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install jellyfin with OIDC auth
+[[steps]]
+action = "run"
+name = "add-jellyfin"
+run = """JELLYFIN_MEDIA_DIR=/tmp/jellyfin-media \
+ryra add jellyfin --auth --domain jellyfin.test.local --repo /opt/ryra-test-registry"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "jellyfin"
+
+# Create the media dir and setup hosts
+[[steps]]
+action = "run"
+name = "setup"
+run = "mkdir -p /tmp/jellyfin-media && echo '127.0.0.1 auth.test.local jellyfin.test.local' >> /etc/hosts"
+
+# Wait for Jellyfin HTTP
+[[steps]]
+action = "assert"
+name = "http-responds"
+run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)/health && exit 0; sleep 5; done; exit 1"
+timeout = 360
+
+# Verify SSO plugin is loaded with authelia provider
+[[steps]]
+action = "assert"
+name = "sso-plugin-loaded"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
+NAMES=$(curl -sf "http://127.0.0.1:$PORT/sso/OID/GetNames")
+echo "SSO providers: $NAMES"
+echo "$NAMES" | grep -q "authelia"
+"""
+timeout = 30
+
+# Verify the SSO start endpoint redirects (302) to Authelia
+[[steps]]
+action = "assert"
+name = "sso-redirects"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
+HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/sso/OID/start/authelia" 2>/dev/null)
+echo "SSO start HTTP code: $HTTP_CODE"
+# Should get 200 (page with redirect JS) or 302, not 400/404/500
+[ "$HTTP_CODE" -lt 400 ]
+"""
+timeout = 30
+
+# Cleanup
+[[steps]]
+action = "remove"
+service = "jellyfin"
