@@ -196,7 +196,7 @@ pub async fn run(
             service,
             domain,
             auth_kind.clone(),
-            auth,
+            auth || auth_kind.is_some(),
             &env_overrides,
             &repo_url,
             &repo_dir,
@@ -308,7 +308,8 @@ pub async fn run(
 }
 
 /// Ensure a hostname resolves on the host via /etc/hosts.
-/// Needed so the browser can reach Caddy's network alias for auth domains.
+/// Check if a hostname resolves on the host. If not, tell the user to add it.
+/// Needed so the browser can follow OIDC redirects to the auth domain.
 fn ensure_hosts_entry(hostname: &str) {
     let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
     if hosts.lines().any(|l| {
@@ -317,17 +318,10 @@ fn ensure_hosts_entry(hostname: &str) {
     }) {
         return;
     }
-    println!("  Adding '{hostname}' to /etc/hosts (requires sudo)...");
-    let status = std::process::Command::new("sudo")
-        .args(["sh", "-c", &format!("echo '127.0.0.1 {hostname}' >> /etc/hosts")])
-        .status();
-    match status {
-        Ok(s) if s.success() => {}
-        _ => {
-            println!("  Could not add /etc/hosts entry. Run manually:");
-            println!("    echo '127.0.0.1 {hostname}' | sudo tee -a /etc/hosts");
-        }
-    }
+    println!();
+    println!("  To access the auth UI from your browser, add to /etc/hosts:");
+    println!("    echo '127.0.0.1 {hostname}' | sudo tee -a /etc/hosts");
+    println!();
 }
 
 /// Auto-install caddy and authelia when --domain or --auth requires them.
