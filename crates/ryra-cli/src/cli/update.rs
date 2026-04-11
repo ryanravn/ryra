@@ -6,8 +6,15 @@ use dialoguer::Confirm;
 
 use super::apply;
 
-pub async fn run(service: &str, repo: Option<&str>, yes: bool, dry_run: bool) -> Result<()> {
-    let (_repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
+pub async fn run(service: &str, yes: bool, dry_run: bool) -> Result<()> {
+    // Look up which registry this service was installed from
+    let installed = ryra_core::list_installed()?
+        .into_iter()
+        .find(|s| s.name == service)
+        .ok_or_else(|| anyhow::anyhow!("{service} is not installed"))?;
+
+    let service_ref = ryra_core::service_ref_from_installed(&installed);
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
 
     let result = ryra_core::update_service(service, &BTreeMap::new(), &repo_dir)?;
 

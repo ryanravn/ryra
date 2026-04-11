@@ -1,14 +1,13 @@
 use std::io::IsTerminal;
 
 use anyhow::Result;
-use dialoguer::Input;
 
 use ryra_core::config::schema::*;
 
 use super::apply;
 use super::prompts;
 
-pub async fn run(repo: Option<String>, dry_run: bool) -> Result<()> {
+pub async fn run(dry_run: bool) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
 
     // If config exists, ask to overwrite
@@ -35,23 +34,9 @@ pub async fn run(repo: Option<String>, dry_run: bool) -> Result<()> {
         None
     };
 
-    // 2. Repo
-    let default_repo = match repo {
-        Some(r) => Some(r),
-        None if interactive => {
-            let url: String = Input::new()
-                .with_prompt("Default repo")
-                .default(ryra_core::DEFAULT_REPO.to_string())
-                .interact_text()?;
-            Some(url)
-        }
-        None => Some(ryra_core::DEFAULT_REPO.to_string()),
-    };
-
     let config = Config {
         smtp,
         auth: None,
-        default_repo,
         ..Config::default()
     };
 

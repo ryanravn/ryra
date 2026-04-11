@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::registry::service_def::AuthKind;
 
 /// Top-level ryra.toml configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Legacy — reads old configs with [host], never written back.
     #[serde(default, skip_serializing)]
@@ -25,19 +25,6 @@ pub struct Config {
 pub struct HostConfig {
     #[serde(default)]
     pub domain: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            host: HostConfig::default(),
-            admin_email: None,
-            smtp: None,
-            auth: None,
-            registries: vec![],
-            services: vec![],
-        }
-    }
 }
 
 // --- SMTP ---

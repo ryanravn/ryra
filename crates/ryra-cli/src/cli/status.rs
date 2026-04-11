@@ -1,9 +1,9 @@
 use anyhow::Result;
 use ryra_core::config::status::{ProviderStatus, RyraStatus, StatusInfo};
 
-pub async fn run(service: Option<&str>, repo: Option<&str>) -> Result<()> {
+pub async fn run(service: Option<&str>) -> Result<()> {
     match service {
-        Some(name) => run_service(name, repo).await,
+        Some(name) => run_service(name).await,
         None => run_global(),
     }
 }
@@ -26,11 +26,6 @@ fn print_global(info: &StatusInfo) {
     println!();
     println!("SMTP:       {}", format_provider(&info.smtp));
     println!("Auth:       {}", format_provider(&info.auth));
-    println!();
-    println!(
-        "Repo:       {}",
-        info.default_repo.as_deref().unwrap_or("not configured")
-    );
     println!();
 
     if info.services.is_empty() {
@@ -63,9 +58,13 @@ fn print_global(info: &StatusInfo) {
     println!();
 }
 
-async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
-    let (_repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
-    let detail = ryra_core::service_info(&repo_dir, service)?;
+async fn run_service(service: &str) -> Result<()> {
+    use ryra_core::registry::resolve::ServiceRef;
+
+    let service_ref = ServiceRef::parse(service)?;
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
+    let service_name = service_ref.service_name();
+    let detail = ryra_core::service_info(&repo_dir, service_name)?;
 
     println!("{}", detail.name);
     println!("  {}", detail.description);
@@ -98,10 +97,10 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
     // Check if installed and get the domain
     let installed_service = ryra_core::list_installed()?
         .into_iter()
-        .find(|s| s.name == service);
+        .find(|s| s.name == service_name);
 
     if let Some(ref svc) = installed_service {
-        let home_dir = ryra_core::service_home(service)?;
+        let home_dir = ryra_core::service_home(service_name)?;
 
         println!();
         println!("Installed");
@@ -112,12 +111,12 @@ async fn run_service(service: &str, repo: Option<&str>) -> Result<()> {
         println!();
         println!("Useful commands:");
         println!("  cat {}", home_dir.join(".env").display());
-        println!("  systemctl --user status {service}");
-        println!("  journalctl --user-unit {service}.service -f");
-        println!("  systemctl --user restart {service}");
+        println!("  systemctl --user status {service_name}");
+        println!("  journalctl --user-unit {service_name}.service -f");
+        println!("  systemctl --user restart {service_name}");
     } else {
         println!();
-        println!("Not installed. Run `ryra add {service}` to install.");
+        println!("Not installed. Run `ryra add {service_name}` to install.");
     }
 
     Ok(())

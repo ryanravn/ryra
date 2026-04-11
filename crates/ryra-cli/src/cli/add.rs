@@ -4,10 +4,9 @@ use std::io::IsTerminal;
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
-use std::path::Path;
-
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
+use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::AuthKind;
 use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 
@@ -18,22 +17,24 @@ pub async fn run(
     services: &[String],
     domain: Option<&str>,
     auth: bool,
-    repo: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
     if domain.is_some() && services.len() > 1 {
         bail!("--domain can only be used when adding a single service");
     }
 
-    let (repo_url, repo_dir) = ryra_core::resolve_repo(repo).await?;
     let interactive = std::io::stdin().is_terminal();
 
     // Auto-install dependencies: caddy for --domain/--auth, authelia for --auth
     if !dry_run {
-        ensure_dependencies(domain, auth, interactive, &repo_url, &repo_dir).await?;
+        ensure_dependencies(domain, auth, interactive).await?;
     }
 
-    for service in services {
+    for service_input in services {
+        let service_ref = ServiceRef::parse(service_input)?;
+        let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
+        let service = service_ref.service_name();
+
         let paths = ryra_core::config::ConfigPaths::resolve()?;
         let config = ryra_core::config::load_or_default(&paths.config_file)?;
 
@@ -68,15 +69,7 @@ pub async fn run(
                 if enable {
                     let mut config = config.clone();
                     if config.auth.is_none() {
-                        match ensure_auth_for_add(
-                            &mut config,
-                            &paths,
-                            &repo_url,
-                            &repo_dir,
-                            dry_run,
-                        )
-                        .await?
-                        {
+                        match ensure_auth_for_add(&mut config, &paths, dry_run).await? {
                             true => {}
                             false => return Ok(()),
                         }
@@ -111,9 +104,7 @@ pub async fn run(
                 let kind = reg_service.def.integrations.auth[selection - 1].clone();
                 let mut config = config.clone();
                 if config.auth.is_none() {
-                    match ensure_auth_for_add(&mut config, &paths, &repo_url, &repo_dir, dry_run)
-                        .await?
-                    {
+                    match ensure_auth_for_add(&mut config, &paths, dry_run).await? {
                         true => {}
                         false => return Ok(()),
                     }
@@ -198,7 +189,7 @@ pub async fn run(
             auth_kind.clone(),
             auth || auth_kind.is_some(),
             &env_overrides,
-            &repo_url,
+            service_ref.registry_name(),
             &repo_dir,
         )?;
 
@@ -252,7 +243,7 @@ pub async fn run(
             ryra_core::finalize_add(ryra_core::FinalizeAddParams {
                 service_name: service,
                 auth_kind,
-                repo: &result.repo_url,
+                registry_name: service_ref.registry_name(),
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
                 env_content: &result.env_content,
@@ -298,11 +289,13 @@ pub async fn run(
             println!();
             println!("Commands:");
             println!("  cat {}  # view config", env_path.display());
-            println!("  systemctl --user restart {service}  # restart (picks up .env changes)");
+            println!(
+                "  systemctl --user restart {service}  # restart (picks up .env changes)"
+            );
             println!("  systemctl --user status {service}  # check if running");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
         }
-    } // end for service in services
+    } // end for service_input in services
 
     Ok(())
 }
@@ -366,8 +359,6 @@ async fn ensure_dependencies(
     domain: Option<&str>,
     auth: bool,
     interactive: bool,
-    repo_url: &str,
-    _repo_dir: &Path,
 ) -> Result<()> {
     let needs_caddy = (domain.is_some() || auth) && !ryra_core::caddy::is_installed();
     let config = ryra_core::config::load_or_default(
@@ -393,14 +384,7 @@ async fn ensure_dependencies(
             }
         }
         println!("\nInstalling caddy...\n");
-        Box::pin(run(
-            &[SERVICE_CADDY.to_string()],
-            None,
-            false,
-            Some(repo_url),
-            false,
-        ))
-        .await?;
+        Box::pin(run(&[SERVICE_CADDY.to_string()], None, false, false)).await?;
     }
 
     // Install authelia
@@ -423,7 +407,6 @@ async fn ensure_dependencies(
                 &[SERVICE_AUTHELIA.to_string()],
                 Some(&authelia_domain),
                 false,
-                Some(repo_url),
                 false,
             ))
             .await?;
@@ -437,7 +420,6 @@ async fn ensure_dependencies(
                 &[SERVICE_AUTHELIA.to_string()],
                 Some(&authelia_domain),
                 false,
-                Some(repo_url),
                 false,
             ))
             .await?;
@@ -453,8 +435,6 @@ async fn ensure_dependencies(
 async fn ensure_auth_for_add(
     config: &mut Config,
     paths: &ConfigPaths,
-    repo_url: &str,
-    _repo_dir: &Path,
     dry_run: bool,
 ) -> Result<bool> {
     match prompts::ensure_auth_configured(config, paths).await? {
@@ -475,14 +455,7 @@ async fn ensure_auth_for_add(
             // Install caddy first if needed
             if !ryra_core::caddy::is_installed() && !dry_run {
                 println!("\nInstalling caddy (needed for auth)...\n");
-                Box::pin(run(
-                    &[SERVICE_CADDY.to_string()],
-                    None,
-                    false,
-                    Some(repo_url),
-                    dry_run,
-                ))
-                .await?;
+                Box::pin(run(&[SERVICE_CADDY.to_string()], None, false, dry_run)).await?;
             }
 
             // Prompt for authelia domain
@@ -500,7 +473,6 @@ async fn ensure_auth_for_add(
                 &[SERVICE_AUTHELIA.to_string()],
                 Some(&authelia_domain),
                 false,
-                Some(repo_url),
                 dry_run,
             ))
             .await?;

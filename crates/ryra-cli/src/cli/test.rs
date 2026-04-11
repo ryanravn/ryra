@@ -12,7 +12,6 @@ use ryra_core::registry::test_def::TestDef;
 pub struct TestRunParams<'a> {
     pub service: Option<&'a str>,
     pub test_filter: Option<&'a str>,
-    pub repo: Option<&'a str>,
     pub project: Option<&'a std::path::PathBuf>,
     pub vm: bool,
     pub keep_alive: bool,
@@ -41,7 +40,6 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
             run_live_service(
                 service,
                 params.test_filter,
-                params.repo,
                 params.yes,
                 params.verbose,
             )
@@ -51,36 +49,27 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
     }
 }
 
-/// Warn if tests are being loaded from a non-default repo.
-fn warn_untrusted_repo(repo_url: &str, yes: bool) -> Result<()> {
-    let default = ryra_core::DEFAULT_REPO;
-
-    // Check configured default too
-    let configured_default = ryra_core::config::ConfigPaths::resolve()
-        .ok()
-        .and_then(|p| ryra_core::config::load_or_default(&p.config_file).ok())
-        .and_then(|c| c.default_repo);
-
-    let is_trusted = repo_url == default || configured_default.as_deref() == Some(repo_url);
-
-    if is_trusted {
+/// Warn if tests are being loaded from a custom registry.
+fn warn_untrusted_repo(registry_name: &str, yes: bool) -> Result<()> {
+    // Bundled registry is always trusted
+    if registry_name == "bundled" || registry_name.is_empty() {
         return Ok(());
     }
 
     if yes {
-        eprintln!("warning: running test commands from non-default repo: {repo_url}");
+        eprintln!("warning: running test commands from custom registry: {registry_name}");
         return Ok(());
     }
 
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
-            "refusing to run test commands from non-default repo in non-interactive mode.\n\
-             Repo: {repo_url}\n\
+            "refusing to run test commands from custom registry in non-interactive mode.\n\
+             Registry: {registry_name}\n\
              Pass -y to skip this check."
         );
     }
 
-    eprintln!("warning: about to run test commands from non-default repo:\n  {repo_url}\n");
+    eprintln!("warning: about to run test commands from custom registry:\n  {registry_name}\n");
     let confirm = dialoguer::Confirm::new()
         .with_prompt("Continue?")
         .default(false)
@@ -96,13 +85,12 @@ fn warn_untrusted_repo(repo_url: &str, yes: bool) -> Result<()> {
 async fn run_live_service(
     service: &str,
     test_filter: Option<&str>,
-    repo: Option<&str>,
     yes: bool,
     verbose: bool,
 ) -> Result<()> {
-    let info = ryra_core::service_tests(service, repo).await?;
+    let info = ryra_core::service_tests(service).await?;
 
-    warn_untrusted_repo(&info.repo_url, yes)?;
+    warn_untrusted_repo(&info.registry_name, yes)?;
 
     if info.tests.is_empty() {
         println!("No tests defined for {service}.");

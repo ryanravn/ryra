@@ -18,9 +18,6 @@ enum Command {
     // -- Linux-only commands (require systemd, podman) --
     /// Initialize ryra on this host (optional — `ryra add` works without it)
     Init {
-        /// Default repo (git URL or local path)
-        #[arg(long)]
-        repo: Option<String>,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -30,7 +27,7 @@ enum Command {
     },
     /// Add and start a service
     Add {
-        /// Service name(s) from repo
+        /// Service name(s) from registry (e.g., "jellyfin" or "acme/jellyfin")
         #[arg(required = true, num_args = 1..)]
         services: Vec<String>,
         /// Domain for this service (adds Caddy reverse proxy route)
@@ -39,9 +36,6 @@ enum Command {
         /// Enable auth (forward auth via Caddy, or native OIDC if supported)
         #[arg(long)]
         auth: bool,
-        /// Repo to install from (git URL or local path)
-        #[arg(long)]
-        repo: Option<String>,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -78,16 +72,13 @@ enum Command {
     },
     /// View or edit global configuration
     Config {
-        /// Section to configure (smtp, auth, repo)
+        /// Section to configure (smtp, auth)
         section: Option<String>,
     },
     /// Show global config, or details about a specific service
     Status {
         /// Service name (omit for global overview)
         service: Option<String>,
-        /// Repo to look up service from (git URL or local path)
-        #[arg(long)]
-        repo: Option<String>,
     },
     /// List installed services
     List,
@@ -95,9 +86,6 @@ enum Command {
     Update {
         /// Service name to update
         service: String,
-        /// Repo to update from (git URL or local path)
-        #[arg(long)]
-        repo: Option<String>,
         /// Skip confirmation prompt
         #[arg(long, short = 'y')]
         yes: bool,
@@ -113,17 +101,14 @@ enum Command {
     Diff {
         /// Service name
         service: String,
-        /// Repo to compare against (git URL or local path)
-        #[arg(long)]
-        repo: Option<String>,
     },
-    /// Search available services in a repo
+    /// Search available services in a registry
     Search {
         /// Filter by name or description
         query: Option<String>,
-        /// Repo to search (git URL or local path)
+        /// Search a specific custom registry
         #[arg(long)]
-        repo: Option<String>,
+        registry: Option<String>,
     },
     /// Run tests for a service
     Test {
@@ -160,6 +145,34 @@ enum Command {
         #[arg(long)]
         parallel: Option<usize>,
     },
+    /// Manage custom registries
+    Registry {
+        #[command(subcommand)]
+        action: RegistryAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryAction {
+    /// Add a custom registry
+    Add {
+        /// Registry name (used as namespace, e.g., "acme")
+        name: String,
+        /// Git URL of the registry repo
+        url: String,
+    },
+    /// Remove a custom registry
+    Remove {
+        /// Registry name
+        name: String,
+    },
+    /// Update (git pull) custom registries
+    Update {
+        /// Specific registry to update (default: all)
+        name: Option<String>,
+    },
+    /// List custom registries
+    List,
 }
 
 #[tokio::main]
@@ -167,24 +180,19 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Init {
-            repo,
-            dry_run,
-            verbose,
-        } => {
+        Command::Init { dry_run, verbose } => {
             ryra_core::verbose::set(verbose);
-            cli::init::run(repo, dry_run).await?
+            cli::init::run(dry_run).await?
         }
         Command::Add {
             ref services,
             ref domain,
             auth,
-            ref repo,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(services, domain.as_deref(), auth, repo.as_deref(), dry_run).await?
+            cli::add::run(services, domain.as_deref(), auth, dry_run).await?
         }
         Command::Remove {
             ref services,
@@ -204,35 +212,28 @@ async fn main() -> anyhow::Result<()> {
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
-        Command::Status {
-            ref service,
-            ref repo,
-        } => cli::status::run(service.as_deref(), repo.as_deref()).await?,
+        Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Update {
             ref service,
-            ref repo,
             yes,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::update::run(service, repo.as_deref(), yes, dry_run).await?
+            cli::update::run(service, yes, dry_run).await?
         }
-        Command::Diff {
-            ref service,
-            ref repo,
-        } => cli::diff::run(service, repo.as_deref()).await?,
+        Command::Diff { ref service } => cli::diff::run(service).await?,
         Command::List => cli::list::run()?,
         Command::Search {
             ref query,
-            ref repo,
-        } => cli::search::run(query.as_deref(), repo.as_deref()).await?,
+            ref registry,
+        } => cli::search::run(query.as_deref(), registry.as_deref()).await?,
         Command::Test {
             ref names,
             live,
             ref service,
             ref test,
-            ref repo,
+            repo: _,
             ref project,
             keep_alive,
             yes,
@@ -243,7 +244,6 @@ async fn main() -> anyhow::Result<()> {
             cli::test::run(cli::test::TestRunParams {
                 service: service.as_deref(),
                 test_filter: test.as_deref(),
-                repo: repo.as_deref(),
                 project: project.as_ref(),
                 vm: !live,
                 keep_alive,
@@ -255,6 +255,16 @@ async fn main() -> anyhow::Result<()> {
             })
             .await?
         }
+        Command::Registry { action } => match action {
+            RegistryAction::Add { ref name, ref url } => {
+                cli::registry_cmd::add(name, url).await?
+            }
+            RegistryAction::Remove { ref name } => cli::registry_cmd::remove(name)?,
+            RegistryAction::Update { ref name } => {
+                cli::registry_cmd::update(name.as_deref()).await?
+            }
+            RegistryAction::List => cli::registry_cmd::list()?,
+        },
     }
 
     Ok(())

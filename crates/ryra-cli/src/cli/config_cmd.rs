@@ -1,5 +1,4 @@
 use anyhow::{Result, bail};
-use dialoguer::Input;
 
 use super::prompts;
 
@@ -26,20 +25,8 @@ pub async fn run(section: Option<&str>) -> Result<()> {
             }
             prompts::AuthSetupChoice::Skip => return Ok(()),
         },
-        Some("repo") => {
-            let url: String = Input::new()
-                .with_prompt("Default repo")
-                .default(
-                    config
-                        .default_repo
-                        .clone()
-                        .unwrap_or_else(|| ryra_core::DEFAULT_REPO.to_string()),
-                )
-                .interact_text()?;
-            config.default_repo = Some(url);
-        }
         Some(other) => {
-            bail!("Unknown section: {other}. Options: smtp, auth, repo");
+            bail!("Unknown section: {other}. Options: smtp, auth");
         }
     }
 
@@ -72,17 +59,11 @@ fn print_overview(config: &ryra_core::config::schema::Config) {
         None => println!("  auth:       {}", status_none()),
     }
 
-    // Repo
-    match &config.default_repo {
-        Some(repo) => println!("  repo:       {repo}"),
-        None => println!("  repo:       (default)"),
-    }
-
     if !config.services.is_empty() {
         println!("\n  {} installed service(s)", config.services.len());
     }
 
-    println!("\nEdit a section: ryra config <smtp|auth|repo>");
+    println!("\nEdit a section: ryra config <smtp|auth>");
 }
 
 fn status_ok() -> &'static str {
