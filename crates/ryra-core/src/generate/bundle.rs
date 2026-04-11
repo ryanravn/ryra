@@ -10,6 +10,8 @@ pub struct ProcessBundleParams<'a> {
     pub quadlet_dir: &'a Path,
     pub extra_networks: &'a [String],
     pub extra_volumes: &'a [String],
+    /// Extra args passed via `PodmanArgs=` in the quadlet.
+    pub podman_args: &'a [String],
 }
 
 /// Result of processing a quadlet bundle from the registry.
@@ -99,6 +101,15 @@ pub fn inject_networks(content: &str, networks: &[String]) -> String {
         .join("\n");
 
     inject_before_section(content, &extra_lines, "[Service]")
+}
+
+/// Append `PodmanArgs=` to the `[Container]` section of a quadlet file.
+pub fn inject_podman_args(content: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        return content.to_string();
+    }
+    let line = format!("PodmanArgs={}", args.join(" "));
+    inject_before_section(content, &line, "[Service]")
 }
 
 /// Append `Volume=` lines to the `[Container]` section of a quadlet file.
@@ -199,6 +210,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
         if file_name.ends_with(".container") {
             content = inject_networks(&content, params.extra_networks);
             content = inject_extra_volumes(&content, params.extra_volumes);
+            content = inject_podman_args(&content, params.podman_args);
         }
 
         quadlet_files.push(GeneratedFile {
@@ -409,6 +421,7 @@ mod tests {
             quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
             extra_networks: &[],
             extra_volumes: &[],
+            podman_args: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("quadlets/ directory not found"));
@@ -445,6 +458,7 @@ mod tests {
             quadlet_dir,
             extra_networks: &["caddy".to_string()],
             extra_volumes: &[],
+            podman_args: &[],
         };
 
         let bundle = process_quadlet_bundle(&params).unwrap_or_else(|e| {
@@ -490,6 +504,7 @@ mod tests {
             quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
             extra_networks: &[],
             extra_volumes: &[],
+            podman_args: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));

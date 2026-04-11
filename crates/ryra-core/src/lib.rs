@@ -370,6 +370,14 @@ pub fn add_service(
         extra_env,
     })?;
 
+    // When auth routes through Caddy, prevent the host's /etc/hosts from
+    // leaking into the container (it would override podman DNS aliases).
+    let podman_args: Vec<String> = if enable_auth && caddy::is_installed() {
+        vec!["--no-hosts".to_string()]
+    } else {
+        Vec::new()
+    };
+
     // Process quadlet bundle from registry
     let bundle = generate::bundle::process_quadlet_bundle(
         &generate::bundle::ProcessBundleParams {
@@ -378,6 +386,7 @@ pub fn add_service(
             quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &extra_volumes,
+            podman_args: &podman_args,
         },
     )?;
 
@@ -786,6 +795,7 @@ pub fn update_service(
             quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &[],
+            podman_args: &[],
         },
     )?;
 
