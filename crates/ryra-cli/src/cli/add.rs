@@ -308,20 +308,57 @@ pub async fn run(
 }
 
 /// Ensure a hostname resolves on the host via /etc/hosts.
-/// Check if a hostname resolves on the host. If not, tell the user to add it.
-/// Needed so the browser can follow OIDC redirects to the auth domain.
-fn ensure_hosts_entry(hostname: &str) {
+/// Print setup hints for auth domain access (hosts entry + CA trust).
+/// Both require sudo — ryra is rootless so it can only show instructions.
+fn print_auth_setup_hints(hostname: &str) {
+    let mut hints = Vec::new();
+
+    // Check /etc/hosts
     let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
-    if hosts.lines().any(|l| {
+    let has_host = hosts.lines().any(|l| {
         let l = l.trim();
         !l.starts_with('#') && l.split_whitespace().any(|w| w == hostname)
-    }) {
-        return;
+    });
+    if !has_host {
+        hints.push(format!(
+            "echo '127.0.0.1 {hostname}' | sudo tee -a /etc/hosts"
+        ));
     }
-    println!();
-    println!("  To access the auth UI from your browser, add to /etc/hosts:");
-    println!("    echo '127.0.0.1 {hostname}' | sudo tee -a /etc/hosts");
-    println!();
+
+    // Check CA trust
+    let ca_trusted = std::path::Path::new("/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt")
+        .exists()
+        || std::path::Path::new("/usr/local/share/ca-certificates/ryra-caddy-ca.crt").exists();
+    if !ca_trusted {
+        let ca_src = ryra_core::service_home("caddy")
+            .ok()
+            .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
+            .filter(|p| p.exists());
+        if let Some(ca) = ca_src {
+            // Fedora/RHEL
+            if std::path::Path::new("/etc/pki/ca-trust").is_dir() {
+                hints.push(format!(
+                    "sudo cp {} /etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust",
+                    ca.display()
+                ));
+            // Debian/Ubuntu
+            } else if std::path::Path::new("/usr/local/share/ca-certificates").is_dir() {
+                hints.push(format!(
+                    "sudo cp {} /usr/local/share/ca-certificates/ryra-caddy-ca.crt && sudo update-ca-certificates",
+                    ca.display()
+                ));
+            }
+        }
+    }
+
+    if !hints.is_empty() {
+        println!();
+        println!("  One-time setup (requires sudo):");
+        for hint in &hints {
+            println!("    {hint}");
+        }
+        println!();
+    }
 }
 
 /// Auto-install caddy and authelia when --domain or --auth requires them.
@@ -390,7 +427,7 @@ async fn ensure_dependencies(
                 false,
             ))
             .await?;
-            ensure_hosts_entry(&authelia_domain);
+            print_auth_setup_hints(&authelia_domain);
         } else {
             // Non-interactive: need AUTHELIA_ADMIN_PASSWORD in env
             let authelia_domain =
@@ -404,7 +441,7 @@ async fn ensure_dependencies(
                 false,
             ))
             .await?;
-            ensure_hosts_entry(&authelia_domain);
+            print_auth_setup_hints(&authelia_domain);
         }
     }
 
@@ -468,7 +505,7 @@ async fn ensure_auth_for_add(
             ))
             .await?;
             if !dry_run {
-                ensure_hosts_entry(&authelia_domain);
+                print_auth_setup_hints(&authelia_domain);
             }
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
