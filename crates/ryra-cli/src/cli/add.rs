@@ -326,27 +326,53 @@ pub async fn run(
             );
             println!("  systemctl --user status {service}  # check if running");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
+
+            // Set up /etc/hosts and CA trust for domain-based services
+            if let Some(ref domain) = result.domain {
+                let mut domain_list = vec![domain.clone()];
+                // Also include authelia's domain if it has one
+                if let Ok(installed) = ryra_core::list_installed() {
+                    if let Some(auth_svc) = installed.iter().find(|s| s.name == SERVICE_AUTHELIA) {
+                        if let Some(ref auth_domain) = auth_svc.domain {
+                            if auth_domain != domain {
+                                domain_list.push(auth_domain.clone());
+                            }
+                        }
+                    }
+                }
+                let refs: Vec<&str> = domain_list.iter().map(|s| s.as_str()).collect();
+                setup_host_access(&refs);
+            }
         }
     } // end for service_input in services
 
     Ok(())
 }
 
-/// Ensure a hostname resolves on the host via /etc/hosts.
-/// Print setup hints for auth domain access (hosts entry + CA trust).
-/// Both require sudo — ryra is rootless so it can only show instructions.
-fn print_auth_setup_hints(hostname: &str) {
-    let mut hints = Vec::new();
+/// Ensure hostnames resolve and CA is trusted for domain-based services.
+/// Collects all needed domains and runs sudo commands with user confirmation.
+fn setup_host_access(domains: &[&str]) {
+    let mut commands = Vec::new();
 
-    // Check /etc/hosts
+    // Check /etc/hosts for each domain
     let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
-    let has_host = hosts.lines().any(|l| {
-        let l = l.trim();
-        !l.starts_with('#') && l.split_whitespace().any(|w| w == hostname)
-    });
-    if !has_host {
-        hints.push(format!(
-            "echo '127.0.0.1 {hostname}' | sudo tee -a /etc/hosts"
+    let missing_hosts: Vec<&&str> = domains
+        .iter()
+        .filter(|d| {
+            !hosts.lines().any(|l| {
+                let l = l.trim();
+                !l.starts_with('#') && l.split_whitespace().any(|w| w == **d)
+            })
+        })
+        .collect();
+    if !missing_hosts.is_empty() {
+        let hostnames = missing_hosts
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        commands.push(format!(
+            "echo '127.0.0.1 {hostnames}' | sudo tee -a /etc/hosts"
         ));
     }
 
@@ -360,15 +386,13 @@ fn print_auth_setup_hints(hostname: &str) {
             .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
             .filter(|p| p.exists());
         if let Some(ca) = ca_src {
-            // Fedora/RHEL
             if std::path::Path::new("/etc/pki/ca-trust").is_dir() {
-                hints.push(format!(
+                commands.push(format!(
                     "sudo cp {} /etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust",
                     ca.display()
                 ));
-            // Debian/Ubuntu
             } else if std::path::Path::new("/usr/local/share/ca-certificates").is_dir() {
-                hints.push(format!(
+                commands.push(format!(
                     "sudo cp {} /usr/local/share/ca-certificates/ryra-caddy-ca.crt && sudo update-ca-certificates",
                     ca.display()
                 ));
@@ -376,14 +400,38 @@ fn print_auth_setup_hints(hostname: &str) {
         }
     }
 
-    if !hints.is_empty() {
-        println!();
-        println!("  One-time setup (requires sudo):");
-        for hint in &hints {
-            println!("    {hint}");
-        }
-        println!();
+    if commands.is_empty() {
+        return;
     }
+
+    println!();
+    println!("  Domain setup (one-time, requires sudo):");
+    for cmd in &commands {
+        println!("    {cmd}");
+    }
+
+    let interactive = std::io::stdin().is_terminal();
+    if interactive {
+        let run = Confirm::new()
+            .with_prompt("  Run these commands now?")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if run {
+            for cmd in &commands {
+                let status = std::process::Command::new("sh")
+                    .args(["-c", cmd])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {}
+                    Ok(_) => eprintln!("  Command failed: {cmd}"),
+                    Err(e) => eprintln!("  Failed to run command: {e}"),
+                }
+            }
+            println!("  Done.");
+        }
+    }
+    println!();
 }
 
 /// Auto-install caddy and authelia when --domain or --auth requires them.
@@ -442,7 +490,7 @@ async fn ensure_dependencies(
                 false,
             ))
             .await?;
-            print_auth_setup_hints(&authelia_domain);
+            setup_host_access(&[&authelia_domain]);
         } else {
             // Non-interactive: need AUTHELIA_ADMIN_PASSWORD in env
             let authelia_domain =
@@ -455,7 +503,7 @@ async fn ensure_dependencies(
                 false,
             ))
             .await?;
-            print_auth_setup_hints(&authelia_domain);
+            setup_host_access(&[&authelia_domain]);
         }
     }
 
@@ -509,7 +557,7 @@ async fn ensure_auth_for_add(
             ))
             .await?;
             if !dry_run {
-                print_auth_setup_hints(&authelia_domain);
+                setup_host_access(&[&authelia_domain]);
             }
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
