@@ -24,6 +24,12 @@ value = ""
 kind = "prompted"
 prompt = "Ollama URL (leave empty if not using Ollama)"
 
+# Skip downloading the sentence-transformer embedding model on startup.
+# Users can configure RAG embeddings later via the admin panel if needed.
+[[env]]
+name = "RAG_EMBEDDING_MODEL"
+value = ""
+
 # Always read OIDC config from env vars, not the database
 [[env]]
 name = "ENABLE_OAUTH_PERSISTENT_CONFIG"
@@ -42,3 +48,4 @@ ENABLE_OAUTH_SIGNUP = "True"
 OAUTH_PROVIDER_NAME = "SSO"
 OAUTH_MERGE_ACCOUNTS_BY_EMAIL = "True"
 AIOHTTP_CLIENT_SESSION_SSL = "false"
+OAUTH_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post"
