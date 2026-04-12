@@ -1,0 +1,22 @@
+[Unit]
+Description=Open WebUI - AI chat interface
+After=network-online.target
+
+[Container]
+ContainerName=open-webui
+Image=ghcr.io/open-webui/open-webui:latest
+Network=open-webui.network
+PublishPort=${RYRA_PORT_HTTP}:8080
+Volume=open-webui-data.volume:/app/backend/data:U
+EnvironmentFile=%h/.local/share/ryra/open-webui/.env
+AutoUpdate=registry
+
+[Service]
+ExecStartPre=/bin/bash %h/.local/share/ryra/open-webui/configs/scripts/merge-ca-bundle.sh
+ExecStartPost=/bin/bash -c "podman cp %h/.local/share/ryra/open-webui/ca-bundle.crt open-webui:/usr/local/lib/python3.11/site-packages/certifi/cacert.pem 2>/dev/null || true"
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

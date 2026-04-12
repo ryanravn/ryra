@@ -11,7 +11,6 @@ pub mod reset;
 pub mod search;
 pub mod status;
 pub mod test;
-pub mod update;
 
 use ryra_core::Step;
 

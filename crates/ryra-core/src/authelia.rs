@@ -70,7 +70,8 @@ pub fn register_oidc_client(
     for suffix in [
         "/user/oauth2/Authelia/callback", // Forgejo/Gitea
         "/auth/login",                    // Immich
-        "/oauth2/callback",               // generic
+        "/oauth/oidc/callback",           // Open WebUI
+        "/oauth2/callback",              // generic
     ] {
         let uri = format!("{base_url}{suffix}");
         if !redirect_uris.contains(&uri) {

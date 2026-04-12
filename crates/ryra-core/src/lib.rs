@@ -160,11 +160,6 @@ pub struct ResetResult {
     pub steps: Vec<Step>,
 }
 
-pub struct UpdateResult {
-    pub steps: Vec<Step>,
-    pub changes: Vec<diff::Change>,
-}
-
 /// Resolve the registry directory for a service reference.
 pub async fn resolve_registry_dir(
     service_ref: &registry::resolve::ServiceRef,
@@ -251,8 +246,13 @@ pub fn add_service(
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
 
-    if config.services.iter().any(|s| s.name == service_name) {
-        return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
+    if let Some(existing) = config.services.iter().find(|s| s.name == service_name) {
+        if existing.installed {
+            return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
+        }
+        // installed: false — the CLI should clean up via remove_service +
+        // finalize_remove before calling add_service again.
+        return Err(Error::ServiceIncomplete(service_name.to_string()));
     }
 
     let reg_service = registry::find_service(repo_dir, service_name)?;
@@ -283,17 +283,17 @@ pub fn add_service(
     }
 
     // Determine host port: use fixed host_port from service def if set,
-    // allocate one if container port is privileged, otherwise use container port directly.
+    // allocate one if container port is privileged or already in use,
+    // otherwise use container port directly.
     let has_fixed_ports = reg_service.def.ports.iter().any(|p| p.host_port.is_some());
-    let has_privileged_port = reg_service
-        .def
-        .ports
-        .iter()
-        .any(|p| p.host_port.is_none() && p.container_port < 1024);
+    let needs_allocation = reg_service.def.ports.iter().any(|p| {
+        p.host_port.is_none()
+            && (p.container_port < 1024 || system::port::is_port_in_use(p.container_port))
+    });
     let host_port = if has_fixed_ports {
         // Fixed ports are set per-port in the service def (e.g. Caddy 80/443)
         None
-    } else if has_privileged_port {
+    } else if needs_allocation {
         Some(system::port::allocate_port(&config)?)
     } else {
         None
@@ -362,6 +362,20 @@ pub fn add_service(
         Vec::new()
     };
 
+    // Build port variable expansions for quadlet PublishPort directives
+    let port_vars: Vec<(String, String)> = reg_service
+        .def
+        .ports
+        .iter()
+        .map(|p| {
+            let resolved = p.host_port.unwrap_or(host_port.unwrap_or(p.container_port));
+            (
+                format!("RYRA_PORT_{}", p.name.to_uppercase()),
+                resolved.to_string(),
+            )
+        })
+        .collect();
+
     // Process quadlet bundle from registry
     let bundle =
         generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
@@ -371,6 +385,7 @@ pub fn add_service(
             extra_networks: &extra_networks,
             extra_volumes: &extra_volumes,
             podman_args: &podman_args,
+            port_vars: &port_vars,
         })?;
 
     // Generate warnings
@@ -567,6 +582,36 @@ pub fn add_service(
     })
 }
 
+/// Check if a quadlet filename belongs to a service.
+///
+/// Matches `{service_name}.container`, `{service_name}-db.volume`, etc.
+/// but NOT `{service_name_prefix}-other.container` (e.g., "whoami" must not
+/// match "whoami-auth.container" when "whoami-auth" is a known service).
+///
+/// `all_service_names` contains every installed service name — used to detect
+/// when a longer service name owns the file instead.
+fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names: &[&str]) -> bool {
+    if !filename.starts_with(service_name) {
+        return false;
+    }
+    let rest = &filename[service_name.len()..];
+    if rest.starts_with('.') {
+        return true;
+    }
+    if !rest.starts_with('-') {
+        return false;
+    }
+    // Check that no other installed service is a longer prefix match.
+    // e.g., "whoami-auth.container" with service "whoami" — if "whoami-auth"
+    // is also installed, it owns this file.
+    !all_service_names.iter().any(|&other| {
+        other.len() > service_name.len()
+            && other.starts_with(service_name)
+            && filename.starts_with(other)
+            && filename[other.len()..].starts_with(['.', '-'])
+    })
+}
+
 /// Remove a service: update state, return cleanup steps.
 pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     let paths = ConfigPaths::resolve()?;
@@ -579,10 +624,11 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
     // Stop all units belonging to this service (main + sidecars).
-    // Quadlet files named {service_name}*.container each produce a systemd unit.
+    // Quadlet files named {service_name}.ext or {service_name}-sidecar.ext.
     let quadlet_path = quadlet_dir()?;
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
+    let all_names: Vec<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
 
     if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
@@ -590,7 +636,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         for entry in entries.flatten() {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
-            if !name.starts_with(service_name) {
+            if !quadlet_belongs_to(&name, service_name, &all_names) {
                 continue;
             }
             // Stop each .container unit before removing files
@@ -651,21 +697,20 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     })
 }
 
-/// Parameters for [`finalize_add`].
-pub struct FinalizeAddParams<'a> {
+/// Parameters for [`record_pending`].
+pub struct RecordPendingParams<'a> {
     pub service_name: &'a str,
     pub auth_kind: Option<registry::service_def::AuthKind>,
     pub registry_name: &'a str,
     pub allocated_ports: &'a [(String, u16)],
     pub repo_dir: &'a Path,
-    /// The generated .env content, used for post-install config (e.g., auth auto-setup).
-    pub env_content: &'a str,
     /// Domain assigned to this service (for Caddy reverse proxy).
     pub domain: Option<&'a str>,
 }
 
-/// Called after add steps succeed — records the service in config and saves a snapshot.
-pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
+/// Record a service as pending installation (installed: false).
+/// Called BEFORE executing steps so that partial failures are recoverable.
+pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     paths.ensure_dirs()?;
     let mut config = config::load_or_default(&paths.config_file)?;
@@ -679,6 +724,7 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         ports,
         auth_kind: params.auth_kind,
         domain: params.domain.map(|d| d.to_string()),
+        installed: false,
     });
 
     // Auto-configure [auth] when an auth provider is installed
@@ -693,9 +739,29 @@ pub fn finalize_add(params: FinalizeAddParams<'_>) -> Result<()> {
         .repo_dir
         .join(params.service_name)
         .join("service.toml");
-    if let Ok(content) = std::fs::read_to_string(&service_toml) {
-        config::save_snapshot(&paths.snapshots_dir, params.service_name, &content)?;
-    }
+    let content = std::fs::read_to_string(&service_toml).map_err(|source| Error::FileRead {
+        path: service_toml,
+        source,
+    })?;
+    config::save_snapshot(&paths.snapshots_dir, params.service_name, &content)?;
+
+    Ok(())
+}
+
+/// Mark a pending service as fully installed.
+/// Called AFTER all steps have executed successfully.
+pub fn mark_installed(service_name: &str) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = config::load_config(&paths.config_file)?;
+
+    let service = config
+        .services
+        .iter_mut()
+        .find(|s| s.name == service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    service.installed = true;
+    config::save_config(&paths.config_file, &config)?;
 
     Ok(())
 }
@@ -711,122 +777,6 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Re-scaffold a service with the latest registry definition.
-///
-/// This is destructive: the service is stopped, all config files are regenerated
-/// (including env vars and secrets), and the service is restarted. Volumes are
-/// preserved but everything else is rebuilt from scratch.
-pub fn update_service(
-    service_name: &str,
-    env_overrides: &BTreeMap<String, String>,
-    repo_dir: &Path,
-) -> Result<UpdateResult> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
-
-    let service = config
-        .services
-        .iter()
-        .find(|s| s.name == service_name)
-        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
-
-    // Load snapshot and compute changes
-    let snapshot_content = config::load_snapshot(&paths.snapshots_dir, service_name)?;
-    let old: registry::service_def::ServiceDef =
-        toml::from_str(&snapshot_content).map_err(|source| Error::TomlParse {
-            path: paths.snapshots_dir.join(format!("{service_name}.toml")),
-            source,
-        })?;
-    let reg_service = registry::find_service(repo_dir, service_name)?;
-    let changes = diff::compute_changes(&old, &reg_service.def);
-
-    let quadlet_path = quadlet_dir()?;
-
-    // Determine host_port from installed service's port mappings
-    let host_port = service.ports.values().next().copied();
-
-    let enable_auth = service.auth_kind.is_some();
-    let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
-    let extra_networks = resolve_extra_networks(
-        service_name,
-        service.domain.as_deref(),
-        enable_auth,
-        caddy::is_installed(),
-        authelia_installed,
-    );
-
-    let mut steps = Vec::new();
-
-    // 1. Stop the service
-    steps.push(Step::StopService {
-        unit: service_name.to_string(),
-    });
-
-    // 2. Generate .env
-    let output = generate::generate_env(generate::GenerateEnvParams {
-        config: &config,
-        service_def: &reg_service.def,
-        auth_kind: service.auth_kind.as_ref(),
-        host_port,
-        env_overrides,
-        domain: service.domain.as_deref(),
-        extra_env: BTreeMap::new(),
-    })?;
-
-    // 3. Process quadlet bundle
-    let bundle =
-        generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
-            service_dir: &reg_service.service_dir,
-            service_name,
-            quadlet_dir: &quadlet_path,
-            extra_networks: &extra_networks,
-            extra_volumes: &[],
-            podman_args: &[],
-        })?;
-
-    // 4. Pull all images
-    for image in &bundle.images {
-        steps.push(Step::PullImage {
-            image: image.clone(),
-        });
-    }
-
-    // 5. Write files
-    for file in bundle.quadlet_files {
-        steps.push(Step::WriteFile(file));
-    }
-    for file in bundle.config_files {
-        steps.push(Step::WriteFile(file));
-    }
-    steps.push(Step::WriteFile(output.env_file));
-
-    // 6. Create bind mount directories
-    for dir in &bundle.bind_mount_dirs {
-        steps.push(Step::CreateDir(dir.clone()));
-    }
-
-    // 7. Reload and restart
-    steps.push(Step::DaemonReload);
-    steps.push(Step::StartService {
-        unit: service_name.to_string(),
-    });
-
-    Ok(UpdateResult { steps, changes })
-}
-
-/// Called after update steps succeed — updates the snapshot to match the new registry version.
-pub fn finalize_update(service_name: &str, repo_dir: &Path) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-
-    // Update the snapshot
-    let service_toml = repo_dir.join(service_name).join("service.toml");
-    if let Ok(content) = std::fs::read_to_string(&service_toml) {
-        config::save_snapshot(&paths.snapshots_dir, service_name, &content)?;
-    }
-
-    Ok(())
-}
-
 /// Reset ryra: tear down all services, infrastructure, and config.
 pub fn reset() -> Result<ResetResult> {
     let paths = ConfigPaths::resolve()?;
@@ -837,6 +787,10 @@ pub fn reset() -> Result<ResetResult> {
 
     // 1. Stop and remove only ryra-managed quadlet files (scoped by installed service names)
     let quadlet_path = quadlet_dir()?;
+    let all_names: Vec<&str> = config
+        .as_ref()
+        .map(|c| c.services.iter().map(|s| s.name.as_str()).collect())
+        .unwrap_or_default();
     if let Some(ref config) = config
         && quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
@@ -845,7 +799,7 @@ pub fn reset() -> Result<ResetResult> {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             // Only touch files belonging to a ryra-installed service
-            let is_ryra_file = config.services.iter().any(|s| name.starts_with(&s.name));
+            let is_ryra_file = config.services.iter().any(|s| quadlet_belongs_to(&name, &s.name, &all_names));
             if !is_ryra_file {
                 continue;
             }
@@ -1094,5 +1048,34 @@ mod tests {
         // Services with auth but no domain still need caddy network for OIDC discovery
         let nets = resolve_extra_networks("jellyfin", None, true, true, true);
         assert_eq!(nets, vec!["caddy", "authelia"]);
+    }
+
+    #[test]
+    fn quadlet_belongs_to_exact_match() {
+        let all = &["whoami", "whoami-auth"];
+        assert!(quadlet_belongs_to("whoami.container", "whoami", all));
+        assert!(quadlet_belongs_to("whoami.network", "whoami", all));
+    }
+
+    #[test]
+    fn quadlet_belongs_to_sidecar() {
+        // whoami-db is a sidecar, not a separate service
+        let all = &["whoami"];
+        assert!(quadlet_belongs_to("whoami-db.volume", "whoami", all));
+    }
+
+    #[test]
+    fn quadlet_belongs_to_rejects_prefix_collision() {
+        let all = &["whoami", "whoami-auth"];
+        assert!(!quadlet_belongs_to("whoami-auth.container", "whoami", all));
+        assert!(!quadlet_belongs_to("whoami-auth-db.volume", "whoami", all));
+    }
+
+    #[test]
+    fn quadlet_belongs_to_hyphenated_service() {
+        let all = &["whoami", "whoami-auth"];
+        assert!(quadlet_belongs_to("whoami-auth.container", "whoami-auth", all));
+        assert!(quadlet_belongs_to("whoami-auth-db.volume", "whoami-auth", all));
+        assert!(!quadlet_belongs_to("whoami.container", "whoami-auth", all));
     }
 }

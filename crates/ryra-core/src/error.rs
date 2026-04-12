@@ -35,6 +35,9 @@ pub enum Error {
     #[error("service {0} is not installed")]
     ServiceNotInstalled(String),
 
+    #[error("service {0} is partially installed (previous add failed)")]
+    ServiceIncomplete(String),
+
     #[error("{service} requires the following services to be installed first: {}", missing.join(", "))]
     MissingRequiredServices {
         service: String,

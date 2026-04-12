@@ -183,7 +183,8 @@ pub async fn run(
             }
         }
 
-        let result = ryra_core::add_service(
+        // If a previous add failed partway, clean up before retrying.
+        let result = match ryra_core::add_service(
             service,
             domain,
             auth_kind.clone(),
@@ -191,7 +192,25 @@ pub async fn run(
             &env_overrides,
             service_ref.registry_name(),
             &repo_dir,
-        )?;
+        ) {
+            Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
+                println!("{service} was partially installed — cleaning up before retry...");
+                let remove_result = ryra_core::remove_service(service)?;
+                apply::execute_all(&remove_result.steps).await?;
+                ryra_core::finalize_remove(service)?;
+                // Retry now that the partial state is gone
+                ryra_core::add_service(
+                    service,
+                    domain,
+                    auth_kind.clone(),
+                    auth || auth_kind.is_some(),
+                    &env_overrides,
+                    service_ref.registry_name(),
+                    &repo_dir,
+                )?
+            }
+            other => other?,
+        };
 
         // Show warnings and confirm
         if !result.warnings.is_empty() {
@@ -238,17 +257,30 @@ pub async fn run(
             super::print_dry_run(&result.steps);
             println!("{service} will be started.");
         } else {
-            println!("Setting up {service}...");
-            apply::execute_all(&result.steps).await?;
-            ryra_core::finalize_add(ryra_core::FinalizeAddParams {
+            // Record the service as pending before executing steps.
+            // If execution fails, ryra knows about the service and can clean up.
+            ryra_core::record_pending(ryra_core::RecordPendingParams {
                 service_name: service,
                 auth_kind,
                 registry_name: service_ref.registry_name(),
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
-                env_content: &result.env_content,
                 domain: result.domain.as_deref(),
             })?;
+
+            println!("Setting up {service}...");
+            if let Err(e) = apply::execute_all(&result.steps).await {
+                eprintln!("\nError: {e}");
+                eprintln!();
+                eprintln!("{service} is partially installed. To clean up:");
+                eprintln!("  ryra remove {service}");
+                eprintln!();
+                eprintln!("Or retry:");
+                eprintln!("  ryra add {service}");
+                return Err(e);
+            }
+
+            ryra_core::mark_installed(service)?;
             let home_dir = ryra_core::service_home(service)?;
             if let Some(ref domain) = result.domain {
                 println!("\n{service} is running at https://{domain}");

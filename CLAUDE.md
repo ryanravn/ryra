@@ -20,7 +20,7 @@ When adding new functionality, ask: "Can this state be invalid?" If yes, restruc
 
 All TOML files are validated immediately after deserialization — if parsing succeeds, the data is safe to use without further checks:
 
-- **`ServiceDef::validate()`** — duplicate names (ports, env, volumes, containers), env var name format, `depends_on` references, hook timeouts, RAM consistency, kind/template contradictions
+- **`ServiceDef::validate()`** — duplicate names (ports, env), env var name format, env kind consistency, RAM consistency (recommended >= minimum)
 - **`TestToml::validate()`** — mutually exclusive `[[tests]]`/`[[steps]]`, required fields per step action type
 - **`Config::validate()`** — no duplicate service names
 - **`StepAction`** is an enum, not a string — serde rejects unknown actions at parse time
@@ -77,15 +77,14 @@ When `ryra add <service> --auth` is called:
 2. Services with native OIDC mappings (`[mappings.auth]` in service.toml) get OIDC env vars written to `.env`
 3. Native OIDC services join the auth provider's podman network for direct HTTP communication
 4. OIDC client registration is handled by `authelia.rs` (edits authelia's configuration.yml)
-5. Post-start hooks (`[[post_start]]`) run after the service starts — these configure OIDC via APIs or config files
+5. Quadlet `ExecStartPost=` scripts handle runtime OIDC setup (API calls, config injection) after the container starts
 6. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
 
-### Pre-start and post-start hooks
+### Pre-start and post-start scripts
 
-Hooks in `[[pre_start]]` and `[[post_start]]` run on the **host** (not inside containers), with the service's `.env` sourced into the environment. Pre-start hooks run before the container starts (e.g., generating config files), post-start hooks run after. This means:
-- Use `$RYRA_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. directly — they're already in the environment
-- Use `$HOME/.local/share/ryra/<service>/` paths to access bind-mounted volumes on the host
-- Do NOT hardcode paths like `/var/lib/<service>/` — that's the container's view, not the host's
+Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/ryra/<service>/configs/scripts/<script>.sh`.
+
+The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$RYRA_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$RYRA_SERVICE_HOME` (pointing to `~/.local/share/ryra/<service>/`).
 
 ### Template variables for auth
 
@@ -99,7 +98,7 @@ Available when `--auth` is used and an auth provider (authelia) is installed:
 
 ## Service Configuration Philosophy
 
-Prefer environment variables and declarative config for all service setup. When a service can't be fully configured through envs alone (e.g., it requires plugin installation, API calls, or config file generation), use pre-start/post-start hooks to automate those steps. The goal is that `ryra add <service>` is turnkey — the user shouldn't need to manually configure the service afterward. If some manual steps are truly unavoidable (e.g., initial web wizard, admin account creation via UI), document them clearly in the service description and guide the user through them after installation.
+Prefer environment variables and declarative config for all service setup. When a service can't be fully configured through envs alone (e.g., it requires plugin installation, API calls, or config file generation), use quadlet `ExecStartPre=` / `ExecStartPost=` scripts to automate those steps. The goal is that `ryra add <service>` is turnkey — the user shouldn't need to manually configure the service afterward. If some manual steps are truly unavoidable (e.g., initial web wizard, admin account creation via UI), document them clearly in the service description and guide the user through them after installation.
 
 ## Podman & Quadlet-Native Solutions
 
@@ -114,6 +113,7 @@ Always prefer podman-native and quadlet-native features over workarounds:
 ## System Dependencies
 
 - `podman` — rootless containers for services
+- `systemd` — user-level service management (`systemctl --user`)
 
 ## Debugging
 
@@ -130,13 +130,13 @@ When tests fail, don't just increase timeouts. SSH into the VM and study the act
 Key points:
 
 - Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
-- `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image
+- `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image (flags on the test runner binary, not `ryra test`)
 - Test runner lives in `crates/ryra-test/`, VM orchestration in `crates/ryra-vm/`
 - Tests are defined in `registry/` via `[[tests]]` in service.toml and lifecycle test files in `registry/tests/`
 - VMs use cloud images + cloud-init for setup, SSH for command execution
 - `--parallel=N` controls concurrency (default 1), each VM gets a unique SSH port
 - VM memory is auto-sized per test based on `[requirements.ram]` in each service's service.toml
-- KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower)
+- KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower, flag on test runner binary)
 - `--keep-alive` keeps the VM running after tests for interactive debugging
 - `--verbose` dumps the serial log on failure
 - Host prerequisites (Debian/Ubuntu): `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
@@ -154,3 +154,22 @@ OIDC tests must install caddy and authelia before adding services with `--auth -
 2. `ryra add authelia --domain auth.test.local` — OIDC provider
 3. `ryra add <service> --auth --domain <service>.test.local` — service with OIDC
 4. Assertions verify HTTP responds and OIDC is configured
+
+### Adding a new service
+
+After creating a service definition (service.toml, quadlets, configs), always run the E2E tests to verify it works. Use `--keep-alive` extensively to iterate — it boots the VM once and keeps it running so you can SSH in, inspect logs, check the UI, and fix issues without waiting for a fresh boot each time.
+
+1. Start with `--keep-alive` to validate the service starts:
+   - Boot the VM: `ryra test <service> --keep-alive --yes`
+   - SSH in and check logs: `journalctl --user -u <service>.service`, `podman logs systemd-<service>`
+   - Verify the service is actually responding before writing assertions
+2. Run the simple tests: `ryra test <service>` — verify the service starts and responds
+3. If the service has OIDC integration (`auth = ["oidc"]` in service.toml), write a browser test:
+   - Create `registry/tests/<service>-auth-browser.toml` with `browser = true`
+   - Create `registry/tests/browser/<service>-auth.spec.ts` with Playwright tests
+   - Use `--keep-alive` on the auth browser test to boot the VM with caddy + authelia + the service, then SSH in and use `curl` to inspect the actual login page HTML — find the real CSS selectors, button text, and post-login indicators before writing the Playwright spec
+   - The browser test must click the SSO button, authenticate with Authelia (fill username/password, submit, handle consent), and verify the redirect back results in an authenticated session
+   - Don't guess at selectors — look at the real page. Iterate with `--keep-alive` until the test passes
+4. Run the full auth browser test: `ryra test <service>-auth-browser`
+
+When E2E tests have long setup times (pulling images, waiting for services), don't just wait — check logs periodically. If a service takes more than 60s to become ready, SSH in via `--keep-alive` and investigate rather than increasing timeouts blindly.

@@ -1,0 +1,44 @@
+[service]
+name = "open-webui"
+description = "Open WebUI - self-hosted AI chat interface (supports Ollama, OpenAI, and more)"
+url = "https://docs.openwebui.com/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 512
+recommended = 1024
+
+[[ports]]
+name = "http"
+container_port = 8080
+
+# --- Open WebUI env vars ---
+
+[[env]]
+name = "WEBUI_URL"
+value = "{{service.external_url}}"
+
+[[env]]
+name = "OLLAMA_BASE_URL"
+value = ""
+kind = "prompted"
+prompt = "Ollama URL (leave empty if not using Ollama)"
+
+# Always read OIDC config from env vars, not the database
+[[env]]
+name = "ENABLE_OAUTH_PERSISTENT_CONFIG"
+value = "false"
+
+[integrations]
+auth = ["oidc"]
+smtp = false
+
+[mappings.auth]
+OAUTH_CLIENT_ID = "{{auth.client_id}}"
+OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
+OPENID_PROVIDER_URL = "{{auth.internal_url}}/.well-known/openid-configuration"
+OPENID_REDIRECT_URI = "{{service.external_url}}/oauth/oidc/callback"
+ENABLE_OAUTH_SIGNUP = "True"
+OAUTH_PROVIDER_NAME = "SSO"
+OAUTH_MERGE_ACCOUNTS_BY_EMAIL = "True"
+AIOHTTP_CLIENT_SESSION_SSL = "false"

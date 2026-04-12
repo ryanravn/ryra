@@ -82,20 +82,6 @@ enum Command {
     },
     /// List installed services
     List,
-    /// Re-scaffold a service with the latest registry definition (destructive)
-    Update {
-        /// Service name to update
-        service: String,
-        /// Skip confirmation prompt
-        #[arg(long, short = 'y')]
-        yes: bool,
-        /// Show what would happen without making changes
-        #[arg(long)]
-        dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
-    },
     // -- Read-only / VM-based commands --
     /// Show what changed in a service's registry definition since install
     Diff {
@@ -213,15 +199,6 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
-        Command::Update {
-            ref service,
-            yes,
-            dry_run,
-            verbose,
-        } => {
-            ryra_core::verbose::set(verbose);
-            cli::update::run(service, yes, dry_run).await?
-        }
         Command::Diff { ref service } => cli::diff::run(service).await?,
         Command::List => cli::list::run()?,
         Command::Search {

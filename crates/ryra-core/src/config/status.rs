@@ -25,6 +25,7 @@ pub struct ServiceInfo {
     pub name: String,
     pub domain: Option<String>,
     pub ports: std::collections::BTreeMap<String, u16>,
+    pub installed: bool,
 }
 
 impl StatusInfo {
@@ -50,6 +51,7 @@ impl StatusInfo {
                     name: s.name.clone(),
                     domain: s.domain.clone(),
                     ports: s.ports.clone(),
+                    installed: s.installed,
                 })
                 .collect(),
         }

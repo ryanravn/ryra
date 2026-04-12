@@ -97,6 +97,11 @@ pub struct InstalledService {
     /// Domain assigned to this service (used for Caddy reverse proxy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Whether the service was fully installed (all steps completed).
+    /// Services with `installed: false` are partially installed and can be
+    /// retried with `ryra add` or cleaned up with `ryra remove`.
+    #[serde(default)]
+    pub installed: bool,
 }
 
 impl Config {

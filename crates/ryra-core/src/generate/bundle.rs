@@ -12,6 +12,10 @@ pub struct ProcessBundleParams<'a> {
     pub extra_volumes: &'a [String],
     /// Extra args passed via `PodmanArgs=` in the quadlet.
     pub podman_args: &'a [String],
+    /// Port variable expansions (e.g., `RYRA_PORT_HTTP` → `8080`).
+    /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
+    /// values because systemd doesn't expand EnvironmentFile vars in directives.
+    pub port_vars: &'a [(String, String)],
 }
 
 /// Result of processing a quadlet bundle from the registry.
@@ -213,6 +217,11 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             content = inject_networks(&content, params.extra_networks);
             content = inject_extra_volumes(&content, params.extra_volumes);
             content = inject_podman_args(&content, params.podman_args);
+            // Expand ${RYRA_PORT_*} in PublishPort lines — systemd doesn't
+            // expand EnvironmentFile vars in quadlet directives.
+            for (var, val) in params.port_vars {
+                content = content.replace(&format!("${{{var}}}"), val);
+            }
         }
 
         quadlet_files.push(GeneratedFile {
@@ -419,6 +428,7 @@ mod tests {
             extra_networks: &[],
             extra_volumes: &[],
             podman_args: &[],
+            port_vars: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("quadlets/ directory not found"));
@@ -454,6 +464,7 @@ mod tests {
             extra_networks: &["caddy".to_string()],
             extra_volumes: &[],
             podman_args: &[],
+            port_vars: &[],
         };
 
         let bundle = process_quadlet_bundle(&params)
@@ -501,6 +512,7 @@ mod tests {
             extra_networks: &[],
             extra_volumes: &[],
             podman_args: &[],
+            port_vars: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));

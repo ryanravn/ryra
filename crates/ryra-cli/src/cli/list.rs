@@ -12,7 +12,12 @@ pub fn run() -> Result<()> {
     println!("{}", "-".repeat(50));
 
     for svc in &services {
-        println!("{:<20} {}", svc.name, svc.repo);
+        let label = if svc.installed {
+            svc.name.clone()
+        } else {
+            format!("{} (incomplete)", svc.name)
+        };
+        println!("{:<20} {}", label, svc.repo);
     }
 
     Ok(())

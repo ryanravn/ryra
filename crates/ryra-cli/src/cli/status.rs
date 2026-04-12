@@ -38,18 +38,19 @@ fn print_global(info: &StatusInfo) {
                 .iter()
                 .map(|(name, port)| format!("{name}={port}"))
                 .collect();
+            let status = if svc.installed { "" } else { " (incomplete)" };
             match (svc.domain.as_deref(), ports.is_empty()) {
                 (Some(domain), true) => {
-                    println!("  {} (https://{})", svc.name, domain);
+                    println!("  {}{status} (https://{})", svc.name, domain);
                 }
                 (Some(domain), false) => {
-                    println!("  {} (https://{}) [{}]", svc.name, domain, ports.join(", "));
+                    println!("  {}{status} (https://{}) [{}]", svc.name, domain, ports.join(", "));
                 }
                 (None, true) => {
-                    println!("  {}", svc.name);
+                    println!("  {}{status}", svc.name);
                 }
                 (None, false) => {
-                    println!("  {} [{}]", svc.name, ports.join(", "));
+                    println!("  {}{status} [{}]", svc.name, ports.join(", "));
                 }
             }
         }
