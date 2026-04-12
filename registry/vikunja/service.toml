@@ -1,0 +1,34 @@
+[service]
+name = "vikunja"
+description = "Vikunja - task management with lists, kanban boards, and calendars"
+url = "https://vikunja.io/docs/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 128
+recommended = 256
+
+[[ports]]
+name = "http"
+container_port = 3456
+
+# --- Vikunja config ---
+
+[[env]]
+name = "VIKUNJA_SERVICE_PUBLICURL"
+value = "{{service.external_url}}"
+
+[[env]]
+name = "VIKUNJA_SERVICE_JWTSECRET"
+value = "{{secret.jwt_secret}}"
+
+[integrations]
+auth = ["oidc"]
+smtp = false
+
+[mappings.auth]
+VIKUNJA_AUTH_OPENID_ENABLED = "true"
+VIKUNJA_AUTH_OPENID_PROVIDERS_AUTHELIA_NAME = "SSO"
+VIKUNJA_AUTH_OPENID_PROVIDERS_AUTHELIA_AUTHURL = "{{auth.internal_url}}"
+VIKUNJA_AUTH_OPENID_PROVIDERS_AUTHELIA_CLIENTID = "{{auth.client_id}}"
+VIKUNJA_AUTH_OPENID_PROVIDERS_AUTHELIA_CLIENTSECRET = "{{auth.client_secret}}"

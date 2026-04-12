@@ -72,6 +72,7 @@ pub fn register_oidc_client(
         "/auth/login",                                 // Immich
         "/oauth/oidc/callback",                        // Open WebUI
         "/accounts/oidc/authelia/login/callback/",      // Paperless-ngx (django-allauth)
+        "/auth/openid/authelia",                       // Vikunja
         "/oauth2/callback",                            // generic
     ] {
         let uri = format!("{base_url}{suffix}");

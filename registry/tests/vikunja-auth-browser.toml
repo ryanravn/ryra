@@ -1,0 +1,62 @@
+[test]
+name = "vikunja-auth-browser"
+browser = true
+
+# Install caddy
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia
+[[steps]]
+action = "run"
+name = "add-authelia"
+run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+ryra add authelia --domain auth.test.local"""
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install vikunja with OIDC auth
+[[steps]]
+action = "run"
+name = "add-vikunja"
+run = "ryra add vikunja --auth --domain tasks.test.local"
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "vikunja"
+
+# Setup /etc/hosts
+[[steps]]
+action = "run"
+name = "setup-hosts"
+run = "echo '127.0.0.1 auth.test.local tasks.test.local' >> /etc/hosts"
+
+# Wait for vikunja via Caddy
+[[steps]]
+action = "assert"
+name = "vikunja-via-caddy"
+run = "for i in $(seq 1 20); do curl -sk -o /dev/null -w '%{http_code}' --resolve tasks.test.local:8443:127.0.0.1 https://tasks.test.local:8443 | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+timeout = 60
+
+# Run playwright SSO test
+[[steps]]
+action = "assert"
+name = "playwright-auth-flow"
+run = """
+export PATH="$HOME/.bun/bin:$PATH"
+export AUTHELIA_USER=testuser
+export AUTHELIA_PASSWORD=testpassword123
+cd /opt/ryra-test-registry/tests/browser
+ln -sf /opt/playwright/node_modules .
+bunx playwright test vikunja-auth.spec.ts --reporter=list
+"""
+timeout = 120
