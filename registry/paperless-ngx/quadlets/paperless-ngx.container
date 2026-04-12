@@ -1,0 +1,25 @@
+[Unit]
+Description=Paperless-ngx document management
+After=network-online.target
+Requires=paperless-ngx-redis.service paperless-ngx.network
+After=paperless-ngx-redis.service paperless-ngx.network
+
+[Container]
+ContainerName=paperless-ngx
+Image=ghcr.io/paperless-ngx/paperless-ngx:latest
+Network=paperless-ngx.network
+PublishPort=${RYRA_PORT_HTTP}:8000
+Volume=paperless-ngx-data.volume:/usr/src/paperless/data:U
+Volume=paperless-ngx-media.volume:/usr/src/paperless/media:U
+EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+AutoUpdate=registry
+
+[Service]
+ExecStartPre=/bin/bash %h/.local/share/ryra/paperless-ngx/configs/scripts/merge-ca-bundle.sh
+ExecStartPost=/bin/bash -c "podman cp %h/.local/share/ryra/paperless-ngx/ca-bundle.crt paperless-ngx:/tmp/ca-bundle.crt 2>/dev/null || true"
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

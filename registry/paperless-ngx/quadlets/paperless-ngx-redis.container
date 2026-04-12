@@ -1,0 +1,23 @@
+[Unit]
+Description=Paperless-ngx Redis cache
+Requires=paperless-ngx.network
+After=paperless-ngx.network
+
+[Container]
+ContainerName=paperless-ngx-redis
+Image=docker.io/library/redis:7-alpine
+Network=paperless-ngx.network:alias=redis
+HealthCmd=redis-cli ping | grep PONG
+HealthStartPeriod=20s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=3s
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
