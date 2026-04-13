@@ -18,18 +18,18 @@ pub enum SmtpSetupChoice {
 pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
     println!();
     let items = &[
+        "Skip",
         "Custom SMTP server",
         "Inbucket (local testing / development)",
-        "Skip",
     ];
     let selection = dialoguer::Select::new()
         .with_prompt("Configure SMTP? (for email notifications, password resets)")
         .items(items)
-        .default(2)
+        .default(0)
         .interact()?;
 
     match selection {
-        0 => {
+        1 => {
             let host: String = Input::new().with_prompt("  SMTP host").interact_text()?;
             let port: u16 = Input::new()
                 .with_prompt("  SMTP port")
@@ -52,7 +52,7 @@ pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
                 from,
             }))
         }
-        1 => Ok(SmtpSetupChoice::Inbucket),
+        2 => Ok(SmtpSetupChoice::Inbucket),
         _ => Ok(SmtpSetupChoice::Skip),
     }
 }
