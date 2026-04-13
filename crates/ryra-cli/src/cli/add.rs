@@ -585,7 +585,7 @@ async fn ensure_dependencies(
         // Prompt for authelia's URL
         let authelia_url: String = Input::new()
             .with_prompt("URL for Authelia (e.g., https://auth.example.com)")
-            .default("https://auth.local".to_string())
+            .default("https://auth.localhost".to_string())
             .interact_text()?;
         println!("\nInstalling authelia...\n");
         Box::pin(run(
@@ -599,7 +599,7 @@ async fn ensure_dependencies(
     } else {
         // Non-interactive: need AUTHELIA_URL in env
         let authelia_url =
-            std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.local".to_string());
+            std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.localhost".to_string());
         println!("\nInstalling authelia...\n");
         Box::pin(run(
             &[SERVICE_AUTHELIA.to_string()],
@@ -640,10 +640,10 @@ async fn ensure_auth_for_add(
             let authelia_url: String = if std::io::stdin().is_terminal() {
                 Input::new()
                     .with_prompt("URL for Authelia (e.g., https://auth.example.com)")
-                    .default("https://auth.local".to_string())
+                    .default("https://auth.localhost".to_string())
                     .interact_text()?
             } else {
-                std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.local".to_string())
+                std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.localhost".to_string())
             };
             // Caddy is needed when TLS provider is caddy.
             let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));

@@ -352,8 +352,8 @@ pub fn add_service(
     let mut podman_args: Vec<String> = Vec::new();
 
     // Prevent /etc/hosts from leaking into containers with auth — host entries
-    // (e.g., 127.0.0.1 auth.local) would override podman DNS aliases that route
-    // to Caddy for OIDC.
+    // (e.g., 127.0.0.1 auth.localhost) would override podman DNS aliases that
+    // route to Caddy for OIDC.
     if enable_auth && caddy_installed && service_name != SERVICE_AUTHELIA && service_name != SERVICE_CADDY {
         podman_args.push("--no-hosts".into());
     }

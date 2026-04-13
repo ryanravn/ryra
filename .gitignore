@@ -17,3 +17,6 @@
 
 # Worktrees
 .worktrees/
+
+# Local certificates
+*.crt

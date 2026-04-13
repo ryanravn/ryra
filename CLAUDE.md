@@ -66,7 +66,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 
 Services run at `http://127.0.0.1:<port>` by default — no domain, no HTTPS, no `/etc/hosts` entries needed. The `--domain` flag is opt-in for when the user wants to expose a service through Caddy with a custom hostname.
 
-The only exception is **authelia**, which requires a domain because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a domain (defaults to `auth.local`). This is the only `/etc/hosts` entry users need.
+The only exception is **authelia**, which requires a domain because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a domain (defaults to `auth.localhost`). `.localhost` domains resolve to 127.0.0.1 automatically (RFC 6761) — no `/etc/hosts` entry needed.
 
 This keeps the default experience frictionless (no sudo, no DNS, no certs) while still supporting custom domains for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding.
 
