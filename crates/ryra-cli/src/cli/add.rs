@@ -539,8 +539,8 @@ async fn ensure_tls_configured(
         }
     };
 
-    // Save to config
-    let mut config = config.clone();
+    // Reload config from disk — Caddy install may have updated it
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     config.tls = Some(tls);
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, &config)?;
