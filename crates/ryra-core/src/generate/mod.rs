@@ -141,11 +141,8 @@ fn render_env_vars(
     if service_def.integrations.smtp && ctx.contains_key("smtp.host") {
         for (env_name, value_template) in &service_def.mappings.smtp {
             let value = template::render(value_template, ctx)?;
-            if value.is_empty() {
-                return Err(Error::Template(format!(
-                    "SMTP mapping {env_name} rendered to empty value from template: {value_template}"
-                )));
-            }
+            // Empty values are valid — e.g., inbucket doesn't need username/password.
+            // Static values (no template) are always included as-is.
             rendered.push(EnvVar {
                 name: env_name.clone(),
                 value,
