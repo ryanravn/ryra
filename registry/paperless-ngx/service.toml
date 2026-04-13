@@ -44,7 +44,14 @@ value = "{{service.external_url}}"
 
 [integrations]
 auth = ["oidc"]
-smtp = false
+smtp = true
+
+[mappings.smtp]
+PAPERLESS_EMAIL_HOST = "{{smtp.host}}"
+PAPERLESS_EMAIL_PORT = "{{smtp.port}}"
+PAPERLESS_EMAIL_HOST_USER = "{{smtp.username}}"
+PAPERLESS_EMAIL_HOST_PASSWORD = "{{smtp.password}}"
+PAPERLESS_EMAIL_FROM = "{{smtp.from}}"
 
 [mappings.auth]
 PAPERLESS_APPS = "allauth.socialaccount.providers.openid_connect"

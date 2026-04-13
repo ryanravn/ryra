@@ -62,6 +62,21 @@ pub fn build_context(
         ctx.insert("smtp.password".into(), smtp.password.clone());
         ctx.insert("smtp.from".into(), smtp.from.clone());
         ctx.insert("smtp.security".into(), smtp.security.clone());
+        // Derived values for services with non-standard SMTP config formats.
+        // smtp.forgejo_protocol: smtp+starttls / smtps / smtp
+        let forgejo_protocol = match smtp.security.as_str() {
+            "starttls" => "smtp+starttls",
+            "force_tls" => "smtps",
+            _ => "smtp",
+        };
+        ctx.insert("smtp.forgejo_protocol".into(), forgejo_protocol.into());
+        // smtp.authelia_scheme: submission / submissions / smtp
+        let authelia_scheme = match smtp.security.as_str() {
+            "starttls" => "submission",
+            "force_tls" => "submissions",
+            _ => "smtp",
+        };
+        ctx.insert("smtp.authelia_scheme".into(), authelia_scheme.into());
     }
 
     // tls.*

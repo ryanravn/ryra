@@ -68,4 +68,11 @@ value = "9091"
 
 [integrations]
 auth = []
-smtp = false
+smtp = true
+
+[mappings.smtp]
+AUTHELIA_NOTIFIER_SMTP_ADDRESS = "{{smtp.authelia_scheme}}://{{smtp.host}}:{{smtp.port}}"
+AUTHELIA_NOTIFIER_SMTP_USERNAME = "{{smtp.username}}"
+AUTHELIA_NOTIFIER_SMTP_PASSWORD = "{{smtp.password}}"
+AUTHELIA_NOTIFIER_SMTP_SENDER = "{{smtp.from}}"
+AUTHELIA_NOTIFIER_SMTP_DISABLE_REQUIRE_TLS = "true"

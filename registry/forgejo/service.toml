@@ -66,7 +66,7 @@ value = "true"
 
 [integrations]
 auth = ["oidc"]
-smtp = false
+smtp = true
 
 [mappings.auth]
 FORGEJO__openid__ENABLE_OPENID_SIGNIN = "true"
@@ -80,3 +80,13 @@ OIDC_DISCOVERY_URL = "{{auth.internal_url}}/.well-known/openid-configuration"
 OIDC_AUTH_URL = "{{auth.external_url}}/api/oidc/authorization"
 OIDC_TOKEN_URL = "{{auth.internal_url}}/api/oidc/token"
 OIDC_PROFILE_URL = "{{auth.internal_url}}/api/oidc/userinfo"
+
+[mappings.smtp]
+FORGEJO__mailer__ENABLED = "true"
+FORGEJO__mailer__SMTP_ADDR = "{{smtp.host}}"
+FORGEJO__mailer__SMTP_PORT = "{{smtp.port}}"
+FORGEJO__mailer__USER = "{{smtp.username}}"
+FORGEJO__mailer__PASSWD = "{{smtp.password}}"
+FORGEJO__mailer__FROM = "{{smtp.from}}"
+FORGEJO__mailer__PROTOCOL = "{{smtp.forgejo_protocol}}"
+FORGEJO__service__ENABLE_NOTIFY_MAIL = "true"

@@ -195,30 +195,6 @@ name = "GOTRUE_MAILER_AUTOCONFIRM"
 value = "true"
 
 [[env]]
-name = "GOTRUE_SMTP_ADMIN_EMAIL"
-value = "admin@local"
-
-[[env]]
-name = "GOTRUE_SMTP_HOST"
-value = ""
-
-[[env]]
-name = "GOTRUE_SMTP_PORT"
-value = "2500"
-
-[[env]]
-name = "GOTRUE_SMTP_USER"
-value = ""
-
-[[env]]
-name = "GOTRUE_SMTP_PASS"
-value = ""
-
-[[env]]
-name = "GOTRUE_SMTP_SENDER_NAME"
-value = "Supabase"
-
-[[env]]
 name = "GOTRUE_MAILER_URLPATHS_INVITE"
 value = "/auth/v1/verify"
 
@@ -507,4 +483,11 @@ value = "{{secret.jwt_secret}}"
 
 [integrations]
 auth = []
-smtp = false
+smtp = true
+
+[mappings.smtp]
+GOTRUE_SMTP_HOST = "{{smtp.host}}"
+GOTRUE_SMTP_PORT = "{{smtp.port}}"
+GOTRUE_SMTP_USER = "{{smtp.username}}"
+GOTRUE_SMTP_PASS = "{{smtp.password}}"
+GOTRUE_SMTP_ADMIN_EMAIL = "{{smtp.from}}"
