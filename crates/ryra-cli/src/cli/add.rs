@@ -59,7 +59,13 @@ pub async fn run(
         let url: Option<&str> = if needs_https && url.is_none() {
             let config = ryra_core::config::load_or_default(&paths.config_file)?;
             if matches!(config.tls, Some(TlsConfig::Caddy)) {
-                auto_url = Some(format!("https://{service}.localhost"));
+                let caddy_https_port = config
+                    .services
+                    .iter()
+                    .find(|s| s.name == SERVICE_CADDY)
+                    .and_then(|s| s.ports.get("https").copied())
+                    .unwrap_or(8443);
+                auto_url = Some(format!("https://{service}.localhost:{caddy_https_port}"));
                 auto_url.as_deref()
             } else {
                 url
