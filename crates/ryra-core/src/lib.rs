@@ -127,6 +127,14 @@ pub enum Warning {
         recommended_mb: u64,
         available_mb: u64,
     },
+    /// A port was reassigned because the default was privileged or in use.
+    PortReassigned {
+        service_name: String,
+        port_name: String,
+        original_port: u16,
+        assigned_port: u16,
+        reason: String,
+    },
 }
 
 // --- Result types ---
@@ -293,6 +301,7 @@ pub fn add_service(
     // allocate one if container port is privileged or already in use,
     // otherwise use container port directly.
     let has_fixed_ports = reg_service.def.ports.iter().any(|p| p.host_port.is_some());
+    let mut port_warnings: Vec<Warning> = Vec::new();
     let needs_allocation = reg_service.def.ports.iter().any(|p| {
         p.host_port.is_none()
             && (p.container_port < 1024 || system::port::is_port_in_use(p.container_port))
@@ -301,7 +310,27 @@ pub fn add_service(
         // Fixed ports are set per-port in the service def (e.g. Caddy 80/443)
         None
     } else if needs_allocation {
-        Some(system::port::allocate_port(&config)?)
+        let allocated = system::port::allocate_port(&config)?;
+        // Warn about each port that was reassigned
+        for p in &reg_service.def.ports {
+            if p.host_port.is_none() {
+                let reason = if p.container_port < 1024 {
+                    "port is privileged (requires root)".to_string()
+                } else if system::port::is_port_in_use(p.container_port) {
+                    format!("port {} is already in use", p.container_port)
+                } else {
+                    continue;
+                };
+                port_warnings.push(Warning::PortReassigned {
+                    service_name: service_name.to_string(),
+                    port_name: p.name.clone(),
+                    original_port: p.container_port,
+                    assigned_port: allocated,
+                    reason,
+                });
+            }
+        }
+        Some(allocated)
     } else {
         None
     };
@@ -417,6 +446,7 @@ pub fn add_service(
             });
         }
     }
+    warnings.extend(port_warnings);
 
     // Build ordered steps
     let mut steps = Vec::new();

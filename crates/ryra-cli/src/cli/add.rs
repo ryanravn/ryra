@@ -335,6 +335,17 @@ pub async fn run(
                          but this system has {available_mb} MB — performance may be degraded"
                         );
                     }
+                    Warning::PortReassigned {
+                        port_name,
+                        original_port,
+                        assigned_port,
+                        reason,
+                        ..
+                    } => {
+                        println!(
+                            "  NOTE: {port_name} port {original_port} → {assigned_port} ({reason})"
+                        );
+                    }
                 }
             }
             println!();
