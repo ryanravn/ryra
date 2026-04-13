@@ -51,5 +51,5 @@ PAPERLESS_APPS = "allauth.socialaccount.providers.openid_connect"
 PAPERLESS_SOCIALACCOUNT_PROVIDERS = '{"openid_connect":{"APPS":[{"provider_id":"authelia","name":"SSO","client_id":"{{auth.client_id}}","secret":"{{auth.client_secret}}","settings":{"server_url":"{{auth.internal_url}}/.well-known/openid-configuration","token_auth_method":"client_secret_post"}}]}}'
 PAPERLESS_SOCIALACCOUNT_ALLOW_SIGNUPS = "true"
 PAPERLESS_SOCIAL_AUTO_SIGNUP = "true"
-PAPERLESS_ACCOUNT_DEFAULT_HTTP_PROTOCOL = "https"
+PAPERLESS_ACCOUNT_DEFAULT_HTTP_PROTOCOL = "{{service.scheme}}"
 REQUESTS_CA_BUNDLE = "/tmp/ca-bundle.crt"

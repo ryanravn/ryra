@@ -35,6 +35,9 @@ pub fn build_context(
             "service.external_url".into(),
             format!("https://{domain}:8443"),
         );
+        ctx.insert("service.scheme".into(), "https".into());
+    } else {
+        ctx.insert("service.scheme".into(), "http".into());
     }
     // service.external_url falls back to service.url when no domain is set.
     ctx.entry("service.external_url".into()).or_insert(url);
