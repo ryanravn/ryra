@@ -73,6 +73,7 @@ value = "redis"
 
 [integrations]
 auth = ["oidc"]
+token_auth_method = "client_secret_basic"
 smtp = false
 
 [mappings.auth]

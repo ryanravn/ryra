@@ -212,6 +212,11 @@ pub struct IntegrationFlags {
     /// Auth types this service supports. Empty = no auth support.
     #[serde(default)]
     pub auth: Vec<AuthKind>,
+    /// OIDC token endpoint auth method for authelia client registration.
+    /// Defaults to "client_secret_post". Services that use HTTP Basic auth
+    /// (e.g. seafile) should set this to "client_secret_basic".
+    #[serde(default = "default_token_auth_method")]
+    pub token_auth_method: String,
     #[serde(default = "default_true")]
     pub smtp: bool,
 }
@@ -220,6 +225,7 @@ impl Default for IntegrationFlags {
     fn default() -> Self {
         Self {
             auth: vec![],
+            token_auth_method: default_token_auth_method(),
             smtp: true,
         }
     }
@@ -227,6 +233,10 @@ impl Default for IntegrationFlags {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_token_auth_method() -> String {
+    "client_secret_post".to_string()
 }
 
 // ---------------------------------------------------------------------------
