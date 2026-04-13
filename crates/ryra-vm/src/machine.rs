@@ -833,6 +833,42 @@ pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Resul
         .await
         .context("failed to configure additionalimagestores in VM")?;
 
+    // Copy host's container registry auth so the VM can pull as a fallback
+    // (additionalimagestores may not work across rootless/root boundary)
+    copy_container_auth(machine).await.ok();
+
+    Ok(())
+}
+
+/// Copy the host's container registry auth config into the VM.
+/// This allows the VM to pull images if the shared store doesn't work.
+async fn copy_container_auth(machine: &Machine) -> Result<()> {
+    // Try common auth file locations
+    let auth_paths = [
+        dirs::runtime_dir()
+            .map(|d| d.join("containers/auth.json")),
+        dirs::config_dir()
+            .map(|d| d.join("containers/auth.json")),
+        Some(std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_default(),
+        ).join(".docker/config.json")),
+    ];
+
+    for path in auth_paths.iter().flatten() {
+        if path.exists() {
+            machine
+                .exec("mkdir -p /root/.config/containers")
+                .await
+                .ok();
+            if scp_to_vm(machine, path, "/root/.config/containers/auth.json")
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+    }
+
     Ok(())
 }
 
