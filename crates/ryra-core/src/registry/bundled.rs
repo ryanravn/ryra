@@ -8,17 +8,22 @@ static BUNDLED_REGISTRY: Dir<'static> =
     include_dir!("$CARGO_MANIFEST_DIR/../../registry");
 
 const BUNDLED_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Content hash of the registry at build time — changes when any file is modified,
+/// even if the crate version stays the same.
+const BUNDLED_HASH: &str = env!("RYRA_REGISTRY_HASH");
 
 /// Ensures the bundled registry is extracted to `<cache_dir>/bundled/`.
 ///
-/// Compares `BUNDLED_VERSION` against the `VERSION` file in the cache dir.
-/// If the version is missing or mismatched, the old directory is removed and
+/// Compares the registry hash against the `VERSION` file in the cache dir.
+/// If the hash is missing or mismatched, the old directory is removed and
 /// the embedded registry is re-extracted. Returns the path to the extracted
 /// registry directory.
 pub fn ensure_bundled(cache_dir: &Path) -> Result<PathBuf> {
     let dest = cache_dir.join("bundled");
     let version_file = dest.join("VERSION");
 
+    // Use "version-hash" format so both release upgrades and dev edits trigger re-extraction.
+    let expected = format!("{BUNDLED_VERSION}-{BUNDLED_HASH}");
     let needs_extract = if version_file.exists() {
         let cached = std::fs::read_to_string(&version_file).map_err(|source| {
             Error::FileRead {
@@ -26,7 +31,7 @@ pub fn ensure_bundled(cache_dir: &Path) -> Result<PathBuf> {
                 source,
             }
         })?;
-        cached.trim() != BUNDLED_VERSION
+        cached.trim() != expected
     } else {
         true
     };
@@ -46,7 +51,7 @@ pub fn ensure_bundled(cache_dir: &Path) -> Result<PathBuf> {
 
         extract_dir(&BUNDLED_REGISTRY, &dest)?;
 
-        std::fs::write(&version_file, BUNDLED_VERSION).map_err(|source| Error::FileWrite {
+        std::fs::write(&version_file, &expected).map_err(|source| Error::FileWrite {
             path: version_file,
             source,
         })?;
@@ -141,10 +146,11 @@ mod tests {
         ensure_bundled(tmp.path()).expect("second ensure_bundled");
 
         let new_version = std::fs::read_to_string(&version_file).expect("read VERSION");
+        let expected = format!("{BUNDLED_VERSION}-{BUNDLED_HASH}");
         assert_eq!(
             new_version.trim(),
-            BUNDLED_VERSION,
-            "VERSION should be updated to current version after re-extraction"
+            expected,
+            "VERSION should be updated to current version-hash after re-extraction"
         );
     }
 
