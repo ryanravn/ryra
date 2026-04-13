@@ -74,7 +74,15 @@ value = "redis"
 [integrations]
 auth = ["oidc"]
 token_auth_method = "client_secret_basic"
-smtp = false
+smtp = true
+
+[mappings.smtp]
+SMTP_HOST = "{{smtp.host}}"
+SMTP_PORT = "{{smtp.port}}"
+SMTP_USERNAME = "{{smtp.username}}"
+SMTP_PASSWORD = "{{smtp.password}}"
+SMTP_FROM = "{{smtp.from}}"
+SMTP_SECURITY = "{{smtp.security}}"
 
 [mappings.auth]
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
