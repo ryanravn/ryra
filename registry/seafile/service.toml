@@ -3,6 +3,7 @@ name = "seafile"
 description = "Seafile - file sync and share server"
 url = "https://www.seafile.com/"
 architecture = ["amd64", "arm64"]
+https = "required"
 
 [requirements.ram]
 min = 512
@@ -87,6 +88,6 @@ SMTP_SECURITY = "{{smtp.security}}"
 [mappings.auth]
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
-OAUTH_REDIRECT_URL = "{{service.url}}/oauth/callback/"
+OAUTH_REDIRECT_URL = "{{service.external_url}}/oauth/callback/"
 OAUTH_PROVIDER_DOMAIN = "{{auth.external_url}}"
 OAUTH_INTERNAL_DOMAIN = "{{auth.internal_url}}"

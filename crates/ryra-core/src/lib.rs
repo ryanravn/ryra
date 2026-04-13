@@ -208,7 +208,8 @@ pub async fn init(config: Config) -> Result<InitResult> {
         config.services = existing.services;
     }
 
-    // Write config
+    // Write config — stamp the current version
+    config.version = Some(config::VERSION.to_string());
     let config_content = toml::to_string_pretty(&config)
         .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
 
@@ -553,9 +554,7 @@ pub fn add_service(
                 path: caddyfile_path,
                 content: updated,
             }));
-            steps.push(Step::RestartService {
-                unit: SERVICE_CADDY.to_string(),
-            });
+            steps.push(Step::ReloadCaddy);
         }
     }
 
