@@ -759,7 +759,7 @@ async fn ensure_dependencies(
         }
         // Prompt for authelia's URL
         let authelia_url: String = Input::new()
-            .with_prompt("URL for Authelia (e.g., https://auth.example.com)")
+            .with_prompt("URL for Authelia")
             .default("https://auth.localhost".to_string())
             .interact_text()?;
         println!("\nInstalling authelia...\n");
@@ -814,7 +814,7 @@ async fn ensure_auth_for_add(
             // Prompt for authelia URL
             let authelia_url: String = if std::io::stdin().is_terminal() {
                 Input::new()
-                    .with_prompt("URL for Authelia (e.g., https://auth.example.com)")
+                    .with_prompt("URL for Authelia")
                     .default("https://auth.localhost".to_string())
                     .interact_text()?
             } else {

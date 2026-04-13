@@ -94,7 +94,7 @@ pub fn prompt_auth() -> Result<AuthSetupChoice> {
         0 => Ok(AuthSetupChoice::InstallAuthelia),
         1 => {
             let url: String = Input::new()
-                .with_prompt("OIDC issuer base URL (e.g. https://auth.example.com)")
+                .with_prompt("OIDC issuer URL")
                 .interact_text()?;
             Ok(AuthSetupChoice::External(AuthCredentials::External { url }))
         }
