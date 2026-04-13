@@ -345,6 +345,11 @@ pub async fn run(
                         println!(
                             "  NOTE: {port_name} port {original_port} → {assigned_port} ({reason})"
                         );
+                        if *original_port < 1024 {
+                            println!(
+                                "        To use port {original_port}, run: sudo sysctl -w net.ipv4.ip_unprivileged_port_start={original_port}"
+                            );
+                        }
                     }
                 }
             }
