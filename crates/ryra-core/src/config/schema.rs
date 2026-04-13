@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +16,8 @@ pub struct Config {
     pub admin_email: Option<String>,
     pub smtp: Option<SmtpCredentials>,
     pub auth: Option<AuthCredentials>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<TlsConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
     #[serde(default)]
@@ -70,6 +73,16 @@ impl AuthCredentials {
             AuthCredentials::External { .. } => None,
         }
     }
+}
+
+// --- TLS ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "provider", rename_all = "lowercase")]
+pub enum TlsConfig {
+    Caddy,
+    Custom { cert: PathBuf, key: PathBuf },
+    None,
 }
 
 // --- Registry entry ---

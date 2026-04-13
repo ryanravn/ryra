@@ -5,9 +5,9 @@ use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
 use ryra_core::config::ConfigPaths;
-use ryra_core::config::schema::Config;
+use ryra_core::config::schema::{Config, TlsConfig};
 use ryra_core::registry::resolve::ServiceRef;
-use ryra_core::registry::service_def::AuthKind;
+use ryra_core::registry::service_def::{AuthKind, HttpsRequirement};
 use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 
 use super::apply;
@@ -45,6 +45,28 @@ pub async fn run(
         if let Some(msg) = reg_service.def.check_architecture() {
             bail!("{msg}");
         }
+
+        // TLS — prompt if service requires HTTPS or user passed an https:// URL.
+        // When Caddy is the TLS provider and no --url was given, auto-generate
+        // a .localhost domain so HTTPS works out of the box.
+        let needs_https = reg_service.def.service.https == HttpsRequirement::Required
+            || url.is_some_and(|u| u.starts_with("https://"));
+        if needs_https && !dry_run {
+            let config = ryra_core::config::load_or_default(&paths.config_file)?;
+            ensure_tls_configured(&config, &paths, interactive).await?;
+        }
+        let auto_url: Option<String>;
+        let url: Option<&str> = if needs_https && url.is_none() {
+            let config = ryra_core::config::load_or_default(&paths.config_file)?;
+            if matches!(config.tls, Some(TlsConfig::Caddy)) {
+                auto_url = Some(format!("https://{service}.localhost"));
+                auto_url.as_deref()
+            } else {
+                url
+            }
+        } else {
+            url
+        };
 
         // Auth — determined by --auth flag
         let auth_kind: Option<AuthKind> = if auth {
@@ -419,6 +441,97 @@ fn setup_host_access(domains: &[&str]) {
     println!();
 }
 
+/// Ensure TLS is configured when a service needs HTTPS.
+/// Prompts the user to choose a TLS provider if not already configured.
+async fn ensure_tls_configured(
+    config: &Config,
+    paths: &ConfigPaths,
+    interactive: bool,
+) -> Result<()> {
+    // Already configured — check if "none" and warn, otherwise we're good
+    if let Some(ref tls) = config.tls {
+        if matches!(tls, TlsConfig::None) {
+            println!(
+                "  NOTE: This service requires HTTPS — make sure it's configured externally."
+            );
+        }
+        return Ok(());
+    }
+
+    // Not configured yet — prompt or error
+    if !interactive {
+        bail!(
+            "this service requires HTTPS — configure [tls] in ryra.toml first\n\
+             Example:\n  [tls]\n  provider = \"caddy\""
+        );
+    }
+
+    println!("\nThis service requires HTTPS.\n");
+    let items = &[
+        "Caddy (automatic HTTPS — recommended)",
+        "Custom certificates (provide cert/key paths)",
+        "None (I'll handle TLS myself)",
+    ];
+    let selection = dialoguer::Select::new()
+        .with_prompt("How would you like to handle TLS?")
+        .items(items)
+        .default(0)
+        .interact()?;
+
+    let tls = match selection {
+        0 => {
+            // Ensure Caddy is installed
+            let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+            if !caddy_installed {
+                println!("\nInstalling caddy...\n");
+                Box::pin(run(
+                    &[SERVICE_CADDY.to_string()],
+                    None,
+                    false,
+                    false,
+                ))
+                .await?;
+            }
+            TlsConfig::Caddy
+        }
+        1 => {
+            let cert: String = Input::new()
+                .with_prompt("  Path to certificate (fullchain.pem)")
+                .interact_text()?;
+            let key: String = Input::new()
+                .with_prompt("  Path to private key (privkey.pem)")
+                .interact_text()?;
+            let cert_path = std::path::PathBuf::from(&cert);
+            let key_path = std::path::PathBuf::from(&key);
+            if !cert_path.exists() {
+                bail!("certificate file not found: {cert}");
+            }
+            if !key_path.exists() {
+                bail!("private key file not found: {key}");
+            }
+            TlsConfig::Custom {
+                cert: cert_path,
+                key: key_path,
+            }
+        }
+        _ => {
+            println!(
+                "  Make sure HTTPS is configured externally before using this service."
+            );
+            TlsConfig::None
+        }
+    };
+
+    // Save to config
+    let mut config = config.clone();
+    config.tls = Some(tls);
+    paths.ensure_dirs()?;
+    ryra_core::config::save_config(&paths.config_file, &config)?;
+    println!("  TLS configured. Saved to {}\n", paths.config_file.display());
+
+    Ok(())
+}
+
 /// Auto-install authelia when --auth requires it.
 async fn ensure_dependencies(
     _url: Option<&str>,
@@ -436,11 +549,21 @@ async fn ensure_dependencies(
         return Ok(());
     }
 
-    // Caddy is required for authelia OIDC — it terminates TLS and
-    // sets proper X-Forwarded-Proto headers that authelia requires.
-    let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
-    if !caddy_installed {
-        println!("\nInstalling caddy (required for OIDC)...\n");
+    // Caddy is needed for authelia OIDC when TLS provider is caddy.
+    // The TLS prompt (ensure_tls_configured) handles Caddy installation
+    // when the user picks caddy as their TLS provider, so we only need
+    // to install Caddy here if tls is already set to caddy but Caddy
+    // isn't installed yet (e.g., config was edited manually).
+    let config_fresh = ryra_core::config::load_or_default(
+        &ryra_core::config::ConfigPaths::resolve()?.config_file,
+    )?;
+    let is_caddy_tls = matches!(config_fresh.tls, Some(TlsConfig::Caddy));
+    let caddy_installed = config_fresh
+        .services
+        .iter()
+        .any(|s| s.name == SERVICE_CADDY);
+    if is_caddy_tls && !caddy_installed {
+        println!("\nInstalling caddy (TLS provider)...\n");
         Box::pin(run(
             &[SERVICE_CADDY.to_string()],
             None,
@@ -522,11 +645,11 @@ async fn ensure_auth_for_add(
             } else {
                 std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.local".to_string())
             };
-            // Caddy is required for authelia OIDC — it terminates TLS and
-            // sets proper X-Forwarded-Proto headers that authelia requires.
+            // Caddy is needed when TLS provider is caddy.
+            let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
             let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
-            if !caddy_installed {
-                println!("\nInstalling caddy (required for OIDC)...\n");
+            if is_caddy_tls && !caddy_installed {
+                println!("\nInstalling caddy (TLS provider)...\n");
                 Box::pin(run(
                     &[SERVICE_CADDY.to_string()],
                     None,

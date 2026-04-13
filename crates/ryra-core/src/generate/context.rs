@@ -63,6 +63,24 @@ pub fn build_context(
         ctx.insert("smtp.from".into(), smtp.from.clone());
     }
 
+    // tls.*
+    if let Some(tls) = &config.tls {
+        use crate::config::schema::TlsConfig;
+        match tls {
+            TlsConfig::Caddy => {
+                ctx.insert("tls.provider".into(), "caddy".into());
+            }
+            TlsConfig::Custom { cert, key } => {
+                ctx.insert("tls.provider".into(), "custom".into());
+                ctx.insert("tls.cert".into(), cert.display().to_string());
+                ctx.insert("tls.key".into(), key.display().to_string());
+            }
+            TlsConfig::None => {
+                ctx.insert("tls.provider".into(), "none".into());
+            }
+        }
+    }
+
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let auth_localhost_url = auth.url().to_string();

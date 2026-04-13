@@ -60,6 +60,9 @@ pub struct ServiceMeta {
     /// Empty means all architectures are supported.
     #[serde(default)]
     pub architecture: Vec<String>,
+    /// Whether this service requires HTTPS to function.
+    #[serde(default)]
+    pub https: HttpsRequirement,
 }
 
 /// What role this service plays in the system.
@@ -69,6 +72,15 @@ pub enum ServiceKind {
     #[default]
     Application,
     Infrastructure,
+}
+
+/// Whether this service requires HTTPS to function.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HttpsRequirement {
+    #[default]
+    None,
+    Required,
 }
 
 /// Whether a port uses TCP or UDP.

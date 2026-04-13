@@ -3,6 +3,7 @@ name = "authelia"
 description = "Authelia - lightweight SSO and 2FA server"
 url = "https://www.authelia.com/"
 architecture = ["amd64", "arm64"]
+https = "required"
 
 [requirements.ram]
 min = 128
