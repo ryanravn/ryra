@@ -312,8 +312,8 @@ pub async fn run(
                 println!("\n{service} is running.");
             }
 
-            // Connection info
-            if !result.allocated_ports.is_empty() {
+            // Connection info — skip localhost URLs when a proper URL is displayed
+            if result.url.is_none() && !result.allocated_ports.is_empty() {
                 for (_, host_port) in &result.allocated_ports {
                     println!("  URL: http://127.0.0.1:{host_port}");
                 }
