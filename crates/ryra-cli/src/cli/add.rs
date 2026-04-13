@@ -448,12 +448,29 @@ async fn ensure_tls_configured(
     paths: &ConfigPaths,
     interactive: bool,
 ) -> Result<()> {
-    // Already configured — check if "none" and warn, otherwise we're good
+    // Already configured
     if let Some(ref tls) = config.tls {
-        if matches!(tls, TlsConfig::None) {
-            println!(
-                "  NOTE: This service requires HTTPS — make sure it's configured externally."
-            );
+        match tls {
+            TlsConfig::Caddy => {
+                // Ensure Caddy is installed (may have been removed or config edited manually)
+                let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+                if !caddy_installed {
+                    println!("\nInstalling caddy (TLS provider)...\n");
+                    Box::pin(run(
+                        &[SERVICE_CADDY.to_string()],
+                        None,
+                        false,
+                        false,
+                    ))
+                    .await?;
+                }
+            }
+            TlsConfig::None => {
+                println!(
+                    "  NOTE: This service requires HTTPS — make sure it's configured externally."
+                );
+            }
+            TlsConfig::Custom { .. } => {}
         }
         return Ok(());
     }
