@@ -40,7 +40,7 @@ value = "http://machine-learning:3003"
 
 [[env]]
 name = "INIT_IMMICH_ADMIN_EMAIL"
-value = "{{admin.email | default('admin@local')}}"
+value = "{{admin.email | default('admin@localhost')}}"
 kind = "prompted"
 prompt = "Admin email"
 
