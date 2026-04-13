@@ -33,6 +33,17 @@ grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
 
 echo "OAuth config injected into seahub_settings.py"
 
-# Restart seahub inside the container so it picks up the new OAuth config.
-# Without this, the SSO button won't appear until the next container restart.
-podman exec seafile /opt/seafile/seafile-server-latest/seahub.sh restart 2>/dev/null || true
+# Wait for seahub to be running inside the container, then restart it
+# so it picks up the OAuth config. Seahub starts after the settings file
+# is created, so we need to wait for it to be listening.
+echo "Waiting for seahub to start before restarting with OAuth config..."
+for i in $(seq 1 30); do
+  if podman exec seafile pgrep -f "seahub" >/dev/null 2>&1; then
+    echo "Restarting seahub to apply OAuth config..."
+    podman exec seafile /opt/seafile/seafile-server-latest/seahub.sh restart 2>&1 || true
+    echo "Seahub restarted with OAuth config."
+    exit 0
+  fi
+  sleep 2
+done
+echo "WARNING: Could not restart seahub — run 'systemctl --user restart seafile' manually"
