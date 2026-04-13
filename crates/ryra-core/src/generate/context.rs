@@ -69,61 +69,44 @@ pub fn build_context(
         let caddy_installed = config.services.iter().any(|s| s.name == "caddy" && s.installed);
         // auth.external_url — browser-accessible URL.
         // Uses the stored URL from the auth provider's installed record if available.
-        let external_url = config
+        // When Caddy is installed, ensures the URL includes Caddy's HTTPS port
+        // so it matches the issuer in authelia's OIDC discovery response.
+        let mut external_url = config
             .services
             .iter()
             .find(|s| s.name == auth.provider_name())
             .and_then(|s| s.url.as_ref())
             .cloned()
             .unwrap_or_else(|| auth_localhost_url.clone());
-        // auth.internal_url — how containers reach the auth provider for OIDC
-        // discovery and token exchange.
-        //
-        // When Caddy is installed, containers route through Caddy (HTTPS) via a
-        // network alias matching the auth domain. This is required because OIDC
-        // clients validate that the configured URL matches the issuer in the
-        // discovery response, so the URL must be the same as the external URL.
-        // The Caddy root CA cert is mounted into service containers so they
-        // trust the self-signed TLS cert.
-        //
-        // Without Caddy, containers talk directly to the auth provider.
-        let internal_url = if caddy_installed {
-            // Ensure the URL includes Caddy's HTTPS port — containers connect
-            // directly to Caddy's container port (e.g., 8443), not the host-mapped
-            // port. If the external URL has no explicit port, append the Caddy
-            // HTTPS container port.
+        if caddy_installed {
             let caddy_https_port = config
                 .services
                 .iter()
                 .find(|s| s.name == "caddy")
                 .and_then(|s| s.ports.get("https").copied());
-            match caddy_https_port {
-                Some(port) => {
-                    // Check if URL already has a port
-                    let has_port = external_url
-                        .split("://")
-                        .nth(1)
-                        .and_then(|rest| rest.split('/').next())
-                        .map(|authority| authority.contains(':'))
-                        .unwrap_or(false);
-                    if has_port {
-                        external_url.clone()
-                    } else {
-                        // Insert port before path
-                        if let Some(idx) = external_url.find("://") {
-                            let after_scheme = &external_url[idx + 3..];
-                            let path_start = after_scheme.find('/').map(|i| idx + 3 + i);
-                            match path_start {
-                                Some(pi) => format!("{}:{port}{}", &external_url[..pi], &external_url[pi..]),
-                                None => format!("{external_url}:{port}"),
-                            }
-                        } else {
-                            format!("{external_url}:{port}")
-                        }
-                    }
+            if let Some(port) = caddy_https_port {
+                let has_port = external_url
+                    .split("://")
+                    .nth(1)
+                    .and_then(|rest| rest.split('/').next())
+                    .map(|authority| authority.contains(':'))
+                    .unwrap_or(false);
+                if !has_port {
+                    external_url = format!("{external_url}:{port}");
                 }
-                None => external_url.clone(),
             }
+        }
+        // auth.internal_url — how containers reach the auth provider for OIDC
+        // discovery and token exchange.
+        //
+        // When Caddy is installed, this equals auth.external_url because OIDC
+        // clients validate that the configured URL matches the issuer in the
+        // discovery response. Containers reach Caddy via a podman network alias
+        // matching the auth domain.
+        //
+        // Without Caddy, containers talk directly to the auth provider.
+        let internal_url = if caddy_installed {
+            external_url.clone()
         } else {
             match auth.port() {
                 Some(port) => format!("http://{}:{port}", auth.provider_name()),
@@ -135,7 +118,7 @@ pub fn build_context(
         ctx.insert("auth.provider".into(), auth.provider_name().to_string());
         ctx.insert("auth.external_url".into(), external_url.clone());
 
-        // OIDC issuer URL — must be browser-reachable so authorization redirects work.
+        // OIDC issuer URL — must match authelia's discovery response.
         let issuer = match auth {
             crate::config::schema::AuthCredentials::Authelia { .. } => external_url.clone(),
             crate::config::schema::AuthCredentials::External { .. } => auth_localhost_url.clone(),

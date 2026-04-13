@@ -309,7 +309,7 @@ pub fn add_service(
     let quadlet_path = quadlet_dir()?;
 
     let mut extra_volumes = Vec::new();
-    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
+    let extra_env: BTreeMap<String, String> = BTreeMap::new();
 
     let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
     let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY && s.installed);
