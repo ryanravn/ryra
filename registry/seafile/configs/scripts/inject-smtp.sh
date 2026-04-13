@@ -33,3 +33,17 @@ grep -q seahub_settings_smtp "$CONF/seahub_settings.py" || \
   echo "exec(open('/shared/seafile/conf/seahub_settings_smtp.py').read())" >> "$CONF/seahub_settings.py"
 
 echo "SMTP config injected into seahub_settings.py"
+
+# Restart seahub so it picks up the SMTP config.
+# This runs after inject-oauth.sh, so both OAuth and SMTP are loaded.
+echo "Waiting for seahub to start before restarting with SMTP config..."
+for i in $(seq 1 30); do
+  if podman exec seafile pgrep -f "seahub" >/dev/null 2>&1; then
+    echo "Restarting seahub to apply SMTP config..."
+    podman exec seafile /opt/seafile/seafile-server-latest/seahub.sh restart 2>&1 || true
+    echo "Seahub restarted with SMTP config."
+    exit 0
+  fi
+  sleep 2
+done
+echo "WARNING: Could not restart seahub — run 'systemctl --user restart seafile' manually"
