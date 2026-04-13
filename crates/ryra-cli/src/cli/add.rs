@@ -157,8 +157,12 @@ pub async fn run(
                         .with_prompt(format!("  {prompt_text}"))
                         .default(resolved_default.clone())
                         .interact_text()?;
+                    // Always save for secret-templated values — re-rendering
+                    // would generate a different random secret.
                     if value != resolved_default {
                         env_overrides.insert(env.name.clone(), value);
+                    } else if env.value.contains("{{secret.") {
+                        env_overrides.insert(env.name.clone(), resolved_default);
                     }
                 }
             }
