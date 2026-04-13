@@ -19,7 +19,7 @@ value = "{{service.external_url}}"
 
 [[env]]
 name = "SIGNUPS_ALLOWED"
-value = "false"
+value = "true"
 
 [[env]]
 name = "WEBSOCKET_ENABLED"
