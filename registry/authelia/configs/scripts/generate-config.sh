@@ -17,6 +17,18 @@ if [ "$DOMAIN" != "localhost" ] && systemctl --user is-active caddy.service >/de
 else
   AUTHELIA_URL="https://$COOKIE_DOMAIN"
 fi
+
+# Use SMTP notifier when configured, otherwise fall back to filesystem
+if [ -n "${AUTHELIA_NOTIFIER_SMTP_ADDRESS:-}" ]; then
+  NOTIFIER_BLOCK="notifier:
+  smtp:
+    address: '$AUTHELIA_NOTIFIER_SMTP_ADDRESS'"
+else
+  NOTIFIER_BLOCK="notifier:
+  filesystem:
+    filename: '/config/notification.txt'"
+fi
+
 cat > "$CONFIG_FILE" <<YAML
 ---
 server:
@@ -33,9 +45,7 @@ session:
 storage:
   local:
     path: '/config/db.sqlite3'
-notifier:
-  filesystem:
-    filename: '/config/notification.txt'
+$NOTIFIER_BLOCK
 access_control:
   default_policy: 'one_factor'
 YAML
