@@ -185,15 +185,12 @@ pub struct Mappings {
 pub enum AuthKind {
     /// Service handles OIDC auth itself (e.g. affine, forgejo).
     Oidc,
-    /// Auth is handled by the reverse proxy in front of the service (e.g. whoami).
-    ForwardAuth,
 }
 
 impl std::fmt::Display for AuthKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AuthKind::Oidc => write!(f, "oidc"),
-            AuthKind::ForwardAuth => write!(f, "forward-auth"),
         }
     }
 }

@@ -282,6 +282,11 @@ pub fn add_service(
         return Err(Error::AuthNotConfigured);
     }
 
+    // --auth requires native OIDC support; forward auth is no longer supported
+    if enable_auth && reg_service.def.integrations.auth.is_empty() && service_name != SERVICE_AUTHELIA {
+        return Err(Error::NoOidcSupport(service_name.to_string()));
+    }
+
     // Determine host port: use fixed host_port from service def if set,
     // allocate one if container port is privileged or already in use,
     // otherwise use container port directly.
@@ -521,35 +526,10 @@ pub fn add_service(
             .map(|p| p.container_port)
             .unwrap_or(8080);
 
-        // Use forward_auth when:
-        // - User requested auth (--auth flag), AND
-        // - The service has no native OIDC mappings (native OIDC handles auth itself), AND
-        // - The service is not the auth provider itself
-        let has_native_oidc = !reg_service.def.mappings.auth.is_empty();
-        let is_auth_provider = service_name == SERVICE_AUTHELIA;
-        let forward_auth = if enable_auth && !has_native_oidc && !is_auth_provider {
-            // Look up authelia's container port from the registry, not the host port
-            let authelia_container_port = registry::find_service(repo_dir, SERVICE_AUTHELIA)?
-                .def
-                .ports
-                .first()
-                .map(|p| p.container_port)
-                .ok_or_else(|| {
-                    Error::Registry("authelia service has no ports defined in registry".into())
-                })?;
-            Some(caddy::ForwardAuthParams {
-                container_port: authelia_container_port,
-                provider: caddy::AuthProvider::Authelia,
-            })
-        } else {
-            None
-        };
-
         let block = caddy::render_site_block(&caddy::CaddySiteParams {
             service_name: service_name.to_string(),
             domain: domain.to_string(),
             container_port,
-            forward_auth,
         });
 
         let caddyfile = caddy::caddyfile_path()?;

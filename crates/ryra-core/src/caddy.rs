@@ -21,19 +21,6 @@ pub struct CaddySiteParams {
     pub domain: String,
     /// Container port the service listens on (used with container DNS name).
     pub container_port: u16,
-    pub forward_auth: Option<ForwardAuthParams>,
-}
-
-/// Forward auth configuration for services without native OIDC.
-pub struct ForwardAuthParams {
-    /// Container port authelia listens on.
-    pub container_port: u16,
-    pub provider: AuthProvider,
-}
-
-/// Which auth provider is handling forward auth.
-pub enum AuthProvider {
-    Authelia,
 }
 
 /// Generate a Caddy site block for a service.
@@ -44,23 +31,6 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
     let mut block = format!("# ryra:{}\n", params.service_name);
     block.push_str(&format!("{}:8443 {{\n", params.domain));
     block.push_str("    tls internal\n");
-
-    if let Some(ref auth) = params.forward_auth {
-        block.push_str(&format!(
-            "    forward_auth authelia:{} {{\n",
-            auth.container_port
-        ));
-        match auth.provider {
-            AuthProvider::Authelia => {
-                block.push_str("        uri /api/authz/forward-auth\n");
-                block.push_str(
-                    "        copy_headers Remote-User Remote-Groups Remote-Name Remote-Email\n",
-                );
-            }
-        }
-        block.push_str("    }\n");
-    }
-
     // Use the container name on caddy's shared network for direct communication.
     block.push_str(&format!(
         "    reverse_proxy {}:{}\n",
@@ -175,30 +145,12 @@ mod tests {
             service_name: "whoami".to_string(),
             domain: "whoami.example.com".to_string(),
             container_port: 8080,
-            forward_auth: None,
         };
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
         assert!(block.contains("whoami.example.com:8443 {"));
         assert!(block.contains("    reverse_proxy whoami:8080"));
         assert!(block.ends_with("}\n"));
-    }
-
-    #[test]
-    fn render_block_with_forward_auth() {
-        let params = CaddySiteParams {
-            service_name: "grafana".to_string(),
-            domain: "grafana.example.com".to_string(),
-            container_port: 3000,
-            forward_auth: Some(ForwardAuthParams {
-                container_port: 9091,
-                provider: AuthProvider::Authelia,
-            }),
-        };
-        let block = render_site_block(&params);
-        assert!(block.contains("forward_auth authelia:9091"));
-        assert!(block.contains("uri /api/authz/forward-auth"));
-        assert!(block.contains("copy_headers"));
     }
 
     #[test]

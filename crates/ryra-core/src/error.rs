@@ -73,6 +73,9 @@ pub enum Error {
     )]
     AuthNotConfigured,
 
+    #[error("service {0} does not support native OIDC auth")]
+    NoOidcSupport(String),
+
     #[error("{0}")]
     UnsupportedArchitecture(String),
 

@@ -48,13 +48,11 @@ pub async fn run(
 
         // Auth — determined by --auth flag
         let auth_kind: Option<AuthKind> = if auth {
-            // --auth flag: use native OIDC if service supports it, otherwise
-            // forward auth is handled by Caddy (no auth_kind needed for that)
+            // --auth flag: use native OIDC if service supports it.
+            // Core will error if the service doesn't support OIDC.
             if !reg_service.def.integrations.auth.is_empty() {
                 Some(reg_service.def.integrations.auth[0].clone())
             } else {
-                // No native OIDC — forward auth via Caddy will be added automatically
-                // when a domain is set and an auth provider is installed
                 None
             }
         } else if !reg_service.def.integrations.auth.is_empty()
