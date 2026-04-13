@@ -128,11 +128,14 @@ Always prefer podman-native and quadlet-native features over workarounds:
 
 Avoid long timeouts in tests. If something needs more than a few seconds to be ready, investigate why rather than adding a larger timeout. Timeouts mask real issues and make tests slow. Prefer polling with short intervals over a single large sleep.
 
-When tests fail, don't just increase timeouts. SSH into the VM and study the actual logs to find the root cause:
+When tests fail or services error, **always check logs first** before proposing fixes:
 - `journalctl --user -u <service>.service` for service logs
+- `podman logs <container>` for container output (includes application logs)
+- `podman exec <container> cat /path/to/app.log` for application-specific logs (e.g., seahub.log)
 - `podman ps -a` to see container state
-- `podman logs <container>` for container output
 - `ss -tlnp` to check port bindings
+
+This applies during development too — when a service fails after `ryra add`, check the logs to find the root cause rather than guessing.
 
 ## E2E Testing
 

@@ -347,7 +347,7 @@ pub fn add_service(
     let quadlet_path = quadlet_dir()?;
 
     let mut extra_volumes = Vec::new();
-    let extra_env: BTreeMap<String, String> = BTreeMap::new();
+    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
 
     let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
     let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY && s.installed);
@@ -363,12 +363,26 @@ pub fn add_service(
             .unwrap_or_default();
         if ca_cert_host.exists() {
             // Mount the Caddy CA cert as the standard Linux CA bundle path so
-            // Go, Python, etc. pick it up automatically.
+            // Go, curl, etc. pick it up automatically.
             // :z relabels for SELinux (shared across containers).
             extra_volumes.push(format!(
                 "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
                 ca_cert_host.display()
             ));
+            // Python (requests/certifi) and Node.js don't use the system CA
+            // bundle — they need explicit env vars to find the cert.
+            extra_env.insert(
+                "REQUESTS_CA_BUNDLE".into(),
+                "/etc/ssl/certs/ca-certificates.crt".into(),
+            );
+            extra_env.insert(
+                "SSL_CERT_FILE".into(),
+                "/etc/ssl/certs/ca-certificates.crt".into(),
+            );
+            extra_env.insert(
+                "NODE_EXTRA_CA_CERTS".into(),
+                "/etc/ssl/certs/ca-certificates.crt".into(),
+            );
         }
     }
     let extra_networks = resolve_extra_networks(
