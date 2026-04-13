@@ -329,6 +329,15 @@ pub async fn run(
             }
 
             ryra_core::mark_installed(service)?;
+
+            // Trust Caddy's self-signed CA if this service uses HTTPS via Caddy
+            if result.url.is_some() {
+                let config = ryra_core::config::load_or_default(&paths.config_file)?;
+                if matches!(config.tls, Some(TlsConfig::Caddy)) {
+                    setup_host_access(&[]);
+                }
+            }
+
             let home_dir = ryra_core::service_home(service)?;
             if let Some(ref url) = result.url {
                 println!("\n{service} is running at {url}");
