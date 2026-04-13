@@ -62,6 +62,14 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 
 ## Auth and Caddy Integration
 
+### Domain philosophy
+
+Services run at `http://127.0.0.1:<port>` by default — no domain, no HTTPS, no `/etc/hosts` entries needed. The `--domain` flag is opt-in for when the user wants to expose a service through Caddy with a custom hostname.
+
+The only exception is **authelia**, which requires a domain because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a domain (defaults to `auth.local`). This is the only `/etc/hosts` entry users need.
+
+This keeps the default experience frictionless (no sudo, no DNS, no certs) while still supporting custom domains for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding.
+
 ### How `--domain` works
 
 When `ryra add <service> --domain foo.example.com` is called:
@@ -79,6 +87,7 @@ When `ryra add <service> --auth` is called:
 4. OIDC client registration is handled by `authelia.rs` (edits authelia's configuration.yml)
 5. Quadlet `ExecStartPost=` scripts handle runtime OIDC setup (API calls, config injection) after the container starts
 6. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
+7. Services work at `http://127.0.0.1:<port>` without `--domain` — the OIDC redirect goes through authelia (HTTPS) and back to the service (HTTP)
 
 ### Pre-start and post-start scripts
 
