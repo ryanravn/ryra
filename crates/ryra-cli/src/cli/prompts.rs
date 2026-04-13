@@ -44,12 +44,18 @@ pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
                 .default(format!("noreply@{host}"))
                 .interact_text()?;
 
+            let security: String = Input::new()
+                .with_prompt("  Security (starttls, force_tls, off)")
+                .default("starttls".to_string())
+                .interact_text()?;
+
             Ok(SmtpSetupChoice::Custom(SmtpCredentials {
                 host,
                 port,
                 username,
                 password,
                 from,
+                security,
             }))
         }
         2 => Ok(SmtpSetupChoice::Inbucket),

@@ -35,6 +35,6 @@ SMTP_PORT = "{{smtp.port}}"
 SMTP_USERNAME = "{{smtp.username}}"
 SMTP_PASSWORD = "{{smtp.password}}"
 SMTP_FROM = "{{smtp.from}}"
-SMTP_SECURITY = "starttls"
+SMTP_SECURITY = "{{smtp.security}}"
 
 # Tests are in tests/vaultwarden.toml (lifecycle test with SMTP setup)

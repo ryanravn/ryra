@@ -61,6 +61,7 @@ pub fn build_context(
         ctx.insert("smtp.username".into(), smtp.username.clone());
         ctx.insert("smtp.password".into(), smtp.password.clone());
         ctx.insert("smtp.from".into(), smtp.from.clone());
+        ctx.insert("smtp.security".into(), smtp.security.clone());
     }
 
     // tls.*

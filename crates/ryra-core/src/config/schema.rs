@@ -39,6 +39,13 @@ pub struct SmtpCredentials {
     pub username: String,
     pub password: String,
     pub from: String,
+    /// SMTP security mode: "starttls", "force_tls", or "off".
+    #[serde(default = "default_smtp_security")]
+    pub security: String,
+}
+
+fn default_smtp_security() -> String {
+    "starttls".to_string()
 }
 
 // --- Auth ---

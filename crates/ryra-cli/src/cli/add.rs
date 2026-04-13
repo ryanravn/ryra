@@ -120,11 +120,12 @@ pub async fn run(
                             .and_then(|s| s.ports.get("smtp").copied())
                             .unwrap_or(2500);
                         let smtp = ryra_core::config::schema::SmtpCredentials {
-                            host: "127.0.0.1".to_string(),
+                            host: "host.containers.internal".to_string(),
                             port: smtp_port,
                             username: String::new(),
                             password: String::new(),
                             from: "ryra@localhost".to_string(),
+                            security: "off".to_string(),
                         };
                         let mut config =
                             ryra_core::config::load_or_default(&paths.config_file)?;
