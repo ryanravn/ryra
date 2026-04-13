@@ -28,6 +28,14 @@ pub fn remove_caddy_ca() {
                 .to_string(),
         );
     }
+    // System trust store (Arch)
+    if std::path::Path::new("/etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt").exists()
+    {
+        sudo_commands.push(
+            "sudo rm -f /etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust"
+                .to_string(),
+        );
+    }
     // System trust store (Debian/Ubuntu)
     if std::path::Path::new("/usr/local/share/ca-certificates/ryra-caddy-ca.crt").exists() {
         sudo_commands.push(

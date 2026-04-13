@@ -502,10 +502,13 @@ fn setup_host_access(domains: &[&str]) {
         ));
     }
 
-    // Check system CA trust
-    let ca_trusted = std::path::Path::new("/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt")
-        .exists()
-        || std::path::Path::new("/usr/local/share/ca-certificates/ryra-caddy-ca.crt").exists();
+    // Check system CA trust (Fedora, Arch, Debian/Ubuntu)
+    let ca_paths = [
+        "/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt",           // Fedora
+        "/etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt",  // Arch
+        "/usr/local/share/ca-certificates/ryra-caddy-ca.crt",           // Debian/Ubuntu
+    ];
+    let ca_trusted = ca_paths.iter().any(|p| std::path::Path::new(p).exists());
     if !ca_trusted {
         let ca_src = ryra_core::service_home("caddy")
             .ok()
@@ -513,11 +516,19 @@ fn setup_host_access(domains: &[&str]) {
             .filter(|p| p.exists());
         if let Some(ca) = ca_src {
             if std::path::Path::new("/etc/pki/ca-trust").is_dir() {
+                // Fedora / RHEL
                 commands.push(format!(
                     "sudo cp {} /etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust",
                     ca.display()
                 ));
+            } else if std::path::Path::new("/etc/ca-certificates/trust-source").is_dir() {
+                // Arch Linux
+                commands.push(format!(
+                    "sudo cp {} /etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust",
+                    ca.display()
+                ));
             } else if std::path::Path::new("/usr/local/share/ca-certificates").is_dir() {
+                // Debian / Ubuntu
                 commands.push(format!(
                     "sudo cp {} /usr/local/share/ca-certificates/ryra-caddy-ca.crt && sudo update-ca-certificates",
                     ca.display()
