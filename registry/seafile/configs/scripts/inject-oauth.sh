@@ -32,3 +32,7 @@ grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
   echo "exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())" >> "$CONF/seahub_settings.py"
 
 echo "OAuth config injected into seahub_settings.py"
+
+# Restart seahub inside the container so it picks up the new OAuth config.
+# Without this, the SSO button won't appear until the next container restart.
+podman exec seafile /opt/seafile/seafile-server-latest/seahub.sh restart 2>/dev/null || true
