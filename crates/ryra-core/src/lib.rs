@@ -218,10 +218,19 @@ fn resolve_extra_networks(
     service_name: &str,
     enable_auth: bool,
     authelia_installed: bool,
+    caddy_installed: bool,
+    has_url: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
     if enable_auth && authelia_installed && service_name != SERVICE_AUTHELIA {
         networks.push(SERVICE_AUTHELIA.to_string());
+    }
+    // Services with a URL and Caddy installed join Caddy's network so the
+    // reverse_proxy directive can reach them by container name.
+    if has_url && caddy_installed && service_name != SERVICE_CADDY {
+        if !networks.contains(&SERVICE_CADDY.to_string()) {
+            networks.push(SERVICE_CADDY.to_string());
+        }
     }
     networks
 }
@@ -337,6 +346,8 @@ pub fn add_service(
         service_name,
         enable_auth,
         authelia_installed,
+        caddy_installed,
+        url.is_some(),
     );
 
     let output = generate::generate_env(generate::GenerateEnvParams {
@@ -460,7 +471,42 @@ pub fn add_service(
         ));
     }
 
-    // 8. Reload and start via systemd
+    // 8. Add Caddy route for services with a URL when Caddy is installed.
+    // This creates a reverse proxy from the service's domain to its container port.
+    if let Some(url) = url {
+        if caddy_installed && service_name != SERVICE_CADDY {
+            // Extract domain from the URL
+            let domain = url
+                .split("://")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .and_then(|authority| authority.split(':').next())
+                .unwrap_or(url);
+            let container_port = reg_service
+                .def
+                .ports
+                .first()
+                .map(|p| p.container_port)
+                .unwrap_or(80);
+            let block = caddy::render_site_block(&caddy::CaddySiteParams {
+                service_name: service_name.to_string(),
+                domain: domain.to_string(),
+                container_port,
+            });
+            let caddyfile_path = caddy::caddyfile_path()?;
+            let existing = std::fs::read_to_string(&caddyfile_path).unwrap_or_default();
+            let updated = caddy::add_route(&existing, service_name, &block);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: caddyfile_path,
+                content: updated,
+            }));
+            steps.push(Step::RestartService {
+                unit: SERVICE_CADDY.to_string(),
+            });
+        }
+    }
+
+    // 9. Reload and start via systemd
     steps.push(Step::DaemonReload);
     // Start — dependencies start automatically via Requires=/After= in the quadlet
     steps.push(Step::StartService {
@@ -929,25 +975,25 @@ mod tests {
 
     #[test]
     fn networks_empty_when_no_auth() {
-        let nets = resolve_extra_networks("whoami", false, false);
+        let nets = resolve_extra_networks("whoami", false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_empty_when_auth_but_no_authelia() {
-        let nets = resolve_extra_networks("forgejo", true, false);
+        let nets = resolve_extra_networks("forgejo", true, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_authelia_when_auth_enabled() {
-        let nets = resolve_extra_networks("forgejo", true, true);
+        let nets = resolve_extra_networks("forgejo", true, true, false, false);
         assert_eq!(nets, vec!["authelia"]);
     }
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks("authelia", true, true);
+        let nets = resolve_extra_networks("authelia", true, true, false, false);
         assert!(nets.is_empty());
     }
 
