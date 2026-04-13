@@ -52,7 +52,7 @@ length = 32
 
 [[env]]
 name = "INIT_SEAFILE_ADMIN_EMAIL"
-value = "{{admin.email | default('admin@localhost')}}"
+value = "{{admin.email | default('admin@local')}}"
 kind = "prompted"
 prompt = "Admin email"
 
@@ -79,7 +79,5 @@ smtp = false
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
 OAUTH_REDIRECT_URL = "{{service.url}}/oauth/callback/"
-OAUTH_PROVIDER_DOMAIN = "{{auth.url}}"
+OAUTH_PROVIDER_DOMAIN = "{{auth.external_url}}"
 OAUTH_INTERNAL_DOMAIN = "{{auth.internal_url}}"
-# oauthlib refuses http:// by default — allow it for local mode
-OAUTHLIB_INSECURE_TRANSPORT = "1"

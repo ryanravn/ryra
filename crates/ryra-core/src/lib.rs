@@ -308,10 +308,31 @@ pub fn add_service(
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
-    let extra_volumes = Vec::new();
-    let extra_env: BTreeMap<String, String> = BTreeMap::new();
+    let mut extra_volumes = Vec::new();
+    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
 
     let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
+    let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY && s.installed);
+
+    // When auth is enabled and Caddy handles TLS, mount the Caddy root CA cert
+    // into service containers so they trust the self-signed HTTPS cert. OIDC
+    // clients connect to Caddy's HTTPS port (via network alias), which requires
+    // TLS trust.
+    if enable_auth && authelia_installed && caddy_installed && service_name != SERVICE_AUTHELIA && service_name != SERVICE_CADDY {
+        // The CA cert is exported by caddy's ExecStartPost to a well-known path
+        let ca_cert_host = service_home(SERVICE_CADDY)
+            .map(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")).unwrap_or_default())
+            .unwrap_or_default();
+        if ca_cert_host.exists() {
+            // Mount the Caddy CA cert as the standard Linux CA bundle path so
+            // Go, Python, etc. pick it up automatically.
+            // :z relabels for SELinux (shared across containers).
+            extra_volumes.push(format!(
+                "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
+                ca_cert_host.display()
+            ));
+        }
+    }
     let extra_networks = resolve_extra_networks(
         service_name,
         enable_auth,
@@ -328,7 +349,14 @@ pub fn add_service(
         extra_env,
     })?;
 
-    let podman_args: Vec<String> = Vec::new();
+    let mut podman_args: Vec<String> = Vec::new();
+
+    // Prevent /etc/hosts from leaking into containers with auth — host entries
+    // (e.g., 127.0.0.1 auth.local) would override podman DNS aliases that route
+    // to Caddy for OIDC.
+    if enable_auth && caddy_installed && service_name != SERVICE_AUTHELIA && service_name != SERVICE_CADDY {
+        podman_args.push("--no-hosts".into());
+    }
 
     // Build port variable expansions for quadlet PublishPort directives
     let port_vars: Vec<(String, String)> = reg_service

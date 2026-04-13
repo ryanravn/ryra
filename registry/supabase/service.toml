@@ -196,7 +196,7 @@ value = "true"
 
 [[env]]
 name = "GOTRUE_SMTP_ADMIN_EMAIL"
-value = "admin@localhost"
+value = "admin@local"
 
 [[env]]
 name = "GOTRUE_SMTP_HOST"

@@ -30,12 +30,14 @@ pub fn build_context(
     if let Some(url) = url {
         // Parse the URL to extract scheme and hostname
         let scheme = url.split("://").next().unwrap_or("https");
-        let host = url
+        let authority = url
             .split("://")
             .nth(1)
             .and_then(|rest| rest.split('/').next())
             .unwrap_or(url);
-        ctx.insert("service.domain".into(), host.to_string());
+        // service.domain is just the hostname (no port)
+        let domain = authority.split(':').next().unwrap_or(authority);
+        ctx.insert("service.domain".into(), domain.to_string());
         // service.external_url — browser-accessible URL as provided by the user.
         ctx.insert("service.external_url".into(), url.to_string());
         ctx.insert("service.scheme".into(), scheme.to_string());
@@ -64,12 +66,7 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let auth_localhost_url = auth.url().to_string();
-        // auth.internal_url is how containers reach the auth provider directly via HTTP.
-        // Uses container DNS (systemd-authelia:<port>) for direct communication.
-        let internal_url = match auth.port() {
-            Some(port) => format!("http://{}:{port}", auth.provider_name()),
-            None => auth_localhost_url.clone(),
-        };
+        let caddy_installed = config.services.iter().any(|s| s.name == "caddy" && s.installed);
         // auth.external_url — browser-accessible URL.
         // Uses the stored URL from the auth provider's installed record if available.
         let external_url = config
@@ -79,6 +76,60 @@ pub fn build_context(
             .and_then(|s| s.url.as_ref())
             .cloned()
             .unwrap_or_else(|| auth_localhost_url.clone());
+        // auth.internal_url — how containers reach the auth provider for OIDC
+        // discovery and token exchange.
+        //
+        // When Caddy is installed, containers route through Caddy (HTTPS) via a
+        // network alias matching the auth domain. This is required because OIDC
+        // clients validate that the configured URL matches the issuer in the
+        // discovery response, so the URL must be the same as the external URL.
+        // The Caddy root CA cert is mounted into service containers so they
+        // trust the self-signed TLS cert.
+        //
+        // Without Caddy, containers talk directly to the auth provider.
+        let internal_url = if caddy_installed {
+            // Ensure the URL includes Caddy's HTTPS port — containers connect
+            // directly to Caddy's container port (e.g., 8443), not the host-mapped
+            // port. If the external URL has no explicit port, append the Caddy
+            // HTTPS container port.
+            let caddy_https_port = config
+                .services
+                .iter()
+                .find(|s| s.name == "caddy")
+                .and_then(|s| s.ports.get("https").copied());
+            match caddy_https_port {
+                Some(port) => {
+                    // Check if URL already has a port
+                    let has_port = external_url
+                        .split("://")
+                        .nth(1)
+                        .and_then(|rest| rest.split('/').next())
+                        .map(|authority| authority.contains(':'))
+                        .unwrap_or(false);
+                    if has_port {
+                        external_url.clone()
+                    } else {
+                        // Insert port before path
+                        if let Some(idx) = external_url.find("://") {
+                            let after_scheme = &external_url[idx + 3..];
+                            let path_start = after_scheme.find('/').map(|i| idx + 3 + i);
+                            match path_start {
+                                Some(pi) => format!("{}:{port}{}", &external_url[..pi], &external_url[pi..]),
+                                None => format!("{external_url}:{port}"),
+                            }
+                        } else {
+                            format!("{external_url}:{port}")
+                        }
+                    }
+                }
+                None => external_url.clone(),
+            }
+        } else {
+            match auth.port() {
+                Some(port) => format!("http://{}:{port}", auth.provider_name()),
+                None => auth_localhost_url.clone(),
+            }
+        };
         ctx.insert("auth.url".into(), auth_localhost_url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());
         ctx.insert("auth.provider".into(), auth.provider_name().to_string());

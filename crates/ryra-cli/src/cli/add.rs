@@ -8,7 +8,7 @@ use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::AuthKind;
-use ryra_core::{SERVICE_AUTHELIA, Warning};
+use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 
 use super::apply;
 use super::prompts;
@@ -436,6 +436,20 @@ async fn ensure_dependencies(
         return Ok(());
     }
 
+    // Caddy is required for authelia OIDC — it terminates TLS and
+    // sets proper X-Forwarded-Proto headers that authelia requires.
+    let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+    if !caddy_installed {
+        println!("\nInstalling caddy (required for OIDC)...\n");
+        Box::pin(run(
+            &[SERVICE_CADDY.to_string()],
+            None,
+            false,
+            false,
+        ))
+        .await?;
+    }
+
     // Install authelia
     if interactive {
         let confirm = Confirm::new()
@@ -508,6 +522,21 @@ async fn ensure_auth_for_add(
             } else {
                 std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.local".to_string())
             };
+            // Caddy is required for authelia OIDC — it terminates TLS and
+            // sets proper X-Forwarded-Proto headers that authelia requires.
+            let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+            if !caddy_installed {
+                println!("\nInstalling caddy (required for OIDC)...\n");
+                Box::pin(run(
+                    &[SERVICE_CADDY.to_string()],
+                    None,
+                    false,
+                    dry_run,
+                ))
+                .await?;
+                *config = ryra_core::config::load_or_default(&paths.config_file)?;
+            }
+
             println!("\nInstalling authelia...\n");
             // Recursively install authelia, then reload config
             Box::pin(run(

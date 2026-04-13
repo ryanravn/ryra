@@ -28,7 +28,7 @@ prompt = "Admin password"
 
 [[env]]
 name = "PAPERLESS_ADMIN_MAIL"
-value = "admin@localhost"
+value = "admin@local"
 
 # --- Redis connection ---
 

@@ -96,13 +96,23 @@ pub fn extract_bind_mount_dirs(
 
 /// Append `Network=<name>.network` lines to the `[Container]` section of a quadlet file.
 /// Inserts just before `[Service]` section if it exists, otherwise appends at end.
+///
+/// Each entry in `networks` is a network name optionally followed by `:` and
+/// extra options (e.g., `"authelia:alias=auth.test.local"` →
+/// `Network=authelia.network:alias=auth.test.local`).
 pub fn inject_networks(content: &str, networks: &[String]) -> String {
     if networks.is_empty() {
         return content.to_string();
     }
     let extra_lines: String = networks
         .iter()
-        .map(|n| format!("Network={n}.network"))
+        .map(|n| {
+            if let Some((name, opts)) = n.split_once(':') {
+                format!("Network={name}.network:{opts}")
+            } else {
+                format!("Network={n}.network")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
 

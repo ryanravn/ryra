@@ -3,18 +3,23 @@ use std::path::Path;
 
 use crate::config::schema::{AuthCredentials, Config};
 use crate::generate::GeneratedFile;
+use crate::generate::bundle::inject_networks;
 use crate::registry::service_def::ServiceDef;
 use crate::{SERVICE_AUTHELIA, Step, service_home};
 
 /// Register an OIDC client with authelia by editing its configuration.yml.
 /// Returns steps to write the updated config and restart authelia.
+///
+/// Also ensures Caddy joins authelia's network with a domain alias so that
+/// OIDC discovery requests from service containers route through Caddy
+/// (which sets proper X-Forwarded-Proto/Host headers).
 pub fn register_oidc_client(
     service_name: &str,
     service_def: &ServiceDef,
     url: Option<&str>,
     ctx: &BTreeMap<String, String>,
-    _config: &Config,
-    _quadlet_dir: &Path,
+    config: &Config,
+    quadlet_dir: &Path,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
 
@@ -64,6 +69,15 @@ pub fn register_oidc_client(
     if let Some(ref url) = redirect_url_from_mappings {
         redirect_uris.push(url.clone());
     }
+    // Also register localhost-based URIs (users may access via either
+    // 127.0.0.1 or localhost, and the browser address determines the
+    // redirect_uri that vikunja sends to authelia).
+    let mut base_urls = vec![base_url.clone()];
+    if base_url.contains("127.0.0.1") {
+        base_urls.push(base_url.replace("127.0.0.1", "localhost"));
+    } else if base_url.contains("localhost") {
+        base_urls.push(base_url.replace("localhost", "127.0.0.1"));
+    }
     for suffix in [
         "/user/oauth2/Authelia/callback",              // Forgejo/Gitea
         "/auth/login",                                 // Immich
@@ -72,9 +86,11 @@ pub fn register_oidc_client(
         "/auth/openid/authelia",                       // Vikunja
         "/oauth2/callback",                            // generic
     ] {
-        let uri = format!("{base_url}{suffix}");
-        if !redirect_uris.contains(&uri) {
-            redirect_uris.push(uri);
+        for base in &base_urls {
+            let uri = format!("{base}{suffix}");
+            if !redirect_uris.contains(&uri) {
+                redirect_uris.push(uri);
+            }
         }
     }
     let redirect_uris_yaml: String = redirect_uris
@@ -101,6 +117,78 @@ pub fn register_oidc_client(
     steps.push(Step::RestartService {
         unit: SERVICE_AUTHELIA.to_string(),
     });
+
+    // Ensure Caddy joins authelia's network with a domain alias so that
+    // containers can resolve the auth FQDN → Caddy → authelia (with proper
+    // X-Forwarded-Proto: https headers that authelia requires for OIDC).
+    let caddy_installed = config.services.iter().any(|s| s.name == "caddy" && s.installed);
+    let auth_domain = config
+        .services
+        .iter()
+        .find(|s| s.name == SERVICE_AUTHELIA)
+        .and_then(|s| s.url.as_ref())
+        .and_then(|u| {
+            u.split("://")
+                .nth(1)
+                .and_then(|rest| rest.split('/').next())
+                .map(|authority| authority.split(':').next().unwrap_or(authority))
+        })
+        .map(|s| s.to_string());
+
+    if caddy_installed {
+        if let Some(ref domain) = auth_domain {
+            let mut need_caddy_restart = false;
+
+            // 1. Add Caddy to authelia's podman network with a domain alias so
+            // that containers resolving the auth domain reach Caddy (HTTPS on
+            // port 8443). OIDC clients require the issuer URL to match exactly,
+            // so services connect to the external URL (https://domain:8443)
+            // which routes through Caddy's TLS termination to authelia.
+            let caddy_quadlet = quadlet_dir.join("caddy.container");
+            if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
+                let network_spec = format!("{SERVICE_AUTHELIA}:alias={domain}");
+                if !content.contains(&format!("alias={domain}")) {
+                    let updated = inject_networks(&content, &[network_spec]);
+                    steps.push(Step::WriteFile(GeneratedFile {
+                        path: caddy_quadlet,
+                        content: updated,
+                    }));
+                    need_caddy_restart = true;
+                }
+            }
+
+            // 2. Add an authelia site block to the Caddyfile so Caddy
+            //    terminates TLS and reverse-proxies to authelia. Without this,
+            //    Caddy has no route for the auth domain and returns 404.
+            if let Ok(caddyfile_path) = crate::caddy::caddyfile_path() {
+                if let Ok(caddyfile) = std::fs::read_to_string(&caddyfile_path) {
+                    if !caddyfile.contains(&format!("# ryra:{SERVICE_AUTHELIA}")) {
+                        let block = crate::caddy::render_site_block(
+                            &crate::caddy::CaddySiteParams {
+                                service_name: SERVICE_AUTHELIA.to_string(),
+                                domain: domain.clone(),
+                                container_port: 9091,
+                            },
+                        );
+                        let updated =
+                            crate::caddy::add_route(&caddyfile, SERVICE_AUTHELIA, &block);
+                        steps.push(Step::WriteFile(GeneratedFile {
+                            path: caddyfile_path,
+                            content: updated,
+                        }));
+                        need_caddy_restart = true;
+                    }
+                }
+            }
+
+            if need_caddy_restart {
+                steps.push(Step::DaemonReload);
+                steps.push(Step::RestartService {
+                    unit: "caddy".to_string(),
+                });
+            }
+        }
+    }
 
     steps
 }

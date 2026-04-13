@@ -52,7 +52,7 @@ prompt = "Admin password"
 
 [[env]]
 name = "AUTHELIA_ADMIN_EMAIL"
-value = "admin@localhost"
+value = "admin@local"
 kind = "prompted"
 prompt = "Admin email"
 
