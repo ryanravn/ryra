@@ -311,7 +311,7 @@ pub async fn run(
         };
 
         // Show warnings and confirm
-        // Show port reassignment notes (informational, no confirmation needed)
+        // Show port reassignment notes
         for warning in &result.warnings {
             if let Warning::PortReassigned {
                 port_name,
@@ -321,21 +321,34 @@ pub async fn run(
                 ..
             } = warning
             {
-                println!(
-                    "  {port_name} port {original_port} → {assigned_port} ({reason})"
-                );
+                // Privileged ports are just informational — nothing the user can do
+                // in rootless podman. "In use" ports are actionable — the user might
+                // want to stop whatever is occupying the port.
+                if *original_port < 1024 {
+                    println!(
+                        "  {port_name} port {original_port} → {assigned_port} ({reason})"
+                    );
+                } else {
+                    println!(
+                        "  WARNING: {port_name} port {original_port} → {assigned_port} ({reason})"
+                    );
+                }
             }
         }
 
-        // Show RAM warnings (these need confirmation)
-        let ram_warnings: Vec<_> = result
+        // Collect warnings that need confirmation (RAM + port conflicts)
+        let needs_confirm: Vec<_> = result
             .warnings
             .iter()
-            .filter(|w| !matches!(w, Warning::PortReassigned { .. }))
+            .filter(|w| match w {
+                Warning::RamBelowMinimum { .. } | Warning::RamBelowRecommended { .. } => true,
+                Warning::PortReassigned { original_port, .. } => *original_port >= 1024,
+            })
             .collect();
-        if !ram_warnings.is_empty() {
-            println!();
-            for warning in &ram_warnings {
+
+        if !needs_confirm.is_empty() {
+            // Show RAM warnings
+            for warning in &needs_confirm {
                 match warning {
                     Warning::RamBelowMinimum {
                         service_name,
@@ -357,14 +370,14 @@ pub async fn run(
                          but this system has {available_mb} MB — performance may be degraded"
                         );
                     }
-                    Warning::PortReassigned { .. } => {}
+                    Warning::PortReassigned { .. } => {} // already printed above
                 }
             }
             println!();
 
             if interactive && !dry_run {
                 let confirmed = Confirm::new()
-                    .with_prompt("Continue with these warnings?")
+                    .with_prompt("Continue?")
                     .default(true)
                     .interact()?;
                 if !confirmed {
