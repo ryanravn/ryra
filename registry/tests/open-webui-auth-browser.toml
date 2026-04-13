@@ -30,7 +30,7 @@ action = "run"
 name = "add-open-webui"
 run = """OLLAMA_BASE_URL= \
 ryra add open-webui --auth"""
-timeout = 300
+timeout = 600
 
 [[steps]]
 action = "wait"
