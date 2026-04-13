@@ -2,7 +2,7 @@
 name = "multi-oidc-lifecycle"
 ram = 5632
 
-# Install caddy (needed for --domain and --auth)
+# Install caddy (needed for authelia HTTPS)
 [[steps]]
 action = "add"
 service = "caddy"
@@ -16,7 +16,7 @@ service = "caddy"
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --domain auth.test.local"""
+ryra add authelia --url https://auth.test.local:8443"""
 timeout = 300
 
 [[steps]]
@@ -29,7 +29,7 @@ action = "run"
 name = "add-seafile"
 run = """INIT_SEAFILE_ADMIN_EMAIL=admin@test.local \
 INIT_SEAFILE_ADMIN_PASSWORD=testpassword123 \
-ryra add seafile --auth --domain seafile.test.local"""
+ryra add seafile --auth"""
 timeout = 900
 
 [[steps]]
@@ -42,7 +42,7 @@ action = "run"
 name = "add-immich"
 run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
 INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
-ryra add immich --auth --domain immich.test.local"""
+ryra add immich --auth"""
 timeout = 900
 
 [[steps]]

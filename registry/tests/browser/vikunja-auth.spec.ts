@@ -3,7 +3,8 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-const VIKUNJA_URL = "https://tasks.test.local:8443";
+const VIKUNJA_PORT = process.env.VIKUNJA_PORT || "3456";
+const VIKUNJA_URL = `http://127.0.0.1:${VIKUNJA_PORT}`;
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
@@ -33,6 +34,7 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
 }
 
 test("vikunja login page loads and has SSO option", async ({ browser }) => {
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
   await page.goto(VIKUNJA_URL, { timeout: 15_000 });
@@ -45,6 +47,7 @@ test("vikunja login page loads and has SSO option", async ({ browser }) => {
 });
 
 test("full OIDC login through Authelia creates a session", async ({ browser }) => {
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 1600 },
@@ -69,9 +72,9 @@ test("full OIDC login through Authelia creates a session", async ({ browser }) =
   // 4. Login at Authelia
   await loginToAuthelia(page);
 
-  // 5. Should redirect back to Vikunja, now authenticated
+  // 5. Should redirect back to Vikunja (localhost), now authenticated
   await page.waitForURL(
-    (url) => url.hostname === "tasks.test.local" && !url.pathname.startsWith("/auth/openid"),
+    (url) => url.hostname === "127.0.0.1" && !url.pathname.startsWith("/auth/openid"),
     { timeout: 15_000 },
   );
 

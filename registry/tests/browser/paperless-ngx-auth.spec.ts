@@ -3,7 +3,8 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-const PAPERLESS_URL = "https://paperless.test.local:8443";
+const PAPERLESS_PORT = process.env.PAPERLESS_PORT || "8000";
+const PAPERLESS_URL = `http://127.0.0.1:${PAPERLESS_PORT}`;
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
@@ -33,6 +34,7 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
 }
 
 test("paperless-ngx login page loads and has SSO option", async ({ browser }) => {
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
   await page.goto(PAPERLESS_URL, { timeout: 15_000 });
@@ -45,6 +47,7 @@ test("paperless-ngx login page loads and has SSO option", async ({ browser }) =>
 });
 
 test("full OIDC login through Authelia creates a session", async ({ browser }) => {
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 1600 },
@@ -69,9 +72,9 @@ test("full OIDC login through Authelia creates a session", async ({ browser }) =
   // 4. Login at Authelia
   await loginToAuthelia(page);
 
-  // 5. Should redirect back to Paperless-ngx (signup page or dashboard)
+  // 5. Should redirect back to Paperless-ngx (localhost — signup page or dashboard)
   await page.waitForURL(
-    (url) => url.hostname === "paperless.test.local" && !url.pathname.includes("/login/callback/"),
+    (url) => url.hostname === "127.0.0.1" && !url.pathname.includes("/login/callback/"),
     { timeout: 15_000 },
   );
 

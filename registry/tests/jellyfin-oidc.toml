@@ -1,7 +1,7 @@
 [test]
 name = "jellyfin-oidc-lifecycle"
 
-# Install caddy (needed for --domain and --auth)
+# Install caddy (needed for authelia HTTPS)
 [[steps]]
 action = "add"
 service = "caddy"
@@ -15,7 +15,7 @@ service = "caddy"
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --domain auth.test.local"""
+ryra add authelia --url https://auth.test.local:8443"""
 timeout = 300
 
 [[steps]]
@@ -26,7 +26,7 @@ service = "authelia"
 [[steps]]
 action = "run"
 name = "add-jellyfin"
-run = "ryra add jellyfin --auth --domain jellyfin.test.local"
+run = "ryra add jellyfin --auth"
 timeout = 300
 
 [[steps]]
@@ -37,7 +37,7 @@ service = "jellyfin"
 [[steps]]
 action = "run"
 name = "setup"
-run = "echo '127.0.0.1 auth.test.local jellyfin.test.local' >> /etc/hosts"
+run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
 
 # Wait for Jellyfin HTTP
 [[steps]]

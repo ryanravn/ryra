@@ -3,8 +3,8 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-// Access Open WebUI through Caddy (HTTPS) for OIDC flows
-const OPEN_WEBUI_URL = "https://chat.test.local:8443";
+const OPEN_WEBUI_PORT = process.env.OPEN_WEBUI_PORT || "3000";
+const OPEN_WEBUI_URL = `http://127.0.0.1:${OPEN_WEBUI_PORT}`;
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
@@ -54,6 +54,7 @@ test("open-webui shows SSO button when OIDC is configured", async ({
 });
 
 test("clicking SSO button initiates OIDC flow", async ({ browser }) => {
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 1600 },
@@ -80,6 +81,7 @@ test("clicking SSO button initiates OIDC flow", async ({ browser }) => {
 test("full OIDC login through Authelia creates a session", async ({
   browser,
 }) => {
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 1600 },
@@ -102,13 +104,13 @@ test("full OIDC login through Authelia creates a session", async ({
   // 3. Fill in Authelia credentials
   await loginToAuthelia(page);
 
-  // 4. Should be redirected back to Open WebUI, now authenticated
+  // 4. Should be redirected back to Open WebUI (localhost), now authenticated
   await page.waitForURL(
-    (url) => url.hostname === "chat.test.local" && !url.pathname.startsWith("/oauth"),
+    (url) => url.hostname === "127.0.0.1" && !url.pathname.startsWith("/oauth"),
     { timeout: 15_000 },
   );
 
-  // 4. Verify we're logged in — page should NOT be the login page anymore
+  // 5. Verify we're logged in — page should NOT be the login page anymore
   //    (could be chat, get-started, or admin setup — any authenticated page)
   await page.waitForLoadState("networkidle");
   const body = await page.locator("body").textContent();

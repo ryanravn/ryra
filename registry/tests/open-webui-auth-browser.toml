@@ -17,7 +17,7 @@ service = "caddy"
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --domain auth.test.local"""
+ryra add authelia --url https://auth.test.local:8443"""
 timeout = 300
 
 [[steps]]
@@ -29,7 +29,7 @@ service = "authelia"
 action = "run"
 name = "add-open-webui"
 run = """OLLAMA_BASE_URL= \
-ryra add open-webui --auth --domain chat.test.local"""
+ryra add open-webui --auth"""
 timeout = 300
 
 [[steps]]
@@ -40,13 +40,13 @@ service = "open-webui"
 [[steps]]
 action = "run"
 name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local chat.test.local' >> /etc/hosts"
+run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
 
-# Wait for open-webui to respond via Caddy
+# Wait for open-webui to respond
 [[steps]]
 action = "assert"
-name = "open-webui-via-caddy"
-run = "for i in $(seq 1 30); do curl -sk -o /dev/null -w '%{http_code}' --resolve chat.test.local:8443:127.0.0.1 https://chat.test.local:8443 | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+name = "open-webui-responds"
+run = "for i in $(seq 1 30); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/open-webui/.env | cut -d= -f2) | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
 timeout = 90
 
 # Run playwright SSO tests
@@ -55,6 +55,7 @@ action = "assert"
 name = "playwright-auth-flow"
 run = """
 export PATH="$HOME/.bun/bin:$PATH"
+export OPEN_WEBUI_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/open-webui/.env | cut -d= -f2)
 export AUTHELIA_USER=testuser
 export AUTHELIA_PASSWORD=testpassword123
 cd /opt/ryra-test-registry/tests/browser

@@ -36,7 +36,7 @@ value = "admin@localhost"
 name = "PAPERLESS_REDIS"
 value = "redis://redis:6379"
 
-# --- URL (set automatically when --domain is used) ---
+# --- URL (set automatically from --url) ---
 
 [[env]]
 name = "PAPERLESS_URL"

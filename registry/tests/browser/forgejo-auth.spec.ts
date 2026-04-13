@@ -2,9 +2,6 @@ import { test, expect } from "@playwright/test";
 
 const FORGEJO_PORT = process.env.FORGEJO_PORT || "3000";
 const FORGEJO_URL = `http://127.0.0.1:${FORGEJO_PORT}`;
-// Domain-based URL through Caddy (HTTPS) — needed for OIDC flows so session
-// cookies match the callback URL (ROOT_URL uses the domain).
-const FORGEJO_DOMAIN_URL = "https://git.test.local:8443";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
@@ -66,13 +63,12 @@ test("clicking SSO button initiates OIDC flow", async ({ page }) => {
 test("full OIDC login through Authelia creates a forgejo session", async ({
   browser,
 }) => {
-  // Use the domain URL (through Caddy) so the session cookie domain matches
-  // the OIDC callback URL. Caddy uses a self-signed cert, so ignore HTTPS errors.
+  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
-  // 1. Go to forgejo login via domain URL and click SSO
-  await page.goto(`${FORGEJO_DOMAIN_URL}/user/login`);
+  // 1. Go to forgejo login and click SSO
+  await page.goto(`${FORGEJO_URL}/user/login`);
   const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');
   await expect(autheliaLink).toBeVisible({ timeout: 15_000 });
   await autheliaLink.click();
@@ -82,7 +78,7 @@ test("full OIDC login through Authelia creates a forgejo session", async ({
 
   // 3. Should be redirected back to forgejo, now authenticated
   await page.waitForURL(
-    (url) => url.hostname === "git.test.local" && !url.pathname.startsWith("/api/oidc"),
+    (url) => url.hostname === "127.0.0.1" && !url.pathname.startsWith("/api/oidc"),
     { timeout: 15_000 },
   );
 

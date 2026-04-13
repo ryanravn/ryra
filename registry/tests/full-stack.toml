@@ -1,7 +1,7 @@
 [test]
 name = "full-stack"
 
-# Set up Caddy first (ExecStartPre seeds the Caddyfile automatically)
+# Set up Caddy first (needed for authelia HTTPS)
 [[steps]]
 action = "add"
 service = "caddy"
@@ -14,7 +14,7 @@ service = "caddy"
 [[steps]]
 action = "run"
 name = "add-authelia"
-run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --domain auth.test.local"
+run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --url https://auth.test.local:8443"
 
 [[steps]]
 action = "wait"
@@ -29,42 +29,42 @@ service = "postgres"
 action = "wait"
 service = "postgres"
 
-# Whoami — gets Caddy forward auth (no native OIDC)
+# Whoami — with --auth for OIDC
 [[steps]]
 action = "run"
 name = "add-whoami"
-run = "ryra add whoami --domain whoami.test.local --auth"
+run = "ryra add whoami --auth"
 
 [[steps]]
 action = "wait"
 service = "whoami"
 
-# Forgejo — gets Caddy forward auth
+# Forgejo
 [[steps]]
 action = "run"
 name = "add-forgejo"
-run = "ryra add forgejo --domain git.test.local"
+run = "ryra add forgejo"
 timeout = 300
 
 [[steps]]
 action = "wait"
 service = "forgejo"
 
-# Vaultwarden — gets Caddy forward auth
+# Vaultwarden
 [[steps]]
 action = "run"
 name = "add-vaultwarden"
-run = "ryra add vaultwarden --domain vault.test.local"
+run = "ryra add vaultwarden"
 
 [[steps]]
 action = "wait"
 service = "vaultwarden"
 
-# Uptime Kuma — gets Caddy forward auth
+# Uptime Kuma
 [[steps]]
 action = "run"
 name = "add-uptime-kuma"
-run = "ryra add uptime-kuma --domain status.test.local"
+run = "ryra add uptime-kuma"
 
 [[steps]]
 action = "wait"
@@ -104,45 +104,22 @@ action = "assert"
 name = "postgres-accepts"
 run = "PGPASSWORD=$(grep POSTGRES_PASSWORD $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) psql -h 127.0.0.1 -p $(grep RYRA_PORT_TCP $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) -U postgres -c 'SELECT 1'"
 
-# === Assertions: Caddy routes + forward auth ===
+# === Assertions: Authelia Caddy route ===
 
 [[steps]]
 action = "assert"
-name = "caddy-has-all-routes"
-run = "grep -q 'ryra:whoami' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:forgejo' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:vaultwarden' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:uptime-kuma' $HOME/.local/share/ryra/caddy/config/Caddyfile && grep -q 'ryra:authelia' $HOME/.local/share/ryra/caddy/config/Caddyfile"
-
-[[steps]]
-action = "assert"
-name = "whoami-has-forward-auth"
-run = "awk '/ryra:whoami/,/^}/' $HOME/.local/share/ryra/caddy/config/Caddyfile | grep -q 'forward_auth'"
-
-[[steps]]
-action = "assert"
-name = "uses-authelia-endpoint"
-run = "grep -q '/api/authz/forward-auth' $HOME/.local/share/ryra/caddy/config/Caddyfile"
-
-# Authelia itself should NOT have forward auth
-[[steps]]
-action = "assert"
-name = "authelia-no-forward-auth"
-run = "! awk '/ryra:authelia/,/^}/' $HOME/.local/share/ryra/caddy/config/Caddyfile | grep -q 'forward_auth'"
-
-# === Auth actually blocks unauthenticated requests ===
-
-[[steps]]
-action = "assert"
-name = "whoami-blocked-via-caddy"
-run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve whoami.test.local:8443:127.0.0.1 https://whoami.test.local:8443); [ \"$CODE\" = '401' ] || [ \"$CODE\" = '302' ] || [ \"$CODE\" = '403' ]"
+name = "caddy-has-authelia-route"
+run = "grep -q 'ryra:authelia' $HOME/.local/share/ryra/caddy/config/Caddyfile"
 
 [[steps]]
 action = "assert"
 name = "authelia-accessible-via-caddy"
 run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
 
-# Direct access bypasses auth
+# Services are accessed directly on localhost
 [[steps]]
 action = "assert"
-name = "whoami-direct-no-auth"
+name = "whoami-direct-access"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2) | grep -q Hostname"
 
 # === Status ===

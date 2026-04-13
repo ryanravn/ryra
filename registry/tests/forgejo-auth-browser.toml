@@ -16,7 +16,7 @@ service = "caddy"
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --domain auth.test.local"""
+ryra add authelia --url https://auth.test.local:8443"""
 timeout = 300
 
 [[steps]]
@@ -27,7 +27,7 @@ service = "authelia"
 [[steps]]
 action = "run"
 name = "add-forgejo"
-run = "ryra add forgejo --auth --domain git.test.local"
+run = "ryra add forgejo --auth"
 timeout = 600
 
 [[steps]]
@@ -38,7 +38,7 @@ service = "forgejo"
 [[steps]]
 action = "run"
 name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local git.test.local' >> /etc/hosts"
+run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
 
 # Wait for OIDC provider registration (ExecStartPost runs register-oidc.sh)
 [[steps]]
@@ -55,11 +55,11 @@ journalctl --user -u forgejo.service --no-pager -n 20 2>&1 | grep -iE 'oidc|oaut
 exit 1"""
 timeout = 150
 
-# Wait for forgejo to respond via caddy
+# Wait for forgejo to respond
 [[steps]]
 action = "assert"
-name = "forgejo-via-caddy"
-run = "for i in $(seq 1 30); do curl -sk -o /dev/null -w '%{http_code}' --resolve git.test.local:8443:127.0.0.1 https://git.test.local:8443 | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+name = "forgejo-responds"
+run = "for i in $(seq 1 30); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2) | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
 timeout = 90
 
 # Wait for authelia to respond via caddy
