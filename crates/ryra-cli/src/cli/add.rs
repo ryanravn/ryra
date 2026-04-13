@@ -311,9 +311,31 @@ pub async fn run(
         };
 
         // Show warnings and confirm
-        if !result.warnings.is_empty() {
+        // Show port reassignment notes (informational, no confirmation needed)
+        for warning in &result.warnings {
+            if let Warning::PortReassigned {
+                port_name,
+                original_port,
+                assigned_port,
+                reason,
+                ..
+            } = warning
+            {
+                println!(
+                    "  {port_name} port {original_port} → {assigned_port} ({reason})"
+                );
+            }
+        }
+
+        // Show RAM warnings (these need confirmation)
+        let ram_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| !matches!(w, Warning::PortReassigned { .. }))
+            .collect();
+        if !ram_warnings.is_empty() {
             println!();
-            for warning in &result.warnings {
+            for warning in &ram_warnings {
                 match warning {
                     Warning::RamBelowMinimum {
                         service_name,
@@ -335,17 +357,7 @@ pub async fn run(
                          but this system has {available_mb} MB — performance may be degraded"
                         );
                     }
-                    Warning::PortReassigned {
-                        port_name,
-                        original_port,
-                        assigned_port,
-                        reason,
-                        ..
-                    } => {
-                        println!(
-                            "  NOTE: {port_name} port {original_port} → {assigned_port} ({reason})"
-                        );
-                    }
+                    Warning::PortReassigned { .. } => {}
                 }
             }
             println!();
