@@ -38,11 +38,11 @@ value = "{{secret.mysql_root_password}}"
 
 [[env]]
 name = "SEAFILE_SERVER_HOSTNAME"
-value = "{{service.external_url}}"
+value = "{{service.domain | default('127.0.0.1')}}:{{service.port}}"
 
 [[env]]
 name = "SEAFILE_SERVER_PROTOCOL"
-value = "https"
+value = "{{service.scheme}}"
 
 [[env]]
 name = "JWT_PRIVATE_KEY"
