@@ -25,12 +25,19 @@ pub async fn run(query: Option<&str>, registry: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<20} {:<10} DESCRIPTION", "SERVICE", "STATUS");
-    println!("{}", "-".repeat(70));
+    println!(
+        "{:<20} {:<10} {:<12} DESCRIPTION",
+        "SERVICE", "STATUS", "SUPPORTS"
+    );
+    println!("{}", "-".repeat(80));
 
     for svc in &results {
         let status = if svc.installed { "installed" } else { "" };
-        println!("{:<20} {:<10} {}", svc.name, status, svc.description);
+        let supports = svc.supports.join(", ");
+        println!(
+            "{:<20} {:<10} {:<12} {}",
+            svc.name, status, supports, svc.description
+        );
     }
 
     Ok(())

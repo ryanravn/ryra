@@ -518,8 +518,8 @@ pub fn add_service(
 /// Check if a quadlet filename belongs to a service.
 ///
 /// Matches `{service_name}.container`, `{service_name}-db.volume`, etc.
-/// but NOT `{service_name_prefix}-other.container` (e.g., "whoami" must not
-/// match "whoami-auth.container" when "whoami-auth" is a known service).
+/// but NOT `{service_name_prefix}-other.container` (e.g., "foo" must not
+/// match "foo-bar.container" when "foo-bar" is a known service).
 ///
 /// `all_service_names` contains every installed service name — used to detect
 /// when a longer service name owns the file instead.
@@ -535,7 +535,7 @@ fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names: &[&
         return false;
     }
     // Check that no other installed service is a longer prefix match.
-    // e.g., "whoami-auth.container" with service "whoami" — if "whoami-auth"
+    // e.g., "foo-bar.container" with service "foo" — if "foo-bar"
     // is also installed, it owns this file.
     !all_service_names.iter().any(|&other| {
         other.len() > service_name.len()
@@ -809,10 +809,18 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
         .map(|reg_svc| {
             let name = &reg_svc.def.service.name;
             let installed = config.services.iter().any(|s| s.name == *name);
+            let mut supports = Vec::new();
+            for kind in &reg_svc.def.integrations.auth {
+                supports.push(kind.to_string());
+            }
+            if reg_svc.def.integrations.smtp {
+                supports.push("smtp".to_string());
+            }
             SearchResult {
                 name: name.clone(),
                 description: reg_svc.def.service.description,
                 installed,
+                supports,
             }
         })
         .collect();
@@ -824,6 +832,8 @@ pub struct SearchResult {
     pub name: String,
     pub description: String,
     pub installed: bool,
+    /// Integrations this service supports (e.g., "oidc", "smtp").
+    pub supports: Vec<String>,
 }
 
 /// Get test definitions for an installed service by reading its `test.toml`.
@@ -943,30 +953,30 @@ mod tests {
 
     #[test]
     fn quadlet_belongs_to_exact_match() {
-        let all = &["whoami", "whoami-auth"];
-        assert!(quadlet_belongs_to("whoami.container", "whoami", all));
-        assert!(quadlet_belongs_to("whoami.network", "whoami", all));
+        let all = &["foo", "foo-bar"];
+        assert!(quadlet_belongs_to("foo.container", "foo", all));
+        assert!(quadlet_belongs_to("foo.network", "foo", all));
     }
 
     #[test]
     fn quadlet_belongs_to_sidecar() {
-        // whoami-db is a sidecar, not a separate service
-        let all = &["whoami"];
-        assert!(quadlet_belongs_to("whoami-db.volume", "whoami", all));
+        // foo-db is a sidecar, not a separate service
+        let all = &["foo"];
+        assert!(quadlet_belongs_to("foo-db.volume", "foo", all));
     }
 
     #[test]
     fn quadlet_belongs_to_rejects_prefix_collision() {
-        let all = &["whoami", "whoami-auth"];
-        assert!(!quadlet_belongs_to("whoami-auth.container", "whoami", all));
-        assert!(!quadlet_belongs_to("whoami-auth-db.volume", "whoami", all));
+        let all = &["foo", "foo-bar"];
+        assert!(!quadlet_belongs_to("foo-bar.container", "foo", all));
+        assert!(!quadlet_belongs_to("foo-bar-db.volume", "foo", all));
     }
 
     #[test]
     fn quadlet_belongs_to_hyphenated_service() {
-        let all = &["whoami", "whoami-auth"];
-        assert!(quadlet_belongs_to("whoami-auth.container", "whoami-auth", all));
-        assert!(quadlet_belongs_to("whoami-auth-db.volume", "whoami-auth", all));
-        assert!(!quadlet_belongs_to("whoami.container", "whoami-auth", all));
+        let all = &["foo", "foo-bar"];
+        assert!(quadlet_belongs_to("foo-bar.container", "foo-bar", all));
+        assert!(quadlet_belongs_to("foo-bar-db.volume", "foo-bar", all));
+        assert!(!quadlet_belongs_to("foo.container", "foo-bar", all));
     }
 }
