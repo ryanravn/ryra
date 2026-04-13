@@ -82,12 +82,61 @@ pub async fn run(
         {
             let config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.smtp.is_none() {
-                if let Some(smtp) = prompts::prompt_smtp()? {
-                    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
-                    config.smtp = Some(smtp);
-                    paths.ensure_dirs()?;
-                    ryra_core::config::save_config(&paths.config_file, &config)?;
-                    println!("  SMTP configured. Saved to {}\n", paths.config_file.display());
+                match prompts::prompt_smtp()? {
+                    prompts::SmtpSetupChoice::Custom(smtp) => {
+                        let mut config =
+                            ryra_core::config::load_or_default(&paths.config_file)?;
+                        config.smtp = Some(smtp);
+                        paths.ensure_dirs()?;
+                        ryra_core::config::save_config(&paths.config_file, &config)?;
+                        println!(
+                            "  SMTP configured. Saved to {}\n",
+                            paths.config_file.display()
+                        );
+                    }
+                    prompts::SmtpSetupChoice::Inbucket => {
+                        // Install inbucket, then configure SMTP to point at it
+                        let inbucket_installed = config
+                            .services
+                            .iter()
+                            .any(|s| s.name == "inbucket");
+                        if !inbucket_installed {
+                            println!("\nInstalling inbucket...\n");
+                            Box::pin(run(
+                                &["inbucket".to_string()],
+                                None,
+                                false,
+                                false,
+                            ))
+                            .await?;
+                        }
+                        // Read inbucket's allocated SMTP port from config
+                        let config =
+                            ryra_core::config::load_or_default(&paths.config_file)?;
+                        let smtp_port = config
+                            .services
+                            .iter()
+                            .find(|s| s.name == "inbucket")
+                            .and_then(|s| s.ports.get("smtp").copied())
+                            .unwrap_or(2500);
+                        let smtp = ryra_core::config::schema::SmtpCredentials {
+                            host: "127.0.0.1".to_string(),
+                            port: smtp_port,
+                            username: String::new(),
+                            password: String::new(),
+                            from: "ryra@localhost".to_string(),
+                        };
+                        let mut config =
+                            ryra_core::config::load_or_default(&paths.config_file)?;
+                        config.smtp = Some(smtp);
+                        paths.ensure_dirs()?;
+                        ryra_core::config::save_config(&paths.config_file, &config)?;
+                        println!(
+                            "  SMTP configured (inbucket). Saved to {}\n",
+                            paths.config_file.display()
+                        );
+                    }
+                    prompts::SmtpSetupChoice::Skip => {}
                 }
             }
         }

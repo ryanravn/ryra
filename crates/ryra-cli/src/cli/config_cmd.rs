@@ -12,7 +12,14 @@ pub async fn run(section: Option<&str>) -> Result<()> {
             return Ok(());
         }
         Some("smtp") => {
-            config.smtp = prompts::prompt_smtp()?;
+            match prompts::prompt_smtp()? {
+                prompts::SmtpSetupChoice::Custom(smtp) => config.smtp = Some(smtp),
+                prompts::SmtpSetupChoice::Inbucket => {
+                    println!("  Run `ryra add inbucket` first, then re-run `ryra config smtp`.");
+                    return Ok(());
+                }
+                prompts::SmtpSetupChoice::Skip => return Ok(()),
+            }
         }
         Some("auth") => match prompts::prompt_auth()? {
             prompts::AuthSetupChoice::External(auth) => config.auth = Some(auth),

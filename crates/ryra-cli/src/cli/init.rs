@@ -29,7 +29,14 @@ pub async fn run(dry_run: bool) -> Result<()> {
 
     // 1. SMTP
     let smtp = if interactive {
-        prompts::prompt_smtp()?
+        match prompts::prompt_smtp()? {
+            prompts::SmtpSetupChoice::Custom(smtp) => Some(smtp),
+            prompts::SmtpSetupChoice::Inbucket => {
+                println!("  Inbucket can be installed later with `ryra add inbucket`.");
+                None
+            }
+            prompts::SmtpSetupChoice::Skip => None,
+        }
     } else {
         None
     };

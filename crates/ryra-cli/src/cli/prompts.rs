@@ -4,37 +4,57 @@ use dialoguer::Input;
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::*;
 
+/// What the user chose when prompted for SMTP setup.
+pub enum SmtpSetupChoice {
+    /// User provided custom SMTP credentials.
+    Custom(SmtpCredentials),
+    /// Install local Inbucket for testing.
+    Inbucket,
+    /// Skip SMTP setup.
+    Skip,
+}
+
 /// Interactive SMTP setup.
-pub fn prompt_smtp() -> Result<Option<SmtpCredentials>> {
+pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
     println!();
-    let setup = dialoguer::Confirm::new()
-        .with_prompt("  Configure SMTP? (for email notifications, password resets)")
-        .default(false)
+    let items = &[
+        "Custom SMTP server",
+        "Inbucket (local testing / development)",
+        "Skip",
+    ];
+    let selection = dialoguer::Select::new()
+        .with_prompt("Configure SMTP? (for email notifications, password resets)")
+        .items(items)
+        .default(2)
         .interact()?;
 
-    if !setup {
-        return Ok(None);
+    match selection {
+        0 => {
+            let host: String = Input::new().with_prompt("  SMTP host").interact_text()?;
+            let port: u16 = Input::new()
+                .with_prompt("  SMTP port")
+                .default(587)
+                .interact_text()?;
+            let username: String =
+                Input::new().with_prompt("  SMTP username").interact_text()?;
+            let password: String =
+                Input::new().with_prompt("  SMTP password").interact_text()?;
+            let from: String = Input::new()
+                .with_prompt("  From address")
+                .default(format!("noreply@{host}"))
+                .interact_text()?;
+
+            Ok(SmtpSetupChoice::Custom(SmtpCredentials {
+                host,
+                port,
+                username,
+                password,
+                from,
+            }))
+        }
+        1 => Ok(SmtpSetupChoice::Inbucket),
+        _ => Ok(SmtpSetupChoice::Skip),
     }
-
-    let host: String = Input::new().with_prompt("SMTP host").interact_text()?;
-    let port: u16 = Input::new()
-        .with_prompt("SMTP port")
-        .default(587)
-        .interact_text()?;
-    let username: String = Input::new().with_prompt("SMTP username").interact_text()?;
-    let password: String = Input::new().with_prompt("SMTP password").interact_text()?;
-    let from: String = Input::new()
-        .with_prompt("From address")
-        .default(format!("noreply@{host}"))
-        .interact_text()?;
-
-    Ok(Some(SmtpCredentials {
-        host,
-        port,
-        username,
-        password,
-        from,
-    }))
 }
 
 /// What the user chose when prompted for auth setup.
