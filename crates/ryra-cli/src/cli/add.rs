@@ -8,26 +8,26 @@ use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::AuthKind;
-use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
+use ryra_core::{SERVICE_AUTHELIA, Warning};
 
 use super::apply;
 use super::prompts;
 
 pub async fn run(
     services: &[String],
-    domain: Option<&str>,
+    url: Option<&str>,
     auth: bool,
     dry_run: bool,
 ) -> Result<()> {
-    if domain.is_some() && services.len() > 1 {
-        bail!("--domain can only be used when adding a single service");
+    if url.is_some() && services.len() > 1 {
+        bail!("--url can only be used when adding a single service");
     }
 
     let interactive = std::io::stdin().is_terminal();
 
-    // Auto-install dependencies: caddy for --domain/--auth, authelia for --auth
+    // Auto-install authelia for --auth
     if !dry_run {
-        ensure_dependencies(domain, auth, interactive).await?;
+        ensure_dependencies(url, auth, interactive).await?;
     }
 
     for service_input in services {
@@ -132,7 +132,7 @@ pub async fn run(
                 &reg_service.def,
                 None,
                 auth_kind.as_ref(),
-                domain,
+                url,
             );
 
             println!("\nConfigure {service}:");
@@ -188,7 +188,7 @@ pub async fn run(
         // If a previous add failed partway, clean up before retrying.
         let result = match ryra_core::add_service(
             service,
-            domain,
+            url,
             auth_kind.clone(),
             auth || auth_kind.is_some(),
             &env_overrides,
@@ -203,7 +203,7 @@ pub async fn run(
                 // Retry now that the partial state is gone
                 ryra_core::add_service(
                     service,
-                    domain,
+                    url,
                     auth_kind.clone(),
                     auth || auth_kind.is_some(),
                     &env_overrides,
@@ -267,7 +267,7 @@ pub async fn run(
                 registry_name: service_ref.registry_name(),
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
-                domain: result.domain.as_deref(),
+                url: result.url.as_deref(),
             })?;
 
             println!("Setting up {service}...");
@@ -284,8 +284,8 @@ pub async fn run(
 
             ryra_core::mark_installed(service)?;
             let home_dir = ryra_core::service_home(service)?;
-            if let Some(ref domain) = result.domain {
-                println!("\n{service} is running at https://{domain}");
+            if let Some(ref url) = result.url {
+                println!("\n{service} is running at {url}");
             } else {
                 println!("\n{service} is running.");
             }
@@ -328,23 +328,6 @@ pub async fn run(
             );
             println!("  systemctl --user status {service}  # check if running");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
-
-            // Set up /etc/hosts and CA trust for domain-based services
-            if let Some(ref domain) = result.domain {
-                let mut domain_list = vec![domain.clone()];
-                // Also include authelia's domain if it has one
-                if let Ok(installed) = ryra_core::list_installed() {
-                    if let Some(auth_svc) = installed.iter().find(|s| s.name == SERVICE_AUTHELIA) {
-                        if let Some(ref auth_domain) = auth_svc.domain {
-                            if auth_domain != domain {
-                                domain_list.push(auth_domain.clone());
-                            }
-                        }
-                    }
-                }
-                let refs: Vec<&str> = domain_list.iter().map(|s| s.as_str()).collect();
-                setup_host_access(&refs);
-            }
         }
     } // end for service_input in services
 
@@ -436,13 +419,12 @@ fn setup_host_access(domains: &[&str]) {
     println!();
 }
 
-/// Auto-install caddy and authelia when --domain or --auth requires them.
+/// Auto-install authelia when --auth requires it.
 async fn ensure_dependencies(
-    domain: Option<&str>,
+    _url: Option<&str>,
     auth: bool,
     interactive: bool,
 ) -> Result<()> {
-    let needs_caddy = (domain.is_some() || auth) && !ryra_core::caddy::is_installed();
     let config = ryra_core::config::load_or_default(
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
@@ -450,63 +432,46 @@ async fn ensure_dependencies(
         && !config.services.iter().any(|s| s.name == SERVICE_AUTHELIA)
         && config.auth.is_none();
 
-    if !needs_caddy && !needs_authelia {
+    if !needs_authelia {
         return Ok(());
     }
 
-    // Install caddy first (authelia needs it for --domain)
-    if needs_caddy {
-        if interactive {
-            let confirm = Confirm::new()
-                .with_prompt("Caddy (reverse proxy) is not installed. Install it?")
-                .default(true)
-                .interact()?;
-            if !confirm {
-                bail!("caddy is required for --domain/--auth");
-            }
-        }
-        println!("\nInstalling caddy...\n");
-        Box::pin(run(&[SERVICE_CADDY.to_string()], None, false, false)).await?;
-    }
-
     // Install authelia
-    if needs_authelia {
-        if interactive {
-            let confirm = Confirm::new()
-                .with_prompt("Authelia (SSO provider) is not installed. Install it?")
-                .default(true)
-                .interact()?;
-            if !confirm {
-                bail!("authelia is required for --auth");
-            }
-            // Prompt for authelia's domain
-            let authelia_domain: String = Input::new()
-                .with_prompt("Domain for Authelia")
-                .default("auth.local".to_string())
-                .interact_text()?;
-            println!("\nInstalling authelia...\n");
-            Box::pin(run(
-                &[SERVICE_AUTHELIA.to_string()],
-                Some(&authelia_domain),
-                false,
-                false,
-            ))
-            .await?;
-            setup_host_access(&[&authelia_domain]);
-        } else {
-            // Non-interactive: need AUTHELIA_ADMIN_PASSWORD in env
-            let authelia_domain =
-                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.local".to_string());
-            println!("\nInstalling authelia...\n");
-            Box::pin(run(
-                &[SERVICE_AUTHELIA.to_string()],
-                Some(&authelia_domain),
-                false,
-                false,
-            ))
-            .await?;
-            setup_host_access(&[&authelia_domain]);
+    if interactive {
+        let confirm = Confirm::new()
+            .with_prompt("Authelia (SSO provider) is not installed. Install it?")
+            .default(true)
+            .interact()?;
+        if !confirm {
+            bail!("authelia is required for --auth");
         }
+        // Prompt for authelia's URL
+        let authelia_url: String = Input::new()
+            .with_prompt("URL for Authelia (e.g., https://auth.example.com)")
+            .default("https://auth.local".to_string())
+            .interact_text()?;
+        println!("\nInstalling authelia...\n");
+        Box::pin(run(
+            &[SERVICE_AUTHELIA.to_string()],
+            Some(&authelia_url),
+            false,
+            false,
+        ))
+        .await?;
+        setup_host_access(&[&authelia_url]);
+    } else {
+        // Non-interactive: need AUTHELIA_URL in env
+        let authelia_url =
+            std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.local".to_string());
+        println!("\nInstalling authelia...\n");
+        Box::pin(run(
+            &[SERVICE_AUTHELIA.to_string()],
+            Some(&authelia_url),
+            false,
+            false,
+        ))
+        .await?;
+        setup_host_access(&[&authelia_url]);
     }
 
     Ok(())
@@ -534,32 +499,26 @@ async fn ensure_auth_for_add(
                 return Ok(false);
             }
 
-            // Install caddy first if needed
-            if !ryra_core::caddy::is_installed() && !dry_run {
-                println!("\nInstalling caddy (needed for auth)...\n");
-                Box::pin(run(&[SERVICE_CADDY.to_string()], None, false, dry_run)).await?;
-            }
-
-            // Prompt for authelia domain
-            let authelia_domain: String = if std::io::stdin().is_terminal() {
+            // Prompt for authelia URL
+            let authelia_url: String = if std::io::stdin().is_terminal() {
                 Input::new()
-                    .with_prompt("Domain for Authelia")
-                    .default("auth.local".to_string())
+                    .with_prompt("URL for Authelia (e.g., https://auth.example.com)")
+                    .default("https://auth.local".to_string())
                     .interact_text()?
             } else {
-                std::env::var("AUTHELIA_DOMAIN").unwrap_or_else(|_| "auth.local".to_string())
+                std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.local".to_string())
             };
             println!("\nInstalling authelia...\n");
             // Recursively install authelia, then reload config
             Box::pin(run(
                 &[SERVICE_AUTHELIA.to_string()],
-                Some(&authelia_domain),
+                Some(&authelia_url),
                 false,
                 dry_run,
             ))
             .await?;
             if !dry_run {
-                setup_host_access(&[&authelia_domain]);
+                setup_host_access(&[&authelia_url]);
             }
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;

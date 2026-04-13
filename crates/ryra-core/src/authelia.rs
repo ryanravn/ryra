@@ -4,20 +4,17 @@ use std::path::Path;
 use crate::config::schema::{AuthCredentials, Config};
 use crate::generate::GeneratedFile;
 use crate::registry::service_def::ServiceDef;
-use crate::{SERVICE_AUTHELIA, SERVICE_CADDY, Step, service_home};
+use crate::{SERVICE_AUTHELIA, Step, service_home};
 
 /// Register an OIDC client with authelia by editing its configuration.yml.
-/// Also ensures caddy has a network alias for the auth domain so OIDC
-/// discovery (which must go through Caddy for correct issuer URLs) works
-/// from service containers.
 /// Returns steps to write the updated config and restart authelia.
 pub fn register_oidc_client(
     service_name: &str,
     service_def: &ServiceDef,
-    domain: Option<&str>,
+    url: Option<&str>,
     ctx: &BTreeMap<String, String>,
-    config: &Config,
-    quadlet_dir: &Path,
+    _config: &Config,
+    _quadlet_dir: &Path,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
 
@@ -46,11 +43,11 @@ pub fn register_oidc_client(
         return steps;
     };
 
-    let base_url = match domain {
-        Some(d) => format!("https://{d}:8443"),
+    let base_url = match url {
+        Some(u) => u.to_string(),
         None => match ctx.get("service.url") {
-            Some(url) if !url.is_empty() => url.clone(),
-            _ => return steps, // no domain or service URL — cannot register OIDC client
+            Some(u) if !u.is_empty() => u.clone(),
+            _ => return steps, // no url or service URL — cannot register OIDC client
         },
     };
 
@@ -104,48 +101,6 @@ pub fn register_oidc_client(
     steps.push(Step::RestartService {
         unit: SERVICE_AUTHELIA.to_string(),
     });
-
-    // OIDC discovery must go through Caddy so authelia returns browser-reachable
-    // endpoints (authelia uses the request Host header as its issuer). Add the
-    // auth domain as a network alias on caddy's container so OIDC services on
-    // the caddy network can resolve it.
-    let auth_domain = config
-        .services
-        .iter()
-        .find(|s| s.name == SERVICE_AUTHELIA)
-        .and_then(|s| s.domain.as_ref());
-    if let Some(auth_domain) = auth_domain {
-        let caddy_quadlet = quadlet_dir.join("caddy.container");
-        if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
-            let alias = format!("Network=caddy.network:alias={auth_domain}");
-            if !content.contains(&alias) {
-                let updated: String = content
-                    .lines()
-                    .map(|line| {
-                        if line == "Network=caddy.network"
-                            || line.starts_with("Network=caddy.network:")
-                        {
-                            alias.clone()
-                        } else {
-                            line.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-                    + "\n";
-                if updated != content {
-                    steps.push(Step::WriteFile(GeneratedFile {
-                        path: caddy_quadlet,
-                        content: updated,
-                    }));
-                    steps.push(Step::DaemonReload);
-                    steps.push(Step::RestartService {
-                        unit: SERVICE_CADDY.to_string(),
-                    });
-                }
-            }
-        }
-    }
 
     steps
 }

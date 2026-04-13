@@ -11,7 +11,7 @@ pub fn build_context(
     service_def: &ServiceDef,
     host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
-    domain: Option<&str>,
+    url: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut ctx = BTreeMap::new();
 
@@ -22,25 +22,30 @@ pub fn build_context(
     }
     // service.url — localhost-based, always includes the port
     let effective_port = host_port.or_else(|| service_def.ports.first().map(|p| p.container_port));
-    let url = match effective_port {
+    let localhost_url = match effective_port {
         Some(port) => format!("http://127.0.0.1:{port}"),
         None => "http://127.0.0.1".to_string(),
     };
-    ctx.insert("service.url".into(), url.clone());
-    if let Some(domain) = domain {
-        ctx.insert("service.domain".into(), domain.to_string());
-        // service.external_url — browser-accessible URL via Caddy (HTTPS with domain).
-        // Use this for ROOT_URL and OIDC redirect_uri when a domain is configured.
-        ctx.insert(
-            "service.external_url".into(),
-            format!("https://{domain}:8443"),
-        );
-        ctx.insert("service.scheme".into(), "https".into());
+    ctx.insert("service.url".into(), localhost_url.clone());
+    if let Some(url) = url {
+        // Parse the URL to extract scheme and hostname
+        let scheme = url.split("://").next().unwrap_or("https");
+        let host = url
+            .split("://")
+            .nth(1)
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or(url);
+        ctx.insert("service.domain".into(), host.to_string());
+        // service.external_url — browser-accessible URL as provided by the user.
+        ctx.insert("service.external_url".into(), url.to_string());
+        ctx.insert("service.scheme".into(), scheme.to_string());
     } else {
         ctx.insert("service.scheme".into(), "http".into());
     }
-    // service.external_url falls back to service.url when no domain is set.
-    ctx.entry("service.external_url".into()).or_insert(url);
+    // service.external_url falls back to service.url when no url is set.
+    ctx.entry("service.external_url".into()).or_insert(localhost_url.clone());
+    // Ensure service.url is always set (even when external url overrides it)
+    ctx.entry("service.url".into()).or_insert(localhost_url);
 
     // admin.*
     if let Some(email) = &config.admin_email {
@@ -58,41 +63,31 @@ pub fn build_context(
 
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
-        let url = auth.url().to_string();
-        // auth.internal_url is how containers reach the auth provider.
-        // When the auth provider has a domain, route through Caddy (HTTPS)
-        // so OIDC discovery returns browser-reachable URLs (authelia uses
-        // the request Host header as its issuer).
-        // Falls back to direct container DNS for domain-less setups.
-        let auth_domain = config
-            .services
-            .iter()
-            .find(|s| s.name == auth.provider_name())
-            .and_then(|s| s.domain.as_ref());
-        let internal_url = match (auth_domain, auth.port()) {
-            (Some(domain), _) => format!("https://{domain}:8443"),
-            (None, Some(port)) => format!("http://{}:{port}", auth.provider_name()),
-            (None, None) => url.clone(),
+        let auth_localhost_url = auth.url().to_string();
+        // auth.internal_url is how containers reach the auth provider directly via HTTP.
+        // Uses container DNS (systemd-authelia:<port>) for direct communication.
+        let internal_url = match auth.port() {
+            Some(port) => format!("http://{}:{port}", auth.provider_name()),
+            None => auth_localhost_url.clone(),
         };
-        ctx.insert("auth.url".into(), url.clone());
-        ctx.insert("auth.internal_url".into(), internal_url.clone());
-        ctx.insert("auth.provider".into(), auth.provider_name().to_string());
-
         // auth.external_url — browser-accessible URL.
-        // Uses Caddy (HTTPS) when the auth provider has a domain, otherwise localhost.
+        // Uses the stored URL from the auth provider's installed record if available.
         let external_url = config
             .services
             .iter()
             .find(|s| s.name == auth.provider_name())
-            .and_then(|s| s.domain.as_ref())
-            .map(|d| format!("https://{d}:8443"))
-            .unwrap_or_else(|| url.clone());
+            .and_then(|s| s.url.as_ref())
+            .cloned()
+            .unwrap_or_else(|| auth_localhost_url.clone());
+        ctx.insert("auth.url".into(), auth_localhost_url.clone());
+        ctx.insert("auth.internal_url".into(), internal_url.clone());
+        ctx.insert("auth.provider".into(), auth.provider_name().to_string());
         ctx.insert("auth.external_url".into(), external_url.clone());
 
         // OIDC issuer URL — must be browser-reachable so authorization redirects work.
         let issuer = match auth {
             crate::config::schema::AuthCredentials::Authelia { .. } => external_url.clone(),
-            crate::config::schema::AuthCredentials::External { .. } => url.clone(),
+            crate::config::schema::AuthCredentials::External { .. } => auth_localhost_url.clone(),
         };
         ctx.insert("auth.issuer".into(), issuer);
         ctx.insert(

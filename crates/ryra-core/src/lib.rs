@@ -145,15 +145,15 @@ pub struct AddResult {
     pub generated_secrets: Vec<String>,
     /// The generated .env content (for post-install processing).
     pub env_content: String,
-    /// Domain assigned to this service (if Caddy reverse proxy was configured).
-    pub domain: Option<String>,
+    /// Public URL for this service (if --url was provided).
+    pub url: Option<String>,
 }
 
 pub struct RemoveResult {
     pub steps: Vec<Step>,
     pub service_name: String,
-    /// Domain that was assigned to this service (if any).
-    pub domain: Option<String>,
+    /// URL that was assigned to this service (if any).
+    pub url: Option<String>,
 }
 
 pub struct ResetResult {
@@ -213,20 +213,13 @@ pub async fn init(config: Config) -> Result<InitResult> {
 }
 
 /// Determine which extra podman networks a service should join.
-/// Services with a domain join caddy's network for reverse proxy routing.
 /// Services with auth join authelia's network for OIDC communication.
 fn resolve_extra_networks(
     service_name: &str,
-    domain: Option<&str>,
     enable_auth: bool,
-    caddy_installed: bool,
     authelia_installed: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
-    let needs_caddy = domain.is_some() || (enable_auth && caddy_installed);
-    if needs_caddy && caddy_installed && service_name != SERVICE_CADDY {
-        networks.push(SERVICE_CADDY.to_string());
-    }
     if enable_auth && authelia_installed && service_name != SERVICE_AUTHELIA {
         networks.push(SERVICE_AUTHELIA.to_string());
     }
@@ -236,7 +229,7 @@ fn resolve_extra_networks(
 /// Add a service: generate config, return steps to execute.
 pub fn add_service(
     service_name: &str,
-    domain: Option<&str>,
+    url: Option<&str>,
     auth_kind: Option<registry::service_def::AuthKind>,
     enable_auth: bool,
     env_overrides: &BTreeMap<String, String>,
@@ -315,37 +308,13 @@ pub fn add_service(
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
-    let mut extra_volumes = Vec::new();
-    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
-
-    // When auth is enabled and routes through Caddy (HTTPS), mount Caddy's
-    // root CA cert so containers trust the self-signed TLS.
-    // The cert is exported by caddy's config scripts to a known path.
-    if enable_auth && caddy::is_installed() {
-        let caddy_home = service_home(SERVICE_CADDY)?;
-        let ca_cert = caddy_home
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or(caddy_home)
-            .join("caddy-root-ca.crt");
-        if ca_cert.exists() && ca_cert.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-            extra_volumes.push(format!(
-                "{}:/etc/ssl/certs/caddy-root-ca.crt:ro,Z",
-                ca_cert.display()
-            ));
-            extra_env.insert(
-                "NODE_EXTRA_CA_CERTS".into(),
-                "/etc/ssl/certs/caddy-root-ca.crt".into(),
-            );
-        }
-    }
+    let extra_volumes = Vec::new();
+    let extra_env: BTreeMap<String, String> = BTreeMap::new();
 
     let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
     let extra_networks = resolve_extra_networks(
         service_name,
-        domain,
         enable_auth,
-        caddy::is_installed(),
         authelia_installed,
     );
 
@@ -355,17 +324,11 @@ pub fn add_service(
         auth_kind: auth_kind.as_ref(),
         host_port,
         env_overrides,
-        domain,
+        url,
         extra_env,
     })?;
 
-    // When auth routes through Caddy, prevent the host's /etc/hosts from
-    // leaking into the container (it would override podman DNS aliases).
-    let podman_args: Vec<String> = if enable_auth && caddy::is_installed() {
-        vec!["--no-hosts".to_string()]
-    } else {
-        Vec::new()
-    };
+    let podman_args: Vec<String> = Vec::new();
 
     // Build port variable expansions for quadlet PublishPort directives
     let port_vars: Vec<(String, String)> = reg_service
@@ -462,7 +425,7 @@ pub fn add_service(
         steps.extend(authelia::register_oidc_client(
             service_name,
             &reg_service.def,
-            domain,
+            url,
             &output.ctx,
             &config,
             &quadlet_path,
@@ -513,44 +476,6 @@ pub fn add_service(
     generated_secrets.sort();
     generated_secrets.dedup();
 
-    // Caddy reverse proxy: if a domain is provided and Caddy is installed,
-    // add a site block to the Caddyfile and restart Caddy.
-    if let Some(domain) = domain
-        && caddy::is_installed()
-    {
-        // Use the first container port for the upstream (not the host-mapped port)
-        let container_port = reg_service
-            .def
-            .ports
-            .first()
-            .map(|p| p.container_port)
-            .unwrap_or(8080);
-
-        let block = caddy::render_site_block(&caddy::CaddySiteParams {
-            service_name: service_name.to_string(),
-            domain: domain.to_string(),
-            container_port,
-        });
-
-        let caddyfile = caddy::caddyfile_path()?;
-        let current = if caddyfile.exists() {
-            std::fs::read_to_string(&caddyfile).map_err(|source| Error::FileRead {
-                path: caddyfile.clone(),
-                source,
-            })?
-        } else {
-            String::new()
-        };
-        let updated = caddy::add_route(&current, service_name, &block);
-
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: caddyfile,
-            content: updated,
-        }));
-
-        steps.push(Step::ReloadCaddy);
-    }
-
     Ok(AddResult {
         steps,
         warnings,
@@ -558,7 +483,7 @@ pub fn add_service(
         allocated_ports,
         generated_secrets,
         env_content,
-        domain: domain.map(|d| d.to_string()),
+        url: url.map(|u| u.to_string()),
     })
 }
 
@@ -642,30 +567,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
         steps.push(Step::RemoveVolume { name: vol_name });
     }
 
-    // Remove Caddy route if the service had a domain
-    if installed.domain.is_some() && caddy::is_installed() {
-        let caddyfile = caddy::caddyfile_path()?;
-        let current = if caddyfile.exists() {
-            std::fs::read_to_string(&caddyfile).map_err(|source| Error::FileRead {
-                path: caddyfile.clone(),
-                source,
-            })?
-        } else {
-            String::new()
-        };
-        let updated = caddy::remove_route(&current, service_name);
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: caddyfile,
-            content: updated.clone(),
-        }));
-
-        // Only reload if there are routes left — caddy rejects an empty Caddyfile
-        if !updated.trim().is_empty() {
-            steps.push(Step::ReloadCaddy);
-        }
-    }
-
-    let domain = installed.domain.clone();
+    let url = installed.url.clone();
 
     // Remove service data directory
     steps.push(Step::RemoveDir(service_home(service_name)?));
@@ -673,7 +575,7 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     Ok(RemoveResult {
         steps,
         service_name: service_name.to_string(),
-        domain,
+        url,
     })
 }
 
@@ -684,8 +586,8 @@ pub struct RecordPendingParams<'a> {
     pub registry_name: &'a str,
     pub allocated_ports: &'a [(String, u16)],
     pub repo_dir: &'a Path,
-    /// Domain assigned to this service (for Caddy reverse proxy).
-    pub domain: Option<&'a str>,
+    /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
+    pub url: Option<&'a str>,
 }
 
 /// Record a service as pending installation (installed: false).
@@ -703,7 +605,7 @@ pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
         repo: params.registry_name.to_string(),
         ports,
         auth_kind: params.auth_kind,
-        domain: params.domain.map(|d| d.to_string()),
+        url: params.url.map(|u| u.to_string()),
         installed: false,
     });
 
@@ -988,46 +890,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn networks_empty_when_no_domain() {
-        let nets = resolve_extra_networks("whoami", None, false, false, false);
+    fn networks_empty_when_no_auth() {
+        let nets = resolve_extra_networks("whoami", false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
-    fn networks_caddy_when_domain_and_caddy() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), false, true, false);
-        assert_eq!(nets, vec!["caddy"]);
-    }
-
-    #[test]
-    fn networks_empty_when_domain_but_no_caddy() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), false, false, false);
-        assert!(nets.is_empty());
-    }
-
-    #[test]
-    fn networks_caddy_excluded_for_caddy_itself() {
-        let nets = resolve_extra_networks("caddy", Some("caddy.test.local"), false, true, false);
+    fn networks_empty_when_auth_but_no_authelia() {
+        let nets = resolve_extra_networks("forgejo", true, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_authelia_when_auth_enabled() {
-        let nets = resolve_extra_networks("forgejo", Some("git.test.local"), true, true, true);
-        assert_eq!(nets, vec!["caddy", "authelia"]);
+        let nets = resolve_extra_networks("forgejo", true, true);
+        assert_eq!(nets, vec!["authelia"]);
     }
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks("authelia", Some("auth.test.local"), true, true, true);
-        assert_eq!(nets, vec!["caddy"]);
-    }
-
-    #[test]
-    fn networks_caddy_when_auth_without_domain() {
-        // Services with auth but no domain still need caddy network for OIDC discovery
-        let nets = resolve_extra_networks("jellyfin", None, true, true, true);
-        assert_eq!(nets, vec!["caddy", "authelia"]);
+        let nets = resolve_extra_networks("authelia", true, true);
+        assert!(nets.is_empty());
     }
 
     #[test]

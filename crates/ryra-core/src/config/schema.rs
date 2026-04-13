@@ -94,9 +94,9 @@ pub struct InstalledService {
     /// The auth kind the user chose when installing this service, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<AuthKind>,
-    /// Domain assigned to this service (used for Caddy reverse proxy).
+    /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
+    pub url: Option<String>,
     /// Whether the service was fully installed (all steps completed).
     /// Services with `installed: false` are partially installed and can be
     /// retried with `ryra add` or cleaned up with `ryra remove`.

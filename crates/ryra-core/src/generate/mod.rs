@@ -22,8 +22,8 @@ pub struct GenerateEnvParams<'a> {
     pub auth_kind: Option<&'a AuthKind>,
     pub host_port: Option<u16>,
     pub env_overrides: &'a BTreeMap<String, String>,
-    /// Domain for the service (used in templates as `{{service.domain}}`).
-    pub domain: Option<&'a str>,
+    /// Public URL for the service (used in templates as `{{service.external_url}}`).
+    pub url: Option<&'a str>,
     /// Additional env vars to append to the .env file (e.g., CA cert trust vars).
     pub extra_env: BTreeMap<String, String>,
 }
@@ -45,7 +45,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         params.service_def,
         params.host_port,
         params.auth_kind,
-        params.domain,
+        params.url,
     );
     let rendered_env = render_env_vars(
         params.service_def,

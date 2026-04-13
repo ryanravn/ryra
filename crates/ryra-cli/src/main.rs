@@ -30,9 +30,9 @@ enum Command {
         /// Service name(s) from registry (e.g., "jellyfin" or "acme/jellyfin")
         #[arg(required = true, num_args = 1..)]
         services: Vec<String>,
-        /// Domain for this service (adds Caddy reverse proxy route)
+        /// Public URL for this service (e.g., https://docs.example.com)
         #[arg(long)]
-        domain: Option<String>,
+        url: Option<String>,
         /// Enable auth (forward auth via Caddy, or native OIDC if supported)
         #[arg(long)]
         auth: bool,
@@ -172,13 +172,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Add {
             ref services,
-            ref domain,
+            ref url,
             auth,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(services, domain.as_deref(), auth, dry_run).await?
+            cli::add::run(services, url.as_deref(), auth, dry_run).await?
         }
         Command::Remove {
             ref services,

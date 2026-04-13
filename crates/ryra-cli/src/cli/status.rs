@@ -39,12 +39,12 @@ fn print_global(info: &StatusInfo) {
                 .map(|(name, port)| format!("{name}={port}"))
                 .collect();
             let status = if svc.installed { "" } else { " (incomplete)" };
-            match (svc.domain.as_deref(), ports.is_empty()) {
-                (Some(domain), true) => {
-                    println!("  {}{status} (https://{})", svc.name, domain);
+            match (svc.url.as_deref(), ports.is_empty()) {
+                (Some(url), true) => {
+                    println!("  {}{status} ({})", svc.name, url);
                 }
-                (Some(domain), false) => {
-                    println!("  {}{status} (https://{}) [{}]", svc.name, domain, ports.join(", "));
+                (Some(url), false) => {
+                    println!("  {}{status} ({}) [{}]", svc.name, url, ports.join(", "));
                 }
                 (None, true) => {
                     println!("  {}{status}", svc.name);
@@ -105,8 +105,8 @@ async fn run_service(service: &str) -> Result<()> {
 
         println!();
         println!("Installed");
-        if let Some(ref domain) = svc.domain {
-            println!("Domain:   https://{domain}");
+        if let Some(ref url) = svc.url {
+            println!("URL:      {url}");
         }
         println!("Config:   {}", home_dir.display());
         println!();
