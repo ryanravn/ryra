@@ -38,7 +38,7 @@ value = "{{secret.mysql_root_password}}"
 
 [[env]]
 name = "SEAFILE_SERVER_HOSTNAME"
-value = "{{service.domain | default('seafile.localhost')}}"
+value = "{{service.domain | default('localhost')}}"
 
 [[env]]
 name = "SEAFILE_SERVER_PROTOCOL"
