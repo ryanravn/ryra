@@ -113,15 +113,18 @@ pub async fn run(
                         // Read inbucket's allocated SMTP port from config
                         let config =
                             ryra_core::config::load_or_default(&paths.config_file)?;
-                        let smtp_port = config
+                        let _smtp_port = config
                             .services
                             .iter()
                             .find(|s| s.name == "inbucket")
                             .and_then(|s| s.ports.get("smtp").copied())
                             .unwrap_or(2500);
+                        // Use container name for SMTP host — services on the
+                        // caddy network can reach inbucket directly. The host
+                        // port isn't reachable from --no-hosts containers.
                         let smtp = ryra_core::config::schema::SmtpCredentials {
-                            host: "host.containers.internal".to_string(),
-                            port: smtp_port,
+                            host: "inbucket".to_string(),
+                            port: 2500, // inbucket's internal container port
                             username: String::new(),
                             password: String::new(),
                             from: "ryra@localhost".to_string(),

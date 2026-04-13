@@ -228,14 +228,19 @@ fn resolve_extra_networks(
     authelia_installed: bool,
     caddy_installed: bool,
     has_url: bool,
+    has_smtp: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
     if enable_auth && authelia_installed && service_name != SERVICE_AUTHELIA {
         networks.push(SERVICE_AUTHELIA.to_string());
     }
-    // Services with a URL and Caddy installed join Caddy's network so the
-    // reverse_proxy directive can reach them by container name.
-    if has_url && caddy_installed && service_name != SERVICE_CADDY {
+    // Services join Caddy's network when they need to reach other containers
+    // on that network: URL-based services for reverse proxy, inbucket itself,
+    // and SMTP-using services to reach inbucket by container name.
+    let joins_caddy = (has_url || has_smtp || service_name == "inbucket")
+        && caddy_installed
+        && service_name != SERVICE_CADDY;
+    if joins_caddy {
         if !networks.contains(&SERVICE_CADDY.to_string()) {
             networks.push(SERVICE_CADDY.to_string());
         }
@@ -385,12 +390,16 @@ pub fn add_service(
             );
         }
     }
+    let has_smtp = reg_service.def.integrations.smtp
+        && !reg_service.def.mappings.smtp.is_empty()
+        && config.smtp.is_some();
     let extra_networks = resolve_extra_networks(
         service_name,
         enable_auth,
         authelia_installed,
         caddy_installed,
         url.is_some(),
+        has_smtp,
     );
 
     let output = generate::generate_env(generate::GenerateEnvParams {
@@ -1019,25 +1028,25 @@ mod tests {
 
     #[test]
     fn networks_empty_when_no_auth() {
-        let nets = resolve_extra_networks("whoami", false, false, false, false);
+        let nets = resolve_extra_networks("whoami", false, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_empty_when_auth_but_no_authelia() {
-        let nets = resolve_extra_networks("forgejo", true, false, false, false);
+        let nets = resolve_extra_networks("forgejo", true, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_authelia_when_auth_enabled() {
-        let nets = resolve_extra_networks("forgejo", true, true, false, false);
+        let nets = resolve_extra_networks("forgejo", true, true, false, false, false);
         assert_eq!(nets, vec!["authelia"]);
     }
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks("authelia", true, true, false, false);
+        let nets = resolve_extra_networks("authelia", true, true, false, false, false);
         assert!(nets.is_empty());
     }
 
