@@ -3,7 +3,7 @@ use std::io::IsTerminal;
 use anyhow::Result;
 use dialoguer::Input;
 
-use super::apply;
+use super::{apply, remove_caddy_ca};
 
 pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
     let result = ryra_core::reset()?;
@@ -38,6 +38,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
         println!("Resetting ryra...");
         apply::execute_all(&result.steps).await?;
         ryra_core::finalize_reset()?;
+        remove_caddy_ca();
         println!("\nryra has been fully reset.");
     }
 

@@ -416,7 +416,7 @@ fn setup_host_access(domains: &[&str]) {
         ));
     }
 
-    // Check CA trust
+    // Check system CA trust
     let ca_trusted = std::path::Path::new("/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt")
         .exists()
         || std::path::Path::new("/usr/local/share/ca-certificates/ryra-caddy-ca.crt").exists();
@@ -436,6 +436,45 @@ fn setup_host_access(domains: &[&str]) {
                     "sudo cp {} /usr/local/share/ca-certificates/ryra-caddy-ca.crt && sudo update-ca-certificates",
                     ca.display()
                 ));
+            }
+        }
+    }
+
+    // Check browser CA trust (Chromium/Brave/Chrome use NSS database)
+    let nssdb = std::env::var("HOME")
+        .ok()
+        .map(|h| std::path::PathBuf::from(h).join(".pki/nssdb"))
+        .filter(|p| p.exists());
+    if let Some(ref nssdb_path) = nssdb {
+        let already_in_nss = std::process::Command::new("certutil")
+            .args(["-d", &format!("sql:{}", nssdb_path.display()), "-L", "-n", "ryra-caddy-ca"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !already_in_nss {
+            let ca_src = ryra_core::service_home("caddy")
+                .ok()
+                .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
+                .filter(|p| p.exists());
+            if let Some(ca) = ca_src {
+                // No sudo needed — NSS db is user-owned
+                let nss_cmd = format!(
+                    "certutil -d sql:{} -A -t 'C,,' -n ryra-caddy-ca -i {}",
+                    nssdb_path.display(),
+                    ca.display()
+                );
+                // Run directly since it doesn't need sudo
+                let status = std::process::Command::new("sh")
+                    .args(["-c", &nss_cmd])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        println!("  Caddy CA added to browser trust store.");
+                    }
+                    _ => {
+                        eprintln!("  Warning: could not add Caddy CA to browser trust store.");
+                    }
+                }
             }
         }
     }
