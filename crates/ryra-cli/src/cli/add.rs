@@ -74,6 +74,24 @@ pub async fn run(
             url
         };
 
+        // SMTP — prompt if service supports it and not yet configured
+        if reg_service.def.integrations.smtp
+            && !reg_service.def.mappings.smtp.is_empty()
+            && !dry_run
+            && interactive
+        {
+            let config = ryra_core::config::load_or_default(&paths.config_file)?;
+            if config.smtp.is_none() {
+                if let Some(smtp) = prompts::prompt_smtp()? {
+                    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+                    config.smtp = Some(smtp);
+                    paths.ensure_dirs()?;
+                    ryra_core::config::save_config(&paths.config_file, &config)?;
+                    println!("  SMTP configured. Saved to {}\n", paths.config_file.display());
+                }
+            }
+        }
+
         // Auth — determined by --auth flag
         let auth_kind: Option<AuthKind> = if auth {
             // --auth flag: use native OIDC if service supports it.
