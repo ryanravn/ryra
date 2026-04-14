@@ -16,6 +16,7 @@ path = "src/lib.rs"
 [dependencies]
 ryra-vm = { path = "../ryra-vm" }
 anyhow.workspace = true
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "time", "net", "fs", "signal"] }
 serde.workspace = true
