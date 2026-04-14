@@ -155,10 +155,11 @@ impl Machine {
         let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
-        let host_store = host_podman_graph_root().await?;
+        let tar_cache = image_tar_cache_dir()?;
+        tokio::fs::create_dir_all(&tar_cache).await.ok();
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
-            host_store.display()
+            tar_cache.display()
         );
 
         let mut args: Vec<&str> = vec![
@@ -291,10 +292,11 @@ impl Machine {
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
 
-        let host_store = host_podman_graph_root().await?;
+        let tar_cache = image_tar_cache_dir()?;
+        tokio::fs::create_dir_all(&tar_cache).await.ok();
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
-            host_store.display()
+            tar_cache.display()
         );
 
         let mut args: Vec<&str> = vec![
@@ -744,26 +746,13 @@ async fn write_seed_iso(
     Ok(())
 }
 
-/// Get the host's podman container storage root (e.g., ~/.local/share/containers/storage).
-/// This directory is shared into VMs via 9p so images pre-pulled on the host
-/// are available instantly without re-downloading.
-pub async fn host_podman_graph_root() -> Result<PathBuf> {
-    let output = Command::new("podman")
-        .args(["info", "--format", "{{.Store.GraphRoot}}"])
-        .output()
-        .await
-        .context("failed to run podman info")?;
-
-    if !output.status.success() {
-        anyhow::bail!("podman info failed — is podman installed?");
-    }
-
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        anyhow::bail!("podman info returned empty GraphRoot");
-    }
-
-    Ok(PathBuf::from(path))
+/// Directory for saved container image tars shared into VMs via 9p.
+///
+/// Using tars instead of sharing the podman store directly because
+/// additionalimagestores can't read a rootless overlay store from
+/// root podman (the VM runs as root, the host runs rootless).
+pub fn image_tar_cache_dir() -> Result<PathBuf> {
+    Ok(cache_base_dir()?.join("image-tars"))
 }
 
 /// Base directory for VM work dirs (disk images, keys, logs).
@@ -779,12 +768,23 @@ fn cache_base_dir() -> Result<PathBuf> {
     Ok(base.join("ryra-e2e"))
 }
 
-/// Ensure a container image exists in the host's podman store.
+/// Ensure a container image is pulled and saved as a tar for VM sharing.
 ///
-/// The host's store is shared into VMs via 9p + additionalimagestores,
-/// so pulling here makes the image instantly available in all VMs.
+/// Tars are saved to ~/.cache/ryra-e2e/image-tars/ and shared into VMs
+/// via 9p. Using tars because additionalimagestores can't read a rootless
+/// host store from root podman inside the VM (overlay format mismatch).
 pub async fn ensure_image_cached(image: &str) -> Result<()> {
-    let check = Command::new("podman")
+    let tar_dir = image_tar_cache_dir()?;
+    tokio::fs::create_dir_all(&tar_dir).await.ok();
+    let tar_name = sanitize_image_name(image);
+    let tar_path = tar_dir.join(&tar_name);
+
+    if tar_path.exists() {
+        return Ok(());
+    }
+
+    // Pull if not in local store
+    let exists = Command::new("podman")
         .args(["image", "exists", image])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -792,45 +792,68 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
         .await
         .context("failed to run podman image exists")?;
 
-    if check.success() {
-        return Ok(());
+    if !exists.success() {
+        println!("    pulling {image}...");
+        let status = Command::new("podman")
+            .args(["pull", image])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .context("failed to run podman pull")?;
+        if !status.success() {
+            anyhow::bail!("podman pull {image} failed");
+        }
     }
 
-    println!("    pulling {image}...");
+    println!("    saving {image}...");
     let status = Command::new("podman")
-        .args(["pull", image])
+        .args(["save", "-o", &tar_path.display().to_string(), image])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .await
-        .context("failed to run podman pull")?;
+        .context("failed to run podman save")?;
     if !status.success() {
-        anyhow::bail!("podman pull {image} failed");
+        let _ = tokio::fs::remove_file(&tar_path).await;
+        anyhow::bail!("podman save {image} failed");
     }
 
     Ok(())
 }
 
-/// Make host container images available in the VM via 9p shared store.
+fn sanitize_image_name(image: &str) -> String {
+    image.replace('/', "_").replace(':', "_") + ".tar"
+}
+
+/// Load container images into the VM from host-side tar cache.
 ///
-/// Mounts the host's podman storage (shared via QEMU virtfs) and configures
-/// podman's `additionalimagestores` to read from it.
-pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
-    // Mount the host's podman store (shared via 9p virtfs in Machine::spawn)
+/// The tar cache is shared via 9p virtfs. Each image was saved with
+/// `podman save` on the host. Loading from the 9p mount reads directly
+/// from host disk — no network transfer.
+pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result<()> {
     machine
         .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
         .await
-        .context("failed to mount 9p image store in VM")?;
+        .context("failed to mount 9p image tar cache in VM")?;
 
-    // Configure podman to use the mounted store as an additional read-only image store
-    machine
-        .exec(
-            "mkdir -p /etc/containers/storage.conf.d && \
-             printf '[storage.options]\\nadditionalimagestores = [\"/mnt/images\"]\\n' \
-             > /etc/containers/storage.conf.d/shared-store.conf",
-        )
-        .await
-        .context("failed to configure additionalimagestores in VM")?;
+    for image in images {
+        let tar_name = sanitize_image_name(image);
+
+        // Skip if already loaded (e.g., from a previous test in same VM)
+        let exists = machine
+            .exec(&format!("podman image exists '{image}'"))
+            .await
+            .is_ok();
+        if exists {
+            continue;
+        }
+
+        machine
+            .exec(&format!("podman load -i '/mnt/images/{tar_name}'"))
+            .await
+            .with_context(|| format!("failed to load image {image}"))?;
+    }
 
     Ok(())
 }

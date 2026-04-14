@@ -882,8 +882,9 @@ async fn create_snapshot(
     let serial_log = work_dir.join("serial.log");
     let port_str = ssh_port.to_string();
 
-    // Discover host podman store for virtfs (must match what Machine::spawn uses)
-    let host_store = crate::machine::host_podman_graph_root().await?;
+    // Share the tar cache via virtfs (must match what Machine::spawn uses)
+    let tar_cache = crate::machine::image_tar_cache_dir()?;
+    tokio::fs::create_dir_all(&tar_cache).await.ok();
 
     let efi_code_arg = format!(
         "if=pflash,format=raw,file={},readonly=on",
@@ -898,7 +899,7 @@ async fn create_snapshot(
     let mon_arg = format!("unix:{},server,nowait", mon_sock.display());
     let virtfs_arg = format!(
         "local,path={},mount_tag=images,security_model=none,readonly=on",
-        host_store.display()
+        tar_cache.display()
     );
 
     let memory_str = memory_mb.to_string();
