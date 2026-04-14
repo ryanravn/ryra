@@ -119,8 +119,12 @@ impl Executor for LocalExecutor {
         });
 
         let status = child.wait().await?;
-        let stdout_buf = stdout_handle.await.unwrap_or_default();
-        let stderr_buf = stderr_handle.await.unwrap_or_default();
+        let stdout_buf = stdout_handle
+            .await
+            .context("stdout reader task panicked")?;
+        let stderr_buf = stderr_handle
+            .await
+            .context("stderr reader task panicked")?;
 
         if !status.success() {
             anyhow::bail!(
@@ -138,18 +142,21 @@ impl Executor for LocalExecutor {
     async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
         let start = std::time::Instant::now();
         loop {
-            if let Ok(out) = self
-                .exec(&format!("systemctl --user is-active {unit}"))
-                .await
-                && out.stdout.trim() == "active"
-            {
+            let cmd = format!(
+                "a=$(systemctl --user is-active {unit} 2>/dev/null || true); \
+                 f=$(systemctl --user is-failed {unit} 2>/dev/null || true); \
+                 echo \"$a|$f\""
+            );
+            let out = self.exec(&cmd).await?;
+            let line = out.stdout.trim();
+            let mut parts = line.split('|');
+            let active = parts.next().unwrap_or("");
+            let failed = parts.next().unwrap_or("");
+
+            if active == "active" {
                 return Ok(());
             }
-            if let Ok(out) = self
-                .exec(&format!("systemctl --user is-failed {unit}"))
-                .await
-                && out.stdout.trim() == "failed"
-            {
+            if failed == "failed" {
                 anyhow::bail!("service {unit} entered failed state");
             }
             if start.elapsed() > timeout {
@@ -183,5 +190,18 @@ mod tests {
         let exec = LocalExecutor;
         let out = exec.exec_streaming("echo streamed", "test").await.unwrap();
         assert_eq!(out.stdout.trim(), "streamed");
+    }
+
+    #[tokio::test]
+    async fn local_wait_for_nonexistent_service_times_out() {
+        let exec = LocalExecutor;
+        let result = exec
+            .wait_for_service(
+                "definitely-not-a-real-unit-xyz123.service",
+                Duration::from_secs(2),
+            )
+            .await;
+        assert!(result.is_err());
+        // Should time out or report non-active, not hang
     }
 }
