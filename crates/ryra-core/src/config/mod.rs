@@ -54,6 +54,9 @@ fn ensure_dir(path: &Path) -> Result<()> {
     })
 }
 
+/// The version of this ryra binary, set at compile time from Cargo.toml.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn load_config(path: &Path) -> Result<Config> {
     if !path.exists() {
         return Err(Error::ConfigNotFound(path.to_path_buf()));
@@ -69,7 +72,33 @@ pub fn load_config(path: &Path) -> Result<Config> {
     if let Err(msg) = config.validate() {
         return Err(Error::Registry(msg));
     }
+    check_version(&config);
     Ok(config)
+}
+
+/// Warn if the config was written by a newer major.minor version of ryra.
+fn check_version(config: &Config) {
+    let config_version = match &config.version {
+        Some(v) => v,
+        None => return, // pre-version config, accept silently
+    };
+    let binary = parse_major_minor(VERSION);
+    let config_v = parse_major_minor(config_version);
+    if let (Some((b_major, b_minor)), Some((c_major, c_minor))) = (binary, config_v) {
+        if (c_major, c_minor) > (b_major, b_minor) {
+            eprintln!(
+                "Warning: config was written by ryra {config_version}, \
+                 but this is ryra {VERSION} — consider upgrading"
+            );
+        }
+    }
+}
+
+fn parse_major_minor(version: &str) -> Option<(u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
 }
 
 /// Load config from path, returning a default config if the file doesn't exist.
@@ -81,7 +110,9 @@ pub fn load_or_default(path: &Path) -> Result<Config> {
 }
 
 pub fn save_config(path: &Path, config: &Config) -> Result<()> {
-    let contents = toml::to_string_pretty(config)?;
+    let mut config = config.clone();
+    config.version = Some(VERSION.to_string());
+    let contents = toml::to_string_pretty(&config)?;
     write_file(path, &contents)?;
     // Config contains credentials — owner-only access
     set_permissions(path, 0o600)?;

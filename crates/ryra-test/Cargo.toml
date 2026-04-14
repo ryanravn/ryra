@@ -1,6 +1,6 @@
 [package]
 name = "ryra-test"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 description = "E2E test runner for ryra using ephemeral QEMU VMs"

@@ -8,6 +8,10 @@ use crate::registry::service_def::AuthKind;
 /// Top-level ryra.toml configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
+    /// Ryra version that last wrote this config. Written on every save,
+    /// checked on load to reject configs from newer versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// Legacy — reads old configs with [host], never written back.
     #[serde(default, skip_serializing)]
     pub host: HostConfig,
