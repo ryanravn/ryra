@@ -360,10 +360,16 @@ async fn wait_for_service_with_timeout(vm: &dyn Executor, service: &str, timeout
     }
 }
 
+/// Escape a value for embedding inside a single-quoted shell string.
+fn shell_escape(s: &str) -> String {
+    s.replace('\'', r"'\''")
+}
+
 /// Run a Playwright spec and save the HTML report.
 async fn run_browser_step(
     vm: &dyn Executor,
     test_name: &str,
+    step_name: &str,
     spec: &str,
     env: &std::collections::BTreeMap<String, String>,
     timeout_secs: u64,
@@ -374,12 +380,14 @@ async fn run_browser_step(
     // Build env exports from the step's env map. Values are shell-quoted.
     let mut env_exports = String::new();
     for (key, val) in env {
-        // Use single quotes + escape any single quotes in val
-        let quoted = val.replace('\'', r"'\''");
+        let quoted = shell_escape(val);
         env_exports.push_str(&format!("export {key}='{quoted}' && "));
     }
 
     let browser_dir = format!("{}/tests/browser", registry_path.display());
+    let browser_dir_esc = shell_escape(&browser_dir);
+    let spec_esc = shell_escape(spec);
+    let test_name_esc = shell_escape(test_name);
 
     // The command:
     // 1. cd into the browser test dir
@@ -387,10 +395,12 @@ async fn run_browser_step(
     //    otherwise bun install (bare mode)
     // 3. Export env vars
     // 4. Run playwright with html,list reporters
-    // 5. Copy the HTML report to a persistent location regardless of pass/fail
+    // 5. Copy the HTML report to a persistent location regardless of pass/fail,
+    //    emitting a sentinel line on success so the Rust side can report the
+    //    actual resolved path (avoids a tilde/$HOME mismatch).
     // 6. Exit with playwright's exit code
     let cmd = format!(
-        "cd {browser_dir} && \
+        "cd '{browser_dir_esc}' && \
          if [ ! -d node_modules ]; then \
            if [ -d /opt/playwright/node_modules ]; then \
              ln -sf /opt/playwright/node_modules .; \
@@ -400,12 +410,16 @@ async fn run_browser_step(
          fi && \
          export PATH=\"$HOME/.bun/bin:$PATH\" && \
          {env_exports}\
-         bunx playwright test {spec} --reporter=html,list; \
+         bunx playwright test '{spec_esc}' --reporter=html,list; \
          EXIT=$?; \
-         REPORT_DIR=\"{browser_dir}/playwright-report\"; \
+         REPORT_DIR=\"{browser_dir_esc}/playwright-report\"; \
          if [ -d \"$REPORT_DIR\" ]; then \
-           DEST=\"$HOME/.local/share/ryra/test-reports/{test_name}\"; \
-           mkdir -p \"$DEST\" && cp -r \"$REPORT_DIR\"/. \"$DEST/\"; \
+           DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}\"; \
+           if mkdir -p \"$DEST\" && cp -r \"$REPORT_DIR\"/. \"$DEST/\"; then \
+             echo \"RYRA_REPORT_WRITTEN: $DEST\"; \
+           else \
+             echo \"warning: failed to copy playwright report\" >&2; \
+           fi; \
          fi; \
          exit $EXIT"
     );
@@ -413,22 +427,32 @@ async fn run_browser_step(
     let timeout = Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, vm.exec_streaming(&cmd, test_name)).await;
 
-    let report_path = format!("~/.local/share/ryra/test-reports/{test_name}");
     let outcome = match result {
-        Ok(Ok(_)) => {
-            println!("[{test_name}]   Playwright report: {report_path}/index.html");
-            println!("[{test_name}]   Open with: bunx playwright show-report {report_path}");
+        Ok(Ok(exec_output)) => {
+            // Only print the report hint if the shell actually confirmed the
+            // copy succeeded via the sentinel. On failure the sentinel is
+            // streamed live anyway so the user still sees it.
+            if let Some(path) = exec_output
+                .stdout
+                .lines()
+                .find_map(|l| l.strip_prefix("RYRA_REPORT_WRITTEN: "))
+            {
+                println!("[{test_name}]   Playwright report: {path}/index.html");
+                println!("[{test_name}]   Open with: bunx playwright show-report {path}");
+            }
             Outcome::Passed
         }
         Ok(Err(e)) => {
-            println!("[{test_name}]   Playwright report (on failure): {report_path}/index.html");
+            println!(
+                "[{test_name}]   Playwright failed — check streamed output above for details"
+            );
             Outcome::Failed(format!("{e:#}"))
         }
         Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
     };
 
     Event {
-        description: format!("browser: {spec}"),
+        description: format!("browser: {step_name}"),
         kind: EventKind::Assertion,
         outcome,
         duration: t.elapsed(),
@@ -594,6 +618,7 @@ pub async fn run_lifecycle_test(
                 let event = run_browser_step(
                     vm,
                     name,
+                    step_name,
                     spec,
                     env,
                     *timeout_secs,
