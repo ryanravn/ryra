@@ -77,6 +77,11 @@ pub struct Args {
     #[arg(long)]
     pub no_vm: bool,
 
+    /// Skip setup steps (add/wait/remove/reset) and only run shell/playwright
+    /// steps. Use to re-run tests quickly when services are already installed.
+    #[arg(long)]
+    pub retest: bool,
+
     /// VM memory in MB (overrides auto-detection from service requirements)
     #[arg(long)]
     pub memory: Option<u32>,
@@ -494,7 +499,7 @@ pub async fn run(args: Args) -> Result<()> {
             let vm_registry = std::path::Path::new("/opt/ryra-test-registry");
             let result = match &test {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
-                    runner::run_lifecycle_test(&executor, &name, steps, verbose, single_test, vm_registry).await
+                    runner::run_lifecycle_test(&executor, &name, steps, verbose, single_test, vm_registry, false).await
                 }
                 registry::DiscoveredTest::Simple { .. } => {
                     runner::run_registry_test(&executor, &test).await
@@ -622,6 +627,7 @@ async fn run_bare(
                     args.verbose,
                     single_test,
                     registry_path,
+                    args.retest,
                 )
                 .await
             }

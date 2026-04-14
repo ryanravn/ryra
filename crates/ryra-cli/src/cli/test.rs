@@ -15,6 +15,7 @@ pub struct TestRunParams<'a> {
     pub project: Option<&'a std::path::PathBuf>,
     pub vm: bool,
     pub no_vm: bool,
+    pub retest: bool,
     pub keep_alive: bool,
     pub yes: bool,
     pub verbose: bool,
@@ -29,6 +30,7 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
             params.names,
             params.verbose,
             params.list,
+            params.retest,
             params.project,
         )
         .await;
@@ -239,10 +241,12 @@ async fn run_no_vm(
     names: &[String],
     verbose: bool,
     list: bool,
+    retest: bool,
     project: Option<&std::path::PathBuf>,
 ) -> Result<()> {
     let mut args = ryra_test::Args::parse_from(std::iter::once("ryra-test"));
     args.no_vm = true;
+    args.retest = retest;
     args.verbose = verbose;
     args.list = list;
     args.project = project.cloned();

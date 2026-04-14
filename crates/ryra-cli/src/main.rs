@@ -118,6 +118,9 @@ enum Command {
         /// Test a local project directory with test.toml (+ optional quadlet files)
         #[arg(long)]
         project: Option<std::path::PathBuf>,
+        /// Skip setup steps (add/wait) and only re-run shell/playwright steps
+        #[arg(long)]
+        retest: bool,
         /// Keep VM alive after tests (or boot without tests for interactive use)
         #[arg(long)]
         keep_alive: bool,
@@ -212,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
             ref names,
             live,
             no_vm,
+            retest,
             ref service,
             ref test,
             repo: _,
@@ -228,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
                 project: project.as_ref(),
                 vm: !live && !no_vm,
                 no_vm,
+                retest,
                 keep_alive,
                 yes,
                 verbose,

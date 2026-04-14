@@ -453,6 +453,7 @@ pub async fn run_lifecycle_test(
     verbose: bool,
     single_test: bool,
     registry_path: &std::path::Path,
+    retest: bool,
 ) -> ScenarioResult {
     let start = Instant::now();
     let mut events = Vec::new();
@@ -465,21 +466,42 @@ pub async fn run_lifecycle_test(
     let stream_prefix = if single_test { "" } else { name };
 
     // Init first (all lifecycle tests start with ryra init)
-    println!("{p}  ryra init...");
-    let init_event = run_event(
-        vm,
-        EventKind::Init,
-        "ryra init",
-        30,
-    )
-    .await;
-    print_event_result(&p, &init_event);
-    if init_event.outcome.is_fail() {
-        failed = true;
+    if !retest {
+        println!("{p}  ryra init...");
+        let init_event = run_event(
+            vm,
+            EventKind::Init,
+            "ryra init",
+            30,
+        )
+        .await;
+        print_event_result(&p, &init_event);
+        if init_event.outcome.is_fail() {
+            failed = true;
+        }
+        events.push(init_event);
     }
-    events.push(init_event);
 
     for step in steps {
+        // In retest mode, skip setup steps and only run test steps.
+        // Setup = add/wait/remove/reset + shell steps that call ryra add/remove/reset.
+        if retest {
+            let is_setup = match step {
+                StepDef::Add { .. } | StepDef::Remove { .. } | StepDef::Reset | StepDef::Wait { .. } => true,
+                StepDef::Shell { run, .. } => {
+                    let trimmed = run.trim_start();
+                    // Shell steps that are wrappers around ryra add/remove
+                    trimmed.contains("ryra add ") || trimmed.contains("ryra remove ") || trimmed.contains("ryra reset")
+                }
+                _ => false,
+            };
+            if is_setup {
+                let desc = step.step_name();
+                println!("{p}  skip  {desc} (retest)");
+                continue;
+            }
+        }
+
         if failed {
             let desc = step.step_name();
             events.push(Event {
