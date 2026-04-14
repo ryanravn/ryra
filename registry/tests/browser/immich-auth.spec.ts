@@ -57,12 +57,13 @@ test("full OIDC login through Authelia creates an immich session", async ({
   // 4. Should be redirected back to immich with the auth code, then to
   //    an authenticated page (onboarding or photos). The callback goes
   //    through /auth/login?code=... before redirecting.
+  // The OIDC token exchange (Immich → Authelia) can be slow in VMs.
   await page.waitForURL(
     (url) =>
       url.hostname === "127.0.0.1" &&
       !url.searchParams.has("code") &&
       url.pathname !== "/auth/login",
-    { timeout: 15_000 },
+    { timeout: 30_000 },
   );
 
   await context.close();
