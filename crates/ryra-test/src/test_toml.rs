@@ -59,6 +59,10 @@ pub struct StepDef {
     pub run: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+    #[serde(default)]
+    pub spec: Option<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 fn default_timeout() -> u64 {
@@ -75,6 +79,7 @@ pub enum StepAction {
     Wait,
     Run,
     Assert,
+    Browser,
 }
 
 impl std::fmt::Display for StepAction {
@@ -86,6 +91,7 @@ impl std::fmt::Display for StepAction {
             StepAction::Wait => write!(f, "wait"),
             StepAction::Run => write!(f, "run"),
             StepAction::Assert => write!(f, "assert"),
+            StepAction::Browser => write!(f, "browser"),
         }
     }
 }
@@ -141,6 +147,13 @@ impl TestToml {
                     }
                 }
                 StepAction::Reset => {}
+                StepAction::Browser => {
+                    if s.spec.is_none() {
+                        anyhow::bail!(
+                            "{ctx}: {step_ctx} (action=browser) requires a 'spec' field",
+                        );
+                    }
+                }
             }
         }
 
@@ -332,6 +345,45 @@ run = "true"
         std::fs::write(&path, toml).expect("write");
         let parsed = TestToml::parse(&path).expect("parse");
         assert_eq!(parsed.name_or_default(&path), "immich-sso");
+    }
+
+    #[test]
+    fn parse_browser_step() {
+        let toml = r#"
+[test]
+name = "auth-browser"
+browser = true
+
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "browser"
+name = "sso-test"
+spec = "seafile-auth.spec.ts"
+timeout = 120
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        assert!(parsed.is_lifecycle());
+        assert_eq!(parsed.steps.len(), 2);
+        assert_eq!(parsed.steps[1].action, StepAction::Browser);
+        assert_eq!(parsed.steps[1].spec.as_deref(), Some("seafile-auth.spec.ts"));
+    }
+
+    #[test]
+    fn browser_step_requires_spec() {
+        let toml = r#"
+[[steps]]
+action = "browser"
+name = "missing-spec"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let result = TestToml::parse(&path);
+        assert!(result.is_err());
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("spec"));
     }
 
     #[test]

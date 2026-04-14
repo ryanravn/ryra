@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -54,6 +55,12 @@ pub enum StepEntry {
     Assert {
         name: String,
         run: String,
+        timeout_secs: u64,
+    },
+    Browser {
+        name: String,
+        spec: String,
+        env: BTreeMap<String, String>,
         timeout_secs: u64,
     },
 }
@@ -437,6 +444,24 @@ fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry
                 StepEntry::Assert {
                     name,
                     run,
+                    timeout_secs: s.timeout,
+                }
+            }
+            StepAction::Browser => {
+                let spec = s.spec.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "step 'browser' requires a 'spec' field in test '{}'",
+                        test_name
+                    )
+                })?;
+                let name = s
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("browser: {spec}"));
+                StepEntry::Browser {
+                    name,
+                    spec,
+                    env: s.env.clone(),
                     timeout_secs: s.timeout,
                 }
             }

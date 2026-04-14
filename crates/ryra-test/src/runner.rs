@@ -508,6 +508,20 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
+            StepEntry::Browser { name: step_name, .. } => {
+                // Real implementation comes in Task 6
+                let event = Event {
+                    description: format!("browser: {step_name}"),
+                    kind: EventKind::Assertion,
+                    outcome: Outcome::Failed(
+                        "browser step not yet implemented (see Task 6)".to_string(),
+                    ),
+                    duration: Duration::ZERO,
+                };
+                print_event_result(&p, &event);
+                failed = true;
+                events.push(event);
+            }
         }
     }
 
@@ -543,12 +557,13 @@ fn lifecycle_step_description(step: &StepEntry) -> String {
         } => format!("wait for {service}"),
         StepEntry::Run { name, .. } => format!("run: {name}"),
         StepEntry::Assert { name, .. } => format!("assert: {name}"),
+        StepEntry::Browser { name, .. } => format!("browser: {name}"),
     }
 }
 
 fn lifecycle_step_kind(step: &StepEntry) -> EventKind {
     match step {
-        StepEntry::Assert { .. } => EventKind::Assertion,
+        StepEntry::Assert { .. } | StepEntry::Browser { .. } => EventKind::Assertion,
         _ => EventKind::Step,
     }
 }
