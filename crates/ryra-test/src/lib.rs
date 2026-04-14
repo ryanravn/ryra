@@ -1,5 +1,6 @@
 pub mod executor;
 pub mod registry;
+mod reports;
 mod runner;
 mod scenario;
 pub mod test_toml;
@@ -145,38 +146,8 @@ fn print_summary(results: &[ScenarioResult], wall_clock: std::time::Duration) {
 }
 
 fn save_results(results: &[ScenarioResult]) -> Result<()> {
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let log_dir = workspace_root.join("crates/ryra-test/logs");
-    std::fs::create_dir_all(&log_dir)?;
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let log_path = log_dir.join(format!("e2e-{timestamp}.log"));
-
-    let mut output = String::new();
-    for result in results {
-        output.push_str(&format!("{result}"));
-    }
-
-    let passed = results.iter().filter(|r| r.passed()).count();
-    let failed = results.len() - passed;
-    let total_duration: std::time::Duration = results.iter().map(|r| r.duration).sum();
-    output.push_str(&format!(
-        "\n{passed} passed, {failed} failed, {} total ({:.1}s)\n",
-        results.len(),
-        total_duration.as_secs_f64()
-    ));
-
-    std::fs::write(&log_path, &output)?;
-
-    let latest = log_dir.join("latest.log");
-    let _ = std::fs::remove_file(&latest);
-    std::fs::write(&latest, &output)?;
-
-    println!("Results saved to: {}", log_path.display());
-
+    reports::save_run_results(results)?;
+    reports::print_results_paths(results);
     Ok(())
 }
 
@@ -300,6 +271,9 @@ pub async fn run(args: Args) -> Result<()> {
     if to_run.is_empty() && !keep_alive_interactive {
         anyhow::bail!("no tests matched the given filters");
     }
+
+    // Fresh report directory for this run. Previous run's output is discarded.
+    reports::wipe_reports_dir()?;
 
     // --no-vm: run entirely on the host. Skip all VM prerequisites, binary
     // lookup, and image preparation since none of it is needed in bare mode.

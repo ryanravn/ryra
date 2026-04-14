@@ -389,18 +389,20 @@ async fn run_browser_step(
     let spec_esc = shell_escape(spec);
     let test_name_esc = shell_escape(test_name);
 
-    // The command:
-    // 1. cd into the browser test dir
-    // 2. Ensure node_modules exists — try symlinking from /opt/playwright (VM mode),
-    //    otherwise bun install (bare mode)
-    // 3. Export env vars
-    // 4. Run playwright with html,list reporters
-    // 5. Copy the HTML report to a persistent location regardless of pass/fail,
-    //    emitting a sentinel line on success so the Rust side can report the
-    //    actual resolved path (avoids a tilde/$HOME mismatch).
-    // 6. Exit with playwright's exit code
+    // Shell command:
+    // 1. Pre-create the canonical report directory and tell playwright to
+    //    emit the HTML report directly there (no intermediate copy step).
+    // 2. cd into the browser test dir.
+    // 3. Ensure node_modules exists — symlink /opt/playwright/node_modules
+    //    in the VM image, or `bun install` on a bare host.
+    // 4. Export env vars from the step.
+    // 5. Run playwright with the html reporter pointed at the canonical path.
+    //    Also use the list reporter so the user sees live progress.
+    // 6. Exit with playwright's own exit code.
     let cmd = format!(
-        "cd '{browser_dir_esc}' && \
+        "DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}/playwright\" && \
+         mkdir -p \"$DEST\" && \
+         cd '{browser_dir_esc}' && \
          if [ ! -d node_modules ]; then \
            if [ -d /opt/playwright/node_modules ]; then \
              ln -sf /opt/playwright/node_modules .; \
@@ -409,45 +411,18 @@ async fn run_browser_step(
            fi; \
          fi && \
          export PATH=\"$HOME/.bun/bin:$PATH\" && \
+         export PLAYWRIGHT_HTML_REPORT=\"$DEST\" && \
+         export PLAYWRIGHT_HTML_OPEN=never && \
          {env_exports}\
-         bunx playwright test '{spec_esc}' --reporter=html,list; \
-         EXIT=$?; \
-         REPORT_DIR=\"{browser_dir_esc}/playwright-report\"; \
-         if [ -d \"$REPORT_DIR\" ]; then \
-           DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}\"; \
-           if mkdir -p \"$DEST\" && cp -r \"$REPORT_DIR\"/. \"$DEST/\"; then \
-             echo \"RYRA_REPORT_WRITTEN: $DEST\"; \
-           else \
-             echo \"warning: failed to copy playwright report\" >&2; \
-           fi; \
-         fi; \
-         exit $EXIT"
+         bunx playwright test '{spec_esc}' --reporter=list,html"
     );
 
     let timeout = Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, vm.exec_streaming(&cmd, test_name)).await;
 
     let outcome = match result {
-        Ok(Ok(exec_output)) => {
-            // Only print the report hint if the shell actually confirmed the
-            // copy succeeded via the sentinel. On failure the sentinel is
-            // streamed live anyway so the user still sees it.
-            if let Some(path) = exec_output
-                .stdout
-                .lines()
-                .find_map(|l| l.strip_prefix("RYRA_REPORT_WRITTEN: "))
-            {
-                println!("[{test_name}]   Playwright report: {path}/index.html");
-                println!("[{test_name}]   Open with: bunx playwright show-report {path}");
-            }
-            Outcome::Passed
-        }
-        Ok(Err(e)) => {
-            println!(
-                "[{test_name}]   Playwright failed — check streamed output above for details"
-            );
-            Outcome::Failed(format!("{e:#}"))
-        }
+        Ok(Ok(_)) => Outcome::Passed,
+        Ok(Err(e)) => Outcome::Failed(format!("{e:#}")),
         Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
     };
 
