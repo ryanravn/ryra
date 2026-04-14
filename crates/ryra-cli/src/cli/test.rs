@@ -14,6 +14,7 @@ pub struct TestRunParams<'a> {
     pub test_filter: Option<&'a str>,
     pub project: Option<&'a std::path::PathBuf>,
     pub vm: bool,
+    pub no_vm: bool,
     pub keep_alive: bool,
     pub yes: bool,
     pub verbose: bool,
@@ -23,6 +24,16 @@ pub struct TestRunParams<'a> {
 }
 
 pub async fn run(params: TestRunParams<'_>) -> Result<()> {
+    if params.no_vm {
+        return run_no_vm(
+            params.names,
+            params.verbose,
+            params.list,
+            params.project,
+        )
+        .await;
+    }
+
     if params.vm || params.keep_alive || params.list || params.project.is_some() {
         return run_vm(
             params.names,
@@ -219,6 +230,21 @@ async fn run_vm(
     if let Some(n) = parallel {
         args.parallel = n;
     }
+    args.project = project.cloned();
+    args.tests = names.to_vec();
+    ryra_test::run(args).await
+}
+
+async fn run_no_vm(
+    names: &[String],
+    verbose: bool,
+    list: bool,
+    project: Option<&std::path::PathBuf>,
+) -> Result<()> {
+    let mut args = ryra_test::Args::parse_from(std::iter::once("ryra-test"));
+    args.no_vm = true;
+    args.verbose = verbose;
+    args.list = list;
     args.project = project.cloned();
     args.tests = names.to_vec();
     ryra_test::run(args).await

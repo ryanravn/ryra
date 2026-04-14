@@ -103,6 +103,9 @@ enum Command {
         /// Run against live services instead of a fresh VM
         #[arg(long)]
         live: bool,
+        /// Run lifecycle tests directly on the host without a VM
+        #[arg(long)]
+        no_vm: bool,
         /// Service to test (live mode)
         #[arg(long)]
         service: Option<String>,
@@ -208,6 +211,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Test {
             ref names,
             live,
+            no_vm,
             ref service,
             ref test,
             repo: _,
@@ -222,7 +226,8 @@ async fn main() -> anyhow::Result<()> {
                 service: service.as_deref(),
                 test_filter: test.as_deref(),
                 project: project.as_ref(),
-                vm: !live,
+                vm: !live && !no_vm,
+                no_vm,
                 keep_alive,
                 yes,
                 verbose,
