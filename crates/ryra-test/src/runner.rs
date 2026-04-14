@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::registry::{DiscoveredTest, StepEntry, TestEntry};
+use crate::registry::{DiscoveredTest, TestEntry};
+use crate::test_toml::StepDef;
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
 use crate::executor::Executor;
 
@@ -448,7 +449,7 @@ async fn run_browser_step(
 pub async fn run_lifecycle_test(
     vm: &dyn Executor,
     name: &str,
-    steps: &[StepEntry],
+    steps: &[StepDef],
     verbose: bool,
     single_test: bool,
     registry_path: &std::path::Path,
@@ -480,11 +481,10 @@ pub async fn run_lifecycle_test(
 
     for step in steps {
         if failed {
-            let desc = lifecycle_step_description(step);
-            let kind = lifecycle_step_kind(step);
+            let desc = step.step_name();
             events.push(Event {
                 description: desc.clone(),
-                kind,
+                kind: EventKind::Step,
                 outcome: Outcome::Skipped,
                 duration: Duration::ZERO,
             });
@@ -493,7 +493,7 @@ pub async fn run_lifecycle_test(
         }
 
         match step {
-            StepEntry::Add { service, args } => {
+            StepDef::Add { service, args } => {
                 println!("{p}  ryra add {service}...");
                 let cmd = match args.as_deref() {
                     Some(a) if !a.is_empty() => {
@@ -508,7 +508,7 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepEntry::Remove { service } => {
+            StepDef::Remove { service } => {
                 println!("{p}  ryra remove {service}...");
                 let event = run_event(
                     vm,
@@ -523,7 +523,7 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepEntry::Reset => {
+            StepDef::Reset => {
                 println!("{p}  ryra reset...");
                 let event = run_event(vm, EventKind::Step, "ryra reset -y", 120).await;
                 print_event_result(&p, &event);
@@ -532,78 +532,47 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepEntry::Wait {
-                service,
-                timeout_secs,
-            } => {
+            StepDef::Wait { service, timeout } => {
                 println!("{p}  waiting for {service}...");
-                let event = wait_for_service_with_timeout(vm, service, *timeout_secs).await;
+                let event = wait_for_service_with_timeout(vm, service, *timeout).await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
                 }
                 events.push(event);
             }
-            StepEntry::Run {
+            StepDef::Run {
                 name: step_name,
                 run,
-                timeout_secs,
+                timeout,
+                poll,
             } => {
                 println!("{p}  run: {step_name}...");
-                let event = if verbose {
-                    run_event_streaming(vm, stream_prefix, EventKind::Step, run, *timeout_secs)
-                        .await
-                } else {
-                    run_event(vm, EventKind::Step, run, *timeout_secs).await
-                };
+                let event = run_step_with_poll(
+                    vm, step_name, run, *timeout, poll.as_ref(), verbose, stream_prefix,
+                )
+                .await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
                 }
                 events.push(event);
             }
-            StepEntry::Assert {
-                name: step_name,
-                run,
-                timeout_secs,
-            } => {
-                println!("{p}  assert: {step_name}...");
-                let t = Instant::now();
-                let timeout = Duration::from_secs(*timeout_secs);
-                let result = tokio::time::timeout(timeout, vm.exec(run)).await;
-
-                let outcome = match result {
-                    Ok(Ok(_)) => Outcome::Passed,
-                    Ok(Err(e)) => Outcome::Failed(format!("{e:#}")),
-                    Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
-                };
-
-                let event = Event {
-                    description: format!("assert: {step_name}"),
-                    kind: EventKind::Assertion,
-                    outcome,
-                    duration: t.elapsed(),
-                };
-                print_event_result(&p, &event);
-                if event.outcome.is_fail() {
-                    failed = true;
-                }
-                events.push(event);
-            }
-            StepEntry::Browser {
-                name: step_name,
+            StepDef::Browser {
+                name: browser_name,
                 spec,
                 env,
-                timeout_secs,
+                timeout,
             } => {
+                let step_name = browser_name.as_deref().unwrap_or(spec);
                 println!("{p}  browser: {step_name}...");
                 let event = run_browser_step(
                     vm,
-                    name,
-                    step_name,
+                    name,       // test name (for report paths)
+                    step_name,  // step name (for event description)
                     spec,
                     env,
-                    *timeout_secs,
+                    *timeout,
                     registry_path,
                 )
                 .await;
@@ -637,25 +606,66 @@ pub async fn run_lifecycle_test(
     }
 }
 
-fn lifecycle_step_description(step: &StepEntry) -> String {
-    match step {
-        StepEntry::Add { service, .. } => format!("ryra add {service}"),
-        StepEntry::Remove { service } => format!("ryra remove {service}"),
-        StepEntry::Reset => "ryra reset".to_string(),
-        StepEntry::Wait {
-            service,
-            timeout_secs: _,
-        } => format!("wait for {service}"),
-        StepEntry::Run { name, .. } => format!("run: {name}"),
-        StepEntry::Assert { name, .. } => format!("assert: {name}"),
-        StepEntry::Browser { name, .. } => format!("browser: {name}"),
-    }
-}
+/// Execute a run step, optionally retrying on failure via poll config.
+async fn run_step_with_poll(
+    vm: &dyn Executor,
+    step_name: &str,
+    cmd: &str,
+    timeout_secs: u64,
+    poll: Option<&crate::test_toml::PollConfig>,
+    verbose: bool,
+    stream_prefix: &str,
+) -> Event {
+    let t = Instant::now();
 
-fn lifecycle_step_kind(step: &StepEntry) -> EventKind {
-    match step {
-        StepEntry::Assert { .. } | StepEntry::Browser { .. } => EventKind::Assertion,
-        _ => EventKind::Step,
+    match poll {
+        None => {
+            // Single execution — same as before
+            if verbose {
+                run_event_streaming(vm, stream_prefix, EventKind::Step, cmd, timeout_secs).await
+            } else {
+                run_event(vm, EventKind::Step, cmd, timeout_secs).await
+            }
+        }
+        Some(poll_cfg) => {
+            // Retry loop
+            let mut last_err = String::new();
+            for attempt in 1..=poll_cfg.attempts {
+                let timeout = Duration::from_secs(timeout_secs);
+                let result = tokio::time::timeout(timeout, vm.exec(cmd)).await;
+
+                match result {
+                    Ok(Ok(_)) => {
+                        return Event {
+                            description: format!("run: {step_name}"),
+                            kind: EventKind::Step,
+                            outcome: Outcome::Passed,
+                            duration: t.elapsed(),
+                        };
+                    }
+                    Ok(Err(e)) => {
+                        last_err = format!("{e:#}");
+                    }
+                    Err(_) => {
+                        last_err = format!("timed out after {timeout_secs}s");
+                    }
+                }
+
+                if attempt < poll_cfg.attempts {
+                    tokio::time::sleep(Duration::from_secs(poll_cfg.interval)).await;
+                }
+            }
+
+            Event {
+                description: format!("run: {step_name}"),
+                kind: EventKind::Step,
+                outcome: Outcome::Failed(format!(
+                    "failed after {} attempts (interval={}s): {last_err}",
+                    poll_cfg.attempts, poll_cfg.interval
+                )),
+                duration: t.elapsed(),
+            }
+        }
     }
 }
 

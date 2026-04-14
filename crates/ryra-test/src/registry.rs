@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::test_toml::{StepAction, StepDef, TestToml};
+use crate::test_toml::{StepDef, TestToml};
 
 /// A discovered test suite — either simple (setup + assertions) or lifecycle (interleaved steps).
 #[derive(Debug, Clone)]
@@ -19,7 +18,7 @@ pub enum DiscoveredTest {
     /// Lifecycle tests: interleaved actions and assertions.
     Lifecycle {
         name: String,
-        steps: Vec<StepEntry>,
+        steps: Vec<StepDef>,
         browser: bool,
         ram_override: Option<u32>,
     },
@@ -30,39 +29,6 @@ pub struct SetupConfig {
     pub services: Vec<String>,
     pub quadlets: Vec<String>,
     pub quadlet_dir: Option<PathBuf>,
-}
-
-/// A step in a lifecycle test — either an action or an assertion.
-#[derive(Debug, Clone)]
-pub enum StepEntry {
-    Add {
-        service: String,
-        args: Option<String>,
-    },
-    Remove {
-        service: String,
-    },
-    Reset,
-    Wait {
-        service: String,
-        timeout_secs: u64,
-    },
-    Run {
-        name: String,
-        run: String,
-        timeout_secs: u64,
-    },
-    Assert {
-        name: String,
-        run: String,
-        timeout_secs: u64,
-    },
-    Browser {
-        name: String,
-        spec: String,
-        env: BTreeMap<String, String>,
-        timeout_secs: u64,
-    },
 }
 
 impl DiscoveredTest {
@@ -82,7 +48,7 @@ impl DiscoveredTest {
             DiscoveredTest::Lifecycle { steps, .. } => {
                 let mut svcs = Vec::new();
                 for step in steps {
-                    if let StepEntry::Add { service, .. } = step
+                    if let StepDef::Add { service, .. } = step
                         && !svcs.contains(&service.as_str())
                     {
                         svcs.push(service.as_str());
@@ -330,10 +296,9 @@ fn discover_from_test_toml(
     let ram_override = parsed.ram_override();
 
     if parsed.is_lifecycle() {
-        let steps = convert_steps(&parsed.steps, &test_name)?;
         return Ok(DiscoveredTest::Lifecycle {
             name: test_name,
-            steps,
+            steps: parsed.steps.clone(),
             browser,
             ram_override,
         });
@@ -376,100 +341,6 @@ fn discover_from_test_toml(
     })
 }
 
-/// Convert StepDef entries from test_toml into StepEntry enums.
-fn convert_steps(step_defs: &[StepDef], test_name: &str) -> Result<Vec<StepEntry>> {
-    let mut steps = Vec::new();
-    for s in step_defs {
-        let step = match s.action {
-            StepAction::Add => {
-                let service = s.service.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'add' requires a 'service' field in test '{}'",
-                        test_name
-                    )
-                })?;
-                StepEntry::Add {
-                    service,
-                    args: s.args.clone(),
-                }
-            }
-            StepAction::Remove => {
-                let service = s.service.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'remove' requires a 'service' field in test '{}'",
-                        test_name
-                    )
-                })?;
-                StepEntry::Remove { service }
-            }
-            StepAction::Reset => StepEntry::Reset,
-            StepAction::Wait => {
-                let service = s.service.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'wait' requires a 'service' field in test '{}'",
-                        test_name
-                    )
-                })?;
-                StepEntry::Wait {
-                    service,
-                    timeout_secs: if s.timeout > 0 { s.timeout } else { 60 },
-                }
-            }
-            StepAction::Run => {
-                let name = s.name.clone().ok_or_else(|| {
-                    anyhow::anyhow!("step 'run' requires a 'name' field in test '{}'", test_name)
-                })?;
-                let run = s.run.clone().ok_or_else(|| {
-                    anyhow::anyhow!("step 'run' requires a 'run' field in test '{}'", test_name)
-                })?;
-                StepEntry::Run {
-                    name,
-                    run,
-                    timeout_secs: s.timeout,
-                }
-            }
-            StepAction::Assert => {
-                let name = s.name.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'assert' requires a 'name' field in test '{}'",
-                        test_name
-                    )
-                })?;
-                let run = s.run.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'assert' requires a 'run' field in test '{}'",
-                        test_name
-                    )
-                })?;
-                StepEntry::Assert {
-                    name,
-                    run,
-                    timeout_secs: s.timeout,
-                }
-            }
-            StepAction::Browser => {
-                let spec = s.spec.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "step 'browser' requires a 'spec' field in test '{}'",
-                        test_name
-                    )
-                })?;
-                let name = s
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("browser: {spec}"));
-                StepEntry::Browser {
-                    name,
-                    spec,
-                    env: s.env.clone(),
-                    timeout_secs: s.timeout,
-                }
-            }
-        };
-        steps.push(step);
-    }
-    Ok(steps)
-}
 
 /// Look up the recommended RAM (MB) for a service from its service.toml.
 pub fn service_recommended_ram(registry_path: &Path, service_name: &str) -> Result<Option<u64>> {
@@ -496,9 +367,9 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
         DiscoveredTest::Lifecycle { steps, .. } => steps
             .iter()
             .filter_map(|s| match s {
-                StepEntry::Add { service, .. } => Some(service.as_str()),
+                StepDef::Add { service, .. } => Some(service.as_str()),
                 // Also detect `ryra add <service>` in run steps
-                StepEntry::Run { run, .. } => run
+                StepDef::Run { run, .. } => run
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .windows(3)
@@ -550,8 +421,8 @@ pub fn vm_disk_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
         DiscoveredTest::Lifecycle { steps, .. } => steps
             .iter()
             .filter_map(|s| match s {
-                StepEntry::Add { service, .. } => Some(service.as_str()),
-                StepEntry::Run { run, .. } => run
+                StepDef::Add { service, .. } => Some(service.as_str()),
+                StepDef::Run { run, .. } => run
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .windows(3)
@@ -615,8 +486,8 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
             // that call `ryra add <service>`
             for step in steps {
                 let service_name = match step {
-                    StepEntry::Add { service, .. } => Some(service.as_str()),
-                    StepEntry::Run { run, .. } => {
+                    StepDef::Add { service, .. } => Some(service.as_str()),
+                    StepDef::Run { run, .. } => {
                         // Parse "ryra add <service>" from run commands
                         run.split_whitespace()
                             .collect::<Vec<_>>()
@@ -841,7 +712,7 @@ run = "curl -sf http://proxy.test.local"
 
         assert!(test.is_lifecycle());
         if let DiscoveredTest::Lifecycle { steps, .. } = &test {
-            if let StepEntry::Add { service, args } = &steps[0] {
+            if let StepDef::Add { service, args } = &steps[0] {
                 assert_eq!(service, "caddy");
                 assert_eq!(args.as_deref(), Some("--domain proxy.test.local"));
             } else {

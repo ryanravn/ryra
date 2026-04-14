@@ -46,53 +46,97 @@ pub struct TestDef {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct StepDef {
-    pub action: StepAction,
-    #[serde(default)]
-    pub service: Option<String>,
-    #[serde(default)]
-    pub args: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub run: Option<String>,
-    #[serde(default = "default_timeout")]
-    pub timeout: u64,
-    #[serde(default)]
-    pub spec: Option<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-}
-
 fn default_timeout() -> u64 {
     30
 }
 
-/// The action a lifecycle test step performs.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum StepAction {
-    Add,
-    Remove,
-    Reset,
-    Wait,
-    Run,
-    Assert,
-    Browser,
+/// Retry configuration for run steps. The runner re-executes the command
+/// up to `attempts` times, sleeping `interval` seconds between tries.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PollConfig {
+    /// Seconds between retries.
+    pub interval: u64,
+    /// Maximum number of attempts before giving up.
+    pub attempts: u64,
 }
 
-impl std::fmt::Display for StepAction {
+/// A lifecycle test step — serde deserializes directly into the correct
+/// variant based on the `action` field. Invalid field combinations are
+/// rejected at parse time rather than runtime.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum StepDef {
+    Add {
+        service: String,
+        #[serde(default)]
+        args: Option<String>,
+    },
+    Remove {
+        service: String,
+    },
+    Reset,
+    Wait {
+        service: String,
+        #[serde(default = "default_timeout")]
+        timeout: u64,
+    },
+    /// Shell command step. Fails the test on non-zero exit code.
+    /// Accepts `action = "assert"` as a backward-compatible alias.
+    #[serde(alias = "assert")]
+    Run {
+        name: String,
+        run: String,
+        #[serde(default = "default_timeout")]
+        timeout: u64,
+        /// Optional retry configuration. When set, the runner re-executes
+        /// the command on failure, up to `attempts` times.
+        #[serde(default)]
+        poll: Option<PollConfig>,
+    },
+    Browser {
+        #[serde(default)]
+        name: Option<String>,
+        spec: String,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default = "default_browser_timeout")]
+        timeout: u64,
+    },
+}
+
+fn default_browser_timeout() -> u64 {
+    120
+}
+
+impl std::fmt::Display for StepDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StepAction::Add => write!(f, "add"),
-            StepAction::Remove => write!(f, "remove"),
-            StepAction::Reset => write!(f, "reset"),
-            StepAction::Wait => write!(f, "wait"),
-            StepAction::Run => write!(f, "run"),
-            StepAction::Assert => write!(f, "assert"),
-            StepAction::Browser => write!(f, "browser"),
+            StepDef::Add { service, .. } => write!(f, "add {service}"),
+            StepDef::Remove { service } => write!(f, "remove {service}"),
+            StepDef::Reset => write!(f, "reset"),
+            StepDef::Wait { service, .. } => write!(f, "wait {service}"),
+            StepDef::Run { name, .. } => write!(f, "run: {name}"),
+            StepDef::Browser { name, spec, .. } => {
+                write!(f, "browser: {}", name.as_deref().unwrap_or(spec))
+            }
         }
+    }
+}
+
+impl StepDef {
+    /// The service name referenced by this step, if any.
+    pub fn service(&self) -> Option<&str> {
+        match self {
+            StepDef::Add { service, .. }
+            | StepDef::Remove { service }
+            | StepDef::Wait { service, .. } => Some(service),
+            _ => None,
+        }
+    }
+
+    /// Human-readable name for this step (used in output).
+    pub fn step_name(&self) -> String {
+        format!("{self}")
     }
 }
 
@@ -108,6 +152,10 @@ impl TestToml {
     }
 
     /// Validate structural invariants after deserialization.
+    ///
+    /// Most field-level validation is handled by serde (the tagged enum
+    /// rejects missing required fields at parse time). This only checks
+    /// cross-field invariants that serde can't express.
     pub fn validate(&self, path: &Path) -> Result<()> {
         let ctx = path.display();
 
@@ -116,45 +164,6 @@ impl TestToml {
                 "{ctx}: test.toml cannot have both [[tests]] and [[steps]] — \
                  use [[tests]] for simple assertions or [[steps]] for lifecycle tests",
             );
-        }
-
-        // Validate step required fields based on action type
-        for (i, s) in self.steps.iter().enumerate() {
-            let default_name = format!("step {}", i + 1);
-            let step_ctx = s.name.as_deref().unwrap_or(&default_name);
-            match s.action {
-                StepAction::Add | StepAction::Remove | StepAction::Wait => {
-                    if s.service.is_none() {
-                        anyhow::bail!(
-                            "{ctx}: {step_ctx} (action={}) requires a 'service' field",
-                            s.action,
-                        );
-                    }
-                }
-                StepAction::Run | StepAction::Assert => {
-                    if s.name.is_none() {
-                        anyhow::bail!(
-                            "{ctx}: step {} (action={}) requires a 'name' field",
-                            i + 1,
-                            s.action,
-                        );
-                    }
-                    if s.run.is_none() {
-                        anyhow::bail!(
-                            "{ctx}: {step_ctx} (action={}) requires a 'run' field",
-                            s.action,
-                        );
-                    }
-                }
-                StepAction::Reset => {}
-                StepAction::Browser => {
-                    if s.spec.is_none() {
-                        anyhow::bail!(
-                            "{ctx}: {step_ctx} (action=browser) requires a 'spec' field",
-                        );
-                    }
-                }
-            }
         }
 
         Ok(())
@@ -196,11 +205,10 @@ impl TestToml {
             .map_or_else(Vec::new, |s| s.services.clone());
 
         for step in &self.steps {
-            if step.action == StepAction::Add
-                && let Some(ref svc) = step.service
-                && !services.contains(svc)
+            if let StepDef::Add { service, .. } = step
+                && !services.contains(service)
             {
-                services.push(svc.clone());
+                services.push(service.clone());
             }
         }
 
@@ -271,8 +279,10 @@ run = "curl -sf http://auth.test.local"
         assert!(parsed.needs_browser());
         assert!(parsed.is_lifecycle());
         assert_eq!(parsed.steps.len(), 2);
-        assert_eq!(parsed.steps[0].action, StepAction::Add);
-        assert_eq!(parsed.steps[0].service.as_deref(), Some("authelia"));
+        assert!(matches!(parsed.steps[0], StepDef::Add { .. }));
+        if let StepDef::Add { ref service, .. } = parsed.steps[0] {
+            assert_eq!(service, "authelia");
+        }
     }
 
     #[test]
@@ -368,8 +378,10 @@ timeout = 120
         let parsed = TestToml::parse(&path).expect("parse");
         assert!(parsed.is_lifecycle());
         assert_eq!(parsed.steps.len(), 2);
-        assert_eq!(parsed.steps[1].action, StepAction::Browser);
-        assert_eq!(parsed.steps[1].spec.as_deref(), Some("seafile-auth.spec.ts"));
+        assert!(matches!(parsed.steps[1], StepDef::Browser { .. }));
+        if let StepDef::Browser { ref spec, .. } = parsed.steps[1] {
+            assert_eq!(spec, "seafile-auth.spec.ts");
+        }
     }
 
     #[test]
@@ -377,13 +389,12 @@ timeout = 120
         let toml = r#"
 [[steps]]
 action = "browser"
-name = "missing-spec"
 "#;
         let (_dir, path) = write_temp(toml);
         let result = TestToml::parse(&path);
         assert!(result.is_err());
         let msg = format!("{:#}", result.unwrap_err());
-        assert!(msg.contains("spec"));
+        assert!(msg.contains("spec") || msg.contains("missing field"));
     }
 
     #[test]
@@ -396,9 +407,55 @@ args = "--domain proxy.test.local"
 "#;
         let (_dir, path) = write_temp(toml);
         let parsed = TestToml::parse(&path).expect("parse");
-        assert_eq!(
-            parsed.steps[0].args.as_deref(),
-            Some("--domain proxy.test.local")
-        );
+        if let StepDef::Add { ref args, .. } = parsed.steps[0] {
+            assert_eq!(args.as_deref(), Some("--domain proxy.test.local"));
+        } else {
+            panic!("expected Add step");
+        }
+    }
+
+    #[test]
+    fn assert_action_parses_as_run() {
+        let toml = r#"
+[[steps]]
+action = "assert"
+name = "check"
+run = "true"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        assert!(matches!(parsed.steps[0], StepDef::Run { .. }));
+    }
+
+    #[test]
+    fn run_step_with_poll() {
+        let toml = r#"
+[[steps]]
+action = "run"
+name = "wait-for-http"
+run = "curl -sf http://localhost:8080"
+poll = { interval = 5, attempts = 10 }
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Run { ref poll, .. } = parsed.steps[0] {
+            let p = poll.as_ref().expect("poll should be Some");
+            assert_eq!(p.interval, 5);
+            assert_eq!(p.attempts, 10);
+        } else {
+            panic!("expected Run step");
+        }
+    }
+
+    #[test]
+    fn run_step_rejects_missing_name() {
+        let toml = r#"
+[[steps]]
+action = "run"
+run = "true"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let result = TestToml::parse(&path);
+        assert!(result.is_err(), "run step without 'name' should fail");
     }
 }
