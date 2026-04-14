@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 const SEAFILE_DOMAIN = process.env.SEAFILE_DOMAIN || "seafile.localhost:8443";
 const SEAFILE_URL = `https://${SEAFILE_DOMAIN}`;
-const AUTHELIA_USER = process.env.AUTHELIA_USER || "admin";
+const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
 /** Fill in Authelia's login form and submit. */

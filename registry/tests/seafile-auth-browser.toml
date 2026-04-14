@@ -15,7 +15,7 @@ service = "caddy"
 [[steps]]
 action = "shell"
 name = "add-authelia"
-run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
+run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
 ryra add authelia --url https://auth.localhost:8443"""
 timeout = 300
 
@@ -49,4 +49,4 @@ action = "playwright"
 name = "playwright-sso"
 spec = "seafile-auth.spec.ts"
 timeout = 120
-env = { SEAFILE_DOMAIN = "seafile.localhost:8443", AUTHELIA_PASSWORD = "testpassword123" }
+env = { SEAFILE_DOMAIN = "seafile.localhost:8443", AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }
