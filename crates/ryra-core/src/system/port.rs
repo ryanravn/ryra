@@ -15,7 +15,7 @@ pub fn allocate_port(config: &Config) -> Result<u16> {
         .collect();
 
     (PORT_RANGE_START..PORT_RANGE_END)
-        .find(|p| !used.contains(p))
+        .find(|p| !used.contains(p) && !is_port_in_use(*p))
         .ok_or(Error::PortsExhausted {
             start: PORT_RANGE_START,
             end: PORT_RANGE_END,
@@ -25,4 +25,5 @@ pub fn allocate_port(config: &Config) -> Result<u16> {
 /// Check if a port is already bound on the host.
 pub fn is_port_in_use(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_err()
+        || TcpListener::bind(("::1", port)).is_err()
 }
