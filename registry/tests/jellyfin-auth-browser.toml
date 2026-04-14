@@ -11,12 +11,12 @@ service = "caddy"
 action = "wait"
 service = "caddy"
 
-# Install authelia
+# Install authelia with .localhost domain (resolves to 127.0.0.1 via RFC 6761)
 [[steps]]
 action = "run"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --url https://auth.test.local:8443"""
+ryra add authelia --url https://auth.localhost:8443"""
 timeout = 300
 
 [[steps]]
@@ -33,12 +33,6 @@ timeout = 300
 [[steps]]
 action = "wait"
 service = "jellyfin"
-
-# Set up /etc/hosts for domain resolution inside the VM
-[[steps]]
-action = "run"
-name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
 
 # Wait for Jellyfin HTTP
 [[steps]]
@@ -91,13 +85,8 @@ timeout = 90
 
 # Run playwright SSO tests
 [[steps]]
-action = "assert"
+action = "browser"
 name = "playwright-sso-tests"
-run = """
-export PATH="$HOME/.bun/bin:$PATH"
-export JELLYFIN_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
-cd /opt/ryra-test-registry/tests/browser
-ln -sf /opt/playwright/node_modules .
-bunx playwright test jellyfin-auth.spec.ts --reporter=list
-"""
+spec = "jellyfin-auth.spec.ts"
 timeout = 120
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }
