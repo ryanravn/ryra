@@ -67,13 +67,13 @@ test("clicking SSO button initiates OIDC flow", async ({ browser }) => {
 
   // Should redirect to Open WebUI's OIDC handler, then to Authelia
   await page.waitForURL(
-    (url) => url.hostname === "auth.test.local" || url.pathname.includes("/oauth/oidc"),
+    (url) => url.hostname === "auth.localhost" || url.pathname.includes("/oauth/oidc"),
     { timeout: 15_000 },
   );
   const url = page.url();
   // Either at Authelia or at Open WebUI's OIDC handler (both mean SSO flow started)
   expect(
-    url.includes("auth.test.local") || url.includes("/oauth/oidc")
+    url.includes("auth.localhost") || url.includes("/oauth/oidc")
   ).toBe(true);
   await context.close();
 });
@@ -97,7 +97,7 @@ test("full OIDC login through Authelia creates a session", async ({
 
   // 2. Wait for redirect to Authelia (goes through Open WebUI's /oauth/oidc/login first)
   await page.waitForURL(
-    (url) => url.hostname === "auth.test.local",
+    (url) => url.hostname === "auth.localhost",
     { timeout: 15_000 },
   );
 

@@ -55,7 +55,7 @@ test("SSO login through Authelia", async ({ browser }) => {
   await page.goto(`${JELLYFIN_URL}/sso/OID/start/authelia`);
 
   // Should redirect to Authelia login
-  await page.waitForURL((url) => url.hostname === "auth.test.local", {
+  await page.waitForURL((url) => url.hostname === "auth.localhost", {
     timeout: 10_000,
   });
 

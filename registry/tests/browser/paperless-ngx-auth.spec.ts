@@ -65,7 +65,7 @@ test("full OIDC login through Authelia creates a session", async ({ browser }) =
 
   // 3. Should redirect to Authelia
   await page.waitForURL(
-    (url) => url.hostname === "auth.test.local",
+    (url) => url.hostname === "auth.localhost",
     { timeout: 15_000 },
   );
 
