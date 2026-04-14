@@ -783,16 +783,33 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Pull if not in local store
-    let exists = Command::new("podman")
+    // Podman sometimes doesn't recognize the docker.io/ prefix for local
+    // lookups (image exists, save) even though pull writes it that way.
+    // Try the full name first, then the short name without docker.io/.
+    let short_name = strip_docker_io(image);
+    let local_name = if Command::new("podman")
         .args(["image", "exists", image])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .await
-        .context("failed to run podman image exists")?;
-
-    if !exists.success() {
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        image
+    } else if short_name != image
+        && Command::new("podman")
+            .args(["image", "exists", short_name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    {
+        short_name
+    } else {
+        // Not in local store — pull it
         println!("    pulling {image}...");
         let status = Command::new("podman")
             .args(["pull", image])
@@ -804,11 +821,12 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
         if !status.success() {
             anyhow::bail!("podman pull {image} failed");
         }
-    }
+        image
+    };
 
     println!("    saving {image}...");
     let status = Command::new("podman")
-        .args(["save", "-o", &tar_path.display().to_string(), image])
+        .args(["save", "-o", &tar_path.display().to_string(), local_name])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -820,6 +838,16 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Strip the `docker.io/` or `docker.io/library/` prefix from an image name.
+/// Podman sometimes doesn't recognize the prefix for local operations even
+/// though `podman pull` stores images with it.
+fn strip_docker_io(image: &str) -> &str {
+    image
+        .strip_prefix("docker.io/library/")
+        .or_else(|| image.strip_prefix("docker.io/"))
+        .unwrap_or(image)
 }
 
 fn sanitize_image_name(image: &str) -> String {
