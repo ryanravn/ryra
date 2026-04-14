@@ -279,6 +279,34 @@ pub async fn run(args: Args) -> Result<()> {
         return Ok(());
     }
 
+    // --keep-alive with no tests: boot a VM and block until Ctrl-C.
+    // This path needs VM prerequisites, so handle it after the no-vm branch below.
+    let keep_alive_interactive = args.keep_alive && args.tests.is_empty();
+
+    if discovered.is_empty() && !keep_alive_interactive {
+        anyhow::bail!("no tests found in registry at {}", registry_path.display());
+    }
+
+    // Filter tests (independent of VM prep — safe to do first)
+    let to_run: Vec<_> = if args.tests.is_empty() {
+        discovered.iter().collect()
+    } else {
+        discovered
+            .iter()
+            .filter(|t| args.tests.iter().any(|f| t.name().contains(f.as_str())))
+            .collect()
+    };
+
+    if to_run.is_empty() && !keep_alive_interactive {
+        anyhow::bail!("no tests matched the given filters");
+    }
+
+    // --no-vm: run entirely on the host. Skip all VM prerequisites, binary
+    // lookup, and image preparation since none of it is needed in bare mode.
+    if args.no_vm {
+        return run_bare(&args, &to_run, &registry_path).await;
+    }
+
     let use_kvm = !args.no_kvm;
     ryra_vm::check_prerequisites(use_kvm)?;
 
@@ -308,35 +336,12 @@ pub async fn run(args: Args) -> Result<()> {
 
     let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm, max_memory).await?;
 
-    // --keep-alive with no tests: boot a VM and block until Ctrl-C
-    if args.keep_alive && args.tests.is_empty() {
+    if keep_alive_interactive {
         return run_interactive_vm(&base_image, &spawn_opts, &ryra_bin, &registry_path).await;
-    }
-
-    if discovered.is_empty() {
-        anyhow::bail!("no tests found in registry at {}", registry_path.display());
     }
 
     let base_image = std::sync::Arc::new(base_image);
     let registry_path = std::sync::Arc::new(registry_path);
-
-    // Filter tests
-    let to_run: Vec<_> = if args.tests.is_empty() {
-        discovered.iter().collect()
-    } else {
-        discovered
-            .iter()
-            .filter(|t| args.tests.iter().any(|f| t.name().contains(f.as_str())))
-            .collect()
-    };
-
-    if to_run.is_empty() {
-        anyhow::bail!("no tests matched the given filters");
-    }
-
-    if args.no_vm {
-        return run_bare(&args, &to_run, &registry_path).await;
-    }
 
     // Prepare browser image only if a filtered test actually needs it
     let any_needs_browser = to_run.iter().any(|t| t.needs_browser());
