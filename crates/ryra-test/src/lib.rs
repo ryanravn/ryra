@@ -72,6 +72,10 @@ pub struct Args {
     #[arg(long)]
     pub no_kvm: bool,
 
+    /// Run tests directly on the host without a VM
+    #[arg(long)]
+    pub no_vm: bool,
+
     /// VM memory in MB (overrides auto-detection from service requirements)
     #[arg(long)]
     pub memory: Option<u32>,
@@ -328,6 +332,10 @@ pub async fn run(args: Args) -> Result<()> {
 
     if to_run.is_empty() {
         anyhow::bail!("no tests matched the given filters");
+    }
+
+    if args.no_vm {
+        return run_bare(&args, &to_run, &registry_path).await;
     }
 
     // Prepare browser image only if a filtered test actually needs it
@@ -606,4 +614,82 @@ async fn run_interactive_vm(
     println!("\nShutting down VM...");
     vm.destroy().await?;
     Ok(())
+}
+
+/// Run tests directly on the host without a VM.
+async fn run_bare(
+    args: &Args,
+    to_run: &[&registry::DiscoveredTest],
+    registry_path: &Path,
+) -> Result<()> {
+    let wall_clock = std::time::Instant::now();
+    let executor = crate::executor::LocalExecutor;
+    let mut results = Vec::new();
+    let single_test = to_run.len() == 1;
+
+    println!("\nRunning {} tests on host (bare mode)\n", to_run.len());
+
+    for test in to_run {
+        let name = test.name().to_string();
+        println!("---- START {name} (bare) ----");
+
+        let start = std::time::Instant::now();
+        let result = match test {
+            registry::DiscoveredTest::Lifecycle { steps, .. } => {
+                runner::run_lifecycle_test(
+                    &executor,
+                    &name,
+                    steps,
+                    args.verbose,
+                    single_test,
+                    registry_path,
+                )
+                .await
+            }
+            registry::DiscoveredTest::Simple { .. } => {
+                runner::run_registry_test(&executor, test).await
+            }
+        };
+
+        let status = if result.passed() { "PASS" } else { "FAIL" };
+        println!(
+            "---- END {name} ({status}, {:.1}s) ----",
+            start.elapsed().as_secs_f64()
+        );
+        results.push(result);
+    }
+
+    print_summary(&results, wall_clock.elapsed());
+    save_results(&results)?;
+
+    if results.iter().any(|r| !r.passed()) {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod args_tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn no_vm_flag_parses() {
+        let args = Args::try_parse_from(["ryra-test", "--no-vm"]).expect("parse");
+        assert!(args.no_vm);
+    }
+
+    #[test]
+    fn no_vm_flag_default_false() {
+        let args = Args::try_parse_from(["ryra-test"]).expect("parse");
+        assert!(!args.no_vm);
+    }
+
+    #[test]
+    fn no_vm_flag_appears_in_help() {
+        let mut cmd = Args::command();
+        let help = cmd.render_long_help().to_string();
+        assert!(help.contains("--no-vm"), "help missing --no-vm: {help}");
+    }
 }
