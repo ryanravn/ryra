@@ -390,17 +390,22 @@ async fn run_browser_step(
     let test_name_esc = shell_escape(test_name);
 
     // Shell command:
-    // 1. Pre-create the canonical report directory and tell playwright to
+    // 1. Source all service .env files so port vars (RYRA_PORT_HTTP etc.) are
+    //    available to the spec. Static env from the toml step overrides these.
+    // 2. Pre-create the canonical report directory and tell playwright to
     //    emit the HTML report directly there (no intermediate copy step).
-    // 2. cd into the browser test dir.
-    // 3. Ensure node_modules exists — symlink /opt/playwright/node_modules
+    // 3. cd into the browser test dir.
+    // 4. Ensure node_modules exists — symlink /opt/playwright/node_modules
     //    in the VM image, or `bun install` on a bare host.
-    // 4. Export env vars from the step.
-    // 5. Run playwright with the html reporter pointed at the canonical path.
+    // 5. Export env vars from the step (overrides sourced vars).
+    // 6. Run playwright with the html reporter pointed at the canonical path.
     //    Also use the list reporter so the user sees live progress.
-    // 6. Exit with playwright's own exit code.
+    // 7. Exit with playwright's own exit code.
     let cmd = format!(
-        "DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}/playwright\" && \
+        "for env_file in $HOME/.local/share/ryra/*/.env; do \
+           [ -f \"$env_file\" ] && . \"$env_file\"; \
+         done && \
+         DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}/playwright\" && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
          if [ ! -d node_modules ]; then \
