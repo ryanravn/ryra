@@ -64,7 +64,4 @@ OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
 OAUTH_ISSUER_URL = "{{auth.issuer}}"
 OAUTH_REDIRECT_URL = "{{service.url}}/auth/login"
 OAUTHLIB_INSECURE_TRANSPORT = "1"
-# Immich uses the external HTTPS issuer URL for both browser redirects and
-# server-side token exchange. Skip TLS verification so it works with Caddy's
-# self-signed cert without requiring root to trust the CA.
 NODE_TLS_REJECT_UNAUTHORIZED = "0"
