@@ -647,8 +647,19 @@ async fn ensure_tls_configured(
         return Ok(());
     }
 
-    // Not configured yet — prompt or error
+    // Not configured yet. In non-interactive mode, auto-configure TLS via Caddy
+    // if Caddy is already installed — the user has implicitly opted in by
+    // installing Caddy first. Otherwise bail with a helpful message.
     if !interactive {
+        let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+        if caddy_installed {
+            let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+            config.tls = Some(TlsConfig::Caddy);
+            paths.ensure_dirs()?;
+            ryra_core::config::save_config(&paths.config_file, &config)?;
+            println!("  TLS auto-configured (provider: caddy)");
+            return Ok(());
+        }
         bail!(
             "this service requires HTTPS — configure [tls] in ryra.toml first\n\
              Example:\n  [tls]\n  provider = \"caddy\""
