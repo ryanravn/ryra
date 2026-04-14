@@ -1,28 +1,70 @@
 import { test, expect } from "@playwright/test";
 
-const SEAFILE_PORT = process.env.SEAFILE_PORT || "80";
-const SEAFILE_URL = `http://127.0.0.1:${SEAFILE_PORT}`;
+const SEAFILE_DOMAIN = process.env.SEAFILE_DOMAIN || "seafile.localhost:8443";
+const SEAFILE_URL = `https://${SEAFILE_DOMAIN}`;
+const AUTHELIA_USER = process.env.AUTHELIA_USER || "admin";
+const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-test("seafile login page loads", async ({ page }) => {
-  await page.goto(SEAFILE_URL);
-  await expect(page.locator("body")).toContainText(/seafile|log in|sign in/i, {
+/** Fill in Authelia's login form and submit. */
+async function loginToAuthelia(page: import("@playwright/test").Page) {
+  // Wait for Authelia's React app to fully hydrate before interacting.
+  await page.waitForLoadState("networkidle");
+  await page.waitForFunction(
+    () => {
+      const root = document.getElementById("root");
+      return root && (Object.keys(root).some(k => k.startsWith("__react")) || (root as any)._reactRootContainer);
+    },
+    { timeout: 10_000 },
+  ).catch(() => {
+    // Fallback: if React detection fails, just wait a bit
+  });
+  const usernameInput = page.locator("#username-textfield");
+  await expect(usernameInput).toBeVisible({ timeout: 15_000 });
+  await expect(usernameInput).toBeEditable({ timeout: 5_000 });
+
+  await usernameInput.fill(AUTHELIA_USER);
+  await page.locator("#password-textfield").fill(AUTHELIA_PASSWORD);
+  await page.getByRole("button", { name: /sign in/i }).click();
+
+  // Accept consent screen if shown (Authelia shows this on first OIDC login)
+  try {
+    const consent = page.getByRole("button", { name: /accept/i });
+    await consent.click({ timeout: 10_000 });
+  } catch {
+    // No consent screen — already authorized or auto-consented
+  }
+}
+
+test("full OIDC login through Authelia creates a seafile session", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  const page = await context.newPage();
+
+  // 1. Go to seafile login page
+  await page.goto(`${SEAFILE_URL}/accounts/login/`);
+  await expect(page.getByRole("heading", { name: "Log In" })).toBeVisible({
     timeout: 15_000,
   });
-});
 
-test("seafile OAuth endpoint initiates OIDC flow", async ({ page }) => {
-  // Seafile doesn't show an OAuth button on the login page by default,
-  // but the /oauth/login/ endpoint is available when ENABLE_OAUTH = True.
-  // Navigating to it should redirect to the auth provider.
-  const response = await page.goto(`${SEAFILE_URL}/oauth/login/`, {
-    waitUntil: "domcontentloaded",
-    timeout: 15_000,
+  // 2. Click the "Single Sign-On" button to initiate OIDC flow
+  const ssoButton = page.getByRole("button", { name: /single sign-on/i });
+  await expect(ssoButton).toBeVisible();
+  await ssoButton.click();
+
+  // 3. Should redirect to Authelia — fill in credentials
+  await loginToAuthelia(page);
+
+  // 4. Should be redirected back to seafile, now authenticated
+  await page.waitForURL(
+    (url) => url.hostname === SEAFILE_DOMAIN.split(":")[0],
+    { timeout: 15_000 },
+  );
+
+  // 5. Verify we're logged in — seafile shows the Files page with sidebar nav
+  await expect(page.getByRole("heading", { name: "Files" })).toBeVisible({
+    timeout: 10_000,
   });
 
-  // Should redirect (302) to the OAuth authorization URL, not return 404
-  const url = page.url();
-  expect(url).not.toContain("/accounts/login");
-  // Should have been redirected away from seafile (to auth provider)
-  // or at least not got a 404
-  expect(response?.status()).not.toBe(404);
+  await context.close();
 });
