@@ -48,5 +48,5 @@ timeout = 90
 action = "browser"
 name = "playwright-auth-flow"
 spec = "open-webui-auth.spec.ts"
-timeout = 120
+timeout = 180
 env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

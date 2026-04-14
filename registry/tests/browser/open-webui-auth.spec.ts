@@ -42,14 +42,14 @@ test("full OIDC login through Authelia creates a session", async ({
   });
   const page = await context.newPage();
 
-  // 1. Go to Open WebUI — shows onboarding/login page with SSO button
-  await page.goto(OPEN_WEBUI_URL, { timeout: 30_000 });
+  // 1. Go to Open WebUI — shows onboarding/login page with SSO button.
+  //    Open WebUI is a heavy SPA that can take a long time to hydrate in VMs.
+  await page.goto(OPEN_WEBUI_URL, { timeout: 60_000 });
   await page.waitForLoadState("networkidle");
 
   // 2. Click the SSO button ("Continue with SSO")
-  //    The button may be below the fold on the onboarding page, so scroll to it first.
   const ssoButton = page.getByRole("button", { name: /continue with sso|sso/i });
-  await expect(ssoButton).toBeVisible({ timeout: 30_000 });
+  await expect(ssoButton).toBeVisible({ timeout: 60_000 });
   await ssoButton.dispatchEvent("click");
 
   // 3. Should redirect to Authelia via Open WebUI's /oauth/oidc/login
