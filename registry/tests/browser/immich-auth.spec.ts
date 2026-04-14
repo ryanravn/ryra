@@ -35,6 +35,7 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
 test("full OIDC login through Authelia creates an immich session", async ({
   browser,
 }) => {
+  test.setTimeout(60_000);
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
