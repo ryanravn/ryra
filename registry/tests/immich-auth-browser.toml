@@ -13,10 +13,10 @@ service = "caddy"
 
 # Install authelia with .localhost domain (resolves to 127.0.0.1 via RFC 6761)
 [[steps]]
-action = "shell"
-name = "add-authelia"
-run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --url https://auth.localhost:8443"""
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 
 [[steps]]
@@ -25,11 +25,10 @@ service = "authelia"
 
 # Install immich with OIDC auth
 [[steps]]
-action = "shell"
-name = "add-immich"
-run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
-INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
-ryra add immich --auth"""
+action = "add"
+service = "immich"
+args = "--auth"
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]
@@ -38,9 +37,11 @@ service = "immich"
 
 # Wait for immich HTTP
 [[steps]]
-action = "shell"
+action = "http"
 name = "immich-http-ready"
-run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
+service = "immich"
+poll = { interval = 5, attempts = 60 }
 timeout = 360
 
 # Create admin user

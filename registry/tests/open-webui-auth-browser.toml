@@ -14,10 +14,10 @@ service = "caddy"
 
 # Install authelia with .localhost domain (resolves to 127.0.0.1 via RFC 6761)
 [[steps]]
-action = "shell"
-name = "add-authelia"
-run = """AUTHELIA_ADMIN_USER=testuser AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --url https://auth.localhost:8443"""
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 
 [[steps]]
@@ -26,10 +26,10 @@ service = "authelia"
 
 # Install open-webui with OIDC auth
 [[steps]]
-action = "shell"
-name = "add-open-webui"
-run = """OLLAMA_BASE_URL= \
-ryra add open-webui --auth"""
+action = "add"
+service = "open-webui"
+args = "--auth"
+env = { OLLAMA_BASE_URL = "" }
 timeout = 600
 
 [[steps]]
@@ -38,9 +38,11 @@ service = "open-webui"
 
 # Wait for open-webui to respond
 [[steps]]
-action = "shell"
+action = "http"
 name = "open-webui-responds"
-run = "for i in $(seq 1 30); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/open-webui/.env | cut -d= -f2) | grep -qE '^(200|302)' && exit 0; sleep 2; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "open-webui"
+poll = { interval = 2, attempts = 30 }
 timeout = 90
 
 # Run playwright SSO tests

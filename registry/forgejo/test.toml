@@ -1,16 +1,26 @@
-[setup]
-services = ["forgejo"]
+[[steps]]
+action = "add"
+service = "forgejo"
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "forgejo"
+
+[[steps]]
+action = "http"
 name = "forgejo-responds"
-run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "forgejo"
+poll = { interval = 2, attempts = 30 }
 timeout = 90
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "postgres-not-on-localhost"
 run = "! ss -tlnp | grep -q ':5432 '"
 timeout = 5
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/forgejo"

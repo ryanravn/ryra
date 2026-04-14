@@ -1,17 +1,29 @@
-[setup]
-services = ["ente"]
+[[steps]]
+action = "add"
+service = "ente"
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "ente"
+
+[[steps]]
+action = "http"
 name = "api-ping"
-run = "for i in $(seq 1 60); do curl -sf http://localhost:$RYRA_PORT_HTTP/ping && exit 0; sleep 2; done; exit 1"
+url = "http://localhost:$RYRA_PORT_HTTP/ping"
+service = "ente"
+poll = { interval = 2, attempts = 60 }
 timeout = 150
 
-[[tests]]
+[[steps]]
+action = "http"
 name = "photos-web"
-run = "for i in $(seq 1 30); do curl -so /dev/null -w '%{http_code}' http://localhost:$RYRA_PORT_PHOTOS/ | grep -q '200' && exit 0; sleep 2; done; exit 1"
+url = "http://localhost:$RYRA_PORT_PHOTOS/"
+service = "ente"
+poll = { interval = 2, attempts = 30 }
 timeout = 90
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/ente"
 timeout = 5

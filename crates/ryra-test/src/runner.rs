@@ -483,23 +483,11 @@ pub async fn run_lifecycle_test(
     }
 
     for step in steps {
-        // In retest mode, skip setup steps and only run test steps.
-        // Setup = add/wait/remove/reset + shell steps that call ryra add/remove/reset.
-        if retest {
-            let is_setup = match step {
-                StepDef::Add { .. } | StepDef::Remove { .. } | StepDef::Reset | StepDef::Wait { .. } => true,
-                StepDef::Shell { run, .. } => {
-                    let trimmed = run.trim_start();
-                    // Shell steps that are wrappers around ryra add/remove
-                    trimmed.contains("ryra add ") || trimmed.contains("ryra remove ") || trimmed.contains("ryra reset")
-                }
-                _ => false,
-            };
-            if is_setup {
-                let desc = step.step_name();
-                println!("{p}  skip  {desc} (retest)");
-                continue;
-            }
+        // In retest mode, skip setup steps and only run test/assertion steps.
+        if retest && step.is_setup() {
+            let desc = step.step_name();
+            println!("{p}  skip  {desc} (retest)");
+            continue;
         }
 
         if failed {
@@ -515,15 +503,25 @@ pub async fn run_lifecycle_test(
         }
 
         match step {
-            StepDef::Add { service, args } => {
+            StepDef::Add {
+                service,
+                args,
+                env,
+                timeout,
+            } => {
                 println!("{p}  ryra add {service}...");
-                let cmd = match args.as_deref() {
-                    Some(a) if !a.is_empty() => {
-                        format!("ryra add {service} {a}")
-                    }
-                    _ => format!("ryra add {service}"),
-                };
-                let event = run_event(vm, EventKind::Step, &cmd, 300).await;
+                let mut cmd = String::new();
+                for (key, val) in env {
+                    let escaped = shell_escape(val);
+                    cmd.push_str(&format!("{key}='{escaped}' "));
+                }
+                cmd.push_str(&format!("ryra add {service}"));
+                if let Some(a) = args.as_deref()
+                    && !a.is_empty()
+                {
+                    cmd.push_str(&format!(" {a}"));
+                }
+                let event = run_event(vm, EventKind::Step, &cmd, *timeout).await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
@@ -572,6 +570,45 @@ pub async fn run_lifecycle_test(
                 println!("{p}  run: {step_name}...");
                 let event = run_step_with_poll(
                     vm, step_name, run, *timeout, poll.as_ref(), verbose, stream_prefix,
+                )
+                .await;
+                print_event_result(&p, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
+            StepDef::Http {
+                name: http_name,
+                url,
+                status,
+                service,
+                poll,
+                timeout,
+            } => {
+                let step_name = http_name.as_deref().unwrap_or(url);
+                println!("{p}  http: {step_name}...");
+                // Source service .env files for variable expansion ($RYRA_PORT_HTTP etc.),
+                // follow redirects (-L), skip TLS verification (-k) for self-signed certs.
+                // URL uses double quotes so shell variables expand.
+                let url_esc = url.replace('"', r#"\""#);
+                let env_source = match service {
+                    Some(svc) => format!(". $HOME/.local/share/ryra/{svc}/.env"),
+                    None => "for f in $HOME/.local/share/ryra/*/.env; do [ -f \"$f\" ] && . \"$f\"; done".to_string(),
+                };
+                let cmd = format!(
+                    "set -a && {env_source} && set +a && \
+                     HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' \"{url_esc}\") && \
+                     [ \"$HTTP_CODE\" = \"{status}\" ]"
+                );
+                let event = run_step_with_poll(
+                    vm,
+                    step_name,
+                    &cmd,
+                    *timeout,
+                    poll.as_ref(),
+                    verbose,
+                    stream_prefix,
                 )
                 .await;
                 print_event_result(&p, &event);

@@ -1,12 +1,19 @@
-[setup]
-services = ["authelia"]
-
-[[tests]]
-name = "health-check"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+[[steps]]
+action = "add"
+service = "authelia"
 env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "authelia"
+
+[[steps]]
+action = "http"
+name = "health-check"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+service = "authelia"
+
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/authelia"
-env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }

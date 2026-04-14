@@ -1,13 +1,21 @@
-[setup]
-services = ["seafile"]
-
-[[tests]]
-name = "seafile-responds"
-run = "for i in $(seq 1 120); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
-timeout = 660
+[[steps]]
+action = "add"
+service = "seafile"
 env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "seafile"
+
+[[steps]]
+action = "http"
+name = "seafile-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "seafile"
+poll = { interval = 5, attempts = 120 }
+timeout = 660
+
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/seafile"
-env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }

@@ -1,11 +1,20 @@
-[setup]
-services = ["uptime-kuma"]
+[[steps]]
+action = "add"
+service = "uptime-kuma"
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "uptime-kuma"
+
+[[steps]]
+action = "http"
 name = "http-responds"
-run = "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP && exit 0; sleep 2; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "uptime-kuma"
+poll = { interval = 2, attempts = 20 }
 timeout = 60
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/uptime-kuma"

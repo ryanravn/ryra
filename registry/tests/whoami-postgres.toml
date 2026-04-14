@@ -1,15 +1,39 @@
-[setup]
-services = ["whoami", "postgres"]
+[test]
+name = "whoami-postgres"
 
-[[tests]]
+# Add services
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "add"
+service = "postgres"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "wait"
+service = "postgres"
+
+# Verify whoami responds
+[[steps]]
+action = "http"
 name = "whoami-responds"
-run = "curl -sf http://127.0.0.1:$WHOAMI__RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "whoami"
 
-[[tests]]
+# Verify postgres accepts connections
+[[steps]]
+action = "shell"
 name = "postgres-accepts-connections"
-run = "for i in $(seq 1 5); do PGPASSWORD=$POSTGRES__POSTGRES_PASSWORD psql -h 127.0.0.1 -p $POSTGRES__RYRA_PORT_TCP -U $POSTGRES__POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1"
+run = ". $HOME/.local/share/ryra/postgres/.env && for i in $(seq 1 5); do PGPASSWORD=$POSTGRES_PASSWORD psql -h 127.0.0.1 -p $RYRA_PORT_TCP -U $POSTGRES_USER -c 'SELECT 1' && exit 0; sleep 2; done; exit 1"
 timeout = 60
 
-[[tests]]
+# Verify both services are active
+[[steps]]
+action = "shell"
 name = "both-services-active"
 run = "systemctl --user is-active whoami.service && systemctl --user is-active postgres.service"

@@ -1,9 +1,21 @@
-[[tests]]
+[[steps]]
+action = "add"
+service = "vikunja"
+
+[[steps]]
+action = "wait"
+service = "vikunja"
+
+[[steps]]
+action = "http"
 name = "vikunja-responds"
-run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP -o /dev/null && exit 0; sleep 2; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "vikunja"
+poll = { interval = 2, attempts = 30 }
 timeout = 90
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/vikunja"
 timeout = 10

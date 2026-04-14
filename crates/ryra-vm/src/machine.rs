@@ -744,8 +744,9 @@ async fn write_seed_iso(
     Ok(())
 }
 
-/// Cache directory for saved container images on the host.
 /// Get the host's podman container storage root (e.g., ~/.local/share/containers/storage).
+/// This directory is shared into VMs via 9p so images pre-pulled on the host
+/// are available instantly without re-downloading.
 pub async fn host_podman_graph_root() -> Result<PathBuf> {
     let output = Command::new("podman")
         .args(["info", "--format", "{{.Store.GraphRoot}}"])
@@ -783,7 +784,6 @@ fn cache_base_dir() -> Result<PathBuf> {
 /// The host's store is shared into VMs via 9p + additionalimagestores,
 /// so pulling here makes the image instantly available in all VMs.
 pub async fn ensure_image_cached(image: &str) -> Result<()> {
-    // Check if already pulled (avoids the pull overhead on repeat runs)
     let check = Command::new("podman")
         .args(["image", "exists", image])
         .stdout(Stdio::null())
@@ -814,8 +814,7 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
 /// Make host container images available in the VM via 9p shared store.
 ///
 /// Mounts the host's podman storage (shared via QEMU virtfs) and configures
-/// podman's `additionalimagestores` to read from it. Images are available
-/// instantly — no `podman load` needed.
+/// podman's `additionalimagestores` to read from it.
 pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
     // Mount the host's podman store (shared via 9p virtfs in Machine::spawn)
     machine
@@ -832,42 +831,6 @@ pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Resul
         )
         .await
         .context("failed to configure additionalimagestores in VM")?;
-
-    // Copy host's container registry auth so the VM can pull as a fallback
-    // (additionalimagestores may not work across rootless/root boundary)
-    copy_container_auth(machine).await.ok();
-
-    Ok(())
-}
-
-/// Copy the host's container registry auth config into the VM.
-/// This allows the VM to pull images if the shared store doesn't work.
-async fn copy_container_auth(machine: &Machine) -> Result<()> {
-    // Try common auth file locations
-    let auth_paths = [
-        dirs::runtime_dir()
-            .map(|d| d.join("containers/auth.json")),
-        dirs::config_dir()
-            .map(|d| d.join("containers/auth.json")),
-        Some(std::path::PathBuf::from(
-            std::env::var("HOME").unwrap_or_default(),
-        ).join(".docker/config.json")),
-    ];
-
-    for path in auth_paths.iter().flatten() {
-        if path.exists() {
-            machine
-                .exec("mkdir -p /root/.config/containers")
-                .await
-                .ok();
-            if scp_to_vm(machine, path, "/root/.config/containers/auth.json")
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
-        }
-    }
 
     Ok(())
 }

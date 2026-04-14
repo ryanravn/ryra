@@ -16,33 +16,38 @@ use std::io::IsTerminal;
 
 use ryra_core::Step;
 
+/// A system CA certificate to install or remove, with the distro-specific
+/// trust store path and update command.
+struct CaCertTarget {
+    cert_path: &'static str,
+    update_cmd: &'static str,
+}
+
+const CA_TARGETS: &[CaCertTarget] = &[
+    // Fedora / RHEL
+    CaCertTarget {
+        cert_path: "/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt",
+        update_cmd: "update-ca-trust",
+    },
+    // Arch Linux
+    CaCertTarget {
+        cert_path: "/etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt",
+        update_cmd: "update-ca-trust",
+    },
+    // Debian / Ubuntu
+    CaCertTarget {
+        cert_path: "/usr/local/share/ca-certificates/ryra-caddy-ca.crt",
+        update_cmd: "update-ca-certificates",
+    },
+];
+
 /// Remove Caddy's CA certificate from system and browser trust stores.
 /// Called during reset and when removing caddy.
 pub fn remove_caddy_ca() {
-    let mut sudo_commands = Vec::new();
-
-    // System trust store (Fedora)
-    if std::path::Path::new("/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt").exists() {
-        sudo_commands.push(
-            "sudo rm -f /etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust"
-                .to_string(),
-        );
-    }
-    // System trust store (Arch)
-    if std::path::Path::new("/etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt").exists()
-    {
-        sudo_commands.push(
-            "sudo rm -f /etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust"
-                .to_string(),
-        );
-    }
-    // System trust store (Debian/Ubuntu)
-    if std::path::Path::new("/usr/local/share/ca-certificates/ryra-caddy-ca.crt").exists() {
-        sudo_commands.push(
-            "sudo rm -f /usr/local/share/ca-certificates/ryra-caddy-ca.crt && sudo update-ca-certificates"
-                .to_string(),
-        );
-    }
+    let installed: Vec<&CaCertTarget> = CA_TARGETS
+        .iter()
+        .filter(|t| std::path::Path::new(t.cert_path).exists())
+        .collect();
 
     // Browser trust store (NSS — Chromium/Brave/Chrome)
     let nssdb = std::env::var("HOME")
@@ -50,26 +55,30 @@ pub fn remove_caddy_ca() {
         .map(|h| std::path::PathBuf::from(h).join(".pki/nssdb"))
         .filter(|p| p.exists());
     if let Some(ref nssdb_path) = nssdb {
+        let nss_arg = format!("sql:{}", nssdb_path.display());
         let in_nss = std::process::Command::new("certutil")
-            .args(["-d", &format!("sql:{}", nssdb_path.display()), "-L", "-n", "ryra-caddy-ca"])
+            .args(["-d", &nss_arg, "-L", "-n", "ryra-caddy-ca"])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
         if in_nss {
             let _ = std::process::Command::new("certutil")
-                .args(["-d", &format!("sql:{}", nssdb_path.display()), "-D", "-n", "ryra-caddy-ca"])
+                .args(["-d", &nss_arg, "-D", "-n", "ryra-caddy-ca"])
                 .status();
         }
     }
 
-    if sudo_commands.is_empty() {
+    if installed.is_empty() {
         return;
     }
 
     let interactive = std::io::stdin().is_terminal();
     println!("\n  Removing Caddy CA from system trust store:");
-    for cmd in &sudo_commands {
-        println!("    {cmd}");
+    for target in &installed {
+        println!(
+            "    sudo rm -f {} && sudo {}",
+            target.cert_path, target.update_cmd
+        );
     }
     if interactive {
         let run = dialoguer::Confirm::new()
@@ -77,14 +86,21 @@ pub fn remove_caddy_ca() {
             .default(true)
             .interact()
             .unwrap_or(false);
-        if run {
-            for cmd in &sudo_commands {
-                let _ = std::process::Command::new("sh").args(["-c", cmd]).status();
-            }
+        if !run {
+            return;
         }
-    } else {
-        for cmd in &sudo_commands {
-            let _ = std::process::Command::new("sh").args(["-c", cmd]).status();
+    }
+
+    for target in &installed {
+        let rm_ok = std::process::Command::new("sudo")
+            .args(["rm", "-f", target.cert_path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if rm_ok {
+            let _ = std::process::Command::new("sudo")
+                .arg(target.update_cmd)
+                .status();
         }
     }
 }

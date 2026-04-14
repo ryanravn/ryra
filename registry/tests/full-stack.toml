@@ -12,9 +12,10 @@ service = "caddy"
 
 # Authelia — lightweight SSO (boots in seconds, no migrations)
 [[steps]]
-action = "shell"
-name = "add-authelia"
-run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --url https://auth.test.local:8443"
+action = "add"
+service = "authelia"
+args = "--url https://auth.test.local:8443"
+env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 
 [[steps]]
 action = "wait"
@@ -31,9 +32,9 @@ service = "postgres"
 
 # Whoami — with --auth for OIDC
 [[steps]]
-action = "shell"
-name = "add-whoami"
-run = "ryra add whoami --auth"
+action = "add"
+service = "whoami"
+args = "--auth"
 
 [[steps]]
 action = "wait"
@@ -41,9 +42,8 @@ service = "whoami"
 
 # Forgejo
 [[steps]]
-action = "shell"
-name = "add-forgejo"
-run = "ryra add forgejo"
+action = "add"
+service = "forgejo"
 timeout = 300
 
 [[steps]]
@@ -52,9 +52,8 @@ service = "forgejo"
 
 # Vaultwarden
 [[steps]]
-action = "shell"
-name = "add-vaultwarden"
-run = "ryra add vaultwarden"
+action = "add"
+service = "vaultwarden"
 
 [[steps]]
 action = "wait"
@@ -62,9 +61,8 @@ service = "vaultwarden"
 
 # Uptime Kuma
 [[steps]]
-action = "shell"
-name = "add-uptime-kuma"
-run = "ryra add uptime-kuma"
+action = "add"
+service = "uptime-kuma"
 
 [[steps]]
 action = "wait"
@@ -73,30 +71,37 @@ service = "uptime-kuma"
 # === Assertions: Services respond ===
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "authelia-health"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/authelia/.env | cut -d= -f2)/api/health"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+service = "authelia"
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "whoami-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "whoami"
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "forgejo-responds"
-run = "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2) && exit 0; sleep 3; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "forgejo"
+poll = { interval = 3, attempts = 20 }
 timeout = 90
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "vaultwarden-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2)"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "vaultwarden"
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "uptime-kuma-responds"
-run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/uptime-kuma/.env | cut -d= -f2) && exit 0; sleep 3; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "uptime-kuma"
+poll = { interval = 3, attempts = 10 }
 timeout = 60
 
 [[steps]]

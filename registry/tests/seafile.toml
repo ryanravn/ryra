@@ -12,10 +12,10 @@ service = "caddy"
 
 # Install authelia (OIDC provider)
 [[steps]]
-action = "shell"
-name = "add-authelia"
-run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --url https://auth.test.local:8443"""
+action = "add"
+service = "authelia"
+args = "--url https://auth.test.local:8443"
+env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 
 [[steps]]
@@ -24,11 +24,10 @@ service = "authelia"
 
 # Install seafile with OIDC auth
 [[steps]]
-action = "shell"
-name = "add-seafile"
-run = """INIT_SEAFILE_ADMIN_EMAIL=admin@test.local \
-INIT_SEAFILE_ADMIN_PASSWORD=testpassword123 \
-ryra add seafile --auth"""
+action = "add"
+service = "seafile"
+args = "--auth"
+env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]
@@ -37,9 +36,11 @@ service = "seafile"
 
 # Verify it all works
 [[steps]]
-action = "shell"
+action = "http"
 name = "http-responds"
-run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/seafile/.env | cut -d= -f2) 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "seafile"
+poll = { interval = 5, attempts = 60 }
 timeout = 360
 
 [[steps]]

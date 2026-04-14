@@ -13,10 +13,10 @@ service = "caddy"
 
 # Install authelia (shared OIDC provider)
 [[steps]]
-action = "shell"
-name = "add-authelia"
-run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --url https://auth.test.local:8443"""
+action = "add"
+service = "authelia"
+args = "--url https://auth.test.local:8443"
+env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 
 [[steps]]
@@ -25,11 +25,10 @@ service = "authelia"
 
 # Install seafile with OIDC
 [[steps]]
-action = "shell"
-name = "add-seafile"
-run = """INIT_SEAFILE_ADMIN_EMAIL=admin@test.local \
-INIT_SEAFILE_ADMIN_PASSWORD=testpassword123 \
-ryra add seafile --auth"""
+action = "add"
+service = "seafile"
+args = "--auth"
+env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]
@@ -38,11 +37,10 @@ service = "seafile"
 
 # Install immich with OIDC
 [[steps]]
-action = "shell"
-name = "add-immich"
-run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
-INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
-ryra add immich --auth"""
+action = "add"
+service = "immich"
+args = "--auth"
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]
@@ -51,9 +49,11 @@ service = "immich"
 
 # Verify seafile responds
 [[steps]]
-action = "shell"
+action = "http"
 name = "seafile-http-responds"
-run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/seafile/.env | cut -d= -f2) 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "seafile"
+poll = { interval = 5, attempts = 60 }
 timeout = 360
 
 # Verify seafile OIDC configured
@@ -64,9 +64,11 @@ run = "test -f $HOME/.local/share/ryra/seafile/shared/seafile/conf/seahub_settin
 
 # Verify immich responds
 [[steps]]
-action = "shell"
+action = "http"
 name = "immich-http-responds"
-run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
+service = "immich"
+poll = { interval = 5, attempts = 60 }
 timeout = 360
 
 # Verify immich OIDC configured

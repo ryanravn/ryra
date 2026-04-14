@@ -49,18 +49,18 @@ async fn execute(step: &Step) -> Result<()> {
             }
             Ok(())
         }
-        Step::DaemonReload => run("systemctl --user daemon-reload"),
-        Step::StartService { unit } => run(&format!("systemctl --user start {unit}")),
+        Step::DaemonReload => run_cmd("systemctl", &["--user", "daemon-reload"]),
+        Step::StartService { unit } => run_cmd("systemctl", &["--user", "start", unit]),
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped)
-            if let Err(e) = run(&format!("systemctl --user stop {unit}"))
+            if let Err(e) = run_cmd("systemctl", &["--user", "stop", unit])
                 && ryra_core::verbose::is_enabled()
             {
                 eprintln!("  Note: stopping {unit} failed (may already be stopped): {e}");
             }
             Ok(())
         }
-        Step::RestartService { unit } => run(&format!("systemctl --user restart {unit}")),
+        Step::RestartService { unit } => run_cmd("systemctl", &["--user", "restart", unit]),
         Step::ReloadCaddy => {
             println!("  Reloading Caddy config...");
             // Wait for Caddy container to be running before reload
@@ -73,8 +73,18 @@ async fn execute(step: &Step) -> Result<()> {
                     .map(|s| s.success())
                     .unwrap_or(false)
                 {
-                    return run(
-                        "podman exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
+                    return run_cmd(
+                        "podman",
+                        &[
+                            "exec",
+                            "caddy",
+                            "caddy",
+                            "reload",
+                            "--config",
+                            "/etc/caddy/Caddyfile",
+                            "--adapter",
+                            "caddyfile",
+                        ],
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -85,9 +95,8 @@ async fn execute(step: &Step) -> Result<()> {
         }
         Step::PullImage { image } => {
             // Skip if already available
-            let check = format!("podman image exists {image}");
-            if Command::new("sh")
-                .args(["-c", &check])
+            if Command::new("podman")
+                .args(["image", "exists", image])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -98,7 +107,7 @@ async fn execute(step: &Step) -> Result<()> {
                 return Ok(());
             }
             println!("  Pulling {image}...");
-            run(&format!("podman pull {image}"))
+            run_cmd("podman", &["pull", image])
         }
         Step::RemoveFile(path) => std::fs::remove_file(path)
             .with_context(|| format!("failed to remove {}", path.display())),
@@ -122,14 +131,16 @@ async fn execute(step: &Step) -> Result<()> {
     }
 }
 
-fn run(cmd: &str) -> Result<()> {
-    println!("  $ {cmd}");
-    let status = Command::new("sh")
-        .args(["-c", cmd])
+/// Run a command with explicit program and args (no shell interpretation).
+fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
+    let display = format!("{program} {}", args.join(" "));
+    println!("  $ {display}");
+    let status = Command::new(program)
+        .args(args)
         .status()
-        .with_context(|| format!("failed to run: {cmd}"))?;
+        .with_context(|| format!("failed to run: {display}"))?;
     if !status.success() {
-        bail!("command failed: {cmd}");
+        bail!("command failed: {display}");
     }
     Ok(())
 }

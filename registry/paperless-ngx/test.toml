@@ -1,9 +1,21 @@
-[[tests]]
+[[steps]]
+action = "add"
+service = "paperless-ngx"
+
+[[steps]]
+action = "wait"
+service = "paperless-ngx"
+
+[[steps]]
+action = "http"
 name = "paperless-ngx-responds"
-run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP -o /dev/null && exit 0; sleep 2; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "paperless-ngx"
+poll = { interval = 2, attempts = 30 }
 timeout = 90
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/paperless-ngx"
 timeout = 10

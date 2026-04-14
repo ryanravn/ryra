@@ -1,13 +1,21 @@
-[setup]
-services = ["immich"]
-
-[[tests]]
-name = "immich-responds"
-run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping && exit 0; sleep 5; done; exit 1"
-timeout = 360
+[[steps]]
+action = "add"
+service = "immich"
 env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "immich"
+
+[[steps]]
+action = "http"
+name = "immich-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
+service = "immich"
+poll = { interval = 5, attempts = 60 }
+timeout = 360
+
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/immich"
-env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }

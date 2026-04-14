@@ -712,7 +712,7 @@ run = "curl -sf http://proxy.test.local"
 
         assert!(test.is_lifecycle());
         if let DiscoveredTest::Lifecycle { steps, .. } = &test {
-            if let StepDef::Add { service, args } = &steps[0] {
+            if let StepDef::Add { service, args, .. } = &steps[0] {
                 assert_eq!(service, "caddy");
                 assert_eq!(args.as_deref(), Some("--domain proxy.test.local"));
             } else {
@@ -750,7 +750,7 @@ run = "curl -sf http://proxy.test.local"
         // If whoami test.toml exists, verify it
         if names.contains(&"whoami") {
             let whoami = discovered.iter().find(|d| d.name() == "whoami").unwrap();
-            assert!(!whoami.is_lifecycle());
+            assert!(whoami.is_lifecycle());
             assert!(whoami.test_count() >= 1);
         }
     }

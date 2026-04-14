@@ -12,10 +12,10 @@ service = "caddy"
 
 # Install authelia (OIDC provider)
 [[steps]]
-action = "shell"
-name = "add-authelia"
-run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
-ryra add authelia --url https://auth.test.local:8443"""
+action = "add"
+service = "authelia"
+args = "--url https://auth.test.local:8443"
+env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 
 [[steps]]
@@ -24,9 +24,9 @@ service = "authelia"
 
 # Install jellyfin with OIDC auth
 [[steps]]
-action = "shell"
-name = "add-jellyfin"
-run = "ryra add jellyfin --auth"
+action = "add"
+service = "jellyfin"
+args = "--auth"
 timeout = 300
 
 [[steps]]
@@ -41,9 +41,11 @@ run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
 
 # Wait for Jellyfin HTTP
 [[steps]]
-action = "shell"
+action = "http"
 name = "http-responds"
-run = "for i in $(seq 1 60); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)/health && exit 0; sleep 5; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/health"
+service = "jellyfin"
+poll = { interval = 5, attempts = 60 }
 timeout = 360
 
 # Verify SSO plugin is loaded with authelia provider — needs time to initialize

@@ -479,13 +479,18 @@ pub async fn run(
 }
 
 /// Ensure hostnames resolve and CA is trusted for domain-based services.
-/// Collects all needed domains and runs sudo commands with user confirmation.
+/// Collects all needed operations and runs them with user confirmation.
+/// All external commands use explicit args (no shell interpolation).
 fn setup_host_access(domains: &[&str]) {
-    let mut commands = Vec::new();
+    use std::process::{Command, Stdio};
 
-    // Check /etc/hosts for each domain
+    let mut sudo_needed = false;
+
+    // --- Detect what needs to be done ---
+
+    // 1. Check /etc/hosts for missing domains
     let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
-    let missing_hosts: Vec<&&str> = domains
+    let missing_hosts: Vec<&str> = domains
         .iter()
         .filter(|d| {
             !hosts.lines().any(|l| {
@@ -493,79 +498,58 @@ fn setup_host_access(domains: &[&str]) {
                 !l.starts_with('#') && l.split_whitespace().any(|w| w == **d)
             })
         })
+        .copied()
         .collect();
     if !missing_hosts.is_empty() {
-        let hostnames = missing_hosts
+        sudo_needed = true;
+    }
+
+    // 2. Check system CA trust — find the right target for this distro
+    let ca_source = ryra_core::service_home("caddy")
+        .ok()
+        .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
+        .filter(|p| p.exists());
+    let ca_target = super::CA_TARGETS.iter().find(|t| {
+        let dir = std::path::Path::new(t.cert_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("/"));
+        dir.is_dir()
+    });
+    let need_ca = ca_source.is_some()
+        && ca_target.is_some()
+        && !super::CA_TARGETS
             .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        commands.push(format!(
-            "echo '127.0.0.1 {hostnames}' | sudo tee -a /etc/hosts"
-        ));
+            .any(|t| std::path::Path::new(t.cert_path).exists());
+    if need_ca {
+        sudo_needed = true;
     }
 
-    // Check system CA trust (Fedora, Arch, Debian/Ubuntu)
-    let ca_paths = [
-        "/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt",           // Fedora
-        "/etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt",  // Arch
-        "/usr/local/share/ca-certificates/ryra-caddy-ca.crt",           // Debian/Ubuntu
-    ];
-    let ca_trusted = ca_paths.iter().any(|p| std::path::Path::new(p).exists());
-    if !ca_trusted {
-        let ca_src = ryra_core::service_home("caddy")
-            .ok()
-            .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
-            .filter(|p| p.exists());
-        if let Some(ca) = ca_src {
-            if std::path::Path::new("/etc/pki/ca-trust").is_dir() {
-                // Fedora / RHEL
-                commands.push(format!(
-                    "sudo cp {} /etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust",
-                    ca.display()
-                ));
-            } else if std::path::Path::new("/etc/ca-certificates/trust-source").is_dir() {
-                // Arch Linux
-                commands.push(format!(
-                    "sudo cp {} /etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt && sudo update-ca-trust",
-                    ca.display()
-                ));
-            } else if std::path::Path::new("/usr/local/share/ca-certificates").is_dir() {
-                // Debian / Ubuntu
-                commands.push(format!(
-                    "sudo cp {} /usr/local/share/ca-certificates/ryra-caddy-ca.crt && sudo update-ca-certificates",
-                    ca.display()
-                ));
-            }
-        }
-    }
-
-    // Check browser CA trust (Chromium/Brave/Chrome use NSS database)
+    // 3. Browser NSS trust (no sudo needed — handled separately)
     let nssdb = std::env::var("HOME")
         .ok()
         .map(|h| std::path::PathBuf::from(h).join(".pki/nssdb"))
         .filter(|p| p.exists());
     if let Some(ref nssdb_path) = nssdb {
-        let already_in_nss = std::process::Command::new("certutil")
-            .args(["-d", &format!("sql:{}", nssdb_path.display()), "-L", "-n", "ryra-caddy-ca"])
+        let nss_arg = format!("sql:{}", nssdb_path.display());
+        let already_in_nss = Command::new("certutil")
+            .args(["-d", &nss_arg, "-L", "-n", "ryra-caddy-ca"])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
         if !already_in_nss {
-            let ca_src = ryra_core::service_home("caddy")
-                .ok()
-                .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
-                .filter(|p| p.exists());
-            if let Some(ca) = ca_src {
-                // No sudo needed — NSS db is user-owned
-                let nss_cmd = format!(
-                    "certutil -d sql:{} -A -t 'C,,' -n ryra-caddy-ca -i {}",
-                    nssdb_path.display(),
-                    ca.display()
-                );
-                // Run directly since it doesn't need sudo
-                let status = std::process::Command::new("sh")
-                    .args(["-c", &nss_cmd])
+            if let Some(ref ca) = ca_source {
+                let status = Command::new("certutil")
+                    .args([
+                        "-d",
+                        &nss_arg,
+                        "-A",
+                        "-t",
+                        "C,,",
+                        "-n",
+                        "ryra-caddy-ca",
+                        "-i",
+                        &ca.display().to_string(),
+                    ])
                     .status();
                 match status {
                     Ok(s) if s.success() => {
@@ -579,16 +563,28 @@ fn setup_host_access(domains: &[&str]) {
         }
     }
 
-    if commands.is_empty() {
+    if !sudo_needed {
         return;
     }
 
+    // --- Display what will be done ---
     println!();
     println!("  Domain setup (one-time, requires sudo):");
-    for cmd in &commands {
-        println!("    {cmd}");
+    if !missing_hosts.is_empty() {
+        println!(
+            "    sudo tee -a /etc/hosts  (add: {})",
+            missing_hosts.join(" ")
+        );
+    }
+    if need_ca {
+        let target = ca_target.unwrap_or_else(|| unreachable!("need_ca guards this"));
+        println!(
+            "    sudo cp <caddy-ca> {} && sudo {}",
+            target.cert_path, target.update_cmd
+        );
     }
 
+    // --- Confirm ---
     let interactive = std::io::stdin().is_terminal();
     if interactive {
         let run = Confirm::new()
@@ -596,20 +592,53 @@ fn setup_host_access(domains: &[&str]) {
             .default(true)
             .interact()
             .unwrap_or(false);
-        if run {
-            for cmd in &commands {
-                let status = std::process::Command::new("sh")
-                    .args(["-c", cmd])
-                    .status();
-                match status {
-                    Ok(s) if s.success() => {}
-                    Ok(_) => eprintln!("  Command failed: {cmd}"),
-                    Err(e) => eprintln!("  Failed to run command: {e}"),
-                }
-            }
-            println!("  Done.");
+        if !run {
+            println!();
+            return;
         }
     }
+
+    // --- Execute (no shell interpolation) ---
+    if !missing_hosts.is_empty() {
+        let entry = format!("127.0.0.1 {}\n", missing_hosts.join(" "));
+        match Command::new("sudo")
+            .args(["tee", "-a", "/etc/hosts"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    use std::io::Write;
+                    let _ = stdin.write_all(entry.as_bytes());
+                }
+                match child.wait() {
+                    Ok(s) if s.success() => {}
+                    _ => eprintln!("  Failed to update /etc/hosts"),
+                }
+            }
+            Err(e) => eprintln!("  Failed to run sudo: {e}"),
+        }
+    }
+
+    if need_ca {
+        let ca = ca_source
+            .as_ref()
+            .unwrap_or_else(|| unreachable!("need_ca guards this"));
+        let target = ca_target.unwrap_or_else(|| unreachable!("need_ca guards this"));
+        let cp_ok = Command::new("sudo")
+            .args(["cp", &ca.display().to_string(), target.cert_path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if cp_ok {
+            let _ = Command::new("sudo").arg(target.update_cmd).status();
+        } else {
+            eprintln!("  Failed to install CA certificate");
+        }
+    }
+
+    println!("  Done.");
     println!();
 }
 

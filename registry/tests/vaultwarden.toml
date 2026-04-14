@@ -30,14 +30,17 @@ action = "wait"
 service = "vaultwarden"
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "http-responds"
-run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2) && exit 0; sleep 2; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "vaultwarden"
+poll = { interval = 2, attempts = 10 }
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "alive-endpoint"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2)/alive"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/alive"
+service = "vaultwarden"
 
 [[steps]]
 action = "shell"

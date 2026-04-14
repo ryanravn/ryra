@@ -11,9 +11,10 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "shell"
+action = "http"
 name = "whoami-responds"
-run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "whoami"
 
 [[steps]]
 action = "shell"

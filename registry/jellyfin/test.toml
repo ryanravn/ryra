@@ -1,13 +1,20 @@
-[setup]
-services = ["jellyfin"]
+[[steps]]
+action = "add"
+service = "jellyfin"
 
-[[tests]]
+[[steps]]
+action = "wait"
+service = "jellyfin"
+
+[[steps]]
+action = "http"
 name = "jellyfin-responds"
-run = "for i in $(seq 1 30); do curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/health && exit 0; sleep 5; done; exit 1"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/health"
+service = "jellyfin"
+poll = { interval = 5, attempts = 30 }
 timeout = 180
-env = {}
 
-[[tests]]
+[[steps]]
+action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/jellyfin"
-env = {}

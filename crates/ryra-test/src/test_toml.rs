@@ -50,6 +50,14 @@ fn default_timeout() -> u64 {
     30
 }
 
+fn default_add_timeout() -> u64 {
+    300
+}
+
+fn default_http_status() -> u16 {
+    200
+}
+
 /// Retry configuration for run steps. The runner re-executes the command
 /// up to `attempts` times, sleeping `interval` seconds between tries.
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +78,10 @@ pub enum StepDef {
         service: String,
         #[serde(default)]
         args: Option<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default = "default_add_timeout")]
+        timeout: u64,
     },
     Remove {
         service: String,
@@ -90,6 +102,24 @@ pub enum StepDef {
         /// the command on failure, up to `attempts` times.
         #[serde(default)]
         poll: Option<PollConfig>,
+    },
+    /// HTTP request step. Sends a request and checks the response status code.
+    /// The URL supports shell variable expansion (e.g., `$RYRA_PORT_HTTP`)
+    /// after sourcing service `.env` files. Follows redirects automatically.
+    Http {
+        #[serde(default)]
+        name: Option<String>,
+        url: String,
+        #[serde(default = "default_http_status")]
+        status: u16,
+        /// When set, only source this service's `.env` file (needed when
+        /// multiple services define the same port variable).
+        #[serde(default)]
+        service: Option<String>,
+        #[serde(default)]
+        poll: Option<PollConfig>,
+        #[serde(default = "default_timeout")]
+        timeout: u64,
     },
     /// Playwright browser test step.
     Playwright {
@@ -115,6 +145,9 @@ impl std::fmt::Display for StepDef {
             StepDef::Reset => write!(f, "reset"),
             StepDef::Wait { service, .. } => write!(f, "wait {service}"),
             StepDef::Shell { name, .. } => write!(f, "shell: {name}"),
+            StepDef::Http { name, url, .. } => {
+                write!(f, "http: {}", name.as_deref().unwrap_or(url))
+            }
             StepDef::Playwright { name, spec, .. } => {
                 write!(f, "browser: {}", name.as_deref().unwrap_or(spec))
             }
@@ -131,6 +164,15 @@ impl StepDef {
             | StepDef::Wait { service, .. } => Some(service),
             _ => None,
         }
+    }
+
+    /// Whether this step is a setup step (vs. a test/assertion step).
+    /// Used by `--retest` to skip setup and only re-run test steps.
+    pub fn is_setup(&self) -> bool {
+        matches!(
+            self,
+            StepDef::Add { .. } | StepDef::Remove { .. } | StepDef::Reset | StepDef::Wait { .. }
+        )
     }
 
     /// Human-readable name for this step (used in output).
@@ -414,7 +456,6 @@ args = "--domain proxy.test.local"
     }
 
     #[test]
-    #[test]
     fn shell_step_parses() {
         let toml = r#"
 [[steps]]
@@ -457,5 +498,141 @@ run = "true"
         let (_dir, path) = write_temp(toml);
         let result = TestToml::parse(&path);
         assert!(result.is_err(), "run step without 'name' should fail");
+    }
+
+    #[test]
+    fn add_step_with_env() {
+        let toml = r#"
+[[steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "pass123" }
+timeout = 300
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Add {
+            ref service,
+            ref args,
+            ref env,
+            timeout,
+        } = parsed.steps[0]
+        {
+            assert_eq!(service, "authelia");
+            assert_eq!(args.as_deref(), Some("--url https://auth.localhost:8443"));
+            assert_eq!(env.get("AUTHELIA_ADMIN_USER").unwrap(), "testuser");
+            assert_eq!(env.get("AUTHELIA_ADMIN_PASSWORD").unwrap(), "pass123");
+            assert_eq!(timeout, 300);
+        } else {
+            panic!("expected Add step");
+        }
+    }
+
+    #[test]
+    fn add_step_default_timeout() {
+        let toml = r#"
+[[steps]]
+action = "add"
+service = "whoami"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Add { timeout, .. } = parsed.steps[0] {
+            assert_eq!(timeout, 300);
+        } else {
+            panic!("expected Add step");
+        }
+    }
+
+    #[test]
+    fn http_step_parses() {
+        let toml = r#"
+[[steps]]
+action = "http"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/health"
+status = 200
+poll = { interval = 5, attempts = 10 }
+timeout = 60
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Http {
+            ref url,
+            status,
+            ref poll,
+            timeout,
+            ..
+        } = parsed.steps[0]
+        {
+            assert_eq!(url, "http://127.0.0.1:$RYRA_PORT_HTTP/health");
+            assert_eq!(status, 200);
+            assert_eq!(poll.as_ref().unwrap().attempts, 10);
+            assert_eq!(timeout, 60);
+        } else {
+            panic!("expected Http step");
+        }
+    }
+
+    #[test]
+    fn http_step_defaults() {
+        let toml = r#"
+[[steps]]
+action = "http"
+url = "http://localhost:8080"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Http {
+            status, timeout, ..
+        } = parsed.steps[0]
+        {
+            assert_eq!(status, 200);
+            assert_eq!(timeout, 30);
+        } else {
+            panic!("expected Http step");
+        }
+    }
+
+    #[test]
+    fn is_setup_classification() {
+        let toml = r#"
+[[steps]]
+action = "add"
+service = "whoami"
+
+[[steps]]
+action = "remove"
+service = "whoami"
+
+[[steps]]
+action = "reset"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "shell"
+name = "check"
+run = "true"
+
+[[steps]]
+action = "http"
+url = "http://localhost:8080"
+
+[[steps]]
+action = "playwright"
+spec = "test.spec.ts"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        assert!(parsed.steps[0].is_setup(), "add should be setup");
+        assert!(parsed.steps[1].is_setup(), "remove should be setup");
+        assert!(parsed.steps[2].is_setup(), "reset should be setup");
+        assert!(parsed.steps[3].is_setup(), "wait should be setup");
+        assert!(!parsed.steps[4].is_setup(), "shell should not be setup");
+        assert!(!parsed.steps[5].is_setup(), "http should not be setup");
+        assert!(!parsed.steps[6].is_setup(), "playwright should not be setup");
     }
 }
