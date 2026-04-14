@@ -402,9 +402,11 @@ async fn run_browser_step(
     //    Also use the list reporter so the user sees live progress.
     // 7. Exit with playwright's own exit code.
     let cmd = format!(
-        "for env_file in $HOME/.local/share/ryra/*/.env; do \
+        "set -a && \
+         for env_file in $HOME/.local/share/ryra/*/.env; do \
            [ -f \"$env_file\" ] && . \"$env_file\"; \
          done && \
+         set +a && \
          DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}/playwright\" && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
