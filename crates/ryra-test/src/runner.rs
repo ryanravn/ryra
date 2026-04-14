@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::registry::{DiscoveredTest, StepEntry, TestEntry};
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
-use ryra_vm::machine::Machine;
+use crate::executor::Executor;
 
 fn print_event_result(prefix: &str, event: &Event) {
     let elapsed = format!("{:.1}s", event.duration.as_secs_f64());
@@ -23,7 +23,7 @@ fn print_event_result(prefix: &str, event: &Event) {
 /// 4. Sources `.env` files
 /// 5. Runs each test command via SSH, checks exit code
 pub async fn run_registry_test(
-    vm: &Machine,
+    vm: &dyn Executor,
     test: &DiscoveredTest,
 ) -> ScenarioResult {
     let start = Instant::now();
@@ -259,7 +259,7 @@ pub async fn run_registry_test(
 }
 
 /// Run a single test entry — wraps the `run` command with env sourcing and timeout.
-async fn run_test_entry(vm: &Machine, entry: &TestEntry, env_prefix: &str) -> Event {
+async fn run_test_entry(vm: &dyn Executor, entry: &TestEntry, env_prefix: &str) -> Event {
     let t = Instant::now();
 
     // Build the full command: env overrides + env sourcing + the test command
@@ -302,7 +302,7 @@ async fn run_test_entry(vm: &Machine, entry: &TestEntry, env_prefix: &str) -> Ev
 ///
 /// Single-service: `. $HOME/.local/share/ryra/<service>/.env` (unprefixed)
 /// Multi-service: reads each .env and exports with SERVICE__ prefix
-async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String> {
+async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<String> {
     match test {
         DiscoveredTest::Simple { setup, .. } => {
             if setup.services.len() == 1 {
@@ -335,12 +335,12 @@ async fn build_env_prefix(_vm: &Machine, test: &DiscoveredTest) -> Result<String
 }
 
 /// Wait for a service's systemd unit to become active (default 60s timeout).
-async fn wait_for_service(vm: &Machine, service: &str) -> Event {
+async fn wait_for_service(vm: &dyn Executor, service: &str) -> Event {
     wait_for_service_with_timeout(vm, service, 60).await
 }
 
 /// Wait for a service's systemd unit to become active with a custom timeout.
-async fn wait_for_service_with_timeout(vm: &Machine, service: &str, timeout_secs: u64) -> Event {
+async fn wait_for_service_with_timeout(vm: &dyn Executor, service: &str, timeout_secs: u64) -> Event {
     let t = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
 
@@ -365,7 +365,7 @@ async fn wait_for_service_with_timeout(vm: &Machine, service: &str, timeout_secs
 /// Unlike `run_registry_test`, this processes a sequence of typed steps
 /// (add, remove, reset, wait, run, assert) rather than "add all then test".
 pub async fn run_lifecycle_test(
-    vm: &Machine,
+    vm: &dyn Executor,
     name: &str,
     steps: &[StepEntry],
     verbose: bool,
@@ -557,7 +557,7 @@ fn lifecycle_step_kind(step: &StepEntry) -> EventKind {
 ///
 /// Uses bash `/dev/tcp` to test actual TCP connectivity through to the
 /// container, not just whether rootlessport is listening on the host side.
-async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
+async fn wait_for_port(vm: &dyn Executor, test_name: &str, port: &str) -> Event {
     let t = Instant::now();
     let timeout = Duration::from_secs(60);
     let mut last_log = std::time::Instant::now();
@@ -600,7 +600,7 @@ async fn wait_for_port(vm: &Machine, test_name: &str, port: &str) -> Event {
 }
 
 /// Dump diagnostic info for each service when a test fails.
-async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
+async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str]) {
     println!("[{test_name}] --- diagnostics ---");
     for svc in services {
         // Systemd service status
@@ -668,7 +668,7 @@ async fn dump_diagnostics(vm: &Machine, test_name: &str, services: &[&str]) {
 
 /// Run a command in the VM with real-time output streaming and return an Event.
 async fn run_event_streaming(
-    vm: &Machine,
+    vm: &dyn Executor,
     test_name: &str,
     kind: EventKind,
     cmd: &str,
@@ -693,7 +693,7 @@ async fn run_event_streaming(
 }
 
 /// Run a command in the VM and return an Event.
-async fn run_event(vm: &Machine, kind: EventKind, cmd: &str, timeout_secs: u64) -> Event {
+async fn run_event(vm: &dyn Executor, kind: EventKind, cmd: &str, timeout_secs: u64) -> Event {
     let t = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, vm.exec(cmd)).await;

@@ -503,12 +503,13 @@ pub async fn run(args: Args) -> Result<()> {
 
             let setup_time = start.elapsed();
             println!("[{name}] running tests (setup took {:.1}s)...", setup_time.as_secs_f64());
+            let executor = crate::executor::VmExecutor::new(&vm);
             let result = match &test {
                 registry::DiscoveredTest::Lifecycle { steps, .. } => {
-                    runner::run_lifecycle_test(&vm, &name, steps, verbose, single_test).await
+                    runner::run_lifecycle_test(&executor, &name, steps, verbose, single_test).await
                 }
                 registry::DiscoveredTest::Simple { .. } => {
-                    runner::run_registry_test(&vm, &test).await
+                    runner::run_registry_test(&executor, &test).await
                 }
             };
 
