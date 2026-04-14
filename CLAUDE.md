@@ -126,7 +126,7 @@ Always prefer podman-native and quadlet-native features over workarounds:
 
 ## Debugging
 
-Avoid long timeouts in tests. If something needs more than a few seconds to be ready, investigate why rather than adding a larger timeout. Timeouts mask real issues and make tests slow. Prefer polling with short intervals over a single large sleep.
+**Never increase timeouts before identifying the root cause.** When a test times out, check logs first to understand *why* it's slow — don't just bump the number. Only increase a timeout after you've confirmed the issue is genuinely timing-related (e.g., a heavy image pull or slow SPA hydration) and there's no underlying bug. Timeouts mask real issues and make tests slow.
 
 When tests fail or services error, **always check logs first** before proposing fixes:
 - `journalctl --user -u <service>.service` for service logs

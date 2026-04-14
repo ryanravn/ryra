@@ -33,9 +33,12 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
   }
 }
 
+// Open WebUI is a heavy SPA — in a VM the JS bundles take a long time to
+// load and hydrate, so we need a longer test-level timeout.
 test("full OIDC login through Authelia creates a session", async ({
   browser,
 }) => {
+  test.setTimeout(120_000);
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
     viewport: { width: 1280, height: 1600 },
