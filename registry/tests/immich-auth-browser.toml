@@ -23,18 +23,6 @@ timeout = 300
 action = "wait"
 service = "authelia"
 
-# Trust Caddy's self-signed CA so Immich's server-side OIDC token exchange
-# works over HTTPS. Immich uses OAUTH_ISSUER_URL (external HTTPS) for both
-# browser redirects and server-side token exchange.
-[[steps]]
-action = "shell"
-name = "trust-caddy-ca"
-run = """
-podman exec caddy cat /data/caddy/pki/authorities/local/root.crt \
-  > /usr/local/share/ca-certificates/ryra-caddy-ca.crt && \
-update-ca-certificates
-"""
-
 # Install immich with OIDC auth
 [[steps]]
 action = "shell"
