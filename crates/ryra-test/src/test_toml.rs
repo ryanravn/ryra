@@ -81,9 +81,7 @@ pub enum StepDef {
         timeout: u64,
     },
     /// Shell command step. Fails the test on non-zero exit code.
-    /// Accepts `action = "assert"` as a backward-compatible alias.
-    #[serde(alias = "assert")]
-    Run {
+    Shell {
         name: String,
         run: String,
         #[serde(default = "default_timeout")]
@@ -93,7 +91,8 @@ pub enum StepDef {
         #[serde(default)]
         poll: Option<PollConfig>,
     },
-    Browser {
+    /// Playwright browser test step.
+    Playwright {
         #[serde(default)]
         name: Option<String>,
         spec: String,
@@ -115,8 +114,8 @@ impl std::fmt::Display for StepDef {
             StepDef::Remove { service } => write!(f, "remove {service}"),
             StepDef::Reset => write!(f, "reset"),
             StepDef::Wait { service, .. } => write!(f, "wait {service}"),
-            StepDef::Run { name, .. } => write!(f, "run: {name}"),
-            StepDef::Browser { name, spec, .. } => {
+            StepDef::Shell { name, .. } => write!(f, "shell: {name}"),
+            StepDef::Playwright { name, spec, .. } => {
                 write!(f, "browser: {}", name.as_deref().unwrap_or(spec))
             }
         }
@@ -270,7 +269,7 @@ action = "add"
 service = "authelia"
 
 [[steps]]
-action = "run"
+action = "shell"
 name = "check-auth"
 run = "curl -sf http://auth.test.local"
 "#;
@@ -369,7 +368,7 @@ action = "add"
 service = "caddy"
 
 [[steps]]
-action = "browser"
+action = "playwright"
 name = "sso-test"
 spec = "seafile-auth.spec.ts"
 timeout = 120
@@ -378,8 +377,8 @@ timeout = 120
         let parsed = TestToml::parse(&path).expect("parse");
         assert!(parsed.is_lifecycle());
         assert_eq!(parsed.steps.len(), 2);
-        assert!(matches!(parsed.steps[1], StepDef::Browser { .. }));
-        if let StepDef::Browser { ref spec, .. } = parsed.steps[1] {
+        assert!(matches!(parsed.steps[1], StepDef::Playwright { .. }));
+        if let StepDef::Playwright { ref spec, .. } = parsed.steps[1] {
             assert_eq!(spec, "seafile-auth.spec.ts");
         }
     }
@@ -388,7 +387,7 @@ timeout = 120
     fn browser_step_requires_spec() {
         let toml = r#"
 [[steps]]
-action = "browser"
+action = "playwright"
 "#;
         let (_dir, path) = write_temp(toml);
         let result = TestToml::parse(&path);
@@ -415,30 +414,31 @@ args = "--domain proxy.test.local"
     }
 
     #[test]
-    fn assert_action_parses_as_run() {
+    #[test]
+    fn shell_step_parses() {
         let toml = r#"
 [[steps]]
-action = "assert"
+action = "shell"
 name = "check"
 run = "true"
 "#;
         let (_dir, path) = write_temp(toml);
         let parsed = TestToml::parse(&path).expect("parse");
-        assert!(matches!(parsed.steps[0], StepDef::Run { .. }));
+        assert!(matches!(parsed.steps[0], StepDef::Shell { .. }));
     }
 
     #[test]
     fn run_step_with_poll() {
         let toml = r#"
 [[steps]]
-action = "run"
+action = "shell"
 name = "wait-for-http"
 run = "curl -sf http://localhost:8080"
 poll = { interval = 5, attempts = 10 }
 "#;
         let (_dir, path) = write_temp(toml);
         let parsed = TestToml::parse(&path).expect("parse");
-        if let StepDef::Run { ref poll, .. } = parsed.steps[0] {
+        if let StepDef::Shell { ref poll, .. } = parsed.steps[0] {
             let p = poll.as_ref().expect("poll should be Some");
             assert_eq!(p.interval, 5);
             assert_eq!(p.attempts, 10);
@@ -451,7 +451,7 @@ poll = { interval = 5, attempts = 10 }
     fn run_step_rejects_missing_name() {
         let toml = r#"
 [[steps]]
-action = "run"
+action = "shell"
 run = "true"
 "#;
         let (_dir, path) = write_temp(toml);

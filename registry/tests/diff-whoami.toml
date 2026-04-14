@@ -11,12 +11,12 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "snapshot-saved"
 run = "test -f $HOME/.config/ryra/snapshots/whoami.toml"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "diff-no-changes"
 run = "ryra diff whoami 2>&1 | grep -q 'up to date'"
 
@@ -24,7 +24,7 @@ run = "ryra diff whoami 2>&1 | grep -q 'up to date'"
 # The bundled registry is extracted to ~/.cache/ryra/bundled/ on first use
 # and won't be re-extracted until the binary version changes.
 [[steps]]
-action = "run"
+action = "shell"
 name = "simulate-upstream-change"
 run = """cat >> $HOME/.cache/ryra/bundled/whoami/service.toml <<'TOML'
 
@@ -34,7 +34,7 @@ value = "hello"
 TOML"""
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "diff-shows-change"
 run = "ryra diff whoami 2>&1 | grep -q 'env var added: NEW_VAR'"
 
@@ -44,6 +44,6 @@ action = "remove"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "snapshot-removed"
 run = "test ! -f $HOME/.config/ryra/snapshots/whoami.toml"

@@ -11,17 +11,17 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "whoami-responds"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "data-dir-exists"
 run = "test -d $HOME/.local/share/ryra/whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "config-has-whoami"
 run = "grep -q whoami $HOME/.config/ryra/ryra.toml"
 
@@ -30,16 +30,16 @@ action = "remove"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "service-stopped"
 run = "! systemctl --user is-active whoami.service 2>/dev/null"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "config-cleaned"
 run = "! grep -q whoami $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "data-dir-removed"
 run = "test ! -d $HOME/.local/share/ryra/whoami"

@@ -19,7 +19,7 @@ action = "wait"
 service = "postgres"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "both-running"
 run = "systemctl --user is-active whoami.service && systemctl --user is-active postgres.service"
 
@@ -27,26 +27,26 @@ run = "systemctl --user is-active whoami.service && systemctl --user is-active p
 action = "reset"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "whoami-stopped"
 run = "! systemctl --user is-active whoami.service 2>/dev/null"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "postgres-stopped"
 run = "! systemctl --user is-active postgres.service 2>/dev/null"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "config-empty"
 run = "! grep -q '\\[services\\.' $HOME/.config/ryra/ryra.toml 2>/dev/null || test ! -f $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "whoami-data-gone"
 run = "test ! -d $HOME/.local/share/ryra/whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "postgres-data-gone"
 run = "test ! -d $HOME/.local/share/ryra/postgres"

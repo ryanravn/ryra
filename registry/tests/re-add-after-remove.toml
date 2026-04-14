@@ -11,7 +11,7 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "first-add-responds"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
@@ -20,7 +20,7 @@ action = "remove"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "removed-cleanly"
 run = "test ! -d $HOME/.local/share/ryra/whoami"
 
@@ -34,16 +34,16 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "re-add-responds"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "re-add-data-dir-exists"
 run = "test -d $HOME/.local/share/ryra/whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "re-add-config-present"
 run = "grep -q whoami $HOME/.config/ryra/ryra.toml"

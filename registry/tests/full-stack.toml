@@ -12,7 +12,7 @@ service = "caddy"
 
 # Authelia — lightweight SSO (boots in seconds, no migrations)
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-authelia"
 run = "AUTHELIA_ADMIN_PASSWORD=testpassword123 ryra add authelia --url https://auth.test.local:8443"
 
@@ -31,7 +31,7 @@ service = "postgres"
 
 # Whoami — with --auth for OIDC
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-whoami"
 run = "ryra add whoami --auth"
 
@@ -41,7 +41,7 @@ service = "whoami"
 
 # Forgejo
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-forgejo"
 run = "ryra add forgejo"
 timeout = 300
@@ -52,7 +52,7 @@ service = "forgejo"
 
 # Vaultwarden
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-vaultwarden"
 run = "ryra add vaultwarden"
 
@@ -62,7 +62,7 @@ service = "vaultwarden"
 
 # Uptime Kuma
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-uptime-kuma"
 run = "ryra add uptime-kuma"
 
@@ -73,58 +73,58 @@ service = "uptime-kuma"
 # === Assertions: Services respond ===
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "authelia-health"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/authelia/.env | cut -d= -f2)/api/health"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "whoami-responds"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "forgejo-responds"
 run = "for i in $(seq 1 20); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2) && exit 0; sleep 3; done; exit 1"
 timeout = 90
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "vaultwarden-responds"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/vaultwarden/.env | cut -d= -f2)"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "uptime-kuma-responds"
 run = "for i in $(seq 1 10); do curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/uptime-kuma/.env | cut -d= -f2) && exit 0; sleep 3; done; exit 1"
 timeout = 60
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "postgres-accepts"
 run = "PGPASSWORD=$(grep POSTGRES_PASSWORD $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) psql -h 127.0.0.1 -p $(grep RYRA_PORT_TCP $HOME/.local/share/ryra/postgres/.env | cut -d= -f2) -U postgres -c 'SELECT 1'"
 
 # === Assertions: Authelia Caddy route ===
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "caddy-has-authelia-route"
 run = "grep -q 'ryra:authelia' $HOME/.local/share/ryra/caddy/config/Caddyfile"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "authelia-accessible-via-caddy"
 run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
 
 # Services are accessed directly on localhost
 [[steps]]
-action = "assert"
+action = "shell"
 name = "whoami-direct-access"
 run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2) | grep -q Hostname"
 
 # === Status ===
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "status-shows-all"
 run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden && ryra list | grep -q authelia && ryra list | grep -q caddy"

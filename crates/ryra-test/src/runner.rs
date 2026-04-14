@@ -541,7 +541,7 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepDef::Run {
+            StepDef::Shell {
                 name: step_name,
                 run,
                 timeout,
@@ -558,7 +558,7 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepDef::Browser {
+            StepDef::Playwright {
                 name: browser_name,
                 spec,
                 env,

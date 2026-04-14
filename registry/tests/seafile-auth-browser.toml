@@ -13,7 +13,7 @@ service = "caddy"
 
 # Install authelia with .localhost domain (resolves to 127.0.0.1 via RFC 6761)
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
 ryra add authelia --url https://auth.localhost:8443"""
@@ -25,7 +25,7 @@ service = "authelia"
 
 # Install seafile with OIDC auth and .localhost domain
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-seafile"
 run = """INIT_SEAFILE_ADMIN_EMAIL=admin@test.local \
 INIT_SEAFILE_ADMIN_PASSWORD=testpassword123 \
@@ -38,14 +38,14 @@ service = "seafile"
 
 # Wait for seafile HTTP via Caddy
 [[steps]]
-action = "assert"
+action = "shell"
 name = "seafile-http-ready"
 run = "for i in $(seq 1 60); do curl -kso /dev/null -w '%{http_code}' https://seafile.localhost:8443 2>/dev/null | grep -qE '^(200|301|302)' && exit 0; sleep 5; done; exit 1"
 timeout = 360
 
 # Run playwright SSO tests
 [[steps]]
-action = "browser"
+action = "playwright"
 name = "playwright-sso"
 spec = "seafile-auth.spec.ts"
 timeout = 120

@@ -369,7 +369,7 @@ pub fn vm_memory_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
             .filter_map(|s| match s {
                 StepDef::Add { service, .. } => Some(service.as_str()),
                 // Also detect `ryra add <service>` in run steps
-                StepDef::Run { run, .. } => run
+                StepDef::Shell { run, .. } => run
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .windows(3)
@@ -422,7 +422,7 @@ pub fn vm_disk_for_test(registry_path: &Path, test: &DiscoveredTest) -> u32 {
             .iter()
             .filter_map(|s| match s {
                 StepDef::Add { service, .. } => Some(service.as_str()),
-                StepDef::Run { run, .. } => run
+                StepDef::Shell { run, .. } => run
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .windows(3)
@@ -487,7 +487,7 @@ pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<Strin
             for step in steps {
                 let service_name = match step {
                     StepDef::Add { service, .. } => Some(service.as_str()),
-                    StepDef::Run { run, .. } => {
+                    StepDef::Shell { run, .. } => {
                         // Parse "ryra add <service>" from run commands
                         run.split_whitespace()
                             .collect::<Vec<_>>()
@@ -659,7 +659,7 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "responds"
 run = "curl -sf http://localhost"
 
@@ -668,7 +668,7 @@ action = "remove"
 service = "whoami"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "gone"
 run = "! id whoami"
 "#,
@@ -700,7 +700,7 @@ service = "caddy"
 args = "--domain proxy.test.local"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "caddy up"
 run = "curl -sf http://proxy.test.local"
 "#,
@@ -916,7 +916,7 @@ action = "add"
 service = "authelia"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "up"
 run = "true"
 "#,

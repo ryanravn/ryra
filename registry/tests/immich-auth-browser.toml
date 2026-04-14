@@ -13,7 +13,7 @@ service = "caddy"
 
 # Install authelia with .localhost domain (resolves to 127.0.0.1 via RFC 6761)
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-authelia"
 run = """AUTHELIA_ADMIN_PASSWORD=testpassword123 \
 ryra add authelia --url https://auth.localhost:8443"""
@@ -25,7 +25,7 @@ service = "authelia"
 
 # Install immich with OIDC auth
 [[steps]]
-action = "run"
+action = "shell"
 name = "add-immich"
 run = """INIT_IMMICH_ADMIN_EMAIL=admin@test.local \
 INIT_IMMICH_ADMIN_PASSWORD=testpassword123 \
@@ -38,14 +38,14 @@ service = "immich"
 
 # Wait for immich HTTP
 [[steps]]
-action = "assert"
+action = "shell"
 name = "immich-http-ready"
 run = "for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)/api/server/ping 2>/dev/null | grep -q '200' && exit 0; sleep 5; done; exit 1"
 timeout = 360
 
 # Create admin user
 [[steps]]
-action = "run"
+action = "shell"
 name = "create-admin"
 run = """
 PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
@@ -57,7 +57,7 @@ curl -sf -X POST "http://127.0.0.1:$PORT/api/auth/admin-sign-up" \
 
 # Run playwright SSO tests
 [[steps]]
-action = "browser"
+action = "playwright"
 name = "playwright-sso-tests"
 spec = "immich-auth.spec.ts"
 timeout = 120

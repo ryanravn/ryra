@@ -3,18 +3,18 @@ name = "idempotent-init"
 
 # Init is already run by the lifecycle runner. Run it again and verify config is preserved.
 [[steps]]
-action = "assert"
+action = "shell"
 name = "config-exists-after-first-init"
 run = "test -f $HOME/.config/ryra/ryra.toml"
 
 [[steps]]
-action = "run"
+action = "shell"
 name = "second-init"
 run = "ryra init"
 timeout = 30
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "config-still-exists"
 run = "test -f $HOME/.config/ryra/ryra.toml"
 
@@ -28,17 +28,17 @@ action = "wait"
 service = "whoami"
 
 [[steps]]
-action = "run"
+action = "shell"
 name = "third-init"
 run = "ryra init"
 timeout = 30
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "whoami-still-running"
 run = "systemctl --user is-active whoami.service"
 
 [[steps]]
-action = "assert"
+action = "shell"
 name = "config-has-whoami"
 run = "grep -q whoami $HOME/.config/ryra/ryra.toml"
