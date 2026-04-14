@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use ryra_vm::machine::{ExecOutput, Machine};
 
@@ -40,5 +40,148 @@ impl Executor for VmExecutor<'_> {
 
     async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
         self.vm.wait_for_service(unit, timeout).await
+    }
+}
+
+/// Executes commands directly on the host machine.
+pub struct LocalExecutor;
+
+#[async_trait]
+impl Executor for LocalExecutor {
+    async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
+        let output = tokio::process::Command::new("bash")
+            .args(["-c", cmd])
+            .output()
+            .await
+            .with_context(|| format!("failed to exec locally: {cmd}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "command failed locally (exit {}): {cmd}\nstdout: {stdout}\nstderr: {stderr}",
+                output.status,
+            );
+        }
+
+        Ok(ExecOutput { stdout, stderr })
+    }
+
+    async fn exec_streaming(&self, cmd: &str, prefix: &str) -> Result<ExecOutput> {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let mut child = tokio::process::Command::new("bash")
+            .args(["-c", cmd])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| format!("failed to exec locally: {cmd}"))?;
+
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+
+        let prefix_out = prefix.to_string();
+        let prefix_err = prefix.to_string();
+
+        let stdout_handle = tokio::spawn(async move {
+            let mut lines = String::new();
+            if let Some(pipe) = stdout_pipe {
+                let mut reader = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if prefix_out.is_empty() {
+                        println!("    {line}");
+                    } else {
+                        println!("[{prefix_out}]     {line}");
+                    }
+                    lines.push_str(&line);
+                    lines.push('\n');
+                }
+            }
+            lines
+        });
+
+        let stderr_handle = tokio::spawn(async move {
+            let mut lines = String::new();
+            if let Some(pipe) = stderr_pipe {
+                let mut reader = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    if prefix_err.is_empty() {
+                        eprintln!("    {line}");
+                    } else {
+                        eprintln!("[{prefix_err}]     {line}");
+                    }
+                    lines.push_str(&line);
+                    lines.push('\n');
+                }
+            }
+            lines
+        });
+
+        let status = child.wait().await?;
+        let stdout_buf = stdout_handle.await.unwrap_or_default();
+        let stderr_buf = stderr_handle.await.unwrap_or_default();
+
+        if !status.success() {
+            anyhow::bail!(
+                "command failed locally (exit {}): {cmd}\nstdout: {stdout_buf}\nstderr: {stderr_buf}",
+                status,
+            );
+        }
+
+        Ok(ExecOutput {
+            stdout: stdout_buf,
+            stderr: stderr_buf,
+        })
+    }
+
+    async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            if let Ok(out) = self
+                .exec(&format!("systemctl --user is-active {unit}"))
+                .await
+                && out.stdout.trim() == "active"
+            {
+                return Ok(());
+            }
+            if let Ok(out) = self
+                .exec(&format!("systemctl --user is-failed {unit}"))
+                .await
+                && out.stdout.trim() == "failed"
+            {
+                anyhow::bail!("service {unit} entered failed state");
+            }
+            if start.elapsed() > timeout {
+                anyhow::bail!("service {unit} not active after {}s", timeout.as_secs());
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_executor_runs_command() {
+        let exec = LocalExecutor;
+        let out = exec.exec("echo hello").await.unwrap();
+        assert_eq!(out.stdout.trim(), "hello");
+    }
+
+    #[tokio::test]
+    async fn local_executor_fails_on_bad_command() {
+        let exec = LocalExecutor;
+        let result = exec.exec("false").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn local_executor_streams_output() {
+        let exec = LocalExecutor;
+        let out = exec.exec_streaming("echo streamed", "test").await.unwrap();
+        assert_eq!(out.stdout.trim(), "streamed");
     }
 }
