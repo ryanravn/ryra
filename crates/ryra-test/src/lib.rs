@@ -1,3 +1,4 @@
+pub mod executor;
 pub mod registry;
 mod runner;
 mod scenario;
