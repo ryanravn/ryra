@@ -360,6 +360,81 @@ async fn wait_for_service_with_timeout(vm: &dyn Executor, service: &str, timeout
     }
 }
 
+/// Run a Playwright spec and save the HTML report.
+async fn run_browser_step(
+    vm: &dyn Executor,
+    test_name: &str,
+    spec: &str,
+    env: &std::collections::BTreeMap<String, String>,
+    timeout_secs: u64,
+    registry_path: &std::path::Path,
+) -> Event {
+    let t = Instant::now();
+
+    // Build env exports from the step's env map. Values are shell-quoted.
+    let mut env_exports = String::new();
+    for (key, val) in env {
+        // Use single quotes + escape any single quotes in val
+        let quoted = val.replace('\'', r"'\''");
+        env_exports.push_str(&format!("export {key}='{quoted}' && "));
+    }
+
+    let browser_dir = format!("{}/tests/browser", registry_path.display());
+
+    // The command:
+    // 1. cd into the browser test dir
+    // 2. Ensure node_modules exists — try symlinking from /opt/playwright (VM mode),
+    //    otherwise bun install (bare mode)
+    // 3. Export env vars
+    // 4. Run playwright with html,list reporters
+    // 5. Copy the HTML report to a persistent location regardless of pass/fail
+    // 6. Exit with playwright's exit code
+    let cmd = format!(
+        "cd {browser_dir} && \
+         if [ ! -d node_modules ]; then \
+           if [ -d /opt/playwright/node_modules ]; then \
+             ln -sf /opt/playwright/node_modules .; \
+           else \
+             bun install playwright @playwright/test 2>&1; \
+           fi; \
+         fi && \
+         export PATH=\"$HOME/.bun/bin:$PATH\" && \
+         {env_exports}\
+         bunx playwright test {spec} --reporter=html,list; \
+         EXIT=$?; \
+         REPORT_DIR=\"{browser_dir}/playwright-report\"; \
+         if [ -d \"$REPORT_DIR\" ]; then \
+           DEST=\"$HOME/.local/share/ryra/test-reports/{test_name}\"; \
+           mkdir -p \"$DEST\" && cp -r \"$REPORT_DIR\"/. \"$DEST/\"; \
+         fi; \
+         exit $EXIT"
+    );
+
+    let timeout = Duration::from_secs(timeout_secs);
+    let result = tokio::time::timeout(timeout, vm.exec_streaming(&cmd, test_name)).await;
+
+    let report_path = format!("~/.local/share/ryra/test-reports/{test_name}");
+    let outcome = match result {
+        Ok(Ok(_)) => {
+            println!("[{test_name}]   Playwright report: {report_path}/index.html");
+            println!("[{test_name}]   Open with: bunx playwright show-report {report_path}");
+            Outcome::Passed
+        }
+        Ok(Err(e)) => {
+            println!("[{test_name}]   Playwright report (on failure): {report_path}/index.html");
+            Outcome::Failed(format!("{e:#}"))
+        }
+        Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
+    };
+
+    Event {
+        description: format!("browser: {spec}"),
+        kind: EventKind::Assertion,
+        outcome,
+        duration: t.elapsed(),
+    }
+}
+
 /// Execute a lifecycle test — interleaved actions and assertions.
 ///
 /// Unlike `run_registry_test`, this processes a sequence of typed steps
@@ -370,6 +445,7 @@ pub async fn run_lifecycle_test(
     steps: &[StepEntry],
     verbose: bool,
     single_test: bool,
+    registry_path: &std::path::Path,
 ) -> ScenarioResult {
     let start = Instant::now();
     let mut events = Vec::new();
@@ -508,18 +584,26 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
-            StepEntry::Browser { name: step_name, .. } => {
-                // Real implementation comes in Task 6
-                let event = Event {
-                    description: format!("browser: {step_name}"),
-                    kind: EventKind::Assertion,
-                    outcome: Outcome::Failed(
-                        "browser step not yet implemented (see Task 6)".to_string(),
-                    ),
-                    duration: Duration::ZERO,
-                };
+            StepEntry::Browser {
+                name: step_name,
+                spec,
+                env,
+                timeout_secs,
+            } => {
+                println!("{p}  browser: {step_name}...");
+                let event = run_browser_step(
+                    vm,
+                    name,
+                    spec,
+                    env,
+                    *timeout_secs,
+                    registry_path,
+                )
+                .await;
                 print_event_result(&p, &event);
-                failed = true;
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
                 events.push(event);
             }
         }
