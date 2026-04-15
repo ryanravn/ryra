@@ -5,10 +5,18 @@ CADDY_CA="$HOME/.local/share/ryra/caddy-root-ca.crt"
 MERGED="$SERVICE_HOME/ca-bundle.crt"
 HOSTS="$SERVICE_HOME/hosts"
 
+# Ensure placeholder files exist for Volume= bind mounts.
+# If podman previously created these as directories (source didn't exist),
+# remove them first.
+[ -d "$MERGED" ] && rm -rf "$MERGED"
+[ -d "$HOSTS" ] && rm -rf "$HOSTS"
+[ -f "$MERGED" ] || touch "$MERGED"
+[ -f "$HOSTS" ] || printf "127.0.0.1 localhost\n::1 localhost\n" > "$HOSTS"
+
 # --- CA bundle: trust caddy's self-signed CA ---
 # Only needed when --auth is used
 if [ -f "$CADDY_CA" ]; then
-  if [ ! -f "$MERGED" ]; then
+  if [ ! -s "$MERGED" ]; then
     # Extract the system CA bundle from the vikunja image
     podman run --rm --entrypoint sh vikunja/vikunja:2.3.0 \
       -c "cat /etc/ssl/certs/ca-certificates.crt" > "$MERGED" 2>/dev/null || true
