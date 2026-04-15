@@ -43,7 +43,7 @@ smtp = false
 [mappings.auth]
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
-OPENID_PROVIDER_URL = "{{auth.internal_url}}/.well-known/openid-configuration"
+OPENID_PROVIDER_URL = "{{auth.external_url}}/.well-known/openid-configuration"
 OPENID_REDIRECT_URI = "{{service.external_url}}/oauth/oidc/callback"
 ENABLE_OAUTH_SIGNUP = "True"
 OAUTH_PROVIDER_NAME = "SSO"
