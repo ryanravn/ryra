@@ -2,3 +2,4 @@
 Description=Immich network
 
 [Network]
+NetworkName=immich

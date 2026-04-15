@@ -8,8 +8,8 @@ service = "caddy"
 
 [[steps]]
 action = "shell"
-name = "responds-on-8080"
-run = "curl -sf http://127.0.0.1:8080 || curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:8080 | grep -q '404\\|200'"
+name = "responds-on-http-port"
+run = ". $HOME/.local/share/ryra/caddy/.env && curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP | grep -qE '200|404'"
 
 [[steps]]
 action = "shell"

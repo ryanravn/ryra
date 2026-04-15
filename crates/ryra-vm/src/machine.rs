@@ -919,6 +919,21 @@ pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Resul
         .await
         .context("failed to configure additionalimagestores in VM")?;
 
+    // Clean up stale state from the snapshot. The snapshot preserves systemd
+    // service state (e.g. quadlet-generated network services as "active (exited)")
+    // and podman networks. Without cleanup, new quadlets may fail because:
+    // - systemd skips re-running "active" services (stale network not recreated)
+    // - stale networks have different names than current quadlet generator produces
+    machine
+        .exec(
+            "systemctl --user stop '*-network.service' 2>/dev/null; \
+             podman network prune -f 2>/dev/null; \
+             systemctl --user reset-failed 2>/dev/null; \
+             systemctl --user daemon-reload",
+        )
+        .await
+        .context("failed to reset stale VM state")?;
+
     // Ensure docker.io resolves correctly. The docker.io domain now points
     // to podman.io via DNS, which breaks image pulls and quadlet generation.
     // Setting unqualified-search-registries tells podman to use docker.io's

@@ -2,3 +2,4 @@
 Description=Forgejo network
 
 [Network]
+NetworkName=forgejo
