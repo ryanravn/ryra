@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 [ -z "${SMTP_HOST:-}" ] && exit 0
 
 CONF=$RYRA_SERVICE_HOME/shared/seafile/conf

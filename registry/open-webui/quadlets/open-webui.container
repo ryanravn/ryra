@@ -13,6 +13,7 @@ Volume=open-webui-data.volume:/app/backend/data:U
 EnvironmentFile=%h/.local/share/ryra/open-webui/.env
 Pull=never
 AutoUpdate=registry
+HealthCmd=curl -sf http://localhost:8080/ || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/open-webui/.env

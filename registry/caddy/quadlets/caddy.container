@@ -16,6 +16,7 @@ Volume=caddy-config-state.volume:/config:U
 Volume=%h/.local/share/ryra/caddy/config:/etc/caddy:Z
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/caddy/.env
+HealthCmd=caddy version || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/caddy/.env

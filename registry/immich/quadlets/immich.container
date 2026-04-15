@@ -13,6 +13,7 @@ PublishPort=${RYRA_PORT_HTTP}:2283
 Volume=%h/.local/share/ryra/immich/upload:/data:Z
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/immich/.env
+HealthCmd=curl -sf http://localhost:2283/api/server/ping || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/immich/.env

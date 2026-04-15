@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 [ -z "${OAUTH_CLIENT_ID:-}" ] && exit 0
 
 IMMICH_URL="http://127.0.0.1:$RYRA_PORT_HTTP"

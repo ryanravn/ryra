@@ -11,6 +11,7 @@ Volume=openclaw-config.volume:/home/node/.openclaw:U
 Exec=sh -c "echo '{\"gateway\":{\"mode\":\"local\",\"bind\":\"lan\",\"auth\":{\"mode\":\"token\",\"token\":\"'\"$OPENCLAW_GATEWAY_TOKEN\"'\"},\"controlUi\":{\"dangerouslyAllowHostHeaderOriginFallback\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured"
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/openclaw/.env
+HealthCmd=wget -q --spider http://localhost:18789/ || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/openclaw/.env

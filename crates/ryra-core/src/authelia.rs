@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::generate::GeneratedFile;
 use crate::generate::bundle::inject_networks;
 use crate::registry::service_def::ServiceDef;
-use crate::{SERVICE_AUTHELIA, SERVICE_CADDY, Step, service_home};
+use crate::{WellKnownService, Step, service_home};
 
 /// Replace the host portion of a URL while preserving scheme, port, and path.
 fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
@@ -62,7 +62,7 @@ pub fn register_oidc_client(
         }
     };
 
-    let authelia_home = service_home(SERVICE_AUTHELIA)?;
+    let authelia_home = service_home(WellKnownService::Authelia.as_str())?;
     let authelia_config_dir = authelia_home.join("config");
     let authelia_config_path = authelia_config_dir.join("configuration.yml");
 
@@ -151,13 +151,43 @@ pub fn register_oidc_client(
             "\nidentity_providers:\n  oidc:\n    jwks:\n      - key_id: 'main'\n        algorithm: 'RS256'\n        use: 'sig'\n        key: {{{{ secret \"/config/oidc.jwk.rsa.pem\" | mindent 10 \"|\" | msquote }}}}\n    clients:{client_block}\n",
         ));
     } else if !yaml.contains(&client_id) {
-        let original = yaml.clone();
-        yaml = yaml.replace("    clients:", &format!("    clients:{client_block}"));
-        if yaml == original {
+        // Find `clients:` under `identity_providers: > oidc:` specifically,
+        // not just any `clients:` line in the file.
+        let mut found = false;
+        let mut in_identity_providers = false;
+        let mut in_oidc = false;
+        let mut insert_pos = None;
+        for (i, line) in yaml.lines().enumerate() {
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            if trimmed.starts_with("identity_providers:") {
+                in_identity_providers = true;
+            } else if in_identity_providers && indent == 2 && trimmed.starts_with("oidc:") {
+                in_oidc = true;
+            } else if in_identity_providers && in_oidc && indent == 4 && trimmed.starts_with("clients:") {
+                // Found the right `clients:` under identity_providers.oidc
+                // Insert position is right after this line
+                let byte_offset: usize = yaml.lines().take(i + 1).map(|l| l.len() + 1).sum();
+                insert_pos = Some(byte_offset.min(yaml.len()));
+                found = true;
+                break;
+            } else if in_oidc && indent <= 2 && !trimmed.is_empty() && !trimmed.starts_with('#') {
+                // Left the oidc section without finding clients:
+                break;
+            }
+        }
+        if !found {
             return Err(Error::Registry(format!(
-                "failed to inject OIDC client into authelia config — expected '    clients:' section not found in {}",
+                "failed to inject OIDC client into authelia config — \
+                 'clients:' under 'identity_providers.oidc' not found in {}",
                 authelia_config_path.display()
             )));
+        }
+        if let Some(pos) = insert_pos {
+            // client_block starts with \n but we're inserting after a line
+            // that already ends with \n, so trim the leading newline.
+            let block = client_block.strip_prefix('\n').unwrap_or(&client_block);
+            yaml.insert_str(pos, block);
         }
     }
 
@@ -167,17 +197,17 @@ pub fn register_oidc_client(
     }));
 
     steps.push(Step::RestartService {
-        unit: SERVICE_AUTHELIA.to_string(),
+        unit: WellKnownService::Authelia.to_string(),
     });
 
     // Ensure Caddy joins authelia's network with a domain alias so that
     // containers can resolve the auth FQDN → Caddy → authelia (with proper
     // X-Forwarded-Proto: https headers that authelia requires for OIDC).
-    let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY && s.installed);
+    let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy && s.installed);
     let auth_domain = config
         .services
         .iter()
-        .find(|s| s.name == SERVICE_AUTHELIA)
+        .find(|s| s.name == WellKnownService::Authelia)
         .and_then(|s| s.url.as_ref())
         .and_then(|u| {
             u.split("://")
@@ -191,6 +221,7 @@ pub fn register_oidc_client(
     if caddy_installed {
         if let Some(ref domain) = auth_domain {
             let mut need_caddy_restart = false;
+            let authelia = WellKnownService::Authelia;
 
             // 1. Add Caddy to authelia's podman network with a domain alias so
             // that containers resolving the auth domain reach Caddy (HTTPS on
@@ -199,7 +230,7 @@ pub fn register_oidc_client(
             // which routes through Caddy's TLS termination to authelia.
             let caddy_quadlet = quadlet_dir.join("caddy.container");
             if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
-                let network_spec = format!("{SERVICE_AUTHELIA}:alias={domain}");
+                let network_spec = format!("{authelia}:alias={domain}");
                 if !content.contains(&format!("alias={domain}")) {
                     let updated = inject_networks(&content, &[network_spec]);
                     steps.push(Step::WriteFile(GeneratedFile {
@@ -215,16 +246,16 @@ pub fn register_oidc_client(
             //    Caddy has no route for the auth domain and returns 404.
             if let Ok(caddyfile_path) = crate::caddy::caddyfile_path() {
                 if let Ok(caddyfile) = std::fs::read_to_string(&caddyfile_path) {
-                    if !caddyfile.contains(&format!("# ryra:{SERVICE_AUTHELIA}")) {
+                    if !caddyfile.contains(&format!("# ryra:{authelia}")) {
                         let block = crate::caddy::render_site_block(
                             &crate::caddy::CaddySiteParams {
-                                service_name: SERVICE_AUTHELIA.to_string(),
+                                service_name: authelia.to_string(),
                                 domain: domain.clone(),
                                 container_port: 9091,
                             },
                         );
                         let updated =
-                            crate::caddy::add_route(&caddyfile, SERVICE_AUTHELIA, &block);
+                            crate::caddy::add_route(&caddyfile, authelia.as_str(), &block);
                         steps.push(Step::WriteFile(GeneratedFile {
                             path: caddyfile_path,
                             content: updated,

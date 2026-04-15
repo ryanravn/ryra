@@ -16,6 +16,7 @@ Volume=paperless-ngx-media.volume:/usr/src/paperless/media:U
 EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
 Pull=never
 AutoUpdate=registry
+HealthCmd=curl -sf http://localhost:8000/ || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env

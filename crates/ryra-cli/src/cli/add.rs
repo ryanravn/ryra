@@ -7,7 +7,7 @@ use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::{Config, TlsConfig};
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::{AuthKind, HttpsRequirement};
-use ryra_core::{REGISTRY_BUNDLED, SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
+use ryra_core::{REGISTRY_BUNDLED, WellKnownService, Warning};
 
 use super::apply;
 use super::prompts;
@@ -80,7 +80,7 @@ pub async fn run(
                 let caddy_https_port = config
                     .services
                     .iter()
-                    .find(|s| s.name == SERVICE_CADDY)
+                    .find(|s| s.name == WellKnownService::Caddy)
                     .and_then(|s| s.ports.get("https").copied())
                     .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
                 auto_url = Some(format!("https://{service}.localhost:{caddy_https_port}"));
@@ -116,11 +116,11 @@ pub async fn run(
                         let inbucket_installed = smtp_config
                             .services
                             .iter()
-                            .any(|s| s.name == "inbucket");
+                            .any(|s| s.name == WellKnownService::Inbucket);
                         if !inbucket_installed {
                             println!("\nInstalling inbucket...\n");
                             Box::pin(run(
-                                &["inbucket".to_string()],
+                                &[WellKnownService::Inbucket.to_string()],
                                 None,
                                 false,
                                 false,
@@ -370,7 +370,9 @@ pub async fn run(
                             eprintln!("Cleanup also failed: {cleanup_err}");
                             eprintln!("Run manually: ryra remove {service}");
                         } else {
-                            let _ = ryra_core::finalize_remove(service);
+                            if let Err(e) = ryra_core::finalize_remove(service) {
+                                eprintln!("Warning: finalize_remove failed: {e}");
+                            }
                             eprintln!("Cleaned up. Retry with: ryra add {service}");
                         }
                     }
@@ -557,8 +559,7 @@ fn setup_host_access(domains: &[&str]) {
             missing_hosts.join(" ")
         );
     }
-    if need_ca {
-        let target = ca_target.expect("need_ca guards ca_target");
+    if let (true, Some(target)) = (need_ca, ca_target) {
         println!(
             "    sudo cp <caddy-ca> {} && sudo {}",
             target.cert_path, target.update_cmd
@@ -604,18 +605,18 @@ fn setup_host_access(domains: &[&str]) {
         }
     }
 
-    if need_ca {
-        let ca = ca_source
-            .as_ref()
-            .expect("need_ca guards ca_source");
-        let target = ca_target.expect("need_ca guards ca_target");
+    if let (true, Some(ca), Some(target)) = (need_ca, ca_source.as_ref(), ca_target) {
         let cp_ok = Command::new("sudo")
             .args(["cp", &ca.display().to_string(), target.cert_path])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
         if cp_ok {
-            let _ = Command::new("sudo").arg(target.update_cmd).status();
+            match Command::new("sudo").arg(target.update_cmd).status() {
+                Ok(s) if s.success() => {}
+                Ok(s) => eprintln!("  Warning: {} exited with {s}", target.update_cmd),
+                Err(e) => eprintln!("  Warning: failed to run {}: {e}", target.update_cmd),
+            }
         } else {
             eprintln!("  Failed to install CA certificate");
         }
@@ -637,11 +638,11 @@ async fn ensure_tls_configured(
         match tls {
             TlsConfig::Caddy => {
                 // Ensure Caddy is installed (may have been removed or config edited manually)
-                let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+                let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
                 if !caddy_installed {
                     println!("\nInstalling caddy (TLS provider)...\n");
                     Box::pin(run(
-                        &[SERVICE_CADDY.to_string()],
+                        &[WellKnownService::Caddy.to_string()],
                         None,
                         false,
                         false,
@@ -664,7 +665,7 @@ async fn ensure_tls_configured(
     // if Caddy is already installed — the user has implicitly opted in by
     // installing Caddy first. Otherwise bail with a helpful message.
     if !interactive {
-        let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+        let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
         if caddy_installed {
             let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
             config.tls = Some(TlsConfig::Caddy);
@@ -694,11 +695,11 @@ async fn ensure_tls_configured(
     let tls = match selection {
         0 => {
             // Ensure Caddy is installed
-            let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+            let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
             if !caddy_installed {
                 println!("\nInstalling caddy...\n");
                 Box::pin(run(
-                    &[SERVICE_CADDY.to_string()],
+                    &[WellKnownService::Caddy.to_string()],
                     None,
                     false,
                     false,
@@ -752,7 +753,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
     let needs_authelia = auth
-        && !config.services.iter().any(|s| s.name == SERVICE_AUTHELIA)
+        && !config.services.iter().any(|s| s.name == WellKnownService::Authelia)
         && config.auth.is_none();
 
     if !needs_authelia {
@@ -771,11 +772,11 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
     let caddy_installed = config_fresh
         .services
         .iter()
-        .any(|s| s.name == SERVICE_CADDY);
+        .any(|s| s.name == WellKnownService::Caddy);
     if is_caddy_tls && !caddy_installed {
         println!("\nInstalling caddy (TLS provider)...\n");
         Box::pin(run(
-            &[SERVICE_CADDY.to_string()],
+            &[WellKnownService::Caddy.to_string()],
             None,
             false,
             false,
@@ -800,7 +801,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             .interact_text()?;
         println!("\nInstalling authelia...\n");
         Box::pin(run(
-            &[SERVICE_AUTHELIA.to_string()],
+            &[WellKnownService::Authelia.to_string()],
             Some(&authelia_url),
             false,
             false,
@@ -814,7 +815,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.localhost".to_string());
         println!("\nInstalling authelia...\n");
         Box::pin(run(
-            &[SERVICE_AUTHELIA.to_string()],
+            &[WellKnownService::Authelia.to_string()],
             Some(&authelia_url),
             false,
             false,
@@ -838,7 +839,7 @@ async fn ensure_auth_for_add(
         prompts::AuthSetupChoice::External(_) => Ok(true),
         prompts::AuthSetupChoice::InstallAuthelia => {
             // Check if authelia is already installed but auth wasn't configured
-            let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
+            let authelia_installed = config.services.iter().any(|s| s.name == WellKnownService::Authelia);
             if authelia_installed {
                 println!();
                 println!("Authelia is already installed — configuring auth...");
@@ -860,11 +861,11 @@ async fn ensure_auth_for_add(
             };
             // Caddy is needed when TLS provider is caddy.
             let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
-            let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY);
+            let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
             if is_caddy_tls && !caddy_installed {
                 println!("\nInstalling caddy (TLS provider)...\n");
                 Box::pin(run(
-                    &[SERVICE_CADDY.to_string()],
+                    &[WellKnownService::Caddy.to_string()],
                     None,
                     false,
                     dry_run,
@@ -877,7 +878,7 @@ async fn ensure_auth_for_add(
             println!("\nInstalling authelia...\n");
             // Recursively install authelia, then reload config
             Box::pin(run(
-                &[SERVICE_AUTHELIA.to_string()],
+                &[WellKnownService::Authelia.to_string()],
                 Some(&authelia_url),
                 false,
                 dry_run,
@@ -1037,14 +1038,14 @@ fn warn_untrusted_service(
 /// Try to configure auth from an already-installed authelia instance.
 /// The .env is user-readable under ~/.local/share/ryra/authelia/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
-    let env_path = ryra_core::service_home(SERVICE_AUTHELIA)?.join(".env");
+    let env_path = ryra_core::service_home(WellKnownService::Authelia.as_str())?.join(".env");
     let env_content = match std::fs::read_to_string(&env_path) {
         Ok(content) => content,
         Err(_) => return Ok(false),
     };
 
     // Find the port from the installed service record
-    let service = config.services.iter().find(|s| s.name == SERVICE_AUTHELIA);
+    let service = config.services.iter().find(|s| s.name == WellKnownService::Authelia);
     let port = service
         .and_then(|s| s.ports.values().next().copied())
         .unwrap_or(DEFAULT_AUTHELIA_PORT);

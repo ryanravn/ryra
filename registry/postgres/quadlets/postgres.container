@@ -10,6 +10,7 @@ PublishPort=${RYRA_PORT_TCP}:5432
 Volume=postgres-data.volume:/var/lib/postgresql/data:U
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/postgres/.env
+HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/postgres/.env

@@ -13,6 +13,7 @@ PublishPort=${RYRA_PORT_HTTP}:3000
 Volume=forgejo-data.volume:/data:U
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/forgejo/.env
+HealthCmd=curl -sf http://localhost:3000/api/v1/settings/api || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/forgejo/.env

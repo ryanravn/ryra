@@ -101,7 +101,7 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let auth_localhost_url = auth.url().to_string();
-        let caddy_installed = config.services.iter().any(|s| s.name == crate::SERVICE_CADDY && s.installed);
+        let caddy_installed = config.services.iter().any(|s| s.name == crate::WellKnownService::Caddy && s.installed);
         // auth.external_url — browser-accessible URL.
         // Uses the stored URL from the auth provider's installed record if available.
         // When Caddy is installed, ensures the URL includes Caddy's HTTPS port
@@ -117,7 +117,7 @@ pub fn build_context(
             let caddy_https_port = config
                 .services
                 .iter()
-                .find(|s| s.name == crate::SERVICE_CADDY)
+                .find(|s| s.name == crate::WellKnownService::Caddy)
                 .and_then(|s| s.ports.get("https").copied());
             if let Some(port) = caddy_https_port {
                 let has_port = external_url
@@ -231,10 +231,17 @@ pub fn build_context(
             continue;
         }
         if let (Some(claims), Some(signing_key_name)) = (&env.jwt_claims, &env.jwt_signing_key) {
-            let signing_key = ctx
-                .get(&format!("secret.{signing_key_name}"))
-                .cloned()
-                .unwrap_or_default();
+            let signing_key_ref = format!("secret.{signing_key_name}");
+            let signing_key = match ctx.get(&signing_key_ref).cloned() {
+                Some(k) => k,
+                None => {
+                    eprintln!(
+                        "Warning: JWT signing key '{signing_key_name}' not found in context \
+                         — JWT will be signed with an empty key"
+                    );
+                    String::new()
+                }
+            };
             for secret_name in crate::generate::extract_secret_refs(&env.value) {
                 let key = format!("secret.{secret_name}");
                 ctx.entry(key)

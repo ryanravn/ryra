@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Merge Caddy's self-signed root CA into the system CA bundle so Python/requests
 # trusts the internal Caddy cert for OIDC token exchange with Authelia.
 SERVICE_HOME="$HOME/.local/share/ryra/paperless-ngx"

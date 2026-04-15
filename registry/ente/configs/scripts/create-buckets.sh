@@ -1,6 +1,7 @@
 #!/bin/bash
 # Create MinIO buckets required by Ente museum.
 # Runs as ExecStartPost after the minio container starts.
+set -euo pipefail
 
 for i in $(seq 1 30); do
     podman exec ente-minio mc alias set local http://localhost:3200 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null && break

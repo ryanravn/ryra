@@ -38,7 +38,7 @@ value = "{{secret.db_password}}"
 name = "POSTGRES_DB"
 value = "ente_db"
 
-# --- MinIO ---
+# --- MinIO (S3-compatible object storage) ---
 
 [[env]]
 name = "MINIO_ROOT_USER"
@@ -86,6 +86,9 @@ value = "{{secret.key_hash}}"
 [[env]]
 name = "ENTE_JWT_SECRET"
 value = "{{secret.jwt_secret}}"
+
+# S3 storage — all three "providers" point to the local MinIO instance.
+# Ente museum requires all three to be configured even for self-hosted.
 
 [[env]]
 name = "ENTE_S3_ARE_LOCAL_BUCKETS"

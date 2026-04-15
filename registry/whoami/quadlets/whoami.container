@@ -9,6 +9,7 @@ Image=docker.io/traefik/whoami:v1.11.0
 PublishPort=${RYRA_PORT_HTTP}:80
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/whoami/.env
+HealthCmd=wget -q --spider http://localhost:80/ || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/whoami/.env

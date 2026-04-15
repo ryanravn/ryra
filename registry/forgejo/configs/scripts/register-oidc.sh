@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 [ -z "${OIDC_CLIENT_ID:-}" ] && exit 0
 echo "Waiting for Forgejo API..."
 for i in $(seq 1 120); do

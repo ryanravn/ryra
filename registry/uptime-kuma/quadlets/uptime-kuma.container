@@ -10,6 +10,7 @@ PublishPort=${RYRA_PORT_HTTP}:3001
 Volume=uptime-kuma-data.volume:/app/data:U
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/uptime-kuma/.env
+HealthCmd=curl -sf http://localhost:3001/api/entry-page || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/uptime-kuma/.env

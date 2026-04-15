@@ -12,6 +12,7 @@ Network=forgejo.network:alias=postgres
 Volume=forgejo-db-data.volume:/var/lib/postgresql/data:U
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/forgejo/.env
+HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/forgejo/.env

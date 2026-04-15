@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 CA_CERT="$(dirname "$RYRA_SERVICE_HOME")/caddy-root-ca.crt"
 for i in $(seq 1 10); do
   # Export both root and intermediate CA certs — some TLS clients need the

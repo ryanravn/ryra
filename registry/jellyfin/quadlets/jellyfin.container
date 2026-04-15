@@ -15,6 +15,7 @@ Volume=jellyfin-cache.volume:/cache:U
 Volume=%h/.local/share/ryra/jellyfin/media:/media:ro,Z
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/jellyfin/.env
+HealthCmd=curl -sf http://localhost:8096/health || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/jellyfin/.env

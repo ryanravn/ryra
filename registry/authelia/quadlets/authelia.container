@@ -13,6 +13,7 @@ PublishPort=${RYRA_PORT_HTTP}:9091
 Volume=%h/.local/share/ryra/authelia/config:/config:Z
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/authelia/.env
+HealthCmd=wget -q --spider http://localhost:9091/api/health || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/authelia/.env

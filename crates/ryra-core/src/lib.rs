@@ -17,11 +17,69 @@ use error::{Error, Result};
 use generate::GeneratedFile;
 
 // Well-known infrastructure service names used for cross-service integration.
-// Using constants prevents typos and makes it easy to find all references.
-pub const SERVICE_CADDY: &str = "caddy";
-pub const SERVICE_AUTHELIA: &str = "authelia";
-pub const SERVICE_INBUCKET: &str = "inbucket";
 pub const REGISTRY_BUNDLED: &str = "bundled";
+
+/// Infrastructure services that ryra knows about for cross-service integration
+/// (e.g., joining networks, configuring OIDC, setting up TLS).
+///
+/// Using an enum instead of string constants makes comparisons type-safe and
+/// ensures the compiler catches typos or missing match arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WellKnownService {
+    Caddy,
+    Authelia,
+    Inbucket,
+}
+
+impl WellKnownService {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Caddy => "caddy",
+            Self::Authelia => "authelia",
+            Self::Inbucket => "inbucket",
+        }
+    }
+
+    /// Try to match a service name to a well-known service.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "caddy" => Some(Self::Caddy),
+            "authelia" => Some(Self::Authelia),
+            "inbucket" => Some(Self::Inbucket),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for WellKnownService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for WellKnownService {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<WellKnownService> for str {
+    fn eq(&self, other: &WellKnownService) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<WellKnownService> for &str {
+    fn eq(&self, other: &WellKnownService) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<WellKnownService> for String {
+    fn eq(&self, other: &WellKnownService) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
 
 // --- Path conventions ---
 
@@ -227,18 +285,18 @@ fn resolve_extra_networks(
     has_smtp: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
-    if enable_auth && authelia_installed && service_name != SERVICE_AUTHELIA {
-        networks.push(SERVICE_AUTHELIA.to_string());
+    if enable_auth && authelia_installed && service_name != WellKnownService::Authelia {
+        networks.push(WellKnownService::Authelia.to_string());
     }
     // Services join Caddy's network when they need to reach other containers
     // on that network: URL-based services for reverse proxy, inbucket itself,
     // and SMTP-using services to reach inbucket by container name.
-    let joins_caddy = (has_url || has_smtp || service_name == SERVICE_INBUCKET)
+    let joins_caddy = (has_url || has_smtp || service_name == WellKnownService::Inbucket)
         && caddy_installed
-        && service_name != SERVICE_CADDY;
+        && service_name != WellKnownService::Caddy;
     if joins_caddy {
-        if !networks.contains(&SERVICE_CADDY.to_string()) {
-            networks.push(SERVICE_CADDY.to_string());
+        if !networks.contains(&WellKnownService::Caddy.to_string()) {
+            networks.push(WellKnownService::Caddy.to_string());
         }
     }
     networks
@@ -294,7 +352,7 @@ pub fn add_service(
     }
 
     // --auth requires native OIDC support; forward auth is no longer supported
-    if enable_auth && reg_service.def.integrations.auth.is_empty() && service_name != SERVICE_AUTHELIA {
+    if enable_auth && reg_service.def.integrations.auth.is_empty() && service_name != WellKnownService::Authelia {
         return Err(Error::NoOidcSupport(service_name.to_string()));
     }
 
@@ -350,16 +408,16 @@ pub fn add_service(
     let mut extra_volumes = Vec::new();
     let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
 
-    let authelia_installed = config.services.iter().any(|s| s.name == SERVICE_AUTHELIA);
-    let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY && s.installed);
+    let authelia_installed = config.services.iter().any(|s| s.name == WellKnownService::Authelia);
+    let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy && s.installed);
 
     // When auth is enabled and Caddy handles TLS, mount the Caddy root CA cert
     // into service containers so they trust the self-signed HTTPS cert. OIDC
     // clients connect to Caddy's HTTPS port (via network alias), which requires
     // TLS trust.
-    if enable_auth && authelia_installed && caddy_installed && service_name != SERVICE_AUTHELIA && service_name != SERVICE_CADDY {
+    if enable_auth && authelia_installed && caddy_installed && service_name != WellKnownService::Authelia && service_name != WellKnownService::Caddy {
         // The CA cert is exported by caddy's ExecStartPost to a well-known path
-        let ca_cert_host = service_home(SERVICE_CADDY)?
+        let ca_cert_host = service_home(WellKnownService::Caddy.as_str())?
             .parent()
             .ok_or_else(|| Error::Registry("caddy service home has no parent directory".into()))?
             .join("caddy-root-ca.crt");
@@ -414,7 +472,7 @@ pub fn add_service(
     // Prevent /etc/hosts from leaking into containers with auth — host entries
     // (e.g., 127.0.0.1 auth.localhost) would override podman DNS aliases that
     // route to Caddy for OIDC.
-    if enable_auth && caddy_installed && service_name != SERVICE_AUTHELIA && service_name != SERVICE_CADDY {
+    if enable_auth && caddy_installed && service_name != WellKnownService::Authelia && service_name != WellKnownService::Caddy {
         podman_args.push("--no-hosts".into());
     }
 
@@ -524,7 +582,7 @@ pub fn add_service(
     // 8. Add Caddy route for services with a URL when Caddy is installed.
     // This creates a reverse proxy from the service's domain to its container port.
     if let Some(url) = url {
-        if caddy_installed && service_name != SERVICE_CADDY {
+        if caddy_installed && service_name != WellKnownService::Caddy {
             // Extract domain from the URL
             let domain = url
                 .split("://")
@@ -721,7 +779,7 @@ pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
     });
 
     // Auto-configure [auth] when an auth provider is installed
-    if params.service_name == SERVICE_AUTHELIA {
+    if params.service_name == WellKnownService::Authelia {
         config.auth = Some(authelia::auth_config(params.allocated_ports)?);
     }
 

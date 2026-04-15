@@ -80,10 +80,11 @@ pub fn generate_jwt_hs256(
     let header = r#"{"alg":"HS256","typ":"JWT"}"#;
     let header_b64 = b64.encode(header.as_bytes());
 
-    // UNIX_EPOCH is guaranteed to be before now, so duration_since cannot fail.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock is before UNIX epoch")
+        // SystemTime::now() is always after UNIX_EPOCH on any real system.
+        // A pre-epoch clock would break all of Rust's time APIs, not just ours.
+        .unwrap_or_else(|_| unreachable!("system clock is before UNIX epoch"))
         .as_secs();
 
     let mut payload_claims = claims.clone();
@@ -94,9 +95,10 @@ pub fn generate_jwt_hs256(
         .entry("exp".to_string())
         .or_insert(serde_json::Value::Number((now + 157_680_000).into())); // 5 years
 
-    // BTreeMap<String, serde_json::Value> is always serializable.
+    // serde_json::to_string only fails for non-string map keys or types that
+    // override Serialize to return an error. BTreeMap<String, Value> has neither.
     let payload_json = serde_json::to_string(&payload_claims)
-        .expect("BTreeMap<String, Value> serialization cannot fail");
+        .unwrap_or_else(|_| unreachable!("BTreeMap<String, Value> serialization cannot fail"));
     let payload_b64 = b64.encode(payload_json.as_bytes());
 
     let message = format!("{header_b64}.{payload_b64}");

@@ -34,7 +34,7 @@ pub async fn run(services: &[String], yes: bool, dry_run: bool) -> Result<()> {
             println!("Removing {service}...");
             apply::execute_all(&result.steps).await?;
             ryra_core::finalize_remove(&result.service_name)?;
-            if service == ryra_core::SERVICE_CADDY {
+            if *service == ryra_core::WellKnownService::Caddy {
                 super::remove_caddy_ca();
             }
             println!("\n{service} removed.");

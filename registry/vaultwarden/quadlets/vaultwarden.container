@@ -10,6 +10,7 @@ PublishPort=${RYRA_PORT_HTTP}:80
 Volume=vaultwarden-data.volume:/data:U
 Pull=never
 EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
+HealthCmd=curl -sf http://localhost:80/alive || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
