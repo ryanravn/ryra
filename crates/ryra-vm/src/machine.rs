@@ -913,6 +913,18 @@ pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Resul
         .await
         .context("failed to configure additionalimagestores in VM")?;
 
+    // Ensure docker.io resolves correctly. The docker.io domain now points
+    // to podman.io via DNS, which breaks image pulls and quadlet generation.
+    // Setting unqualified-search-registries tells podman to use docker.io's
+    // actual registry endpoint (registry-1.docker.io) for docker.io/ images.
+    machine
+        .exec(
+            "printf 'unqualified-search-registries = [\"docker.io\"]\\n' \
+             > /etc/containers/registries.conf",
+        )
+        .await
+        .context("failed to configure registries in VM")?;
+
     Ok(())
 }
 

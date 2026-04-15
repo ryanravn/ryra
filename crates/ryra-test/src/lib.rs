@@ -302,9 +302,9 @@ pub async fn run(args: Args) -> Result<()> {
         None => find_ryra_binary()?,
     };
 
-    // Compute max RAM needed across all tests for snapshot sizing.
+    // Compute max RAM needed across the tests we're actually running.
     // The snapshot must be created at this size so all VMs can restore from it.
-    let max_memory: u32 = discovered
+    let max_memory: u32 = to_run
         .iter()
         .map(|t| {
             memory_override
