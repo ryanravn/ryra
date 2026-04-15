@@ -75,6 +75,7 @@ value = "redis"
 [integrations]
 auth = ["oidc"]
 token_auth_method = "client_secret_basic"
+oidc_callbacks = ["/oauth/callback/"]
 smtp = true
 
 [mappings.smtp]

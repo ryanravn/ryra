@@ -37,6 +37,7 @@ value = "false"
 
 [integrations]
 auth = ["oidc"]
+oidc_callbacks = ["/oauth/oidc/callback"]
 smtp = false
 
 [mappings.auth]

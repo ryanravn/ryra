@@ -4,6 +4,12 @@ use dialoguer::Input;
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::*;
 
+const SMTP_SECURITY_ITEMS: &[(&str, SmtpSecurity)] = &[
+    ("STARTTLS (port 587)", SmtpSecurity::Starttls),
+    ("Force TLS (port 465)", SmtpSecurity::ForceTls),
+    ("None / plaintext", SmtpSecurity::Off),
+];
+
 /// What the user chose when prompted for SMTP setup.
 pub enum SmtpSetupChoice {
     /// User provided custom SMTP credentials.
@@ -44,10 +50,13 @@ pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
                 .default(format!("noreply@{host}"))
                 .interact_text()?;
 
-            let security: String = Input::new()
-                .with_prompt("  Security (starttls, force_tls, off)")
-                .default("starttls".to_string())
-                .interact_text()?;
+            let sec_labels: Vec<&str> = SMTP_SECURITY_ITEMS.iter().map(|(l, _)| *l).collect();
+            let sec_idx = dialoguer::Select::new()
+                .with_prompt("  Security")
+                .items(&sec_labels)
+                .default(0)
+                .interact()?;
+            let security = SMTP_SECURITY_ITEMS[sec_idx].1.clone();
 
             Ok(SmtpSetupChoice::Custom(SmtpCredentials {
                 host,

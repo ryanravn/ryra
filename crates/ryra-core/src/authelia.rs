@@ -123,14 +123,13 @@ pub fn register_oidc_client(
             base_urls.push(alt);
         }
     }
-    for suffix in [
-        "/user/oauth2/Authelia/callback",              // Forgejo/Gitea
-        "/auth/login",                                 // Immich
-        "/oauth/oidc/callback",                        // Open WebUI
-        "/accounts/oidc/authelia/login/callback/",      // Paperless-ngx (django-allauth)
-        "/auth/openid/authelia",                       // Vikunja
-        "/oauth2/callback",                            // generic
-    ] {
+    let callbacks = if service_def.integrations.oidc_callbacks.is_empty() {
+        // Fallback for services that haven't declared their callbacks yet.
+        vec!["/oauth2/callback".to_string()]
+    } else {
+        service_def.integrations.oidc_callbacks.clone()
+    };
+    for suffix in &callbacks {
         for base in &base_urls {
             let uri = format!("{base}{suffix}");
             if !redirect_uris.contains(&uri) {
@@ -142,7 +141,7 @@ pub fn register_oidc_client(
         .iter()
         .map(|u| format!("\n          - '{u}'"))
         .collect();
-    let token_auth_method = &service_def.integrations.token_auth_method;
+    let token_auth_method = service_def.integrations.token_auth_method.as_str();
     let client_block = format!(
         "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        token_endpoint_auth_method: '{token_auth_method}'\n        redirect_uris:{redirect_uris_yaml}\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n          - 'groups'\n        authorization_policy: 'one_factor'"
     );

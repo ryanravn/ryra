@@ -66,6 +66,7 @@ value = "true"
 
 [integrations]
 auth = ["oidc"]
+oidc_callbacks = ["/user/oauth2/Authelia/callback"]
 smtp = true
 
 [mappings.auth]

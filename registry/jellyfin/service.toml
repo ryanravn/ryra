@@ -22,6 +22,7 @@ value = ""
 
 [integrations]
 auth = ["oidc"]
+oidc_callbacks = ["/sso/OID/redirect/authelia"]
 smtp = false
 
 [mappings.auth]

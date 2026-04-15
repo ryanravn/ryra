@@ -43,13 +43,28 @@ pub struct SmtpCredentials {
     pub username: String,
     pub password: String,
     pub from: String,
-    /// SMTP security mode: "starttls", "force_tls", or "off".
-    #[serde(default = "default_smtp_security")]
-    pub security: String,
+    #[serde(default)]
+    pub security: SmtpSecurity,
 }
 
-fn default_smtp_security() -> String {
-    "starttls".to_string()
+/// SMTP transport security mode.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SmtpSecurity {
+    #[default]
+    Starttls,
+    ForceTls,
+    Off,
+}
+
+impl SmtpSecurity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SmtpSecurity::Starttls => "starttls",
+            SmtpSecurity::ForceTls => "force_tls",
+            SmtpSecurity::Off => "off",
+        }
+    }
 }
 
 // --- Auth ---

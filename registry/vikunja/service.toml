@@ -24,6 +24,7 @@ value = "{{secret.jwt_secret}}"
 
 [integrations]
 auth = ["oidc"]
+oidc_callbacks = ["/auth/openid/authelia"]
 smtp = true
 
 [mappings.auth]

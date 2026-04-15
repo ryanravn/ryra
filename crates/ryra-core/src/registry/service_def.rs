@@ -207,16 +207,36 @@ impl std::fmt::Display for AuthKind {
     }
 }
 
+/// OIDC token endpoint authentication method for authelia client registration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenAuthMethod {
+    #[default]
+    ClientSecretPost,
+    ClientSecretBasic,
+}
+
+impl TokenAuthMethod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TokenAuthMethod::ClientSecretPost => "client_secret_post",
+            TokenAuthMethod::ClientSecretBasic => "client_secret_basic",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationFlags {
     /// Auth types this service supports. Empty = no auth support.
     #[serde(default)]
     pub auth: Vec<AuthKind>,
     /// OIDC token endpoint auth method for authelia client registration.
-    /// Defaults to "client_secret_post". Services that use HTTP Basic auth
-    /// (e.g. seafile) should set this to "client_secret_basic".
-    #[serde(default = "default_token_auth_method")]
-    pub token_auth_method: String,
+    #[serde(default)]
+    pub token_auth_method: TokenAuthMethod,
+    /// OIDC callback path suffixes registered with the auth provider.
+    /// Appended to the service's base URL(s) to form redirect_uris.
+    #[serde(default)]
+    pub oidc_callbacks: Vec<String>,
     #[serde(default = "default_true")]
     pub smtp: bool,
 }
@@ -225,7 +245,8 @@ impl Default for IntegrationFlags {
     fn default() -> Self {
         Self {
             auth: vec![],
-            token_auth_method: default_token_auth_method(),
+            token_auth_method: TokenAuthMethod::default(),
+            oidc_callbacks: vec![],
             smtp: true,
         }
     }
@@ -233,10 +254,6 @@ impl Default for IntegrationFlags {
 
 fn default_true() -> bool {
     true
-}
-
-fn default_token_auth_method() -> String {
-    "client_secret_post".to_string()
 }
 
 // ---------------------------------------------------------------------------

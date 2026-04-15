@@ -137,7 +137,7 @@ pub async fn run(
                             username: String::new(),
                             password: String::new(),
                             from: "ryra@localhost".to_string(),
-                            security: "off".to_string(),
+                            security: ryra_core::config::schema::SmtpSecurity::Off,
                         };
                         let mut cfg = ryra_core::config::load_or_default(&paths.config_file)?;
                         cfg.smtp = Some(smtp);

@@ -39,25 +39,19 @@ pub(crate) fn home_dir() -> Result<PathBuf> {
 
 /// Data directory for a service: ~/.local/share/ryra/<name>
 pub fn service_home(service_name: &str) -> Result<PathBuf> {
-    let base = dirs::data_local_dir()
-        .or_else(|| home_dir().ok().map(|h| h.join(".local/share")))
-        .ok_or_else(|| {
-            Error::Registry(
-                "could not determine data directory: set $HOME or $XDG_DATA_HOME".into(),
-            )
-        })?;
+    let base = match dirs::data_local_dir() {
+        Some(d) => d,
+        None => home_dir()?.join(".local/share"),
+    };
     Ok(base.join("ryra").join(service_name))
 }
 
 /// Quadlet directory: ~/.config/containers/systemd
 pub fn quadlet_dir() -> Result<PathBuf> {
-    let base = dirs::config_dir()
-        .or_else(|| home_dir().ok().map(|h| h.join(".config")))
-        .ok_or_else(|| {
-            Error::Registry(
-                "could not determine config directory: set $HOME or $XDG_CONFIG_HOME".into(),
-            )
-        })?;
+    let base = match dirs::config_dir() {
+        Some(d) => d,
+        None => home_dir()?.join(".config"),
+    };
     Ok(base.join("containers").join("systemd"))
 }
 
