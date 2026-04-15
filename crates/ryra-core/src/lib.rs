@@ -279,10 +279,11 @@ fn resolve_extra_networks(
     if enable_auth && authelia_installed && !WellKnownService::Authelia.matches(service_name) {
         networks.push(WellKnownService::Authelia.to_string());
     }
-    // Services join Caddy's network when they need to reach other containers
-    // on that network: URL-based services for reverse proxy, inbucket itself,
+    // Services join Caddy's network when they need to reach containers
+    // on that network: URL-based services for reverse proxy, auth services
+    // to reach the OIDC provider via caddy's TLS, inbucket itself,
     // and SMTP-using services to reach inbucket by container name.
-    let joins_caddy = (has_url || has_smtp || WellKnownService::Inbucket.matches(service_name))
+    let joins_caddy = (has_url || has_smtp || enable_auth || WellKnownService::Inbucket.matches(service_name))
         && caddy_installed
         && !WellKnownService::Caddy.matches(service_name);
     if joins_caddy {
@@ -1083,6 +1084,13 @@ mod tests {
     fn networks_authelia_when_auth_enabled() {
         let nets = resolve_extra_networks("forgejo", true, true, false, false, false);
         assert_eq!(nets, vec!["authelia"]);
+    }
+
+    #[test]
+    fn networks_auth_with_caddy_includes_both() {
+        let nets = resolve_extra_networks("forgejo", true, true, true, false, false);
+        assert!(nets.contains(&"authelia".to_string()));
+        assert!(nets.contains(&"caddy".to_string()));
     }
 
     #[test]
