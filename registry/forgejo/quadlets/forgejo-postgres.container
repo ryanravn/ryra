@@ -8,7 +8,7 @@ Image=postgres:17-alpine
 ContainerName=forgejo-postgres
 Network=forgejo.network:alias=postgres
 Volume=forgejo-db-data.volume:/var/lib/postgresql/data:U
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1
 

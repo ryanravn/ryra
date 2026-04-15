@@ -9,7 +9,7 @@ service = "caddy"
 [[steps]]
 action = "shell"
 name = "responds-on-http-port"
-run = ". $HOME/.local/share/ryra/caddy/.env && curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP | grep -qE '200|404'"
+run = ". $HOME/.local/share/ryra/caddy/.env && for i in $(seq 1 10); do CODE=$(curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP 2>/dev/null) && echo \"$CODE\" | grep -qE '200|404' && exit 0; sleep 1; done; exit 1"
 
 [[steps]]
 action = "shell"

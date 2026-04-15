@@ -9,7 +9,7 @@ ContainerName=ente-minio
 Network=ente.network:alias=minio
 Volume=ente-minio-data.volume:/data:U
 Exec=server /data --address :3200 --console-address :3201
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/ente/.env
 HealthCmd=mc ready local || exit 1
 HealthStartPeriod=15s

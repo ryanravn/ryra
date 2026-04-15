@@ -11,8 +11,7 @@ Network=open-webui.network
 PublishPort=${RYRA_PORT_HTTP}:8080
 Volume=open-webui-data.volume:/app/backend/data:U
 EnvironmentFile=%h/.local/share/ryra/open-webui/.env
-Pull=never
-AutoUpdate=registry
+Pull=missing
 HealthCmd=curl -sf http://localhost:8080/ || exit 1
 
 [Service]

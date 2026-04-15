@@ -13,7 +13,7 @@ HealthStartPeriod=30s
 HealthInterval=10s
 HealthRetries=5
 HealthTimeout=5s
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/ente/.env
 
 [Service]

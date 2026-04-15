@@ -18,7 +18,7 @@ Volume=%h/.local/share/ryra/supabase/configs/db/logs.sql:/docker-entrypoint-init
 Volume=%h/.local/share/ryra/supabase/configs/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
 Environment=POSTGRES_HOST=/var/run/postgresql
 Exec=postgres -c config_file=/etc/postgresql/postgresql.conf -c log_min_messages=fatal
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 HealthCmd=pg_isready -U postgres -h localhost
 HealthInterval=5s

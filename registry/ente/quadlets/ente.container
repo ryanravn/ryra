@@ -11,7 +11,7 @@ Image=ghcr.io/ente-io/server:latest
 ContainerName=ente-museum
 Network=ente.network:alias=museum
 PublishPort=${RYRA_PORT_HTTP}:8080
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/ente/.env
 HealthCmd=curl -sSfL -o /dev/null http://localhost:8080/ping
 HealthInterval=10s

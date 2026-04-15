@@ -10,7 +10,7 @@ ContainerName=supabase-rest
 Image=postgrest/postgrest:v14.8
 Network=supabase.network:alias=rest
 Exec=postgrest
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 
 [Service]

@@ -7,7 +7,7 @@ StartLimitBurst=3
 ContainerName=whoami
 Image=traefik/whoami:v1.11.0
 PublishPort=${RYRA_PORT_HTTP}:80
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/whoami/.env
 HealthCmd=wget -q --spider http://localhost:80/ || exit 1
 

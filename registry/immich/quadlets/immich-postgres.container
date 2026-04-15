@@ -13,7 +13,7 @@ HealthStartPeriod=30s
 HealthInterval=30s
 HealthRetries=5
 HealthTimeout=5s
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/immich/.env
 
 [Service]

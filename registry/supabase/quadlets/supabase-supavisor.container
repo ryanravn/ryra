@@ -15,7 +15,7 @@ Volume=%h/.local/share/ryra/supabase/configs/pooler/pooler.exs:/etc/pooler/poole
 Entrypoint=/bin/sh
 Exec=-c "export DATABASE_URL=ecto://supabase_admin:$$POSTGRES_PASSWORD@db:$$POSTGRES_PORT/_supabase && /app/bin/migrate && /app/bin/supavisor eval \"$$(cat /etc/pooler/pooler.exs)\" && /app/bin/server"
 Environment=PORT=4000
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 HealthCmd=curl -sSfL --head -o /dev/null http://127.0.0.1:4000/api/health
 HealthInterval=10s

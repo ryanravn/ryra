@@ -9,7 +9,7 @@ After=supabase-db.service
 ContainerName=supabase-meta
 Image=supabase/postgres-meta:v0.96.3
 Network=supabase.network:alias=meta
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 
 [Service]

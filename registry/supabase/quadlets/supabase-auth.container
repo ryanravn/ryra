@@ -9,7 +9,7 @@ After=supabase-db.service
 ContainerName=supabase-auth
 Image=supabase/gotrue:v2.186.0
 Network=supabase.network:alias=auth
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 HealthCmd=wget --no-verbose --tries=1 --spider http://localhost:9999/health
 HealthInterval=5s

@@ -8,7 +8,7 @@ ContainerName=vaultwarden
 Image=vaultwarden/server:1.35.4
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=vaultwarden-data.volume:/data:U
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
 HealthCmd=curl -sf http://localhost:80/alive || exit 1
 

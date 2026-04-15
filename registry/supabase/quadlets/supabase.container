@@ -17,7 +17,7 @@ Volume=%h/.local/share/ryra/supabase/configs/api/kong-entrypoint.sh:/home/kong/k
 Environment="KONG_NGINX_PROXY_PROXY_BUFFERS=64 160k"
 Environment=KONG_DECLARATIVE_CONFIG=/tmp/kong.yml
 Entrypoint=["/home/kong/kong-entrypoint.sh"]
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 
 [Service]

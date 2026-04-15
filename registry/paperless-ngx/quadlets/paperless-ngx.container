@@ -14,8 +14,7 @@ PublishPort=${RYRA_PORT_HTTP}:8000
 Volume=paperless-ngx-data.volume:/usr/src/paperless/data:U
 Volume=paperless-ngx-media.volume:/usr/src/paperless/media:U
 EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
-Pull=never
-AutoUpdate=registry
+Pull=missing
 HealthCmd=curl -sf http://localhost:8000/ || exit 1
 
 [Service]

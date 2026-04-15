@@ -11,7 +11,7 @@ ContainerName=twenty-worker
 Network=twenty.network
 Exec=yarn worker:prod
 Volume=twenty-data.volume:/app/docker-data:Z
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/twenty/.env
 Environment=DISABLE_DB_MIGRATIONS=true
 

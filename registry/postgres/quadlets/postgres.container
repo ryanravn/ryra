@@ -8,7 +8,7 @@ ContainerName=postgres
 Image=postgres:17-alpine
 PublishPort=${RYRA_PORT_TCP}:5432
 Volume=postgres-data.volume:/var/lib/postgresql/data:U
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/postgres/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1
 

@@ -8,7 +8,7 @@ ContainerName=inbucket
 Image=inbucket/inbucket:3.1.1
 PublishPort=${RYRA_PORT_HTTP}:9000
 PublishPort=${RYRA_PORT_SMTP}:2500
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/inbucket/.env
 HealthCmd=curl -sf http://localhost:9000/status || exit 1
 

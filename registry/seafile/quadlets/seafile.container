@@ -11,7 +11,7 @@ ContainerName=seafile
 Network=seafile.network
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=%h/.local/share/ryra/seafile/shared:/shared:Z
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/seafile/.env
 HealthCmd=curl -sf http://localhost:80/ || exit 1
 

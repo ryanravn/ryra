@@ -9,7 +9,7 @@ After=supabase-network.service
 ContainerName=supabase-imgproxy
 Image=darthsim/imgproxy:v3.30.1
 Network=supabase.network:alias=imgproxy
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/supabase/.env
 HealthCmd=imgproxy health
 HealthInterval=5s

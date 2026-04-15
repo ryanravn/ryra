@@ -8,7 +8,7 @@ Image=postgres:16-alpine
 ContainerName=twenty-postgres
 Network=twenty.network:alias=db
 Volume=twenty-db-data.volume:/var/lib/postgresql/data:U
-Pull=never
+Pull=missing
 EnvironmentFile=%h/.local/share/ryra/twenty/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-twenty} || exit 1
 

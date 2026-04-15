@@ -12,8 +12,7 @@ PublishPort=${RYRA_PORT_HTTP}:3456
 Volume=vikunja-db.volume:/db:U
 Volume=vikunja-files.volume:/app/vikunja/files:U
 EnvironmentFile=%h/.local/share/ryra/vikunja/.env
-Pull=never
-AutoUpdate=registry
+Pull=missing
 HealthCmd=curl -sf http://localhost:3456/api/v1/info || exit 1
 
 [Service]
