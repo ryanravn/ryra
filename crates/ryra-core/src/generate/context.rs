@@ -108,21 +108,14 @@ pub fn build_context(
             }
         }
         // auth.internal_url — how containers reach the auth provider for OIDC
-        // discovery and token exchange.
+        // discovery and token exchange (server-to-server calls).
         //
-        // When Caddy is installed, this equals auth.external_url because OIDC
-        // clients validate that the configured URL matches the issuer in the
-        // discovery response. Containers reach Caddy via a podman network alias
-        // matching the auth domain.
-        //
-        // Without Caddy, containers talk directly to the auth provider.
-        let internal_url = if caddy_installed {
-            external_url.clone()
-        } else {
-            match auth.port() {
-                Some(port) => format!("http://{}:{port}", auth.provider_name()),
-                None => auth_localhost_url.clone(),
-            }
+        // Always uses direct HTTP to the auth container on the shared podman
+        // network. Cannot use .localhost domains because RFC 6761 requires them
+        // to always resolve to 127.0.0.1, even inside containers with --no-hosts.
+        let internal_url = match auth.port() {
+            Some(port) => format!("http://{}:{port}", auth.provider_name()),
+            None => auth_localhost_url.clone(),
         };
         ctx.insert("auth.url".into(), auth_localhost_url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());
