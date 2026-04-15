@@ -11,7 +11,10 @@ Network=vikunja.network
 PublishPort=${RYRA_PORT_HTTP}:3456
 Volume=vikunja-db.volume:/db:U
 Volume=vikunja-files.volume:/app/vikunja/files:U
+Volume=%h/.local/share/ryra/vikunja/ca-bundle.crt:/etc/ssl/certs/ca-certificates.crt:Z,ro
+Volume=%h/.local/share/ryra/vikunja/hosts:/etc/hosts:Z,ro
 EnvironmentFile=%h/.local/share/ryra/vikunja/.env
+PodmanArgs=--no-hosts
 Pull=missing
 HealthCmd=curl -sf http://localhost:3456/api/v1/info || exit 1
 
@@ -20,6 +23,7 @@ EnvironmentFile=%h/.local/share/ryra/vikunja/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
+ExecStartPre=/bin/bash %h/.local/share/ryra/vikunja/configs/scripts/merge-ca-bundle.sh
 
 [Install]
 WantedBy=default.target
