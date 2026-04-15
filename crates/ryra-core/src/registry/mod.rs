@@ -36,7 +36,7 @@ pub fn find_service(repo_dir: &Path, name: &str) -> Result<RegistryService> {
     })?;
 
     if let Err(msg) = def.validate() {
-        return Err(Error::Registry(msg));
+        return Err(Error::ConfigValidation(msg));
     }
 
     Ok(RegistryService {

@@ -79,8 +79,23 @@ pub enum Error {
     #[error("{0}")]
     UnsupportedArchitecture(String),
 
-    #[error("registry error: {0}")]
-    Registry(String),
+    #[error("could not determine home directory: set $HOME")]
+    HomeDirNotFound,
+
+    #[error("invalid service reference: {0}")]
+    InvalidServiceRef(String),
+
+    #[error("registry configuration error: {0}")]
+    RegistryConfig(String),
+
+    #[error("quadlet bundle error: {0}")]
+    Bundle(String),
+
+    #[error("auth context error: {0}")]
+    AuthContext(String),
+
+    #[error("config validation failed: {0}")]
+    ConfigValidation(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

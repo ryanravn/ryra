@@ -13,7 +13,7 @@ pub async fn add(name: &str, url: &str) -> Result<()> {
     let mut config = config::load_or_default(&paths.config_file)?;
 
     if config.registries.iter().any(|r| r.name == name) {
-        return Err(Error::Registry(format!(
+        return Err(Error::RegistryConfig(format!(
             "registry '{name}' already exists — remove it first to change the URL"
         )));
     }

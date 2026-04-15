@@ -1,4 +1,5 @@
 mod cli;
+pub mod verbose;
 
 use clap::{Parser, Subcommand};
 
@@ -176,7 +177,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Init { dry_run, verbose } => {
-            ryra_core::verbose::set(verbose);
+            crate::verbose::set(verbose);
             cli::init::run(dry_run).await?
         }
         Command::Add {
@@ -187,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
             verbose,
         } => {
-            ryra_core::verbose::set(verbose);
+            crate::verbose::set(verbose);
             cli::add::run(services, url.as_deref(), auth, dry_run, yes).await?
         }
         Command::Remove {
@@ -196,7 +197,7 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
             verbose,
         } => {
-            ryra_core::verbose::set(verbose);
+            crate::verbose::set(verbose);
             cli::remove::run(services, yes, dry_run).await?
         }
         Command::Reset {
@@ -204,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
             verbose,
         } => {
-            ryra_core::verbose::set(verbose);
+            crate::verbose::set(verbose);
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,

@@ -25,10 +25,10 @@ impl ServiceRef {
     pub fn parse(input: &str) -> Result<Self> {
         let parts: Vec<&str> = input.split('/').collect();
         match parts.as_slice() {
-            [""] => Err(Error::Registry("service reference cannot be empty".to_string())),
+            [""] => Err(Error::InvalidServiceRef("service reference cannot be empty".to_string())),
             [name] => {
                 if name.is_empty() {
-                    Err(Error::Registry(
+                    Err(Error::InvalidServiceRef(
                         "service reference cannot be empty".to_string(),
                     ))
                 } else {
@@ -37,12 +37,12 @@ impl ServiceRef {
             }
             [registry, service] => {
                 if registry.is_empty() {
-                    return Err(Error::Registry(format!(
+                    return Err(Error::InvalidServiceRef(format!(
                         "registry name cannot be empty in reference '{input}'"
                     )));
                 }
                 if service.is_empty() {
-                    return Err(Error::Registry(format!(
+                    return Err(Error::InvalidServiceRef(format!(
                         "service name cannot be empty in reference '{input}'"
                     )));
                 }
@@ -51,7 +51,7 @@ impl ServiceRef {
                     service: service.to_string(),
                 })
             }
-            _ => Err(Error::Registry(format!(
+            _ => Err(Error::InvalidServiceRef(format!(
                 "invalid service reference '{input}': expected 'service' or 'registry/service'"
             ))),
         }

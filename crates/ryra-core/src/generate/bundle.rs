@@ -189,7 +189,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     let quadlets_dir = params.service_dir.join("quadlets");
 
     if !quadlets_dir.is_dir() {
-        return Err(Error::Registry(format!(
+        return Err(Error::Bundle(format!(
             "quadlets/ directory not found for service '{}'",
             params.service_name
         )));
@@ -219,7 +219,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
 
         let file_name = path
             .file_name()
-            .ok_or_else(|| Error::Registry(format!("invalid file path: {}", path.display())))?
+            .ok_or_else(|| Error::Bundle(format!("invalid file path: {}", path.display())))?
             .to_string_lossy();
 
         // Only inject networks/volumes into .container files
@@ -241,7 +241,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     }
 
     if quadlet_files.is_empty() {
-        return Err(Error::Registry(format!(
+        return Err(Error::Bundle(format!(
             "no quadlet files found in quadlets/ for service '{}'",
             params.service_name
         )));
@@ -301,7 +301,7 @@ fn collect_configs_recursive(
         } else if path.is_file() {
             let relative = path
                 .strip_prefix(base_dir)
-                .map_err(|e| Error::Registry(format!("failed to compute relative path: {e}")))?;
+                .map_err(|e| Error::Bundle(format!("failed to compute relative path: {e}")))?;
 
             let content = std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
                 path: path.clone(),

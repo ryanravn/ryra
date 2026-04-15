@@ -4,10 +4,41 @@ use minijinja::{Environment, Value};
 
 use crate::error::{Error, Result};
 
+/// Convert SMTP security value to Forgejo's protocol format.
+/// starttls → smtp+starttls, force_tls → smtps, off → smtp
+fn forgejo_protocol(value: &str) -> String {
+    match value {
+        "starttls" => "smtp+starttls".to_string(),
+        "force_tls" => "smtps".to_string(),
+        _ => "smtp".to_string(),
+    }
+}
+
+/// Convert SMTP security value to Authelia's scheme format.
+/// starttls → submission, force_tls → submissions, off → smtp
+fn authelia_scheme(value: &str) -> String {
+    match value {
+        "starttls" => "submission".to_string(),
+        "force_tls" => "submissions".to_string(),
+        _ => "smtp".to_string(),
+    }
+}
+
 /// Render a template string with the given context variables.
 pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<String> {
     let mut env = Environment::new();
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
+
+    // Register custom filters for service-specific derived values.
+    // Templates use e.g. `{{ smtp.security | forgejo_protocol }}` instead of
+    // the core needing to know about every service's config format.
+    env.add_filter("forgejo_protocol", |value: &str| -> String {
+        forgejo_protocol(value)
+    });
+    env.add_filter("authelia_scheme", |value: &str| -> String {
+        authelia_scheme(value)
+    });
+
     env.add_template("tpl", template_str)
         .map_err(|e| Error::Template(format!("invalid template: {e}")))?;
 
@@ -109,6 +140,40 @@ mod tests {
         ctx.insert("service.domain".into(), "example.com".into());
         let result = render("{{ service.domain | default('localhost') }}", &ctx)?;
         assert_eq!(result, "example.com");
+        Ok(())
+    }
+
+    #[test]
+    fn forgejo_protocol_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("smtp.security".into(), "starttls".into());
+        let result = render("{{ smtp.security | forgejo_protocol }}", &ctx)?;
+        assert_eq!(result, "smtp+starttls");
+
+        ctx.insert("smtp.security".into(), "force_tls".into());
+        let result = render("{{ smtp.security | forgejo_protocol }}", &ctx)?;
+        assert_eq!(result, "smtps");
+
+        ctx.insert("smtp.security".into(), "off".into());
+        let result = render("{{ smtp.security | forgejo_protocol }}", &ctx)?;
+        assert_eq!(result, "smtp");
+        Ok(())
+    }
+
+    #[test]
+    fn authelia_scheme_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("smtp.security".into(), "starttls".into());
+        let result = render("{{ smtp.security | authelia_scheme }}", &ctx)?;
+        assert_eq!(result, "submission");
+
+        ctx.insert("smtp.security".into(), "force_tls".into());
+        let result = render("{{ smtp.security | authelia_scheme }}", &ctx)?;
+        assert_eq!(result, "submissions");
+
+        ctx.insert("smtp.security".into(), "off".into());
+        let result = render("{{ smtp.security | authelia_scheme }}", &ctx)?;
+        assert_eq!(result, "smtp");
         Ok(())
     }
 }

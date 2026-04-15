@@ -6,7 +6,7 @@ use ryra_core::Step;
 
 /// Execute a list of steps, stopping on first failure.
 pub async fn execute_all(steps: &[Step]) -> Result<()> {
-    let verbose = ryra_core::verbose::is_enabled();
+    let verbose = crate::verbose::is_enabled();
     for step in steps {
         let start = std::time::Instant::now();
         execute(step).await?;
@@ -26,7 +26,7 @@ async fn execute(step: &Step) -> Result<()> {
     match step {
         Step::WriteFile(file) => {
             println!("  Writing {}", file.path.display());
-            if ryra_core::verbose::is_enabled() && !file.content.is_empty() {
+            if crate::verbose::is_enabled() && !file.content.is_empty() {
                 for line in file.content.lines() {
                     println!("    | {line}");
                 }
@@ -54,7 +54,7 @@ async fn execute(step: &Step) -> Result<()> {
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped)
             if let Err(e) = run_cmd("systemctl", &["--user", "stop", unit])
-                && ryra_core::verbose::is_enabled()
+                && crate::verbose::is_enabled()
             {
                 eprintln!("  Note: stopping {unit} failed (may already be stopped): {e}");
             }
@@ -121,7 +121,7 @@ async fn execute(step: &Step) -> Result<()> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
-            if ryra_core::verbose::is_enabled() && !status.map(|s| s.success()).unwrap_or(false) {
+            if crate::verbose::is_enabled() && !status.map(|s| s.success()).unwrap_or(false) {
                 eprintln!("  Note: volume {name} not removed (may not exist)");
             }
             Ok(())

@@ -59,7 +59,7 @@ pub struct ServiceMeta {
     /// Supported CPU architectures (e.g. ["amd64", "arm64"]).
     /// Empty means all architectures are supported.
     #[serde(default)]
-    pub architecture: Vec<String>,
+    pub architecture: Vec<Arch>,
     /// Whether this service requires HTTPS to function.
     #[serde(default)]
     pub https: HttpsRequirement,
@@ -72,6 +72,23 @@ pub enum ServiceKind {
     #[default]
     Application,
     Infrastructure,
+}
+
+/// CPU architecture for container images.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Arch {
+    Amd64,
+    Arm64,
+}
+
+impl std::fmt::Display for Arch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Arch::Amd64 => write!(f, "amd64"),
+            Arch::Arm64 => write!(f, "arm64"),
+        }
+    }
 }
 
 /// Whether this service requires HTTPS to function.
@@ -268,13 +285,14 @@ impl ServiceDef {
             return None;
         }
         let current = current_architecture();
-        if self.service.architecture.iter().any(|a| a == current) {
+        if self.service.architecture.contains(&current) {
             None
         } else {
+            let supported: Vec<_> = self.service.architecture.iter().map(|a| a.to_string()).collect();
             Some(format!(
                 "{} only supports {} — this system is {current}",
                 self.service.name,
-                self.service.architecture.join(", "),
+                supported.join(", "),
             ))
         }
     }
@@ -371,10 +389,12 @@ impl ServiceDef {
 }
 
 /// Detect the current system architecture using OCI/Docker naming conventions.
-pub fn current_architecture() -> &'static str {
+pub fn current_architecture() -> Arch {
     match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        "aarch64" => "arm64",
-        other => other,
+        "x86_64" => Arch::Amd64,
+        "aarch64" => Arch::Arm64,
+        // Fallback: default to amd64 for unknown architectures.
+        // The service's check_architecture() will catch unsupported ones.
+        _ => Arch::Amd64,
     }
 }

@@ -48,7 +48,7 @@ pub fn register_oidc_client(
     let client_id = match ctx.get("auth.client_id") {
         Some(id) => id.clone(),
         None => {
-            return Err(Error::Registry(
+            return Err(Error::AuthContext(
                 "auth.client_id not found in template context".into(),
             ))
         }
@@ -56,7 +56,7 @@ pub fn register_oidc_client(
     let client_secret = match ctx.get("auth.client_secret") {
         Some(s) => s.clone(),
         None => {
-            return Err(Error::Registry(
+            return Err(Error::AuthContext(
                 "auth.client_secret not found in template context".into(),
             ))
         }
@@ -88,7 +88,7 @@ pub fn register_oidc_client(
         None => match ctx.get("service.url") {
             Some(u) if !u.is_empty() => u.clone(),
             _ => {
-                return Err(Error::Registry(
+                return Err(Error::AuthContext(
                     "no URL provided and no service.url in template context — cannot register OIDC client".into(),
                 ))
             }
@@ -177,7 +177,7 @@ pub fn register_oidc_client(
             }
         }
         if !found {
-            return Err(Error::Registry(format!(
+            return Err(Error::AuthContext(format!(
                 "failed to inject OIDC client into authelia config — \
                  'clients:' under 'identity_providers.oidc' not found in {}",
                 authelia_config_path.display()
@@ -203,11 +203,11 @@ pub fn register_oidc_client(
     // Ensure Caddy joins authelia's network with a domain alias so that
     // containers can resolve the auth FQDN → Caddy → authelia (with proper
     // X-Forwarded-Proto: https headers that authelia requires for OIDC).
-    let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy && s.installed);
+    let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
     let auth_domain = config
         .services
         .iter()
-        .find(|s| s.name == WellKnownService::Authelia)
+        .find(|s| WellKnownService::Authelia.matches(&s.name))
         .and_then(|s| s.url.as_ref())
         .and_then(|u| {
             u.split("://")
@@ -284,7 +284,7 @@ pub fn auth_config(allocated_ports: &[(String, u16)]) -> crate::error::Result<Au
         .find(|(name, _)| name == "http")
         .map(|(_, p)| *p)
         .ok_or_else(|| {
-            crate::error::Error::Registry(
+            crate::error::Error::AuthContext(
                 "authelia has no 'http' port allocated — cannot configure auth".into(),
             )
         })?;

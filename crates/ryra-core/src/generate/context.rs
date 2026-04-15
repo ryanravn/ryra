@@ -62,22 +62,6 @@ pub fn build_context(
         ctx.insert("smtp.password".into(), smtp.password.clone());
         ctx.insert("smtp.from".into(), smtp.from.clone());
         ctx.insert("smtp.security".into(), smtp.security.as_str().into());
-        // Derived values for services with non-standard SMTP config formats.
-        use crate::config::schema::SmtpSecurity;
-        // smtp.forgejo_protocol: smtp+starttls / smtps / smtp
-        let forgejo_protocol = match smtp.security {
-            SmtpSecurity::Starttls => "smtp+starttls",
-            SmtpSecurity::ForceTls => "smtps",
-            SmtpSecurity::Off => "smtp",
-        };
-        ctx.insert("smtp.forgejo_protocol".into(), forgejo_protocol.into());
-        // smtp.authelia_scheme: submission / submissions / smtp
-        let authelia_scheme = match smtp.security {
-            SmtpSecurity::Starttls => "submission",
-            SmtpSecurity::ForceTls => "submissions",
-            SmtpSecurity::Off => "smtp",
-        };
-        ctx.insert("smtp.authelia_scheme".into(), authelia_scheme.into());
     }
 
     // tls.*
@@ -101,7 +85,7 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let auth_localhost_url = auth.url().to_string();
-        let caddy_installed = config.services.iter().any(|s| s.name == crate::WellKnownService::Caddy && s.installed);
+        let caddy_installed = config.services.iter().any(|s| crate::WellKnownService::Caddy.matches(&s.name) && s.installed);
         // auth.external_url — browser-accessible URL.
         // Uses the stored URL from the auth provider's installed record if available.
         // When Caddy is installed, ensures the URL includes Caddy's HTTPS port
@@ -117,7 +101,7 @@ pub fn build_context(
             let caddy_https_port = config
                 .services
                 .iter()
-                .find(|s| s.name == crate::WellKnownService::Caddy)
+                .find(|s| crate::WellKnownService::Caddy.matches(&s.name))
                 .and_then(|s| s.ports.get("https").copied());
             if let Some(port) = caddy_https_port {
                 let has_port = external_url

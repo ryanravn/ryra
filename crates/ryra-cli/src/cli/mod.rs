@@ -121,7 +121,7 @@ pub fn remove_caddy_ca() {
 
 /// Print a dry-run summary: files to write, then commands to run.
 pub fn print_dry_run(steps: &[Step]) {
-    let verbose = ryra_core::verbose::is_enabled();
+    let verbose = crate::verbose::is_enabled();
 
     let file_steps: Vec<_> = steps
         .iter()

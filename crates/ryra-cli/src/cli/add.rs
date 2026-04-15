@@ -44,9 +44,9 @@ pub async fn run(
         let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
         let service = service_ref.service_name();
 
-        // Load config fresh — previous iterations or ensure_dependencies may have
+        // Load config once — previous iterations or ensure_dependencies may have
         // modified it on disk (e.g., installing caddy or authelia).
-        let config = ryra_core::config::load_or_default(&paths.config_file)?;
+        let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
 
         // Look up the service definition
         let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
@@ -68,19 +68,17 @@ pub async fn run(
         let needs_https = reg_service.def.service.https == HttpsRequirement::Required
             || url.is_some_and(|u| u.starts_with("https://"));
         if needs_https && !dry_run {
-            // Reload config since ensure_tls_configured may install caddy
-            let config = ryra_core::config::load_or_default(&paths.config_file)?;
             ensure_tls_configured(&config, &paths, interactive).await?;
+            // Reload — ensure_tls_configured may have installed caddy
+            config = ryra_core::config::load_or_default(&paths.config_file)?;
         }
         let auto_url: Option<String>;
-        // Reload config after TLS setup — caddy ports may have been added
         let url: Option<&str> = if needs_https && url.is_none() {
-            let config = ryra_core::config::load_or_default(&paths.config_file)?;
             if matches!(config.tls, Some(TlsConfig::Caddy)) {
                 let caddy_https_port = config
                     .services
                     .iter()
-                    .find(|s| s.name == WellKnownService::Caddy)
+                    .find(|s| WellKnownService::Caddy.matches(&s.name))
                     .and_then(|s| s.ports.get("https").copied())
                     .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
                 auto_url = Some(format!("https://{service}.localhost:{caddy_https_port}"));
@@ -97,59 +95,55 @@ pub async fn run(
             && !reg_service.def.mappings.smtp.is_empty()
             && !dry_run
             && interactive
+            && config.smtp.is_none()
         {
-            let smtp_config = ryra_core::config::load_or_default(&paths.config_file)?;
-            if smtp_config.smtp.is_none() {
-                match prompts::prompt_smtp()? {
-                    prompts::SmtpSetupChoice::Custom(smtp) => {
-                        let mut cfg = ryra_core::config::load_or_default(&paths.config_file)?;
-                        cfg.smtp = Some(smtp);
-                        paths.ensure_dirs()?;
-                        ryra_core::config::save_config(&paths.config_file, &cfg)?;
-                        println!(
-                            "  SMTP configured. Saved to {}\n",
-                            paths.config_file.display()
-                        );
-                    }
-                    prompts::SmtpSetupChoice::Inbucket => {
-                        // Install inbucket, then configure SMTP to point at it
-                        let inbucket_installed = smtp_config
-                            .services
-                            .iter()
-                            .any(|s| s.name == WellKnownService::Inbucket);
-                        if !inbucket_installed {
-                            println!("\nInstalling inbucket...\n");
-                            Box::pin(run(
-                                &[WellKnownService::Inbucket.to_string()],
-                                None,
-                                false,
-                                false,
-                                true,
-                            ))
-                            .await?;
-                        }
-                        // Use container name for SMTP host — services on the
-                        // caddy network can reach inbucket directly. The host
-                        // port isn't reachable from --no-hosts containers.
-                        let smtp = ryra_core::config::schema::SmtpCredentials {
-                            host: "inbucket".to_string(),
-                            port: INBUCKET_SMTP_PORT, // inbucket's internal container port
-                            username: String::new(),
-                            password: String::new(),
-                            from: "ryra@localhost".to_string(),
-                            security: ryra_core::config::schema::SmtpSecurity::Off,
-                        };
-                        let mut cfg = ryra_core::config::load_or_default(&paths.config_file)?;
-                        cfg.smtp = Some(smtp);
-                        paths.ensure_dirs()?;
-                        ryra_core::config::save_config(&paths.config_file, &cfg)?;
-                        println!(
-                            "  SMTP configured (inbucket). Saved to {}\n",
-                            paths.config_file.display()
-                        );
-                    }
-                    prompts::SmtpSetupChoice::Skip => {}
+            match prompts::prompt_smtp()? {
+                prompts::SmtpSetupChoice::Custom(smtp) => {
+                    config.smtp = Some(smtp);
+                    paths.ensure_dirs()?;
+                    ryra_core::config::save_config(&paths.config_file, &config)?;
+                    println!(
+                        "  SMTP configured. Saved to {}\n",
+                        paths.config_file.display()
+                    );
                 }
+                prompts::SmtpSetupChoice::Inbucket => {
+                    let inbucket_installed = config
+                        .services
+                        .iter()
+                        .any(|s| WellKnownService::Inbucket.matches(&s.name));
+                    if !inbucket_installed {
+                        println!("\nInstalling inbucket...\n");
+                        Box::pin(run(
+                            &[WellKnownService::Inbucket.to_string()],
+                            None,
+                            false,
+                            false,
+                            true,
+                        ))
+                        .await?;
+                        // Reload — inbucket install modified config on disk
+                        config = ryra_core::config::load_or_default(&paths.config_file)?;
+                    }
+                    // Use container name for SMTP host — services on the
+                    // caddy network can reach inbucket directly. The host
+                    // port isn't reachable from --no-hosts containers.
+                    config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
+                        host: "inbucket".to_string(),
+                        port: INBUCKET_SMTP_PORT, // inbucket's internal container port
+                        username: String::new(),
+                        password: String::new(),
+                        from: "ryra@localhost".to_string(),
+                        security: ryra_core::config::schema::SmtpSecurity::Off,
+                    });
+                    paths.ensure_dirs()?;
+                    ryra_core::config::save_config(&paths.config_file, &config)?;
+                    println!(
+                        "  SMTP configured (inbucket). Saved to {}\n",
+                        paths.config_file.display()
+                    );
+                }
+                prompts::SmtpSetupChoice::Skip => {}
             }
         }
 
@@ -159,10 +153,11 @@ pub async fn run(
 
         // If the user chose auth but no provider is configured, install one
         if auth_kind.is_some() && config.auth.is_none() {
-            let mut config = config.clone();
             if !ensure_auth_for_add(&mut config, &paths, dry_run).await? {
                 return Ok(());
             }
+            // Reload — ensure_auth_for_add may have installed authelia
+            config = ryra_core::config::load_or_default(&paths.config_file)?;
         }
 
         // Prompt for env vars based on their kind
@@ -178,9 +173,8 @@ pub async fn run(
 
         if !promptable.is_empty() && interactive {
             // Resolve template variables in defaults so prompts show real values
-            let config_for_defaults = ryra_core::config::load_or_default(&paths.config_file)?;
             let default_ctx = ryra_core::generate::context::build_context(
-                &config_for_defaults,
+                &config,
                 &reg_service.def,
                 None,
                 auth_kind.as_ref(),
@@ -638,7 +632,7 @@ async fn ensure_tls_configured(
         match tls {
             TlsConfig::Caddy => {
                 // Ensure Caddy is installed (may have been removed or config edited manually)
-                let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
+                let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name));
                 if !caddy_installed {
                     println!("\nInstalling caddy (TLS provider)...\n");
                     Box::pin(run(
@@ -665,12 +659,12 @@ async fn ensure_tls_configured(
     // if Caddy is already installed — the user has implicitly opted in by
     // installing Caddy first. Otherwise bail with a helpful message.
     if !interactive {
-        let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
+        let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name));
         if caddy_installed {
-            let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
-            config.tls = Some(TlsConfig::Caddy);
+            let mut cfg = config.clone();
+            cfg.tls = Some(TlsConfig::Caddy);
             paths.ensure_dirs()?;
-            ryra_core::config::save_config(&paths.config_file, &config)?;
+            ryra_core::config::save_config(&paths.config_file, &cfg)?;
             println!("  TLS auto-configured (provider: caddy)");
             return Ok(());
         }
@@ -695,7 +689,7 @@ async fn ensure_tls_configured(
     let tls = match selection {
         0 => {
             // Ensure Caddy is installed
-            let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
+            let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name));
             if !caddy_installed {
                 println!("\nInstalling caddy...\n");
                 Box::pin(run(
@@ -753,7 +747,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
     let needs_authelia = auth
-        && !config.services.iter().any(|s| s.name == WellKnownService::Authelia)
+        && !config.services.iter().any(|s| WellKnownService::Authelia.matches(&s.name))
         && config.auth.is_none();
 
     if !needs_authelia {
@@ -765,14 +759,11 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
     // when the user picks caddy as their TLS provider, so we only need
     // to install Caddy here if tls is already set to caddy but Caddy
     // isn't installed yet (e.g., config was edited manually).
-    let config_fresh = ryra_core::config::load_or_default(
-        &ryra_core::config::ConfigPaths::resolve()?.config_file,
-    )?;
-    let is_caddy_tls = matches!(config_fresh.tls, Some(TlsConfig::Caddy));
-    let caddy_installed = config_fresh
+    let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
+    let caddy_installed = config
         .services
         .iter()
-        .any(|s| s.name == WellKnownService::Caddy);
+        .any(|s| WellKnownService::Caddy.matches(&s.name));
     if is_caddy_tls && !caddy_installed {
         println!("\nInstalling caddy (TLS provider)...\n");
         Box::pin(run(
@@ -839,7 +830,7 @@ async fn ensure_auth_for_add(
         prompts::AuthSetupChoice::External(_) => Ok(true),
         prompts::AuthSetupChoice::InstallAuthelia => {
             // Check if authelia is already installed but auth wasn't configured
-            let authelia_installed = config.services.iter().any(|s| s.name == WellKnownService::Authelia);
+            let authelia_installed = config.services.iter().any(|s| WellKnownService::Authelia.matches(&s.name));
             if authelia_installed {
                 println!();
                 println!("Authelia is already installed — configuring auth...");
@@ -861,7 +852,7 @@ async fn ensure_auth_for_add(
             };
             // Caddy is needed when TLS provider is caddy.
             let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
-            let caddy_installed = config.services.iter().any(|s| s.name == WellKnownService::Caddy);
+            let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name));
             if is_caddy_tls && !caddy_installed {
                 println!("\nInstalling caddy (TLS provider)...\n");
                 Box::pin(run(
@@ -1045,7 +1036,7 @@ fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -
     };
 
     // Find the port from the installed service record
-    let service = config.services.iter().find(|s| s.name == WellKnownService::Authelia);
+    let service = config.services.iter().find(|s| WellKnownService::Authelia.matches(&s.name));
     let port = service
         .and_then(|s| s.ports.values().next().copied())
         .unwrap_or(DEFAULT_AUTHELIA_PORT);
