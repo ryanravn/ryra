@@ -18,6 +18,7 @@ pub async fn run(
     url: Option<&str>,
     auth: bool,
     dry_run: bool,
+    yes: bool,
 ) -> Result<()> {
     if url.is_some() && services.len() > 1 {
         bail!("--url can only be used when adding a single service");
@@ -44,6 +45,12 @@ pub async fn run(
         // Check architecture compatibility before any prompts
         if let Some(msg) = reg_service.def.check_architecture() {
             bail!("{msg}");
+        }
+
+        // Warn about untrusted registry services — they can run arbitrary
+        // scripts via quadlet ExecStartPre/Post and mount host directories.
+        if service_ref.registry_name() != "bundled" && !yes && !dry_run {
+            warn_untrusted_service(&reg_service.service_dir, service, interactive)?;
         }
 
         // TLS — prompt if service requires HTTPS or user passed an https:// URL.
@@ -107,6 +114,7 @@ pub async fn run(
                                 None,
                                 false,
                                 false,
+                                true,
                             ))
                             .await?;
                         }
@@ -662,6 +670,7 @@ async fn ensure_tls_configured(
                         None,
                         false,
                         false,
+                        true,
                     ))
                     .await?;
                 }
@@ -718,6 +727,7 @@ async fn ensure_tls_configured(
                     None,
                     false,
                     false,
+                    true,
                 ))
                 .await?;
             }
@@ -798,6 +808,7 @@ async fn ensure_dependencies(
             None,
             false,
             false,
+            true,
         ))
         .await?;
     }
@@ -822,6 +833,7 @@ async fn ensure_dependencies(
             Some(&authelia_url),
             false,
             false,
+            true,
         ))
         .await?;
         setup_host_access(&[&authelia_url]);
@@ -835,6 +847,7 @@ async fn ensure_dependencies(
             Some(&authelia_url),
             false,
             false,
+            true,
         ))
         .await?;
         setup_host_access(&[&authelia_url]);
@@ -884,6 +897,7 @@ async fn ensure_auth_for_add(
                     None,
                     false,
                     dry_run,
+                    true,
                 ))
                 .await?;
                 *config = ryra_core::config::load_or_default(&paths.config_file)?;
@@ -896,6 +910,7 @@ async fn ensure_auth_for_add(
                 Some(&authelia_url),
                 false,
                 dry_run,
+                true,
             ))
             .await?;
             if !dry_run {
@@ -916,6 +931,94 @@ async fn ensure_auth_for_add(
             Ok(false)
         }
     }
+}
+
+/// Warn about services from untrusted (non-bundled) registries.
+/// Shows scripts and volume mounts that will run on the host, requires y/n.
+fn warn_untrusted_service(
+    service_dir: &std::path::Path,
+    service: &str,
+    interactive: bool,
+) -> Result<()> {
+    // Collect scripts (ExecStartPre/Post in quadlets)
+    let quadlet_dir = service_dir.join("quadlets");
+    let mut scripts: Vec<String> = Vec::new();
+    let mut volumes: Vec<String> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&quadlet_dir) {
+        for entry in entries.flatten() {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("ExecStartPre=")
+                        || trimmed.starts_with("ExecStartPost=")
+                    {
+                        scripts.push(trimmed.to_string());
+                    }
+                    if trimmed.starts_with("Volume=") {
+                        let vol = trimmed.strip_prefix("Volume=").unwrap_or(trimmed);
+                        // Only flag host bind mounts (contain %h or start with /)
+                        if vol.contains("%h") || vol.starts_with('/') {
+                            volumes.push(vol.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Collect config scripts
+    let scripts_dir = service_dir.join("configs").join("scripts");
+    let mut config_scripts: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                config_scripts.push(name.to_string());
+            }
+        }
+    }
+
+    println!();
+    println!("  WARNING: {service} is from an external registry.");
+    println!("  External services can run arbitrary code on your host.");
+    if !scripts.is_empty() {
+        println!();
+        println!("  Quadlet hooks (run as your user):");
+        for s in &scripts {
+            println!("    {s}");
+        }
+    }
+    if !config_scripts.is_empty() {
+        println!();
+        println!("  Scripts (copied to service data dir):");
+        for s in &config_scripts {
+            println!("    {s}");
+        }
+    }
+    if !volumes.is_empty() {
+        println!();
+        println!("  Host bind mounts:");
+        for v in &volumes {
+            println!("    {v}");
+        }
+    }
+    println!();
+
+    if !interactive {
+        bail!(
+            "{service} is from an external registry — use --yes to accept or run interactively"
+        );
+    }
+
+    let proceed = Confirm::new()
+        .with_prompt("  Install this service?")
+        .default(false)
+        .interact()?;
+    if !proceed {
+        bail!("cancelled");
+    }
+
+    Ok(())
 }
 
 /// Try to configure auth from an already-installed authelia instance.

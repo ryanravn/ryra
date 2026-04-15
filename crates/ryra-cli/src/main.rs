@@ -36,6 +36,9 @@ enum Command {
         /// Enable auth (forward auth via Caddy, or native OIDC if supported)
         #[arg(long)]
         auth: bool,
+        /// Skip confirmation prompts (including untrusted registry warnings)
+        #[arg(long, short = 'y')]
+        yes: bool,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
@@ -180,11 +183,12 @@ async fn main() -> anyhow::Result<()> {
             ref services,
             ref url,
             auth,
+            yes,
             dry_run,
             verbose,
         } => {
             ryra_core::verbose::set(verbose);
-            cli::add::run(services, url.as_deref(), auth, dry_run).await?
+            cli::add::run(services, url.as_deref(), auth, dry_run, yes).await?
         }
         Command::Remove {
             ref services,
