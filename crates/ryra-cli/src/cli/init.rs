@@ -11,10 +11,7 @@ pub async fn run(dry_run: bool) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
 
     // If config exists, ask to overwrite
-    let has_existing = ryra_core::config::ConfigPaths::resolve()
-        .ok()
-        .map(|p| p.config_file.exists())
-        .unwrap_or(false);
+    let has_existing = ryra_core::config::ConfigPaths::resolve()?.config_file.exists();
 
     if has_existing && interactive && !dry_run {
         let overwrite = dialoguer::Confirm::new()

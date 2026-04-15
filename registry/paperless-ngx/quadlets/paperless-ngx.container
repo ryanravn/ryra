@@ -1,5 +1,7 @@
 [Unit]
 Description=Paperless-ngx document management
+StartLimitIntervalSec=60
+StartLimitBurst=3
 After=network-online.target
 Requires=paperless-ngx-redis.service paperless-ngx.network
 After=paperless-ngx-redis.service paperless-ngx.network
@@ -12,9 +14,11 @@ PublishPort=${RYRA_PORT_HTTP}:8000
 Volume=paperless-ngx-data.volume:/usr/src/paperless/data:U
 Volume=paperless-ngx-media.volume:/usr/src/paperless/media:U
 EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+Pull=never
 AutoUpdate=registry
 
 [Service]
+EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
 ExecStartPre=/bin/bash %h/.local/share/ryra/paperless-ngx/configs/scripts/merge-ca-bundle.sh
 ExecStartPost=/bin/bash -c "podman cp %h/.local/share/ryra/paperless-ngx/ca-bundle.crt paperless-ngx:/tmp/ca-bundle.crt 2>/dev/null || true"
 Restart=always

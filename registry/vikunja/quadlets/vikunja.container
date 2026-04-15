@@ -1,5 +1,7 @@
 [Unit]
 Description=Vikunja task management
+StartLimitIntervalSec=60
+StartLimitBurst=3
 After=network-online.target
 
 [Container]
@@ -10,12 +12,14 @@ PublishPort=${RYRA_PORT_HTTP}:3456
 Volume=vikunja-db.volume:/db:U
 Volume=vikunja-files.volume:/app/vikunja/files:U
 EnvironmentFile=%h/.local/share/ryra/vikunja/.env
+Pull=never
 AutoUpdate=registry
 
 [Service]
+EnvironmentFile=%h/.local/share/ryra/vikunja/.env
 Restart=always
 RestartSec=5
-TimeoutStartSec=120
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target

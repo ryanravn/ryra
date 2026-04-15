@@ -21,6 +21,7 @@ EnvironmentFile=%h/.local/share/ryra/immich/.env
 EnvironmentFile=%h/.local/share/ryra/immich/.env
 Restart=always
 RestartSec=5
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target

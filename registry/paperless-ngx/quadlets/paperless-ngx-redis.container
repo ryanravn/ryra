@@ -1,5 +1,7 @@
 [Unit]
 Description=Paperless-ngx Redis cache
+StartLimitIntervalSec=60
+StartLimitBurst=3
 Requires=paperless-ngx.network
 After=paperless-ngx.network
 
@@ -16,8 +18,10 @@ Pull=never
 EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
 
 [Service]
+EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
 Restart=always
 RestartSec=5
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target

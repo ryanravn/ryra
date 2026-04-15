@@ -788,7 +788,11 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
 /// Reset ryra: tear down all services, infrastructure, and config.
 pub fn reset() -> Result<ResetResult> {
     let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file).ok();
+    let config = match config::load_config(&paths.config_file) {
+        Ok(c) => Some(c),
+        Err(Error::ConfigNotFound(_)) => None,
+        Err(e) => return Err(e),
+    };
 
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();

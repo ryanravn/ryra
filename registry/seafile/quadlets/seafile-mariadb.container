@@ -22,6 +22,7 @@ EnvironmentFile=%h/.local/share/ryra/seafile/.env
 EnvironmentFile=%h/.local/share/ryra/seafile/.env
 Restart=always
 RestartSec=5
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target

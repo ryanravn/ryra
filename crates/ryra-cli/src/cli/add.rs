@@ -527,8 +527,11 @@ fn setup_host_access(domains: &[&str]) {
 
     // 2. Check system CA trust — find the right target for this distro
     let ca_source = ryra_core::service_home("caddy")
-        .ok()
-        .and_then(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
+        .map(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
+        .unwrap_or_else(|e| {
+            eprintln!("  Warning: could not resolve caddy service home: {e}");
+            None
+        })
         .filter(|p| p.exists());
     let ca_target = super::CA_TARGETS.iter().find(|t| {
         let dir = std::path::Path::new(t.cert_path)

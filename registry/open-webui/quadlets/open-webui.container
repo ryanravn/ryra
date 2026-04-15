@@ -1,5 +1,7 @@
 [Unit]
 Description=Open WebUI - AI chat interface
+StartLimitIntervalSec=60
+StartLimitBurst=3
 After=network-online.target
 
 [Container]
@@ -9,9 +11,11 @@ Network=open-webui.network
 PublishPort=${RYRA_PORT_HTTP}:8080
 Volume=open-webui-data.volume:/app/backend/data:U
 EnvironmentFile=%h/.local/share/ryra/open-webui/.env
+Pull=never
 AutoUpdate=registry
 
 [Service]
+EnvironmentFile=%h/.local/share/ryra/open-webui/.env
 ExecStartPre=/bin/bash %h/.local/share/ryra/open-webui/configs/scripts/merge-ca-bundle.sh
 ExecStartPost=/bin/bash -c "podman cp %h/.local/share/ryra/open-webui/ca-bundle.crt open-webui:/usr/local/lib/python3.11/site-packages/certifi/cacert.pem 2>/dev/null || true"
 Restart=always

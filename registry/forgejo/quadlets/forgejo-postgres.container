@@ -17,6 +17,7 @@ EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 EnvironmentFile=%h/.local/share/ryra/forgejo/.env
 Restart=always
 RestartSec=5
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target
