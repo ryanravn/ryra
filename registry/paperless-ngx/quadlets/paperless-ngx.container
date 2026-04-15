@@ -3,8 +3,8 @@ Description=Paperless-ngx document management
 StartLimitIntervalSec=60
 StartLimitBurst=3
 After=network-online.target
-Requires=paperless-ngx-redis.service paperless-ngx.network
-After=paperless-ngx-redis.service paperless-ngx.network
+Requires=paperless-ngx-redis.service
+After=paperless-ngx-redis.service
 
 [Container]
 ContainerName=paperless-ngx

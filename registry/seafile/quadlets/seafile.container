@@ -2,8 +2,8 @@
 Description=Seafile file sync and share
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=seafile.network seafile-mariadb.service seafile-redis.service
-After=seafile.network seafile-mariadb.service seafile-redis.service
+Requires=seafile-mariadb.service seafile-redis.service
+After=seafile-mariadb.service seafile-redis.service
 
 [Container]
 Image=docker.io/seafileltd/seafile-mc:13.0.20

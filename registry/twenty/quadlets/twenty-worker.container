@@ -2,8 +2,8 @@
 Description=Twenty CRM background worker
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=twenty.network twenty-postgres.service twenty-redis.service twenty.service
-After=twenty.network twenty-postgres.service twenty-redis.service twenty.service
+Requires=twenty-postgres.service twenty-redis.service twenty.service
+After=twenty-postgres.service twenty-redis.service twenty.service
 
 [Container]
 Image=docker.io/twentycrm/twenty:latest

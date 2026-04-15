@@ -2,8 +2,8 @@
 Description=Immich photo management server
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=immich.network immich-postgres.service immich-machine-learning.service immich-valkey.service
-After=immich.network immich-postgres.service immich-machine-learning.service immich-valkey.service
+Requires=immich-postgres.service immich-machine-learning.service immich-valkey.service
+After=immich-postgres.service immich-machine-learning.service immich-valkey.service
 
 [Container]
 Image=ghcr.io/immich-app/immich-server:v2.7.4

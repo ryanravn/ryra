@@ -2,8 +2,6 @@
 Description=Forgejo PostgreSQL database
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=forgejo.network
-After=forgejo.network
 
 [Container]
 Image=docker.io/library/postgres:17-alpine

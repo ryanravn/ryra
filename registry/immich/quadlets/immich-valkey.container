@@ -2,8 +2,6 @@
 Description=Immich Valkey cache
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=immich.network
-After=immich.network
 
 [Container]
 Image=docker.io/valkey/valkey:9

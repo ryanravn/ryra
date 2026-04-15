@@ -2,8 +2,6 @@
 Description=Twenty Redis cache
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=twenty.network
-After=twenty.network
 
 [Container]
 Image=docker.io/library/redis:7-alpine

@@ -2,8 +2,6 @@
 Description=Seafile Redis cache
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=seafile.network
-After=seafile.network
 
 [Container]
 Image=docker.io/library/redis:7-alpine

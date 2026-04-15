@@ -2,8 +2,6 @@
 Description=Jellyfin media server
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=jellyfin.network
-After=jellyfin.network
 
 [Container]
 Image=docker.io/jellyfin/jellyfin:10.11.8

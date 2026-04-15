@@ -2,8 +2,6 @@
 Description=Immich machine learning
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=immich.network
-After=immich.network
 
 [Container]
 Image=ghcr.io/immich-app/immich-machine-learning:v2.7.4

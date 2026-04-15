@@ -2,8 +2,8 @@
 Description=Twenty CRM server
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=twenty.network twenty-postgres.service twenty-redis.service
-After=twenty.network twenty-postgres.service twenty-redis.service
+Requires=twenty-postgres.service twenty-redis.service
+After=twenty-postgres.service twenty-redis.service
 
 [Container]
 Image=docker.io/twentycrm/twenty:latest

@@ -2,8 +2,6 @@
 Description=Ente PostgreSQL database
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=ente.network
-After=ente.network
 
 [Container]
 Image=docker.io/library/postgres:15-alpine

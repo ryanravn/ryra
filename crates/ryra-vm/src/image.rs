@@ -999,8 +999,10 @@ async fn create_snapshot(
 
     match socat_result {
         Ok(mut child) => {
-            // Wait for savevm to complete (writes memory to disk)
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            // Wait for savevm to complete — writes all VM memory to the qcow2.
+            // Conservative: ~1s per 200MB, minimum 15s.
+            let save_secs = std::cmp::max(15, (memory_mb as u64) / 200 + 5);
+            tokio::time::sleep(std::time::Duration::from_secs(save_secs)).await;
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -1012,6 +1014,22 @@ async fn create_snapshot(
 
     let _ = qemu.kill().await;
     let _ = qemu.wait().await;
+
+    // Verify the snapshot was actually saved
+    let check = Command::new("qemu-img")
+        .args(["snapshot", "-l", &disk.to_string_lossy()])
+        .output()
+        .await
+        .context("failed to run qemu-img snapshot -l")?;
+    let snapshot_list = String::from_utf8_lossy(&check.stdout);
+    if !snapshot_list.contains("ready") {
+        anyhow::bail!(
+            "savevm failed — snapshot 'ready' not found in {}. \
+             This can happen if the VM needed more time to save {}MB of RAM.",
+            disk.display(),
+            memory_mb
+        );
+    }
 
     // Move snapshot files to their final locations
     tokio::fs::rename(&disk, snapshot_disk)

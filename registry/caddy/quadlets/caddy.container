@@ -2,8 +2,6 @@
 Description=Caddy reverse proxy
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=caddy.network
-After=caddy.network
 
 [Container]
 ContainerName=caddy

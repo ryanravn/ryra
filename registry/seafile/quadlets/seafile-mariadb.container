@@ -2,8 +2,6 @@
 Description=Seafile MariaDB database
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=seafile.network
-After=seafile.network
 
 [Container]
 Image=docker.io/library/mariadb:10.11

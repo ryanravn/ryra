@@ -2,8 +2,6 @@
 Description=Authelia SSO server
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=authelia.network
-After=authelia.network
 
 [Container]
 Image=docker.io/authelia/authelia:4.39

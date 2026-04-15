@@ -2,8 +2,6 @@
 Description=Paperless-ngx Redis cache
 StartLimitIntervalSec=60
 StartLimitBurst=3
-Requires=paperless-ngx.network
-After=paperless-ngx.network
 
 [Container]
 ContainerName=paperless-ngx-redis
