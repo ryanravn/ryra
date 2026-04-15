@@ -2,14 +2,32 @@ use anyhow::{Result, bail};
 
 use crate::machine::Machine;
 
+/// Parsed systemd unit status — avoids raw string comparisons.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SystemdStatus {
+    Active,
+    Failed,
+    Inactive,
+}
+
+impl SystemdStatus {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "active" => Self::Active,
+            "failed" => Self::Failed,
+            _ => Self::Inactive,
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl Machine {
     pub async fn assert_service_active(&self, unit: &str) -> Result<()> {
         let cmd = format!("systemctl --user is-active {unit}");
         let output = self.exec(&cmd).await?;
-        let status = output.stdout_trimmed();
-        if status != "active" {
-            bail!("expected service {unit} to be active, got: {status}");
+        let status = SystemdStatus::parse(output.stdout_trimmed());
+        if status != SystemdStatus::Active {
+            bail!("expected service {unit} to be active, got: {}", output.stdout_trimmed());
         }
         Ok(())
     }
@@ -17,8 +35,8 @@ impl Machine {
     pub async fn assert_service_inactive(&self, unit: &str) -> Result<()> {
         let cmd = format!("systemctl --user is-active {unit} 2>/dev/null || echo inactive");
         let output = self.exec(&cmd).await?;
-        let status = output.stdout_trimmed();
-        if status == "active" {
+        let status = SystemdStatus::parse(output.stdout_trimmed());
+        if status == SystemdStatus::Active {
             bail!("expected service {unit} to be inactive, but it is active");
         }
         Ok(())
@@ -73,20 +91,20 @@ impl Machine {
                  else echo inactive; fi"
             );
             if let Ok(output) = self.exec(&cmd).await {
-                let status = output.stdout_trimmed();
-                if status == "active" {
-                    return Ok(());
-                }
-                if status == "failed" {
-                    let diag_cmd = format!(
-                        "systemctl --user status {unit} 2>&1 | head -15; echo '---'; journalctl --user -u {unit} --no-pager -n 10 2>&1"
-                    );
-                    let diag = self
-                        .exec(&diag_cmd)
-                        .await
-                        .map(|o| o.stdout.trim().to_string())
-                        .unwrap_or_default();
-                    bail!("service {unit} failed to start:\n{diag}");
+                match SystemdStatus::parse(output.stdout_trimmed()) {
+                    SystemdStatus::Active => return Ok(()),
+                    SystemdStatus::Failed => {
+                        let diag_cmd = format!(
+                            "systemctl --user status {unit} 2>&1 | head -15; echo '---'; journalctl --user -u {unit} --no-pager -n 10 2>&1"
+                        );
+                        let diag = self
+                            .exec(&diag_cmd)
+                            .await
+                            .map(|o| o.stdout.trim().to_string())
+                            .unwrap_or_default();
+                        bail!("service {unit} failed to start:\n{diag}");
+                    }
+                    SystemdStatus::Inactive => {}
                 }
             }
 

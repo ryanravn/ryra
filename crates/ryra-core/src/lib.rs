@@ -4,7 +4,6 @@ pub mod config;
 pub mod diff;
 pub mod error;
 pub mod generate;
-pub mod integrations;
 pub mod registry;
 pub mod system;
 pub mod verbose;
@@ -21,6 +20,8 @@ use generate::GeneratedFile;
 // Using constants prevents typos and makes it easy to find all references.
 pub const SERVICE_CADDY: &str = "caddy";
 pub const SERVICE_AUTHELIA: &str = "authelia";
+pub const SERVICE_INBUCKET: &str = "inbucket";
+pub const REGISTRY_BUNDLED: &str = "bundled";
 
 // --- Path conventions ---
 
@@ -182,7 +183,7 @@ pub async fn resolve_registry_dir(
 pub fn service_ref_from_installed(
     installed: &InstalledService,
 ) -> registry::resolve::ServiceRef {
-    if installed.repo.is_empty() || installed.repo == "bundled" {
+    if installed.repo.is_empty() || installed.repo == REGISTRY_BUNDLED {
         registry::resolve::ServiceRef::Bundled(installed.name.clone())
     } else {
         registry::resolve::ServiceRef::Custom {
@@ -238,7 +239,7 @@ fn resolve_extra_networks(
     // Services join Caddy's network when they need to reach other containers
     // on that network: URL-based services for reverse proxy, inbucket itself,
     // and SMTP-using services to reach inbucket by container name.
-    let joins_caddy = (has_url || has_smtp || service_name == "inbucket")
+    let joins_caddy = (has_url || has_smtp || service_name == SERVICE_INBUCKET)
         && caddy_installed
         && service_name != SERVICE_CADDY;
     if joins_caddy {
@@ -364,9 +365,10 @@ pub fn add_service(
     // TLS trust.
     if enable_auth && authelia_installed && caddy_installed && service_name != SERVICE_AUTHELIA && service_name != SERVICE_CADDY {
         // The CA cert is exported by caddy's ExecStartPost to a well-known path
-        let ca_cert_host = service_home(SERVICE_CADDY)
-            .map(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")).unwrap_or_default())
-            .unwrap_or_default();
+        let ca_cert_host = service_home(SERVICE_CADDY)?
+            .parent()
+            .ok_or_else(|| Error::Registry("caddy service home has no parent directory".into()))?
+            .join("caddy-root-ca.crt");
         if ca_cert_host.exists() {
             // Mount the Caddy CA cert as the standard Linux CA bundle path so
             // Go, curl, etc. pick it up automatically.
@@ -548,7 +550,10 @@ pub fn add_service(
                 container_port,
             });
             let caddyfile_path = caddy::caddyfile_path()?;
-            let existing = std::fs::read_to_string(&caddyfile_path).unwrap_or_default();
+            let existing = std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+                path: caddyfile_path.clone(),
+                source,
+            })?;
             let updated = caddy::add_route(&existing, service_name, &block);
             steps.push(Step::WriteFile(GeneratedFile {
                 path: caddyfile_path,
@@ -582,23 +587,9 @@ pub fn add_service(
         .env
         .iter()
         .filter(|e| !env_overrides.contains_key(&e.name))
-        .flat_map(|e| {
-            let mut secrets = Vec::new();
-            let mut rest = e.value.as_str();
-            while let Some(start) = rest.find("{{secret.") {
-                let after = &rest[start + 9..];
-                if let Some(end) = after.find("}}") {
-                    secrets.push(after[..end].to_string());
-                    rest = &after[end + 2..];
-                } else {
-                    break;
-                }
-            }
-            secrets
-        })
+        .flat_map(|e| generate::extract_secret_refs(&e.value))
         .collect();
     // Deduplicate — the same secret may be referenced by multiple env vars
-    generated_secrets.dedup();
     generated_secrets.sort();
     generated_secrets.dedup();
 

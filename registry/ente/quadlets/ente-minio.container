@@ -6,7 +6,7 @@ Requires=ente.network
 After=ente.network
 
 [Container]
-Image=docker.io/minio/minio:latest
+Image=docker.io/minio/minio:RELEASE.2025-10-15T17-29-55Z
 ContainerName=ente-minio
 Network=ente.network:alias=minio
 Volume=ente-minio-data.volume:/data:U

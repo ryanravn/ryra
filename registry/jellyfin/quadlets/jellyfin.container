@@ -6,7 +6,7 @@ Requires=jellyfin.network
 After=jellyfin.network
 
 [Container]
-Image=docker.io/jellyfin/jellyfin:latest
+Image=docker.io/jellyfin/jellyfin:10.11.8
 ContainerName=jellyfin
 Network=jellyfin.network
 PublishPort=${RYRA_PORT_HTTP}:8096

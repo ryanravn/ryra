@@ -16,6 +16,11 @@ use std::io::IsTerminal;
 
 use ryra_core::Step;
 
+/// Whether stdin is connected to a terminal (shared check).
+pub fn is_interactive() -> bool {
+    std::io::stdin().is_terminal()
+}
+
 /// A system CA certificate to install or remove, with the distro-specific
 /// trust store path and update command.
 struct CaCertTarget {
@@ -77,7 +82,7 @@ pub fn remove_caddy_ca() {
         return;
     }
 
-    let interactive = std::io::stdin().is_terminal();
+    let interactive = is_interactive();
     println!("\n  Removing Caddy CA from system trust store:");
     for target in &installed {
         println!(

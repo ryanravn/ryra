@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
@@ -8,10 +7,17 @@ use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::{Config, TlsConfig};
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::{AuthKind, HttpsRequirement};
-use ryra_core::{SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
+use ryra_core::{REGISTRY_BUNDLED, SERVICE_AUTHELIA, SERVICE_CADDY, Warning};
 
 use super::apply;
 use super::prompts;
+
+/// Default port for Caddy's HTTPS listener.
+const DEFAULT_CADDY_HTTPS_PORT: u16 = 8443;
+/// Default port for Authelia's HTTP listener.
+const DEFAULT_AUTHELIA_PORT: u16 = 9091;
+/// Inbucket's internal SMTP container port.
+const INBUCKET_SMTP_PORT: u16 = 2500;
 
 pub async fn run(
     services: &[String],
@@ -24,19 +30,22 @@ pub async fn run(
         bail!("--url can only be used when adding a single service");
     }
 
-    let interactive = std::io::stdin().is_terminal();
+    let interactive = super::is_interactive();
 
     // Auto-install authelia for --auth
     if !dry_run {
-        ensure_dependencies(url, auth, interactive).await?;
+        ensure_dependencies(auth, interactive).await?;
     }
+
+    let paths = ryra_core::config::ConfigPaths::resolve()?;
 
     for service_input in services {
         let service_ref = ServiceRef::parse(service_input)?;
         let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
         let service = service_ref.service_name();
 
-        let paths = ryra_core::config::ConfigPaths::resolve()?;
+        // Load config fresh — previous iterations or ensure_dependencies may have
+        // modified it on disk (e.g., installing caddy or authelia).
         let config = ryra_core::config::load_or_default(&paths.config_file)?;
 
         // Look up the service definition
@@ -49,7 +58,7 @@ pub async fn run(
 
         // Warn about untrusted registry services — they can run arbitrary
         // scripts via quadlet ExecStartPre/Post and mount host directories.
-        if service_ref.registry_name() != "bundled" && !yes && !dry_run {
+        if service_ref.registry_name() != REGISTRY_BUNDLED && !yes && !dry_run {
             warn_untrusted_service(&reg_service.service_dir, service, interactive)?;
         }
 
@@ -59,10 +68,12 @@ pub async fn run(
         let needs_https = reg_service.def.service.https == HttpsRequirement::Required
             || url.is_some_and(|u| u.starts_with("https://"));
         if needs_https && !dry_run {
+            // Reload config since ensure_tls_configured may install caddy
             let config = ryra_core::config::load_or_default(&paths.config_file)?;
             ensure_tls_configured(&config, &paths, interactive).await?;
         }
         let auto_url: Option<String>;
+        // Reload config after TLS setup — caddy ports may have been added
         let url: Option<&str> = if needs_https && url.is_none() {
             let config = ryra_core::config::load_or_default(&paths.config_file)?;
             if matches!(config.tls, Some(TlsConfig::Caddy)) {
@@ -71,7 +82,7 @@ pub async fn run(
                     .iter()
                     .find(|s| s.name == SERVICE_CADDY)
                     .and_then(|s| s.ports.get("https").copied())
-                    .unwrap_or(8443);
+                    .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
                 auto_url = Some(format!("https://{service}.localhost:{caddy_https_port}"));
                 auto_url.as_deref()
             } else {
@@ -87,15 +98,14 @@ pub async fn run(
             && !dry_run
             && interactive
         {
-            let config = ryra_core::config::load_or_default(&paths.config_file)?;
-            if config.smtp.is_none() {
+            let smtp_config = ryra_core::config::load_or_default(&paths.config_file)?;
+            if smtp_config.smtp.is_none() {
                 match prompts::prompt_smtp()? {
                     prompts::SmtpSetupChoice::Custom(smtp) => {
-                        let mut config =
-                            ryra_core::config::load_or_default(&paths.config_file)?;
-                        config.smtp = Some(smtp);
+                        let mut cfg = ryra_core::config::load_or_default(&paths.config_file)?;
+                        cfg.smtp = Some(smtp);
                         paths.ensure_dirs()?;
-                        ryra_core::config::save_config(&paths.config_file, &config)?;
+                        ryra_core::config::save_config(&paths.config_file, &cfg)?;
                         println!(
                             "  SMTP configured. Saved to {}\n",
                             paths.config_file.display()
@@ -103,7 +113,7 @@ pub async fn run(
                     }
                     prompts::SmtpSetupChoice::Inbucket => {
                         // Install inbucket, then configure SMTP to point at it
-                        let inbucket_installed = config
+                        let inbucket_installed = smtp_config
                             .services
                             .iter()
                             .any(|s| s.name == "inbucket");
@@ -118,31 +128,21 @@ pub async fn run(
                             ))
                             .await?;
                         }
-                        // Read inbucket's allocated SMTP port from config
-                        let config =
-                            ryra_core::config::load_or_default(&paths.config_file)?;
-                        let _smtp_port = config
-                            .services
-                            .iter()
-                            .find(|s| s.name == "inbucket")
-                            .and_then(|s| s.ports.get("smtp").copied())
-                            .unwrap_or(2500);
                         // Use container name for SMTP host — services on the
                         // caddy network can reach inbucket directly. The host
                         // port isn't reachable from --no-hosts containers.
                         let smtp = ryra_core::config::schema::SmtpCredentials {
                             host: "inbucket".to_string(),
-                            port: 2500, // inbucket's internal container port
+                            port: INBUCKET_SMTP_PORT, // inbucket's internal container port
                             username: String::new(),
                             password: String::new(),
                             from: "ryra@localhost".to_string(),
                             security: "off".to_string(),
                         };
-                        let mut config =
-                            ryra_core::config::load_or_default(&paths.config_file)?;
-                        config.smtp = Some(smtp);
+                        let mut cfg = ryra_core::config::load_or_default(&paths.config_file)?;
+                        cfg.smtp = Some(smtp);
                         paths.ensure_dirs()?;
-                        ryra_core::config::save_config(&paths.config_file, &config)?;
+                        ryra_core::config::save_config(&paths.config_file, &cfg)?;
                         println!(
                             "  SMTP configured (inbucket). Saved to {}\n",
                             paths.config_file.display()
@@ -153,72 +153,17 @@ pub async fn run(
             }
         }
 
-        // Auth — determined by --auth flag
-        let auth_kind: Option<AuthKind> = if auth {
-            // --auth flag: use native OIDC if service supports it.
-            // Core will error if the service doesn't support OIDC.
-            if !reg_service.def.integrations.auth.is_empty() {
-                Some(reg_service.def.integrations.auth[0].clone())
-            } else {
-                None
+        // Auth — determined by --auth flag or interactive prompt
+        let auth_kind: Option<AuthKind> =
+            resolve_auth_kind(auth, interactive, &reg_service.def.integrations.auth)?;
+
+        // If the user chose auth but no provider is configured, install one
+        if auth_kind.is_some() && config.auth.is_none() {
+            let mut config = config.clone();
+            if !ensure_auth_for_add(&mut config, &paths, dry_run).await? {
+                return Ok(());
             }
-        } else if !reg_service.def.integrations.auth.is_empty()
-            && reg_service.def.integrations.auth.len() == 1
-        {
-            let kind = &reg_service.def.integrations.auth[0];
-            if interactive {
-                let enable = Confirm::new()
-                    .with_prompt(format!("Enable {kind} auth?"))
-                    .default(true)
-                    .interact()?;
-                if enable {
-                    let mut config = config.clone();
-                    if config.auth.is_none() {
-                        match ensure_auth_for_add(&mut config, &paths, dry_run).await? {
-                            true => {}
-                            false => return Ok(()),
-                        }
-                    }
-                    Some(kind.clone())
-                } else {
-                    None
-                }
-            } else {
-                // Non-interactive without --auth: don't auto-enable
-                None
-            }
-        } else if interactive && !reg_service.def.integrations.auth.is_empty() {
-            let items: Vec<String> = std::iter::once("None".to_string())
-                .chain(
-                    reg_service
-                        .def
-                        .integrations
-                        .auth
-                        .iter()
-                        .map(|k| k.to_string()),
-                )
-                .collect();
-            let selection = dialoguer::Select::new()
-                .with_prompt("Auth mode")
-                .items(&items)
-                .default(1)
-                .interact()?;
-            if selection == 0 {
-                None
-            } else {
-                let kind = reg_service.def.integrations.auth[selection - 1].clone();
-                let mut config = config.clone();
-                if config.auth.is_none() {
-                    match ensure_auth_for_add(&mut config, &paths, dry_run).await? {
-                        true => {}
-                        false => return Ok(()),
-                    }
-                }
-                Some(kind)
-            }
-        } else {
-            None
-        };
+        }
 
         // Prompt for env vars based on their kind
         use ryra_core::registry::service_def::EnvKind;
@@ -415,13 +360,25 @@ pub async fn run(
 
             println!("Setting up {service}...");
             if let Err(e) = apply::execute_all(&result.steps).await {
-                eprintln!("\nError: {e}");
-                eprintln!();
-                eprintln!("{service} is partially installed. To clean up:");
-                eprintln!("  ryra remove {service}");
-                eprintln!();
-                eprintln!("Or retry:");
-                eprintln!("  ryra add {service}");
+                eprintln!("\nError during setup: {e}");
+                eprintln!("Cleaning up partial installation...");
+                // Attempt cleanup so the user doesn't have to do it manually.
+                // If cleanup fails, fall back to telling the user how to do it.
+                match ryra_core::remove_service(service) {
+                    Ok(remove_result) => {
+                        if let Err(cleanup_err) = apply::execute_all(&remove_result.steps).await {
+                            eprintln!("Cleanup also failed: {cleanup_err}");
+                            eprintln!("Run manually: ryra remove {service}");
+                        } else {
+                            let _ = ryra_core::finalize_remove(service);
+                            eprintln!("Cleaned up. Retry with: ryra add {service}");
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("Could not clean up automatically.");
+                        eprintln!("Run manually: ryra remove {service}");
+                    }
+                }
                 return Err(e);
             }
 
@@ -601,7 +558,7 @@ fn setup_host_access(domains: &[&str]) {
         );
     }
     if need_ca {
-        let target = ca_target.unwrap_or_else(|| unreachable!("need_ca guards this"));
+        let target = ca_target.expect("need_ca guards ca_target");
         println!(
             "    sudo cp <caddy-ca> {} && sudo {}",
             target.cert_path, target.update_cmd
@@ -609,7 +566,7 @@ fn setup_host_access(domains: &[&str]) {
     }
 
     // --- Confirm ---
-    let interactive = std::io::stdin().is_terminal();
+    let interactive = super::is_interactive();
     if interactive {
         let run = Confirm::new()
             .with_prompt("  Run these commands now?")
@@ -650,8 +607,8 @@ fn setup_host_access(domains: &[&str]) {
     if need_ca {
         let ca = ca_source
             .as_ref()
-            .unwrap_or_else(|| unreachable!("need_ca guards this"));
-        let target = ca_target.unwrap_or_else(|| unreachable!("need_ca guards this"));
+            .expect("need_ca guards ca_source");
+        let target = ca_target.expect("need_ca guards ca_target");
         let cp_ok = Command::new("sudo")
             .args(["cp", &ca.display().to_string(), target.cert_path])
             .status()
@@ -790,11 +747,7 @@ async fn ensure_tls_configured(
 }
 
 /// Auto-install authelia when --auth requires it.
-async fn ensure_dependencies(
-    _url: Option<&str>,
-    auth: bool,
-    interactive: bool,
-) -> Result<()> {
+async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
     let config = ryra_core::config::load_or_default(
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
@@ -897,7 +850,7 @@ async fn ensure_auth_for_add(
             }
 
             // Prompt for authelia URL
-            let authelia_url: String = if std::io::stdin().is_terminal() {
+            let authelia_url: String = if super::is_interactive() {
                 Input::new()
                     .with_prompt("URL for Authelia")
                     .default("https://auth.localhost".to_string())
@@ -949,6 +902,48 @@ async fn ensure_auth_for_add(
             Ok(false)
         }
     }
+}
+
+/// Determine which auth kind to use based on CLI flags and service capabilities.
+fn resolve_auth_kind(
+    auth_flag: bool,
+    interactive: bool,
+    supported: &[AuthKind],
+) -> Result<Option<AuthKind>> {
+    // --auth flag: use the first supported auth kind (core validates further)
+    if auth_flag {
+        return Ok(supported.first().cloned());
+    }
+
+    // No auth support in service definition
+    if supported.is_empty() || !interactive {
+        return Ok(None);
+    }
+
+    // Single auth option: simple yes/no prompt
+    if supported.len() == 1 {
+        let kind = &supported[0];
+        let enable = Confirm::new()
+            .with_prompt(format!("Enable {kind} auth?"))
+            .default(true)
+            .interact()?;
+        return Ok(if enable { Some(kind.clone()) } else { None });
+    }
+
+    // Multiple options: selection prompt
+    let items: Vec<String> = std::iter::once("None".to_string())
+        .chain(supported.iter().map(|k| k.to_string()))
+        .collect();
+    let selection = dialoguer::Select::new()
+        .with_prompt("Auth mode")
+        .items(&items)
+        .default(1)
+        .interact()?;
+    Ok(if selection == 0 {
+        None
+    } else {
+        Some(supported[selection - 1].clone())
+    })
 }
 
 /// Warn about services from untrusted (non-bundled) registries.
@@ -1052,7 +1047,7 @@ fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -
     let service = config.services.iter().find(|s| s.name == SERVICE_AUTHELIA);
     let port = service
         .and_then(|s| s.ports.values().next().copied())
-        .unwrap_or(9091);
+        .unwrap_or(DEFAULT_AUTHELIA_PORT);
 
     // Verify the .env file looks valid (has at least a port reference)
     if env_content.is_empty() {

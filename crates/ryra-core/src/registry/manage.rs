@@ -122,13 +122,18 @@ pub struct RegistryInfo {
 
 /// Count how many service directories exist in a registry directory.
 fn count_services(dir: &Path) -> usize {
-    std::fs::read_dir(dir)
-        .ok()
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().join("service.toml").exists())
-                .count()
-        })
-        .unwrap_or(0)
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!(
+                "warning: could not read registry directory {}: {e}",
+                dir.display()
+            );
+            return 0;
+        }
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().join("service.toml").exists())
+        .count()
 }

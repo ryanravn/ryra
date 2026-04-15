@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::generate::GeneratedFile;
 use crate::generate::bundle::inject_networks;
 use crate::registry::service_def::ServiceDef;
-use crate::{SERVICE_AUTHELIA, Step, service_home};
+use crate::{SERVICE_AUTHELIA, SERVICE_CADDY, Step, service_home};
 
 /// Replace the host portion of a URL while preserving scheme, port, and path.
 fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
@@ -174,7 +174,7 @@ pub fn register_oidc_client(
     // Ensure Caddy joins authelia's network with a domain alias so that
     // containers can resolve the auth FQDN → Caddy → authelia (with proper
     // X-Forwarded-Proto: https headers that authelia requires for OIDC).
-    let caddy_installed = config.services.iter().any(|s| s.name == "caddy" && s.installed);
+    let caddy_installed = config.services.iter().any(|s| s.name == SERVICE_CADDY && s.installed);
     let auth_domain = config
         .services
         .iter()

@@ -1,4 +1,3 @@
-use std::io::IsTerminal;
 use std::process::Stdio;
 use std::time::Instant;
 
@@ -65,7 +64,7 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
 /// Warn if tests are being loaded from a custom registry.
 fn warn_untrusted_repo(registry_name: &str, yes: bool) -> Result<()> {
     // Bundled registry is always trusted
-    if registry_name == "bundled" || registry_name.is_empty() {
+    if registry_name == ryra_core::REGISTRY_BUNDLED || registry_name.is_empty() {
         return Ok(());
     }
 
@@ -74,7 +73,7 @@ fn warn_untrusted_repo(registry_name: &str, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    if !std::io::stdin().is_terminal() {
+    if !super::is_interactive() {
         anyhow::bail!(
             "refusing to run test commands from custom registry in non-interactive mode.\n\
              Registry: {registry_name}\n\

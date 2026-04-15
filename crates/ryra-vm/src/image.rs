@@ -565,7 +565,7 @@ async fn prepare_image(
     .await?;
 
     // Boot VM
-    let ssh_port: u16 = 10099;
+    let ssh_port = crate::ports::allocate_ssh_port();
     let serial_log = work_dir.join("serial.log");
     let memory = "2048";
     let cpus = "2";
@@ -878,7 +878,7 @@ async fn create_snapshot(
     crate::machine::build_seed_iso(&work_dir, &seed_iso, "snapshot-prep", pub_key.trim()).await?;
 
     // Boot with HMP monitor for savevm
-    let ssh_port: u16 = 10098;
+    let ssh_port = crate::ports::allocate_ssh_port();
     let serial_log = work_dir.join("serial.log");
     let port_str = ssh_port.to_string();
 

@@ -1,5 +1,3 @@
-use std::io::IsTerminal;
-
 use anyhow::Result;
 use dialoguer::Input;
 
@@ -10,7 +8,7 @@ pub async fn run(services: &[String], yes: bool, dry_run: bool) -> Result<()> {
         let result = ryra_core::remove_service(service)?;
 
         if !yes && !dry_run {
-            if std::io::stdin().is_terminal() {
+            if super::is_interactive() {
                 let home_dir = ryra_core::service_home(service)?;
                 println!("This will:");
                 println!("  - Stop and remove {service}");

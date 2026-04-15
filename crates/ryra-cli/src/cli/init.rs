@@ -1,5 +1,3 @@
-use std::io::IsTerminal;
-
 use anyhow::Result;
 
 use ryra_core::config::schema::*;
@@ -8,7 +6,7 @@ use super::apply;
 use super::prompts;
 
 pub async fn run(dry_run: bool) -> Result<()> {
-    let interactive = std::io::stdin().is_terminal();
+    let interactive = super::is_interactive();
 
     // If config exists, ask to overwrite
     let has_existing = ryra_core::config::ConfigPaths::resolve()?.config_file.exists();

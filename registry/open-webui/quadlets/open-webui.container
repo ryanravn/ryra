@@ -6,7 +6,7 @@ After=network-online.target
 
 [Container]
 ContainerName=open-webui
-Image=ghcr.io/open-webui/open-webui:latest
+Image=ghcr.io/open-webui/open-webui:0.8.12
 Network=open-webui.network
 PublishPort=${RYRA_PORT_HTTP}:8080
 Volume=open-webui-data.volume:/app/backend/data:U

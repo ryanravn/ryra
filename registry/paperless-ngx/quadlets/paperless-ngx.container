@@ -8,7 +8,7 @@ After=paperless-ngx-redis.service paperless-ngx.network
 
 [Container]
 ContainerName=paperless-ngx
-Image=ghcr.io/paperless-ngx/paperless-ngx:latest
+Image=ghcr.io/paperless-ngx/paperless-ngx:2.20.14
 Network=paperless-ngx.network
 PublishPort=${RYRA_PORT_HTTP}:8000
 Volume=paperless-ngx-data.volume:/usr/src/paperless/data:U

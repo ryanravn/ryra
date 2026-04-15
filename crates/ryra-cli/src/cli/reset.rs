@@ -1,5 +1,3 @@
-use std::io::IsTerminal;
-
 use anyhow::Result;
 use dialoguer::Input;
 
@@ -13,7 +11,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
     }
 
     if !yes && !dry_run {
-        if std::io::stdin().is_terminal() {
+        if super::is_interactive() {
             println!("This will:");
             println!("  - Stop and remove all installed services");
             println!("  - Delete all ryra state and configuration");

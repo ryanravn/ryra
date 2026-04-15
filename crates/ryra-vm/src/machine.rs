@@ -349,30 +349,27 @@ impl Machine {
         Ok(machine)
     }
 
+    /// Build common SSH arguments for connecting to this VM.
+    fn ssh_args(&self) -> Vec<String> {
+        let key = self.ssh_key_path();
+        vec![
+            "-o".into(), "StrictHostKeyChecking=no".into(),
+            "-o".into(), "UserKnownHostsFile=/dev/null".into(),
+            "-o".into(), "LogLevel=ERROR".into(),
+            "-o".into(), "ConnectTimeout=10".into(),
+            "-o".into(), "BatchMode=yes".into(),
+            "-i".into(), key.to_string_lossy().into_owned(),
+            "-p".into(), self.ssh_port.to_string(),
+            format!("root@{}", self.ssh_host),
+        ]
+    }
+
     /// Run a command inside the VM via SSH.
     pub async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
-        let key = self.ssh_key_path();
-        let port = self.ssh_port.to_string();
-        let target = format!("root@{}", self.ssh_host);
+        let mut args = self.ssh_args();
+        args.push(cmd.to_string());
         let output = Command::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "BatchMode=yes",
-                "-i",
-                &key.to_string_lossy(),
-                "-p",
-                &port,
-                &target,
-                cmd,
-            ])
+            .args(&args)
             .output()
             .await
             .with_context(|| format!("failed to SSH exec in {}: {cmd}", self.name))?;
@@ -397,28 +394,10 @@ impl Machine {
         use tokio::io::{AsyncBufReadExt, BufReader};
         use tokio::process::Command as TokioCommand;
 
-        let key = self.ssh_key_path();
-        let port = self.ssh_port.to_string();
-        let target = format!("root@{}", self.ssh_host);
+        let mut args = self.ssh_args();
+        args.push(cmd.to_string());
         let mut child = TokioCommand::new("ssh")
-            .args([
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "ConnectTimeout=10",
-                "-o",
-                "BatchMode=yes",
-                "-i",
-                &key.to_string_lossy(),
-                "-p",
-                &port,
-                &target,
-                cmd,
-            ])
+            .args(&args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -526,9 +505,12 @@ impl Machine {
 
     async fn wait_for_ssh(&self, timeout: std::time::Duration) -> Result<()> {
         let start = std::time::Instant::now();
-        let key = self.ssh_key_path();
-        let port = self.ssh_port.to_string();
-        let target = format!("root@{}", self.ssh_host);
+        let mut ssh_args = self.ssh_args();
+        // Override ConnectTimeout to 3s for probing
+        if let Some(pos) = ssh_args.iter().position(|a| a == "ConnectTimeout=10") {
+            ssh_args[pos] = "ConnectTimeout=3".into();
+        }
+        ssh_args.push("true".into());
         let mut last_log = std::time::Instant::now();
 
         loop {
@@ -544,24 +526,7 @@ impl Machine {
 
             // Try a real SSH command (not just TCP connect)
             let result = Command::new("ssh")
-                .args([
-                    "-o",
-                    "StrictHostKeyChecking=no",
-                    "-o",
-                    "UserKnownHostsFile=/dev/null",
-                    "-o",
-                    "LogLevel=ERROR",
-                    "-o",
-                    "ConnectTimeout=3",
-                    "-o",
-                    "BatchMode=yes",
-                    "-i",
-                    &key.to_string_lossy(),
-                    "-p",
-                    &port,
-                    &target,
-                    "true",
-                ])
+                .args(&ssh_args)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
@@ -886,27 +851,27 @@ pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result
     Ok(())
 }
 
+/// Build common SCP arguments for copying files to a VM.
+fn scp_base_args(machine: &Machine) -> Vec<String> {
+    let key = machine.ssh_key_path();
+    vec![
+        "-o".into(), "StrictHostKeyChecking=no".into(),
+        "-o".into(), "UserKnownHostsFile=/dev/null".into(),
+        "-o".into(), "LogLevel=ERROR".into(),
+        "-i".into(), key.to_string_lossy().into_owned(),
+        "-P".into(), machine.ssh_port.to_string(),
+    ]
+}
+
 /// SCP a local file into the VM at the given remote path.
 async fn scp_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
-    let key = machine.ssh_key_path();
-    let port = machine.ssh_port.to_string();
     let dest = format!("root@{}:{remote_path}", machine.ssh_host);
+    let mut args = scp_base_args(machine);
+    args.push(local_path.to_string_lossy().into_owned());
+    args.push(dest);
 
     let status = Command::new("scp")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-i",
-            &key.to_string_lossy(),
-            "-P",
-            &port,
-            &local_path.to_string_lossy(),
-            &dest,
-        ])
+        .args(&args)
         .status()
         .await
         .with_context(|| format!("failed to SCP {} to VM", local_path.display()))?;
@@ -918,26 +883,14 @@ async fn scp_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> R
 
 /// SCP a local directory recursively into the VM at the given remote path.
 async fn scp_dir_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
-    let key = machine.ssh_key_path();
-    let port = machine.ssh_port.to_string();
     let dest = format!("root@{}:{remote_path}", machine.ssh_host);
+    let mut args = scp_base_args(machine);
+    args.push("-r".into());
+    args.push(local_path.to_string_lossy().into_owned());
+    args.push(dest);
 
     let status = Command::new("scp")
-        .args([
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "LogLevel=ERROR",
-            "-i",
-            &key.to_string_lossy(),
-            "-P",
-            &port,
-            "-r",
-            &local_path.to_string_lossy(),
-            &dest,
-        ])
+        .args(&args)
         .status()
         .await
         .with_context(|| format!("failed to SCP {} to VM", local_path.display()))?;

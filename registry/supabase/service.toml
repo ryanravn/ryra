@@ -140,7 +140,7 @@ value = "9999"
 
 [[env]]
 name = "API_EXTERNAL_URL"
-value = "{{service.url}}"
+value = "{{service.external_url}}"
 
 [[env]]
 name = "GOTRUE_DB_DRIVER"
@@ -152,7 +152,7 @@ value = "postgres://supabase_auth_admin:{{secret.postgres_password}}@db:5432/pos
 
 [[env]]
 name = "GOTRUE_SITE_URL"
-value = "{{service.url}}"
+value = "{{service.external_url}}"
 
 [[env]]
 name = "GOTRUE_URI_ALLOW_LIST"
@@ -399,7 +399,7 @@ value = "http://kong:8000"
 
 [[env]]
 name = "SUPABASE_PUBLIC_URL"
-value = "{{service.url}}"
+value = "{{service.external_url}}"
 
 [[env]]
 name = "AUTH_JWT_SECRET"
