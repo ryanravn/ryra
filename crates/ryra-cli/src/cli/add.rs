@@ -451,7 +451,14 @@ pub async fn run(
             if !result.generated_secrets.is_empty() {
                 // Show generated secret values so the user can log in
                 let env_path = home_dir.join(".env");
-                let env_content = std::fs::read_to_string(&env_path).unwrap_or_default();
+                let env_content = match std::fs::read_to_string(&env_path) {
+                    Ok(content) => content,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    Err(e) => {
+                        eprintln!("  Warning: could not read {}: {e}", env_path.display());
+                        String::new()
+                    }
+                };
                 println!("  Secrets (auto-generated):");
                 for secret_name in &result.generated_secrets {
                     // Find the env var that used this secret template
@@ -497,7 +504,13 @@ fn setup_host_access(domains: &[&str]) {
     // --- Detect what needs to be done ---
 
     // 1. Check /etc/hosts for missing domains
-    let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+    let hosts = match std::fs::read_to_string("/etc/hosts") {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("  Warning: could not read /etc/hosts: {e}");
+            return;
+        }
+    };
     let missing_hosts: Vec<&str> = domains
         .iter()
         .filter(|d| {
@@ -618,7 +631,9 @@ fn setup_host_access(domains: &[&str]) {
             Ok(mut child) => {
                 if let Some(mut stdin) = child.stdin.take() {
                     use std::io::Write;
-                    let _ = stdin.write_all(entry.as_bytes());
+                    if let Err(e) = stdin.write_all(entry.as_bytes()) {
+                        eprintln!("  Failed to write to /etc/hosts: {e}");
+                    }
                 }
                 match child.wait() {
                     Ok(s) if s.success() => {}

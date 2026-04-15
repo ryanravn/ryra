@@ -76,7 +76,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn render_four_level_nesting() {
+    fn render_four_level_nesting() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut ctx = BTreeMap::new();
         ctx.insert("services.postgres.port.tcp".into(), "5432".into());
         ctx.insert(
@@ -88,24 +88,27 @@ mod tests {
         let result = render(
             "postgresql://user:{{ services.postgres.env.POSTGRES_PASSWORD }}@127.0.0.1:{{ services.postgres.port.tcp }}",
             &ctx,
-        ).unwrap();
+        )?;
 
         assert_eq!(result, "postgresql://user:secret123@127.0.0.1:5432");
+        Ok(())
     }
 
     #[test]
-    fn default_filter_on_missing_key() {
+    fn default_filter_on_missing_key() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let ctx = BTreeMap::new();
         // service.domain is not in context — default filter should provide fallback
-        let result = render("{{ service.domain | default('localhost') }}", &ctx).unwrap();
+        let result = render("{{ service.domain | default('localhost') }}", &ctx)?;
         assert_eq!(result, "localhost");
+        Ok(())
     }
 
     #[test]
-    fn default_filter_with_value_present() {
+    fn default_filter_with_value_present() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut ctx = BTreeMap::new();
         ctx.insert("service.domain".into(), "example.com".into());
-        let result = render("{{ service.domain | default('localhost') }}", &ctx).unwrap();
+        let result = render("{{ service.domain | default('localhost') }}", &ctx)?;
         assert_eq!(result, "example.com");
+        Ok(())
     }
 }

@@ -62,9 +62,14 @@ pub fn remove_caddy_ca() {
             .map(|o| o.status.success())
             .unwrap_or(false);
         if in_nss {
-            let _ = std::process::Command::new("certutil")
+            match std::process::Command::new("certutil")
                 .args(["-d", &nss_arg, "-D", "-n", "ryra-caddy-ca"])
-                .status();
+                .status()
+            {
+                Ok(s) if s.success() => {}
+                Ok(s) => eprintln!("  Warning: certutil exited with {s}"),
+                Err(e) => eprintln!("  Warning: could not run certutil: {e}"),
+            }
         }
     }
 
@@ -98,9 +103,13 @@ pub fn remove_caddy_ca() {
             .map(|s| s.success())
             .unwrap_or(false);
         if rm_ok {
-            let _ = std::process::Command::new("sudo")
+            match std::process::Command::new("sudo")
                 .arg(target.update_cmd)
-                .status();
+                .status()
+            {
+                Ok(s) if s.success() => {}
+                _ => eprintln!("  Warning: {} failed", target.update_cmd),
+            }
         }
     }
 }

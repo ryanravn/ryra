@@ -522,7 +522,7 @@ pub fn add_service(
             &output.ctx,
             &config,
             &quadlet_path,
-        ));
+        )?);
     }
 
     // 8. Add Caddy route for services with a URL when Caddy is installed.

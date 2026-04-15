@@ -88,70 +88,67 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn extracts_bundled_registry() {
-        let tmp = TempDir::new().expect("create temp dir");
-        let registry_dir = ensure_bundled(tmp.path()).expect("ensure_bundled succeeds");
+    fn extracts_bundled_registry() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let tmp = TempDir::new()?;
+        let registry_dir = ensure_bundled(tmp.path())?;
 
         assert!(registry_dir.exists(), "registry dir should exist");
 
         // At least one service.toml should be present somewhere under the dir
         let found = walkdir_has_service_toml(&registry_dir);
         assert!(found, "at least one service.toml should exist in extracted registry");
+        Ok(())
     }
 
     #[test]
-    fn skips_extraction_when_version_matches() {
-        let tmp = TempDir::new().expect("create temp dir");
+    fn skips_extraction_when_version_matches() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let tmp = TempDir::new()?;
 
         // First extraction
-        let registry_dir = ensure_bundled(tmp.path()).expect("first ensure_bundled");
+        let registry_dir = ensure_bundled(tmp.path())?;
 
         // Record modification time of VERSION file
         let version_file = registry_dir.join("VERSION");
-        let mtime_before = std::fs::metadata(&version_file)
-            .expect("VERSION file exists")
-            .modified()
-            .expect("mtime available");
+        let mtime_before = std::fs::metadata(&version_file)?.modified()?;
 
         // Small sleep to ensure mtime would differ if re-written
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Second call — should be a no-op
-        let registry_dir2 = ensure_bundled(tmp.path()).expect("second ensure_bundled");
+        let registry_dir2 = ensure_bundled(tmp.path())?;
         assert_eq!(registry_dir, registry_dir2, "same path returned");
 
-        let mtime_after = std::fs::metadata(&version_file)
-            .expect("VERSION file still exists")
-            .modified()
-            .expect("mtime available");
+        let mtime_after = std::fs::metadata(&version_file)?.modified()?;
 
         assert_eq!(mtime_before, mtime_after, "VERSION file should not have been re-written");
+        Ok(())
     }
 
     #[test]
-    fn re_extracts_on_version_mismatch() {
-        let tmp = TempDir::new().expect("create temp dir");
+    fn re_extracts_on_version_mismatch() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let tmp = TempDir::new()?;
 
         // First extraction
-        let registry_dir = ensure_bundled(tmp.path()).expect("first ensure_bundled");
+        let registry_dir = ensure_bundled(tmp.path())?;
 
         // Tamper with the VERSION file
         let version_file = registry_dir.join("VERSION");
-        std::fs::write(&version_file, "0.0.0-fake").expect("write fake version");
+        std::fs::write(&version_file, "0.0.0-fake")?;
 
         // Small sleep so mtime would differ
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Second call — should re-extract because version mismatches
-        ensure_bundled(tmp.path()).expect("second ensure_bundled");
+        ensure_bundled(tmp.path())?;
 
-        let new_version = std::fs::read_to_string(&version_file).expect("read VERSION");
+        let new_version = std::fs::read_to_string(&version_file)?;
         let expected = format!("{BUNDLED_VERSION}-{BUNDLED_HASH}");
         assert_eq!(
             new_version.trim(),
             expected,
             "VERSION should be updated to current version-hash after re-extraction"
         );
+        Ok(())
     }
 
     fn walkdir_has_service_toml(dir: &Path) -> bool {

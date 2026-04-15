@@ -2,10 +2,32 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::config::schema::{AuthCredentials, Config};
+use crate::error::Error;
 use crate::generate::GeneratedFile;
 use crate::generate::bundle::inject_networks;
 use crate::registry::service_def::ServiceDef;
 use crate::{SERVICE_AUTHELIA, Step, service_home};
+
+/// Replace the host portion of a URL while preserving scheme, port, and path.
+fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
+    let (scheme, rest) = base_url.split_once("://")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (_, port_part) = if authority.contains(':') {
+        let (h, p) = authority.rsplit_once(':')?;
+        (h, Some(p))
+    } else {
+        (authority, None)
+    };
+    let new_authority = match port_part {
+        Some(port) => format!("{new_host}:{port}"),
+        None => new_host.to_string(),
+    };
+    if path.is_empty() {
+        Some(format!("{scheme}://{new_authority}"))
+    } else {
+        Some(format!("{scheme}://{new_authority}/{path}"))
+    }
+}
 
 /// Register an OIDC client with authelia by editing its configuration.yml.
 /// Returns steps to write the updated config and restart authelia.
@@ -20,21 +42,27 @@ pub fn register_oidc_client(
     ctx: &BTreeMap<String, String>,
     config: &Config,
     quadlet_dir: &Path,
-) -> Vec<Step> {
+) -> crate::error::Result<Vec<Step>> {
     let mut steps = Vec::new();
 
     let client_id = match ctx.get("auth.client_id") {
         Some(id) => id.clone(),
-        None => return steps,
+        None => {
+            return Err(Error::Registry(
+                "auth.client_id not found in template context".into(),
+            ))
+        }
     };
     let client_secret = match ctx.get("auth.client_secret") {
         Some(s) => s.clone(),
-        None => return steps,
+        None => {
+            return Err(Error::Registry(
+                "auth.client_secret not found in template context".into(),
+            ))
+        }
     };
 
-    let Ok(authelia_home) = service_home(SERVICE_AUTHELIA) else {
-        return steps;
-    };
+    let authelia_home = service_home(SERVICE_AUTHELIA)?;
     let authelia_config_dir = authelia_home.join("config");
     let authelia_config_path = authelia_config_dir.join("configuration.yml");
 
@@ -42,17 +70,28 @@ pub fn register_oidc_client(
 
     // Add OIDC section + client to authelia config
     if !authelia_config_path.exists() {
-        return steps;
+        return Err(Error::FileRead {
+            path: authelia_config_path,
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "authelia configuration.yml not found",
+            ),
+        });
     }
-    let Ok(mut yaml) = std::fs::read_to_string(&authelia_config_path) else {
-        return steps;
-    };
+    let mut yaml = std::fs::read_to_string(&authelia_config_path).map_err(|e| Error::FileRead {
+        path: authelia_config_path.clone(),
+        source: e,
+    })?;
 
     let base_url = match url {
         Some(u) => u.to_string(),
         None => match ctx.get("service.url") {
             Some(u) if !u.is_empty() => u.clone(),
-            _ => return steps, // no url or service URL — cannot register OIDC client
+            _ => {
+                return Err(Error::Registry(
+                    "no URL provided and no service.url in template context — cannot register OIDC client".into(),
+                ))
+            }
         },
     };
 
@@ -73,10 +112,16 @@ pub fn register_oidc_client(
     // 127.0.0.1 or localhost, and the browser address determines the
     // redirect_uri that vikunja sends to authelia).
     let mut base_urls = vec![base_url.clone()];
-    if base_url.contains("127.0.0.1") {
-        base_urls.push(base_url.replace("127.0.0.1", "localhost"));
-    } else if base_url.contains("localhost") {
-        base_urls.push(base_url.replace("localhost", "127.0.0.1"));
+    // Also register the localhost/127.0.0.1 alternate so browser redirects work from either address
+    if let Some(alt) = url_with_host(&base_url, "localhost") {
+        if alt != base_url && !base_urls.contains(&alt) {
+            base_urls.push(alt);
+        }
+    }
+    if let Some(alt) = url_with_host(&base_url, "127.0.0.1") {
+        if alt != base_url && !base_urls.contains(&alt) {
+            base_urls.push(alt);
+        }
     }
     for suffix in [
         "/user/oauth2/Authelia/callback",              // Forgejo/Gitea
@@ -107,7 +152,14 @@ pub fn register_oidc_client(
             "\nidentity_providers:\n  oidc:\n    jwks:\n      - key_id: 'main'\n        algorithm: 'RS256'\n        use: 'sig'\n        key: {{{{ secret \"/config/oidc.jwk.rsa.pem\" | mindent 10 \"|\" | msquote }}}}\n    clients:{client_block}\n",
         ));
     } else if !yaml.contains(&client_id) {
+        let original = yaml.clone();
         yaml = yaml.replace("    clients:", &format!("    clients:{client_block}"));
+        if yaml == original {
+            return Err(Error::Registry(format!(
+                "failed to inject OIDC client into authelia config — expected '    clients:' section not found in {}",
+                authelia_config_path.display()
+            )));
+        }
     }
 
     steps.push(Step::WriteFile(GeneratedFile {
@@ -132,7 +184,8 @@ pub fn register_oidc_client(
             u.split("://")
                 .nth(1)
                 .and_then(|rest| rest.split('/').next())
-                .map(|authority| authority.split(':').next().unwrap_or(authority))
+                // split(':') always yields at least one element, so first() always returns Some
+                .and_then(|authority| authority.split(':').next())
         })
         .map(|s| s.to_string());
 
@@ -191,7 +244,7 @@ pub fn register_oidc_client(
         }
     }
 
-    steps
+    Ok(steps)
 }
 
 /// Build AuthCredentials for finalize_add when authelia is installed.

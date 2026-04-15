@@ -68,22 +68,24 @@ pub fn remove_route(caddyfile: &str, service_name: &str) -> String {
 
     while i < lines.len() {
         if lines[i].trim() == marker {
-            // Skip the marker line
+            // Skip the marker line and the entire site block that follows.
+            // Caddyfile blocks open with `domain {` and close with `}` alone
+            // on a line. Track depth by looking at line-ending `{` and
+            // line-starting `}` (the only valid positions in Caddyfile syntax).
             i += 1;
-            // Skip until we find the closing brace at depth 0
             let mut depth: i32 = 0;
-            let mut found_open = false;
+            let mut entered_block = false;
             while i < lines.len() {
                 let trimmed = lines[i].trim();
-                if trimmed.contains('{') {
-                    depth += trimmed.matches('{').count() as i32;
-                    found_open = true;
+                if trimmed.ends_with('{') {
+                    depth += 1;
+                    entered_block = true;
                 }
-                if trimmed.contains('}') {
-                    depth -= trimmed.matches('}').count() as i32;
+                if trimmed.starts_with('}') {
+                    depth -= 1;
                 }
                 i += 1;
-                if found_open && depth <= 0 {
+                if entered_block && depth <= 0 {
                     break;
                 }
             }
