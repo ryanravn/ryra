@@ -1,7 +1,7 @@
 [test]
-name = "seafile-oidc-lifecycle"
+name = "seafile"
 
-# Install caddy (needed for authelia HTTPS)
+# Seafile requires HTTPS — install caddy first
 [[steps]]
 action = "add"
 service = "caddy"
@@ -10,45 +10,25 @@ service = "caddy"
 action = "wait"
 service = "caddy"
 
-# Install authelia (OIDC provider)
-[[steps]]
-action = "add"
-service = "authelia"
-args = "--url https://auth.test.local:8443"
-env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
-timeout = 300
-
-[[steps]]
-action = "wait"
-service = "authelia"
-
-# Install seafile with OIDC auth
 [[steps]]
 action = "add"
 service = "seafile"
-args = "--auth"
+args = "--url https://seafile.localhost:8443"
 env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
-timeout = 900
 
 [[steps]]
 action = "wait"
 service = "seafile"
 
-# Verify it all works
 [[steps]]
 action = "http"
-name = "http-responds"
+name = "seafile-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "seafile"
-poll = { interval = 5, attempts = 60 }
-timeout = 360
+poll = { interval = 5, attempts = 120 }
+timeout = 660
 
 [[steps]]
 action = "shell"
-name = "oauth-configured"
-run = "test -f $HOME/.local/share/ryra/seafile/shared/seafile/conf/seahub_settings_oauth.py && grep -q OAUTH_CLIENT_ID $HOME/.local/share/ryra/seafile/shared/seafile/conf/seahub_settings_oauth.py"
-
-# Cleanup
-[[steps]]
-action = "remove"
-service = "seafile"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/seafile"

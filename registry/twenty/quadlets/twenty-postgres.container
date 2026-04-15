@@ -1,0 +1,24 @@
+[Unit]
+Description=Twenty PostgreSQL database
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=twenty.network
+After=twenty.network
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=twenty-postgres
+Network=twenty.network:alias=db
+Volume=twenty-db-data.volume:/var/lib/postgresql/data:U
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+HealthCmd=pg_isready -U ${POSTGRES_USER:-twenty} || exit 1
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -10,23 +10,14 @@ use crate::{WellKnownService, Step, service_home};
 
 /// Replace the host portion of a URL while preserving scheme, port, and path.
 fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
-    let (scheme, rest) = base_url.split_once("://")?;
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let (_, port_part) = if authority.contains(':') {
-        let (h, p) = authority.rsplit_once(':')?;
-        (h, Some(p))
-    } else {
-        (authority, None)
-    };
-    let new_authority = match port_part {
-        Some(port) => format!("{new_host}:{port}"),
-        None => new_host.to_string(),
-    };
-    if path.is_empty() {
-        Some(format!("{scheme}://{new_authority}"))
-    } else {
-        Some(format!("{scheme}://{new_authority}/{path}"))
+    let mut parsed = url::Url::parse(base_url).ok()?;
+    parsed.set_host(Some(new_host)).ok()?;
+    let mut result = parsed.to_string();
+    // url::Url always adds a trailing slash; strip it if the original didn't have one
+    if !base_url.ends_with('/') && result.ends_with('/') {
+        result.pop();
     }
+    Some(result)
 }
 
 /// Register an OIDC client with authelia by editing its configuration.yml.
@@ -186,8 +177,14 @@ pub fn register_oidc_client(
         if let Some(pos) = insert_pos {
             // client_block starts with \n but we're inserting after a line
             // that already ends with \n, so trim the leading newline.
+            // Ensure the block ends with \n so existing content isn't concatenated.
             let block = client_block.strip_prefix('\n').unwrap_or(&client_block);
-            yaml.insert_str(pos, block);
+            let block = if block.ends_with('\n') {
+                block.to_string()
+            } else {
+                format!("{block}\n")
+            };
+            yaml.insert_str(pos, &block);
         }
     }
 
@@ -209,14 +206,8 @@ pub fn register_oidc_client(
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name))
         .and_then(|s| s.url.as_ref())
-        .and_then(|u| {
-            u.split("://")
-                .nth(1)
-                .and_then(|rest| rest.split('/').next())
-                // split(':') always yields at least one element, so first() always returns Some
-                .and_then(|authority| authority.split(':').next())
-        })
-        .map(|s| s.to_string());
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|parsed| parsed.host_str().map(|h| h.to_string()));
 
     if caddy_installed {
         if let Some(ref domain) = auth_domain {
@@ -252,6 +243,7 @@ pub fn register_oidc_client(
                                 service_name: authelia.to_string(),
                                 domain: domain.clone(),
                                 container_port: 9091,
+                                https_port: crate::caddy_https_port(config),
                             },
                         );
                         let updated =

@@ -29,18 +29,18 @@ pub fn build_context(
     ctx.insert("service.url".into(), localhost_url.clone());
     if let Some(url) = url {
         // Parse the URL to extract scheme and hostname
-        let scheme = url.split("://").next().unwrap_or("https");
-        let authority = url
-            .split("://")
-            .nth(1)
-            .and_then(|rest| rest.split('/').next())
-            .unwrap_or(url);
-        // service.domain is just the hostname (no port)
-        let domain = authority.split(':').next().unwrap_or(authority);
-        ctx.insert("service.domain".into(), domain.to_string());
+        if let Ok(parsed) = url::Url::parse(url) {
+            ctx.insert(
+                "service.domain".into(),
+                parsed.host_str().unwrap_or(url).to_string(),
+            );
+            ctx.insert("service.scheme".into(), parsed.scheme().to_string());
+        } else {
+            // Fallback for non-standard URLs: use as-is
+            ctx.insert("service.scheme".into(), "https".into());
+        }
         // service.external_url — browser-accessible URL as provided by the user.
         ctx.insert("service.external_url".into(), url.to_string());
-        ctx.insert("service.scheme".into(), scheme.to_string());
     } else {
         ctx.insert("service.scheme".into(), "http".into());
     }
@@ -98,21 +98,13 @@ pub fn build_context(
             .cloned()
             .unwrap_or_else(|| auth_localhost_url.clone());
         if caddy_installed {
-            let caddy_https_port = config
-                .services
-                .iter()
-                .find(|s| crate::WellKnownService::Caddy.matches(&s.name))
-                .and_then(|s| s.ports.get("https").copied());
-            if let Some(port) = caddy_https_port {
-                let has_port = external_url
-                    .split("://")
-                    .nth(1)
-                    .and_then(|rest| rest.split('/').next())
-                    .map(|authority| authority.contains(':'))
-                    .unwrap_or(false);
-                if !has_port {
-                    external_url = format!("{external_url}:{port}");
-                }
+            let port = crate::caddy_https_port(config);
+            let has_port = url::Url::parse(&external_url)
+                .ok()
+                .and_then(|u| u.port())
+                .is_some();
+            if !has_port {
+                external_url = format!("{external_url}:{port}");
             }
         }
         // auth.internal_url — how containers reach the auth provider for OIDC

@@ -1,0 +1,33 @@
+[[steps]]
+action = "add"
+service = "twenty"
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "twenty"
+
+[[steps]]
+action = "http"
+name = "twenty-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "twenty"
+poll = { interval = 5, attempts = 60 }
+timeout = 300
+
+[[steps]]
+action = "shell"
+name = "postgres-not-on-localhost"
+run = "! ss -tlnp | grep -q ':5432 '"
+timeout = 5
+
+[[steps]]
+action = "shell"
+name = "redis-not-on-localhost"
+run = "! ss -tlnp | grep -q ':6379 '"
+timeout = 5
+
+[[steps]]
+action = "shell"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/twenty"

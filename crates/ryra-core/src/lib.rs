@@ -18,6 +18,10 @@ use generate::GeneratedFile;
 // Well-known infrastructure service names used for cross-service integration.
 pub const REGISTRY_BUNDLED: &str = "bundled";
 
+/// Default Caddy HTTPS port, used when the caddy service record has no "https"
+/// port entry (e.g., config was written by an older version).
+const DEFAULT_CADDY_HTTPS_PORT: u16 = 8443;
+
 /// Infrastructure services that ryra knows about for cross-service integration
 /// (e.g., joining networks, configuring OIDC, setting up TLS).
 ///
@@ -88,6 +92,16 @@ pub fn quadlet_dir() -> Result<PathBuf> {
         None => home_dir()?.join(".config"),
     };
     Ok(base.join("containers").join("systemd"))
+}
+
+/// Look up Caddy's HTTPS port from the installed service record.
+pub(crate) fn caddy_https_port(config: &Config) -> u16 {
+    config
+        .services
+        .iter()
+        .find(|s| WellKnownService::Caddy.matches(&s.name))
+        .and_then(|s| s.ports.get("https").copied())
+        .unwrap_or(DEFAULT_CADDY_HTTPS_PORT)
 }
 
 // --- Typed steps: what the CLI needs to execute ---
@@ -280,6 +294,10 @@ fn resolve_extra_networks(
 }
 
 /// Add a service: generate config, return steps to execute.
+///
+/// When `pre_built_ctx` is provided, its secrets and auth credentials are
+/// reused instead of generating fresh ones. Pass the context from the
+/// interactive prompt phase so the values the user saw match what gets written.
 pub fn add_service(
     service_name: &str,
     url: Option<&str>,
@@ -288,6 +306,7 @@ pub fn add_service(
     env_overrides: &BTreeMap<String, String>,
     registry_name: &str,
     repo_dir: &Path,
+    pre_built_ctx: Option<BTreeMap<String, String>>,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
@@ -442,6 +461,7 @@ pub fn add_service(
         env_overrides,
         url,
         extra_env,
+        pre_built_ctx,
     })?;
 
     let mut podman_args: Vec<String> = Vec::new();
@@ -560,13 +580,10 @@ pub fn add_service(
     // This creates a reverse proxy from the service's domain to its container port.
     if let Some(url) = url {
         if caddy_installed && !WellKnownService::Caddy.matches(service_name) {
-            // Extract domain from the URL
-            let domain = url
-                .split("://")
-                .nth(1)
-                .and_then(|rest| rest.split('/').next())
-                .and_then(|authority| authority.split(':').next())
-                .unwrap_or(url);
+            let parsed = url::Url::parse(url).map_err(|e| {
+                Error::Template(format!("invalid service URL '{url}': {e}"))
+            })?;
+            let domain = parsed.host_str().unwrap_or(url);
             let container_port = reg_service
                 .def
                 .ports
@@ -577,6 +594,7 @@ pub fn add_service(
                 service_name: service_name.to_string(),
                 domain: domain.to_string(),
                 container_port,
+                https_port: caddy_https_port(&config),
             });
             let caddyfile_path = caddy::caddyfile_path()?;
             let existing = std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {

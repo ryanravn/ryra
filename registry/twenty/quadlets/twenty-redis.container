@@ -1,0 +1,28 @@
+[Unit]
+Description=Twenty Redis cache
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=twenty.network
+After=twenty.network
+
+[Container]
+Image=docker.io/library/redis:7-alpine
+ContainerName=twenty-redis
+Network=twenty.network:alias=redis
+Exec=redis-server --maxmemory-policy noeviction
+HealthCmd=redis-cli ping | grep PONG
+HealthStartPeriod=20s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=3s
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

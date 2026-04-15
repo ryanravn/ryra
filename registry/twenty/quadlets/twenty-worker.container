@@ -1,0 +1,25 @@
+[Unit]
+Description=Twenty CRM background worker
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=twenty.network twenty-postgres.service twenty-redis.service twenty.service
+After=twenty.network twenty-postgres.service twenty-redis.service twenty.service
+
+[Container]
+Image=docker.io/twentycrm/twenty:latest
+ContainerName=twenty-worker
+Network=twenty.network
+Exec=yarn worker:prod
+Volume=twenty-data.volume:/app/docker-data:Z
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+Environment=DISABLE_DB_MIGRATIONS=true
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

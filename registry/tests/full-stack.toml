@@ -30,11 +30,10 @@ service = "postgres"
 action = "wait"
 service = "postgres"
 
-# Whoami — with --auth for OIDC
+# Whoami — no auth (doesn't support native OIDC)
 [[steps]]
 action = "add"
 service = "whoami"
-args = "--auth"
 
 [[steps]]
 action = "wait"
@@ -50,10 +49,11 @@ timeout = 300
 action = "wait"
 service = "forgejo"
 
-# Vaultwarden
+# Vaultwarden (requires HTTPS)
 [[steps]]
 action = "add"
 service = "vaultwarden"
+args = "--url https://vault.localhost:8443"
 
 [[steps]]
 action = "wait"

@@ -6,7 +6,7 @@ ADMIN_PASSWORD="$INIT_IMMICH_ADMIN_PASSWORD"
 
 echo "Waiting for Immich API to be ready (up to 10 min)..."
 for i in $(seq 1 60); do
-  CODE=$(curl -so /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$IMMICH_URL/api/server/ping" 2>/dev/null)
+  CODE=$(curl -so /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$IMMICH_URL/api/server/ping" 2>/dev/null || true)
   [ "$CODE" = "200" ] && break
   echo "  not yet — retrying in 10s (${i}0s elapsed)"
   sleep 10

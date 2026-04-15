@@ -21,6 +21,8 @@ pub struct CaddySiteParams {
     pub domain: String,
     /// Container port the service listens on (used with container DNS name).
     pub container_port: u16,
+    /// Caddy's HTTPS listen port (from the installed caddy service's port map).
+    pub https_port: u16,
 }
 
 /// Generate a Caddy site block for a service.
@@ -29,7 +31,7 @@ pub struct CaddySiteParams {
 /// so that [`add_route`] and [`remove_route`] can locate it.
 pub fn render_site_block(params: &CaddySiteParams) -> String {
     let mut block = format!("# ryra:{}\n", params.service_name);
-    block.push_str(&format!("{}:8443 {{\n", params.domain));
+    block.push_str(&format!("{}:{} {{\n", params.domain, params.https_port));
     block.push_str("    tls internal\n");
     // Use the container name on caddy's shared network for direct communication.
     block.push_str(&format!(
@@ -147,12 +149,25 @@ mod tests {
             service_name: "whoami".to_string(),
             domain: "whoami.example.com".to_string(),
             container_port: 8080,
+            https_port: 8443,
         };
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
         assert!(block.contains("whoami.example.com:8443 {"));
         assert!(block.contains("    reverse_proxy whoami:8080"));
         assert!(block.ends_with("}\n"));
+    }
+
+    #[test]
+    fn render_block_custom_https_port() {
+        let params = CaddySiteParams {
+            service_name: "app".to_string(),
+            domain: "app.example.com".to_string(),
+            container_port: 3000,
+            https_port: 9443,
+        };
+        let block = render_site_block(&params);
+        assert!(block.contains("app.example.com:9443 {"));
     }
 
     #[test]

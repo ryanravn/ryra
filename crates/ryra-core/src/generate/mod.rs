@@ -26,6 +26,11 @@ pub struct GenerateEnvParams<'a> {
     pub url: Option<&'a str>,
     /// Additional env vars to append to the .env file (e.g., CA cert trust vars).
     pub extra_env: BTreeMap<String, String>,
+    /// Pre-built template context. When provided, secrets and auth credentials
+    /// from this context are reused instead of generating fresh ones. This
+    /// ensures the values shown during interactive prompts match what gets
+    /// written to the .env file.
+    pub pre_built_ctx: Option<BTreeMap<String, String>>,
 }
 
 /// Result of generating env for a service.
@@ -39,14 +44,17 @@ pub struct EnvOutput {
 pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
     let name = &params.service_def.service.name;
 
-    // Build template context (generates fresh secrets based on each env var's format + length)
-    let ctx = context::build_context(
-        params.config,
-        params.service_def,
-        params.host_port,
-        params.auth_kind,
-        params.url,
-    );
+    // Use pre-built context if provided (preserves secrets from the prompt phase),
+    // otherwise generate a fresh one.
+    let ctx = params.pre_built_ctx.unwrap_or_else(|| {
+        context::build_context(
+            params.config,
+            params.service_def,
+            params.host_port,
+            params.auth_kind,
+            params.url,
+        )
+    });
     let rendered_env = render_env_vars(
         params.service_def,
         &ctx,

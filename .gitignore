@@ -8,6 +8,7 @@
 /registry/tests/browser/package.json
 /registry/tests/browser/playwright-report
 /registry/tests/browser/test-results
+/test-results
 
 # Environment files
 .env

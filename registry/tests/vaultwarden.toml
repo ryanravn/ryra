@@ -1,11 +1,20 @@
 [test]
 name = "vaultwarden-lifecycle"
 
+# Vaultwarden requires HTTPS — install caddy first
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
 # Inject fake SMTP config so vaultwarden's SMTP mappings render
 [[steps]]
 action = "shell"
 name = "inject-smtp-config"
-run = """cat >> $HOME/.config/ryra/ryra.toml <<'TOML'
+run = '''cat >> $HOME/.config/ryra/ryra.toml <<'TOML'
 
 [smtp]
 host = "localhost"
@@ -13,17 +22,12 @@ port = 1025
 username = "test"
 password = "test"
 from = "noreply@test.local"
-TOML"""
+TOML'''
 
 [[steps]]
 action = "add"
 service = "vaultwarden"
-
-# Fix DOMAIN env var — in Local mode ryra doesn't set a domain, but vaultwarden requires one
-[[steps]]
-action = "shell"
-name = "fix-domain-env"
-run = "sed -i 's|^DOMAIN=.*|DOMAIN=https://vault.test.local|' $HOME/.local/share/ryra/vaultwarden/.env && systemctl --user restart vaultwarden"
+args = "--url https://vault.localhost:8443"
 
 [[steps]]
 action = "wait"

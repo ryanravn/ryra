@@ -1,0 +1,95 @@
+[service]
+name = "twenty"
+description = "Twenty - open-source CRM alternative to Salesforce"
+url = "https://twenty.com/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 1024
+recommended = 2048
+
+[[ports]]
+name = "http"
+container_port = 3000
+
+# --- Postgres env vars (shared with postgres sidecar) ---
+
+[[env]]
+name = "POSTGRES_USER"
+value = "twenty"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "POSTGRES_DB"
+value = "twenty"
+
+# --- Twenty server env vars ---
+
+[[env]]
+name = "PG_DATABASE_URL"
+value = "postgresql://twenty:{{secret.db_password}}@db:5432/twenty"
+
+[[env]]
+name = "REDIS_URL"
+value = "redis://redis:6379"
+
+[[env]]
+name = "APP_SECRET"
+value = "{{secret.app_secret}}"
+format = "hex"
+length = 64
+
+[[env]]
+name = "SERVER_URL"
+value = "{{service.external_url}}"
+
+[[env]]
+name = "NODE_ENV"
+value = "production"
+
+[[env]]
+name = "STORAGE_TYPE"
+value = "local"
+
+# --- Admin account (used for initial setup and OIDC registration) ---
+
+[[env]]
+name = "RYRA_ADMIN_EMAIL"
+value = "admin@ryra.local"
+kind = "prompted"
+prompt = "Admin email"
+
+[[env]]
+name = "RYRA_ADMIN_PASSWORD"
+value = "{{secret.admin_password}}"
+kind = "prompted"
+prompt = "Admin password"
+
+# Enterprise key for SSO support (optional — leave empty to skip SSO)
+[[env]]
+name = "ENTERPRISE_KEY"
+value = ""
+kind = "prompted"
+prompt = "Enterprise key (required for SSO, leave empty to skip)"
+
+[integrations]
+auth = ["oidc"]
+token_auth_method = "client_secret_basic"
+oidc_callbacks = ["/auth/oidc/callback"]
+smtp = true
+
+[mappings.smtp]
+EMAIL_DRIVER = "smtp"
+EMAIL_SMTP_HOST = "{{smtp.host}}"
+EMAIL_SMTP_PORT = "{{smtp.port}}"
+EMAIL_SMTP_USER = "{{smtp.username}}"
+EMAIL_SMTP_PASSWORD = "{{smtp.password}}"
+
+[mappings.auth]
+OIDC_CLIENT_ID = "{{auth.client_id}}"
+OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
+OIDC_ISSUER_URL = "{{auth.internal_url}}"
+OIDC_EXTERNAL_URL = "{{auth.external_url}}"

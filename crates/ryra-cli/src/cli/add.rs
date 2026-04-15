@@ -164,6 +164,7 @@ pub async fn run(
         use ryra_core::registry::service_def::EnvKind;
 
         let mut env_overrides = BTreeMap::new();
+        let mut prompt_ctx: Option<BTreeMap<String, String>> = None;
         let promptable: Vec<_> = reg_service
             .def
             .env
@@ -172,7 +173,9 @@ pub async fn run(
             .collect();
 
         if !promptable.is_empty() && interactive {
-            // Resolve template variables in defaults so prompts show real values
+            // Resolve template variables in defaults so prompts show real values.
+            // This context is reused by add_service so the secrets the user saw
+            // during prompts match what gets written to .env.
             let default_ctx = ryra_core::generate::context::build_context(
                 &config,
                 &reg_service.def,
@@ -180,6 +183,7 @@ pub async fn run(
                 auth_kind.as_ref(),
                 url,
             );
+            prompt_ctx = Some(default_ctx.clone());
 
             println!("\nConfigure {service}:");
             for env in &promptable {
@@ -240,6 +244,7 @@ pub async fn run(
             &env_overrides,
             service_ref.registry_name(),
             &repo_dir,
+            prompt_ctx.clone(),
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 println!("{service} was partially installed — cleaning up before retry...");
@@ -255,6 +260,7 @@ pub async fn run(
                     &env_overrides,
                     service_ref.registry_name(),
                     &repo_dir,
+                    prompt_ctx.clone(),
                 )?
             }
             other => other?,
@@ -508,11 +514,16 @@ fn setup_host_access(domains: &[&str]) {
         .filter(|p| p.exists());
     if let Some(ref nssdb_path) = nssdb {
         let nss_arg = format!("sql:{}", nssdb_path.display());
-        let already_in_nss = Command::new("certutil")
+        let already_in_nss = match Command::new("certutil")
             .args(["-d", &nss_arg, "-L", "-n", "ryra-caddy-ca"])
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        {
+            Ok(o) => o.status.success(),
+            Err(e) => {
+                eprintln!("  Warning: could not check browser trust store: {e}");
+                false
+            }
+        };
         if !already_in_nss {
             if let Some(ref ca) = ca_source {
                 let status = Command::new("certutil")
@@ -563,11 +574,17 @@ fn setup_host_access(domains: &[&str]) {
     // --- Confirm ---
     let interactive = super::is_interactive();
     if interactive {
-        let run = Confirm::new()
+        let run = match Confirm::new()
             .with_prompt("  Run these commands now?")
             .default(true)
             .interact()
-            .unwrap_or(false);
+        {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("  Warning: could not read confirmation ({e}), skipping domain setup");
+                return;
+            }
+        };
         if !run {
             println!();
             return;
@@ -600,11 +617,16 @@ fn setup_host_access(domains: &[&str]) {
     }
 
     if let (true, Some(ca), Some(target)) = (need_ca, ca_source.as_ref(), ca_target) {
-        let cp_ok = Command::new("sudo")
+        let cp_ok = match Command::new("sudo")
             .args(["cp", &ca.display().to_string(), target.cert_path])
             .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        {
+            Ok(s) => s.success(),
+            Err(e) => {
+                eprintln!("  Failed to install CA certificate: {e}");
+                false
+            }
+        };
         if cp_ok {
             match Command::new("sudo").arg(target.update_cmd).status() {
                 Ok(s) if s.success() => {}

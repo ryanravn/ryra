@@ -19,7 +19,7 @@ HealthCmd=curl -sf http://localhost:80/ || exit 1
 EnvironmentFile=%h/.local/share/ryra/seafile/.env
 Restart=always
 RestartSec=5
-TimeoutStartSec=300
+TimeoutStartSec=900
 ExecStartPost=/bin/bash %h/.local/share/ryra/seafile/configs/scripts/inject-oauth.sh
 ExecStartPost=/bin/bash %h/.local/share/ryra/seafile/configs/scripts/inject-smtp.sh
 

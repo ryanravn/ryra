@@ -1,0 +1,31 @@
+[Unit]
+Description=Twenty CRM server
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=twenty.network twenty-postgres.service twenty-redis.service
+After=twenty.network twenty-postgres.service twenty-redis.service
+
+[Container]
+Image=docker.io/twentycrm/twenty:latest
+ContainerName=twenty
+Network=twenty.network
+PublishPort=${RYRA_PORT_HTTP}:3000
+Volume=twenty-data.volume:/app/docker-data:Z
+Pull=never
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+HealthCmd=curl -sf http://localhost:3000/healthz || exit 1
+HealthStartPeriod=60s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=5s
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/twenty/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do podman exec twenty-postgres pg_isready -U ${POSTGRES_USER:-twenty} && exit 0; sleep 2; done; exit 1'
+ExecStartPost=/bin/bash %h/.local/share/ryra/twenty/configs/scripts/register-oidc.sh
+
+[Install]
+WantedBy=default.target
