@@ -94,16 +94,32 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::PullImage { image } => {
-            // Skip if already available
-            if Command::new("podman")
+            // Skip if already available — check both the local store and
+            // additionalimagestores (read-only mounts). `podman image exists`
+            // only checks the local store, so fall back to listing images.
+            let exists_local = Command::new("podman")
                 .args(["image", "exists", image])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
                 .map(|s| s.success())
-                .unwrap_or(false)
-            {
+                .unwrap_or(false);
+            if exists_local {
                 println!("  {image} already available, skipping pull");
+                return Ok(());
+            }
+            // Check additional image stores via podman images
+            let in_additional = Command::new("podman")
+                .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|line| line == image)
+                })
+                .unwrap_or(false);
+            if in_additional {
+                println!("  {image} available in image store, skipping pull");
                 return Ok(());
             }
             println!("  Pulling {image}...");

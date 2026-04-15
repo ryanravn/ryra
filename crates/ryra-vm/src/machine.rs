@@ -155,11 +155,11 @@ impl Machine {
         let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
-        let tar_cache = image_tar_cache_dir()?;
-        tokio::fs::create_dir_all(&tar_cache).await.ok();
+        let shared_store = image_shared_store_dir()?;
+        tokio::fs::create_dir_all(&shared_store).await.ok();
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
-            tar_cache.display()
+            shared_store.display()
         );
 
         let mut args: Vec<&str> = vec![
@@ -292,11 +292,11 @@ impl Machine {
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
 
-        let tar_cache = image_tar_cache_dir()?;
-        tokio::fs::create_dir_all(&tar_cache).await.ok();
+        let shared_store = image_shared_store_dir()?;
+        tokio::fs::create_dir_all(&shared_store).await.ok();
         let virtfs_arg = format!(
             "local,path={},mount_tag=images,security_model=none,readonly=on",
-            tar_cache.display()
+            shared_store.display()
         );
 
         let mut args: Vec<&str> = vec![
@@ -713,11 +713,23 @@ async fn write_seed_iso(
 
 /// Directory for saved container image tars shared into VMs via 9p.
 ///
-/// Using tars instead of sharing the podman store directly because
-/// additionalimagestores can't read a rootless overlay store from
-/// root podman (the VM runs as root, the host runs rootless).
-pub fn image_tar_cache_dir() -> Result<PathBuf> {
+/// Tars are an intermediate step: the host's rootless podman store uses UID
+/// shifting that other podman instances can't read. We save to tar first,
+/// then load into the shared store (see [`image_shared_store_dir`]).
+fn image_tar_cache_dir() -> Result<PathBuf> {
     Ok(cache_base_dir()?.join("image-tars"))
+}
+
+/// Dedicated overlay store populated from tars, shared into VMs via 9p.
+///
+/// VMs configure `additionalimagestores` pointing at this mount, so all
+/// pre-cached images are available instantly — no per-image `podman load`.
+///
+/// This store is created with `podman --root <path> --storage-driver overlay`
+/// which uses unprivileged overlayfs (kernel ≥5.11). The resulting files are
+/// owned by the current user and readable by root podman in the VM.
+pub fn image_shared_store_dir() -> Result<PathBuf> {
+    Ok(cache_base_dir()?.join("image-store"))
 }
 
 /// Base directory for VM work dirs (disk images, keys, logs).
@@ -733,76 +745,131 @@ fn cache_base_dir() -> Result<PathBuf> {
     Ok(base.join("ryra-e2e"))
 }
 
-/// Ensure a container image is pulled and saved as a tar for VM sharing.
+/// Ensure a container image is cached in the shared store for VM sharing.
 ///
-/// Tars are saved to ~/.cache/ryra-e2e/image-tars/ and shared into VMs
-/// via 9p. Using tars because additionalimagestores can't read a rootless
-/// host store from root podman inside the VM (overlay format mismatch).
+/// Flow: pull → save to tar (intermediate) → load into shared overlay store.
+/// The shared store at ~/.cache/ryra-e2e/image-store/ is mounted into VMs
+/// via 9p and used as an `additionalimagestores` entry, making images
+/// available instantly without per-image `podman load`.
+///
+/// Tars are kept as an intermediate cache so that re-populating the shared
+/// store (e.g., after clearing it) doesn't require re-pulling from registries.
 pub async fn ensure_image_cached(image: &str) -> Result<()> {
+    let store_dir = image_shared_store_dir()?;
+    tokio::fs::create_dir_all(&store_dir).await.ok();
+
+    // Check if the image is already in the shared store
+    if image_exists_in_store(&store_dir, image).await {
+        return Ok(());
+    }
+
+    // Ensure tar exists (pull + save if needed)
     let tar_dir = image_tar_cache_dir()?;
     tokio::fs::create_dir_all(&tar_dir).await.ok();
     let tar_name = sanitize_image_name(image);
     let tar_path = tar_dir.join(&tar_name);
 
-    if tar_path.exists() {
-        return Ok(());
-    }
-
-    // Podman sometimes doesn't recognize the docker.io/ prefix for local
-    // lookups (image exists, save) even though pull writes it that way.
-    // Try the full name first, then the short name without docker.io/.
-    let short_name = strip_docker_io(image);
-    let local_name = if Command::new("podman")
-        .args(["image", "exists", image])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        image
-    } else if short_name != image
-        && Command::new("podman")
-            .args(["image", "exists", short_name])
+    if !tar_path.exists() {
+        // Podman sometimes doesn't recognize the docker.io/ prefix for local
+        // lookups (image exists, save) even though pull writes it that way.
+        // Try the full name first, then the short name without docker.io/.
+        let short_name = strip_docker_io(image);
+        let local_name = if Command::new("podman")
+            .args(["image", "exists", image])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .await
             .map(|s| s.success())
             .unwrap_or(false)
-    {
-        short_name
-    } else {
-        // Not in local store — pull it
-        println!("    pulling {image}...");
+        {
+            image
+        } else if short_name != image
+            && Command::new("podman")
+                .args(["image", "exists", short_name])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false)
+        {
+            short_name
+        } else {
+            // Not in local store — pull it
+            println!("    pulling {image}...");
+            let status = Command::new("podman")
+                .args(["pull", image])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .context("failed to run podman pull")?;
+            if !status.success() {
+                anyhow::bail!("podman pull {image} failed");
+            }
+            image
+        };
+
+        println!("    saving {image}...");
         let status = Command::new("podman")
-            .args(["pull", image])
+            .args(["save", "-o", &tar_path.display().to_string(), local_name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .await
-            .context("failed to run podman pull")?;
+            .context("failed to run podman save")?;
         if !status.success() {
-            anyhow::bail!("podman pull {image} failed");
+            let _ = tokio::fs::remove_file(&tar_path).await;
+            anyhow::bail!("podman save {image} failed");
         }
-        image
-    };
+    }
 
-    println!("    saving {image}...");
+    // Load tar into the shared overlay store
+    println!("    loading {image} into shared store...");
     let status = Command::new("podman")
-        .args(["save", "-o", &tar_path.display().to_string(), local_name])
+        .args([
+            "--root", &store_dir.display().to_string(),
+            "--storage-driver", "overlay",
+            "load", "-i", &tar_path.display().to_string(),
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .await
-        .context("failed to run podman save")?;
+        .context("failed to load image into shared store")?;
     if !status.success() {
-        let _ = tokio::fs::remove_file(&tar_path).await;
-        anyhow::bail!("podman save {image} failed");
+        anyhow::bail!("podman load into shared store failed for {image}");
     }
 
+    // Delete the tar — the shared store is the canonical cache now.
+    // If the shared store is cleared, tars will be recreated on next run.
+    let _ = tokio::fs::remove_file(&tar_path).await;
+
     Ok(())
+}
+
+/// Check if an image exists in the shared store.
+async fn image_exists_in_store(store_dir: &Path, image: &str) -> bool {
+    // Try the full name and the short name (without docker.io/ prefix)
+    for name in [image, strip_docker_io(image)] {
+        let ok = Command::new("podman")
+            .args([
+                "--root", &store_dir.display().to_string(),
+                "--storage-driver", "overlay",
+                "image", "exists", name,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            return true;
+        }
+    }
+    false
 }
 
 /// Strip the `docker.io/` or `docker.io/library/` prefix from an image name.
@@ -819,34 +886,32 @@ fn sanitize_image_name(image: &str) -> String {
     image.replace('/', "_").replace(':', "_") + ".tar"
 }
 
-/// Load container images into the VM from host-side tar cache.
+/// Make host container images available in the VM via shared store.
 ///
-/// The tar cache is shared via 9p virtfs. Each image was saved with
-/// `podman save` on the host. Loading from the 9p mount reads directly
-/// from host disk — no network transfer.
-pub async fn load_images_into_vm(machine: &Machine, images: &[String]) -> Result<()> {
+/// Mounts the host's shared overlay store (via 9p virtfs) and configures
+/// podman's `additionalimagestores` to read from it. All pre-cached
+/// images become available instantly — no per-image `podman load`.
+pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
+    // Mount the shared store (9p virtfs configured in Machine::spawn).
+    // Use mountpoint check to handle snapshot-restored VMs where /mnt/images
+    // may already be mounted from the snapshot state.
     machine
-        .exec("mkdir -p /mnt/images && mount -t 9p -o trans=virtio,ro images /mnt/images")
+        .exec("mkdir -p /mnt/images && mountpoint -q /mnt/images || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
         .await
-        .context("failed to mount 9p image tar cache in VM")?;
+        .context("failed to mount 9p shared image store in VM")?;
 
-    for image in images {
-        let tar_name = sanitize_image_name(image);
-
-        // Skip if already loaded (e.g., from a previous test in same VM)
-        let exists = machine
-            .exec(&format!("podman image exists '{image}'"))
-            .await
-            .is_ok();
-        if exists {
-            continue;
-        }
-
-        machine
-            .exec(&format!("podman load -i '/mnt/images/{tar_name}'"))
-            .await
-            .with_context(|| format!("failed to load image {image}"))?;
-    }
+    // Configure podman to use the mounted store as a read-only image source.
+    // The default /usr/share/containers/storage.conf already sets
+    // additionalimagestores = [] — drop-in files can't override an
+    // already-set key, so we copy and patch the config at /etc/ level.
+    machine
+        .exec(
+            "cp /usr/share/containers/storage.conf /etc/containers/storage.conf && \
+             sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' \
+             /etc/containers/storage.conf",
+        )
+        .await
+        .context("failed to configure additionalimagestores in VM")?;
 
     Ok(())
 }
