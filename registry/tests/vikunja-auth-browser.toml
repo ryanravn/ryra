@@ -49,4 +49,4 @@ action = "playwright"
 name = "playwright-auth-flow"
 spec = "vikunja-auth.spec.ts"
 timeout = 120
-env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123", VIKUNJA_PORT = "$RYRA_PORT_HTTP" }
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }
