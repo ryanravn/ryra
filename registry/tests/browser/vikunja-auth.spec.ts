@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-const VIKUNJA_PORT = process.env.VIKUNJA_PORT || "3456";
+const VIKUNJA_PORT = process.env.RYRA_PORT_HTTP || process.env.VIKUNJA_PORT || "3456";
 const VIKUNJA_URL = `http://127.0.0.1:${VIKUNJA_PORT}`;
 
 /** Fill in Authelia's login form and submit. */

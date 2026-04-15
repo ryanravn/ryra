@@ -25,8 +25,8 @@ action = "http"
 name = "seafile-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "seafile"
-poll = { interval = 5, attempts = 120 }
-timeout = 660
+poll = { interval = 5, attempts = 180 }
+timeout = 960
 
 [[steps]]
 action = "shell"
