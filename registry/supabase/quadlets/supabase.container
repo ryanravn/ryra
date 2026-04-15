@@ -8,7 +8,7 @@ Wants=supabase-supavisor.service
 
 [Container]
 ContainerName=supabase-kong
-Image=docker.io/kong/kong:3.9.1
+Image=kong/kong:3.9.1
 Network=supabase.network:alias=kong
 PublishPort=${RYRA_PORT_HTTP}:8000
 PublishPort=${RYRA_PORT_HTTPS}:8443

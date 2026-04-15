@@ -5,7 +5,7 @@ StartLimitBurst=3
 
 [Container]
 ContainerName=vaultwarden
-Image=docker.io/vaultwarden/server:1.35.4
+Image=vaultwarden/server:1.35.4
 PublishPort=${RYRA_PORT_HTTP}:80
 Volume=vaultwarden-data.volume:/data:U
 Pull=never

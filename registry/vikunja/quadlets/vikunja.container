@@ -6,7 +6,7 @@ After=network-online.target
 
 [Container]
 ContainerName=vikunja
-Image=docker.io/vikunja/vikunja:2.3.0
+Image=vikunja/vikunja:2.3.0
 Network=vikunja.network
 PublishPort=${RYRA_PORT_HTTP}:3456
 Volume=vikunja-db.volume:/db:U

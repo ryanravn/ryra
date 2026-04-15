@@ -6,7 +6,7 @@ Requires=seafile-mariadb.service seafile-redis.service
 After=seafile-mariadb.service seafile-redis.service
 
 [Container]
-Image=docker.io/seafileltd/seafile-mc:13.0.20
+Image=seafileltd/seafile-mc:13.0.20
 ContainerName=seafile
 Network=seafile.network
 PublishPort=${RYRA_PORT_HTTP}:80

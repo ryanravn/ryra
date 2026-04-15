@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=docker.io/library/postgres:17-alpine
+Image=postgres:17-alpine
 ContainerName=forgejo-postgres
 Network=forgejo.network:alias=postgres
 Volume=forgejo-db-data.volume:/var/lib/postgresql/data:U

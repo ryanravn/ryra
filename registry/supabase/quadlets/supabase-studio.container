@@ -7,7 +7,7 @@ After=supabase-network.service
 
 [Container]
 ContainerName=supabase-studio
-Image=docker.io/supabase/studio:2026.04.08-sha-205cbe7
+Image=supabase/studio:2026.04.08-sha-205cbe7
 Network=supabase.network:alias=studio
 Environment=PORT=3000
 Pull=never

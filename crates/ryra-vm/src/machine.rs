@@ -850,9 +850,15 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
 }
 
 /// Check if an image exists in the shared store.
+///
+/// Tries multiple name variants because quadlets use short names
+/// (e.g. "caddy:2-alpine") but podman stores images with the full
+/// registry prefix (e.g. "docker.io/library/caddy:2-alpine").
 async fn image_exists_in_store(store_dir: &Path, image: &str) -> bool {
-    // Try the full name and the short name (without docker.io/ prefix)
-    for name in [image, strip_docker_io(image)] {
+    let short = strip_docker_io(image);
+    let expanded_library = format!("docker.io/library/{short}");
+    let expanded_org = format!("docker.io/{short}");
+    for name in [image, short, &expanded_library, &expanded_org] {
         let ok = Command::new("podman")
             .args([
                 "--root", &store_dir.display().to_string(),

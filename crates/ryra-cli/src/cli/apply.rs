@@ -50,7 +50,18 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::DaemonReload => run_cmd("systemctl", &["--user", "daemon-reload"]),
-        Step::StartService { unit } => run_cmd("systemctl", &["--user", "start", unit]),
+        Step::StartService { unit } => {
+            // Retry once on failure — the first start after daemon-reload can
+            // fail on some podman versions due to a race in the quadlet
+            // generator's dependency resolution.
+            match run_cmd("systemctl", &["--user", "start", unit]) {
+                Ok(()) => Ok(()),
+                Err(_first_err) => {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    run_cmd("systemctl", &["--user", "start", unit])
+                }
+            }
+        }
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped)
             if let Err(e) = run_cmd("systemctl", &["--user", "stop", unit])
@@ -108,14 +119,23 @@ async fn execute(step: &Step) -> Result<()> {
                 println!("  {image} already available, skipping pull");
                 return Ok(());
             }
-            // Check additional image stores via podman images
+            // Check additional image stores via podman images.
+            // Match both the exact name and docker.io/ expanded forms since
+            // quadlets use short names (e.g. "caddy:2-alpine") but podman
+            // stores them with the full registry prefix.
             let in_additional = Command::new("podman")
                 .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
                 .output()
                 .map(|o| {
+                    let expanded_library = format!("docker.io/library/{image}");
+                    let expanded_org = format!("docker.io/{image}");
                     String::from_utf8_lossy(&o.stdout)
                         .lines()
-                        .any(|line| line == image)
+                        .any(|line| {
+                            line == image
+                                || line == expanded_library
+                                || line == expanded_org
+                        })
                 })
                 .unwrap_or(false);
             if in_additional {

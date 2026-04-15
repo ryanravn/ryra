@@ -6,7 +6,7 @@ Requires=twenty-postgres.service twenty-redis.service
 After=twenty-postgres.service twenty-redis.service
 
 [Container]
-Image=docker.io/twentycrm/twenty:latest
+Image=twentycrm/twenty:latest
 ContainerName=twenty
 Network=twenty.network
 PublishPort=${RYRA_PORT_HTTP}:3000

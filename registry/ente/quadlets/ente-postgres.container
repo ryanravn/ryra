@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=docker.io/library/postgres:15-alpine
+Image=postgres:15-alpine
 ContainerName=ente-postgres
 Network=ente.network:alias=postgres
 Volume=ente-db-data.volume:/var/lib/postgresql/data:U

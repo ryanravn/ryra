@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=docker.io/valkey/valkey:9
+Image=valkey/valkey:9
 ContainerName=immich-valkey
 Network=immich.network:alias=valkey
 HealthCmd=redis-cli ping | grep PONG

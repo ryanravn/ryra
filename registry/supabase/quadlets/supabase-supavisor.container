@@ -7,7 +7,7 @@ After=supabase-db.service
 
 [Container]
 ContainerName=supabase-supavisor
-Image=docker.io/supabase/supavisor:2.7.4
+Image=supabase/supavisor:2.7.4
 Network=supabase.network:alias=supavisor
 PublishPort=${RYRA_PORT_POSTGRES}:5432
 PublishPort=${RYRA_PORT_POOLER}:6543
