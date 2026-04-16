@@ -418,62 +418,87 @@ pub fn add_service(
     // clients connect to Caddy's HTTPS port (via network alias), which requires
     // TLS trust.
     if enable_auth && authelia_installed && caddy_installed && !WellKnownService::Authelia.matches(service_name) && !WellKnownService::Caddy.matches(service_name) {
-        // The CA cert is exported by caddy's ExecStartPost to a well-known path
+        // Create a merged CA bundle: system CAs + caddy's self-signed CA.
+        // Always create the bundle and mount — caddy-root-ca.crt may not
+        // exist yet (caddy is restarted during `ryra add`), but it will be
+        // available by service start time. Services with ExecStartPre
+        // merge-ca-bundle.sh will refresh it before the container starts.
         let ca_cert_host = service_home(WellKnownService::Caddy.as_str())?
             .parent()
             .ok_or_else(|| Error::Bundle("caddy service home has no parent directory".into()))?
             .join("caddy-root-ca.crt");
-        if ca_cert_host.exists() {
-            // Create a merged CA bundle: system CAs + caddy's self-signed CA.
-            // Mounting just the caddy cert would replace ALL system CAs and
-            // break any service that needs to reach the public internet.
-            let service_data = service_home(service_name)?;
-            std::fs::create_dir_all(&service_data).ok();
-            let merged_bundle = service_data.join("ca-bundle.crt");
-            if !merged_bundle.exists() {
-                let mut bundle = String::new();
-                // Try common system CA bundle paths
-                for sys_path in &["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"] {
-                    if let Ok(content) = std::fs::read_to_string(sys_path) {
-                        bundle = content;
-                        break;
-                    }
+        let service_data = service_home(service_name)?;
+        std::fs::create_dir_all(&service_data).ok();
+        let merged_bundle = service_data.join("ca-bundle.crt");
+        if !merged_bundle.exists() {
+            let mut bundle = String::new();
+            // Try common system CA bundle paths
+            for sys_path in &["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"] {
+                if let Ok(content) = std::fs::read_to_string(sys_path) {
+                    bundle = content;
+                    break;
                 }
-                // Append caddy's CA
-                if let Ok(caddy_ca) = std::fs::read_to_string(&ca_cert_host) {
-                    bundle.push_str("\n# ryra-caddy-ca\n");
-                    bundle.push_str(&caddy_ca);
-                }
-                std::fs::write(&merged_bundle, &bundle).ok();
             }
-            // Mount the merged bundle as the system CA store
-            // :z relabels for SELinux (shared across containers).
-            extra_volumes.push(format!(
-                "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
-                merged_bundle.display()
-            ));
-            // Python (requests/certifi) and Node.js don't use the system CA
-            // bundle — they need explicit env vars to find the cert.
-            extra_env.insert(
-                "REQUESTS_CA_BUNDLE".into(),
-                "/etc/ssl/certs/ca-certificates.crt".into(),
+            // Append caddy's CA if available
+            if let Ok(caddy_ca) = std::fs::read_to_string(&ca_cert_host) {
+                bundle.push_str("\n# ryra-caddy-ca\n");
+                bundle.push_str(&caddy_ca);
+            }
+            std::fs::write(&merged_bundle, &bundle).ok();
+        }
+        // Mount the merged bundle as the system CA store
+        // :z relabels for SELinux (shared across containers).
+        extra_volumes.push(format!(
+            "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
+            merged_bundle.display()
+        ));
+        // Python (requests/certifi) and Node.js don't use the system CA
+        // bundle — they need explicit env vars to find the cert.
+        extra_env.insert(
+            "REQUESTS_CA_BUNDLE".into(),
+            "/etc/ssl/certs/ca-certificates.crt".into(),
+        );
+        extra_env.insert(
+            "SSL_CERT_FILE".into(),
+            "/etc/ssl/certs/ca-certificates.crt".into(),
+        );
+        extra_env.insert(
+            "NODE_EXTRA_CA_CERTS".into(),
+            "/etc/ssl/certs/ca-certificates.crt".into(),
+        );
+
+        // Create a refresh-ca-bundle.sh script that rebuilds the merged CA
+        // bundle at service start time. This ensures caddy's self-signed CA
+        // is included even if it wasn't available during `ryra add`.
+        let service_data = service_home(service_name)?;
+        std::fs::create_dir_all(&service_data).ok();
+        let refresh_ca_script = service_data.join("refresh-ca-bundle.sh");
+        {
+            let script = format!(
+                "#!/bin/bash\n\
+                 CADDY_CA=\"{ryra_dir}/caddy-root-ca.crt\"\n\
+                 MERGED=\"{service_data}/ca-bundle.crt\"\n\
+                 [ -f \"$CADDY_CA\" ] || exit 0\n\
+                 for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do\n\
+                   if [ -f \"$f\" ]; then cp \"$f\" \"$MERGED\"; break; fi\n\
+                 done\n\
+                 cat \"$CADDY_CA\" >> \"$MERGED\" 2>/dev/null || true\n\
+                 exit 0\n",
+                ryra_dir = service_data.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+                service_data = service_data.display(),
             );
-            extra_env.insert(
-                "SSL_CERT_FILE".into(),
-                "/etc/ssl/certs/ca-certificates.crt".into(),
-            );
-            extra_env.insert(
-                "NODE_EXTRA_CA_CERTS".into(),
-                "/etc/ssl/certs/ca-certificates.crt".into(),
-            );
+            std::fs::write(&refresh_ca_script, &script).ok();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&refresh_ca_script, std::fs::Permissions::from_mode(0o755)).ok();
+            }
         }
 
         // Create a resolve-auth-host.sh script that dynamically resolves
         // caddy's IP at service start time and writes an /etc/hosts override.
         // This is needed because .localhost domains resolve to 127.0.0.1
         // inside containers (RFC 6761), and caddy's IP changes on restart.
-        let service_data = service_home(service_name)?;
-        std::fs::create_dir_all(&service_data).ok();
         let auth_host_script = service_data.join("resolve-auth-host.sh");
         if let Some(auth_service) = config.services.iter().find(|s| WellKnownService::Authelia.matches(&s.name)) {
             if let Some(ref auth_url) = auth_service.url {
@@ -560,8 +585,16 @@ pub fn add_service(
         })
         .collect();
 
-    // Collect ExecStartPre commands for auth host resolution
+    // Collect ExecStartPre commands for auth scripts
     let mut extra_exec_start_pre: Vec<String> = Vec::new();
+    let refresh_ca = service_home(service_name)
+        .ok()
+        .map(|d| d.join("refresh-ca-bundle.sh"));
+    if let Some(ref script) = refresh_ca {
+        if script.exists() {
+            extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
+        }
+    }
     let auth_host_script = service_home(service_name)
         .ok()
         .map(|d| d.join("resolve-auth-host.sh"));
