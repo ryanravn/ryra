@@ -131,6 +131,8 @@ pub enum Step {
     RemoveVolume { name: String },
     /// Create a directory (with parents).
     CreateDir(PathBuf),
+    /// Wait for a file to appear (with timeout).
+    WaitForFile { path: PathBuf, timeout_secs: u32 },
 }
 
 impl Step {
@@ -151,6 +153,9 @@ impl Step {
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
             Step::RemoveVolume { name } => format!("podman volume rm {name}"),
+            Step::WaitForFile { path, timeout_secs } => {
+                format!("wait for {} (up to {timeout_secs}s)", path.display())
+            }
         }
     }
 }

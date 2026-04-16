@@ -164,6 +164,17 @@ async fn execute(step: &Step) -> Result<()> {
         }
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
+        Step::WaitForFile { path, timeout_secs } => {
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(*timeout_secs as u64);
+            while !path.exists() {
+                if std::time::Instant::now() > deadline {
+                    anyhow::bail!("timed out waiting for {}", path.display());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Ok(())
+        }
     }
 }
 

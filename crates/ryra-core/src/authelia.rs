@@ -262,6 +262,18 @@ pub fn register_oidc_client(
                 steps.push(Step::RestartService {
                     unit: "caddy".to_string(),
                 });
+                // Wait for caddy's ExecStartPost to export the CA cert.
+                // The cert is needed by add_service to create the merged CA bundle
+                // for OIDC services. systemctl restart returns after ExecStart but
+                // before ExecStartPost completes.
+                let ca_path = crate::service_home("caddy")?
+                    .parent()
+                    .map(|p| p.join("caddy-root-ca.crt"))
+                    .unwrap_or_default();
+                steps.push(Step::WaitForFile {
+                    path: ca_path,
+                    timeout_secs: 15,
+                });
             }
         }
     }
