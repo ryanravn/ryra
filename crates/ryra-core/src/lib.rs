@@ -1,3 +1,4 @@
+pub mod auth_bridge;
 pub mod authelia;
 pub mod caddy;
 pub mod config;
@@ -406,9 +407,6 @@ pub fn add_service(
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
-    let mut extra_volumes = Vec::new();
-    let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
-
     let authelia_installed = config
         .services
         .iter()
@@ -418,146 +416,21 @@ pub fn add_service(
         .iter()
         .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
 
-    // When auth is enabled and Caddy handles TLS, mount the Caddy root CA cert
-    // into service containers so they trust the self-signed HTTPS cert. OIDC
-    // clients connect to Caddy's HTTPS port (via network alias), which requires
-    // TLS trust.
-    if enable_auth
-        && authelia_installed
-        && caddy_installed
-        && !WellKnownService::Authelia.matches(service_name)
-        && !WellKnownService::Caddy.matches(service_name)
-    {
-        // Create a merged CA bundle: system CAs + caddy's self-signed CA.
-        // Always create the bundle and mount — caddy-root-ca.crt may not
-        // exist yet (caddy is restarted during `ryra add`), but it will be
-        // available by service start time. Services with ExecStartPre
-        // merge-ca-bundle.sh will refresh it before the container starts.
-        let ca_cert_host = service_home(WellKnownService::Caddy.as_str())?
-            .parent()
-            .ok_or_else(|| Error::Bundle("caddy service home has no parent directory".into()))?
-            .join("caddy-root-ca.crt");
-        let service_data = service_home(service_name)?;
-        std::fs::create_dir_all(&service_data).ok();
-        let merged_bundle = service_data.join("ca-bundle.crt");
-        if !merged_bundle.exists() {
-            let mut bundle = String::new();
-            // Try common system CA bundle paths
-            for sys_path in &[
-                "/etc/ssl/certs/ca-certificates.crt",
-                "/etc/pki/tls/certs/ca-bundle.crt",
-            ] {
-                if let Ok(content) = std::fs::read_to_string(sys_path) {
-                    bundle = content;
-                    break;
-                }
-            }
-            // Append caddy's CA if available
-            if let Ok(caddy_ca) = std::fs::read_to_string(&ca_cert_host) {
-                bundle.push_str("\n# ryra-caddy-ca\n");
-                bundle.push_str(&caddy_ca);
-            }
-            std::fs::write(&merged_bundle, &bundle).ok();
-        }
-        // Mount the merged bundle as the system CA store
-        // :z relabels for SELinux (shared across containers).
-        extra_volumes.push(format!(
-            "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
-            merged_bundle.display()
-        ));
-        // Python (requests/certifi) and Node.js don't use the system CA
-        // bundle — they need explicit env vars to find the cert.
-        extra_env.insert(
-            "REQUESTS_CA_BUNDLE".into(),
-            "/etc/ssl/certs/ca-certificates.crt".into(),
-        );
-        extra_env.insert(
-            "SSL_CERT_FILE".into(),
-            "/etc/ssl/certs/ca-certificates.crt".into(),
-        );
-        extra_env.insert(
-            "NODE_EXTRA_CA_CERTS".into(),
-            "/etc/ssl/certs/ca-certificates.crt".into(),
-        );
+    // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
+    // auth provider's .localhost domain). Pure — all filesystem writes are
+    // emitted as Step::WriteFile below, not performed here.
+    let auth_bridge = auth_bridge::build(&auth_bridge::AuthBridgeParams {
+        service_name,
+        enable_auth,
+        config: &config,
+        service_data: &home_dir,
+    })?;
 
-        // Create a refresh-ca-bundle.sh script that rebuilds the merged CA
-        // bundle at service start time. This ensures caddy's self-signed CA
-        // is included even if it wasn't available during `ryra add`.
-        let service_data = service_home(service_name)?;
-        std::fs::create_dir_all(&service_data).ok();
-        let refresh_ca_script = service_data.join("refresh-ca-bundle.sh");
-        {
-            let script = format!(
-                "#!/bin/bash\n\
-                 CADDY_CA=\"{ryra_dir}/caddy-root-ca.crt\"\n\
-                 MERGED=\"{service_data}/ca-bundle.crt\"\n\
-                 [ -f \"$CADDY_CA\" ] || exit 0\n\
-                 for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do\n\
-                   if [ -f \"$f\" ]; then cp \"$f\" \"$MERGED\"; break; fi\n\
-                 done\n\
-                 cat \"$CADDY_CA\" >> \"$MERGED\" 2>/dev/null || true\n\
-                 exit 0\n",
-                ryra_dir = service_data
-                    .parent()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                service_data = service_data.display(),
-            );
-            std::fs::write(&refresh_ca_script, &script).ok();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(
-                    &refresh_ca_script,
-                    std::fs::Permissions::from_mode(0o755),
-                )
-                .ok();
-            }
-        }
+    let (extra_volumes, extra_env, extra_exec_start_pre, auth_bridge_steps) = match auth_bridge {
+        Some(b) => (b.volumes, b.env, b.exec_start_pre, b.steps),
+        None => (Vec::new(), BTreeMap::new(), Vec::new(), Vec::new()),
+    };
 
-        // Create a resolve-auth-host.sh script that dynamically resolves
-        // caddy's IP at service start time and writes an /etc/hosts override.
-        // This is needed because .localhost domains resolve to 127.0.0.1
-        // inside containers (RFC 6761), and caddy's IP changes on restart.
-        let auth_host_script = service_data.join("resolve-auth-host.sh");
-        if let Some(auth_service) = config
-            .services
-            .iter()
-            .find(|s| WellKnownService::Authelia.matches(&s.name))
-            && let Some(ref auth_url) = auth_service.url
-            && let Ok(parsed) = url::Url::parse(auth_url)
-            && let Some(host) = parsed.host_str()
-        {
-            let script = format!(
-                "#!/bin/bash\n\
-                 # Resolve caddy's current IP for .localhost auth domains\n\
-                 HOSTS=\"{service_data}/auth-hosts.txt\"\n\
-                 CADDY_IP=$(podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
-                 if [ -n \"$CADDY_IP\" ]; then\n\
-                   echo \"$CADDY_IP {host}\" > \"$HOSTS\"\n\
-                 else\n\
-                   echo \"127.0.0.1 {host}\" > \"$HOSTS\"\n\
-                 fi\n\
-                 exit 0\n",
-                service_data = service_data.display(),
-                host = host,
-            );
-            std::fs::write(&auth_host_script, &script).ok();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&auth_host_script, std::fs::Permissions::from_mode(0o755))
-                    .ok();
-            }
-            // Create placeholder hosts file for Volume= mount
-            let auth_hosts = service_data.join("auth-hosts.txt");
-            if !auth_hosts.exists() {
-                std::fs::write(&auth_hosts, format!("127.0.0.1 {host}\n")).ok();
-            }
-            // Mount the dynamic hosts file
-            extra_volumes.push(format!("{}:/etc/hosts:z", auth_hosts.display()));
-        }
-    }
     let has_smtp = reg_service.def.integrations.smtp
         && !reg_service.def.mappings.smtp.is_empty()
         && config.smtp.is_some();
@@ -583,13 +456,6 @@ pub fn add_service(
 
     let podman_args: Vec<String> = Vec::new();
 
-    // Note: .localhost auth domains (e.g. auth.localhost) can't be resolved
-    // inside containers — RFC 6761 hardcodes them to 127.0.0.1. The caddy
-    // container's IP is dynamic and changes on restart, so we can't use
-    // static --add-host. Instead, auth-enabled services get a shared
-    // resolve-auth-host.sh ExecStartPre script that dynamically resolves
-    // caddy's current IP at service start time.
-
     // Build port variable expansions for quadlet PublishPort directives
     let port_vars: Vec<(String, String)> = reg_service
         .def
@@ -603,25 +469,6 @@ pub fn add_service(
             )
         })
         .collect();
-
-    // Collect ExecStartPre commands for auth scripts
-    let mut extra_exec_start_pre: Vec<String> = Vec::new();
-    let refresh_ca = service_home(service_name)
-        .ok()
-        .map(|d| d.join("refresh-ca-bundle.sh"));
-    if let Some(ref script) = refresh_ca
-        && script.exists()
-    {
-        extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
-    }
-    let auth_host_script = service_home(service_name)
-        .ok()
-        .map(|d| d.join("resolve-auth-host.sh"));
-    if let Some(ref script) = auth_host_script
-        && script.exists()
-    {
-        extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
-    }
 
     // Process quadlet bundle from registry
     let bundle =
@@ -694,7 +541,12 @@ pub fn add_service(
         steps.push(Step::CreateDir(dir.clone()));
     }
 
-    // 7. Register OIDC client with the auth provider BEFORE starting the service.
+    // 7. Auth-bridge artifacts (CA bundle, refresh script, host-resolve script,
+    // placeholder /etc/hosts) — needed before container starts for TLS trust
+    // and .localhost auth-domain resolution.
+    steps.extend(auth_bridge_steps);
+
+    // 8. Register OIDC client with the auth provider BEFORE starting the service.
     // This must happen first because the service's ExecStartPost (e.g., register-oidc.sh)
     // needs the auth provider configured and caddy's network alias in place so OIDC
     // discovery URLs resolve correctly from within the service container.
@@ -713,7 +565,7 @@ pub fn add_service(
         )?);
     }
 
-    // 8. Add Caddy route for services with a URL when Caddy is installed.
+    // 9. Add Caddy route for services with a URL when Caddy is installed.
     // This creates a reverse proxy from the service's domain to its container port.
     if let Some(url) = url
         && caddy_installed
@@ -748,7 +600,7 @@ pub fn add_service(
         steps.push(Step::ReloadCaddy);
     }
 
-    // 9. Reload and start via systemd
+    // 10. Reload and start via systemd
     steps.push(Step::DaemonReload);
     // Start — dependencies start automatically via Requires=/After= in the quadlet
     steps.push(Step::StartService {
