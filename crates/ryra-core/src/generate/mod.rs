@@ -89,7 +89,11 @@ fn build_env_file(
     let mut lines = Vec::new();
 
     for env in rendered_env {
-        lines.push(format!("{}={}", env.name, shell_escape(&env.value)));
+        // Write raw KEY=VALUE for podman --env-file. Podman does NOT strip
+        // quotes (single or double), so any shell-style quoting ends up as
+        // literal characters in the container. Tests that source the .env
+        // must stick to values that survive unquoted bash parsing.
+        lines.push(format!("{}={}", env.name, env.value));
     }
 
     // Expose service home path so scripts can reference it
@@ -182,77 +186,6 @@ fn render_env_vars(
     Ok(rendered)
 }
 
-/// Shell-escape a value for use in a `.env` file sourced via `set -a && . .env`.
-///
-/// Simple values (alphanumeric + common safe chars) are left unquoted.
-/// Everything else is single-quoted with internal `'` escaped as `'\''`.
-fn shell_escape(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    // Safe chars that don't need quoting in a shell .env assignment
-    let needs_quoting = value
-        .bytes()
-        .any(|b| !b.is_ascii_alphanumeric() && !b"_-./:@+,".contains(&b));
-    if !needs_quoting {
-        return value.to_string();
-    }
-    // Single-quote the value, escaping embedded single quotes
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            // End current quote, add escaped quote, restart quote
-            escaped.push_str("'\\''");
-        } else {
-            escaped.push(ch);
-        }
-    }
-    escaped.push('\'');
-    escaped
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shell_escape_empty() {
-        assert_eq!(shell_escape(""), "''");
-    }
-
-    #[test]
-    fn shell_escape_simple() {
-        assert_eq!(shell_escape("hello"), "hello");
-        assert_eq!(shell_escape("abc123"), "abc123");
-        assert_eq!(shell_escape("http://localhost:8080"), "http://localhost:8080");
-    }
-
-    #[test]
-    fn shell_escape_with_spaces() {
-        assert_eq!(shell_escape("hello world"), "'hello world'");
-    }
-
-    #[test]
-    fn shell_escape_with_dollar() {
-        assert_eq!(shell_escape("$HOME"), "'$HOME'");
-    }
-
-    #[test]
-    fn shell_escape_with_single_quote() {
-        assert_eq!(shell_escape("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn shell_escape_with_double_quote() {
-        assert_eq!(shell_escape("say \"hi\""), "'say \"hi\"'");
-    }
-
-    #[test]
-    fn shell_escape_safe_chars_unquoted() {
-        assert_eq!(shell_escape("a-b_c.d/e:f@g+h,i"), "a-b_c.d/e:f@g+h,i");
-    }
-}
 
 pub fn extract_secret_refs(value: &str) -> Vec<String> {
     let mut secrets = Vec::new();
