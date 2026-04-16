@@ -894,57 +894,14 @@ fn sanitize_image_name(image: &str) -> String {
 
 /// Make host container images available in the VM via shared store.
 ///
-/// Mounts the host's shared overlay store (via 9p virtfs) and configures
-/// podman's `additionalimagestores` to read from it. All pre-cached
-/// images become available instantly — no per-image `podman load`.
+/// The snapshot already has storage.conf (additionalimagestores), registries.conf,
+/// and the 9p mount configured. This function just verifies the mount is up
+/// (it should be from the snapshot, but re-mounts if needed after cold boot).
 pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
-    // Mount the shared store (9p virtfs configured in Machine::spawn).
-    // Use mountpoint check to handle snapshot-restored VMs where /mnt/images
-    // may already be mounted from the snapshot state.
     machine
-        .exec("mkdir -p /mnt/images && mountpoint -q /mnt/images || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
+        .exec("mountpoint -q /mnt/images 2>/dev/null || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
         .await
-        .context("failed to mount 9p shared image store in VM")?;
-
-    // Configure podman to use the mounted store as a read-only image source.
-    // The default /usr/share/containers/storage.conf already sets
-    // additionalimagestores = [] — drop-in files can't override an
-    // already-set key, so we copy and patch the config at /etc/ level.
-    machine
-        .exec(
-            "cp /usr/share/containers/storage.conf /etc/containers/storage.conf && \
-             sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' \
-             /etc/containers/storage.conf",
-        )
-        .await
-        .context("failed to configure additionalimagestores in VM")?;
-
-    // Clean up stale state from the snapshot. The snapshot preserves systemd
-    // service state (e.g. quadlet-generated network services as "active (exited)")
-    // and podman networks. Without cleanup, new quadlets may fail because:
-    // - systemd skips re-running "active" services (stale network not recreated)
-    // - stale networks have different names than current quadlet generator produces
-    machine
-        .exec(
-            "systemctl --user stop '*-network.service' 2>/dev/null; \
-             podman network prune -f 2>/dev/null; \
-             systemctl --user reset-failed 2>/dev/null; \
-             systemctl --user daemon-reload",
-        )
-        .await
-        .context("failed to reset stale VM state")?;
-
-    // Ensure docker.io resolves correctly. The docker.io domain now points
-    // to podman.io via DNS, which breaks image pulls and quadlet generation.
-    // Setting unqualified-search-registries tells podman to use docker.io's
-    // actual registry endpoint (registry-1.docker.io) for docker.io/ images.
-    machine
-        .exec(
-            "printf 'unqualified-search-registries = [\"docker.io\"]\\n' \
-             > /etc/containers/registries.conf",
-        )
-        .await
-        .context("failed to configure registries in VM")?;
+        .context("failed to verify 9p image store mount in VM")?;
 
     Ok(())
 }

@@ -977,6 +977,30 @@ async fn create_snapshot(
         .status()
         .await;
 
+    // Configure the VM before snapshotting so every restored VM starts clean.
+    // This avoids stale state issues — storage.conf, registries.conf, and the
+    // 9p mount are all baked into the snapshot.
+    let setup_cmd = "\
+        mkdir -p /mnt/images && mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images; \
+        cp /usr/share/containers/storage.conf /etc/containers/storage.conf && \
+        sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' /etc/containers/storage.conf; \
+        printf 'unqualified-search-registries = [\"docker.io\"]\\n' > /etc/containers/registries.conf; \
+        systemctl --user daemon-reload";
+    let _ = Command::new("ssh")
+        .args([
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", "BatchMode=yes",
+            "-i", &ssh_key_path.to_string_lossy(),
+            "-p", &port_str,
+            "root@127.0.0.1", setup_cmd,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+
     // Save snapshot via HMP monitor using socat
     let socat_result = std::process::Command::new("socat")
         .args([
