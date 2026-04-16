@@ -189,12 +189,12 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
             Ok(prefix) => prefix,
             Err(e) => {
                 failed = true;
-                events.push(Event {
-                    description: "source service env vars".to_string(),
-                    kind: EventKind::Step,
-                    outcome: Outcome::Failed(format!("{e:#}")),
-                    duration: Duration::ZERO,
-                });
+                events.push(Event::bare(
+                    "source service env vars".to_string(),
+                    EventKind::Step,
+                    Outcome::Failed(format!("{e:#}")),
+                    Duration::ZERO,
+                ));
                 String::new()
             }
         }
@@ -205,12 +205,12 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
     // Run each test command
     for test_entry in test.tests() {
         if failed {
-            events.push(Event {
-                description: format!("test: {}", test_entry.name),
-                kind: EventKind::Assertion,
-                outcome: Outcome::Skipped,
-                duration: Duration::ZERO,
-            });
+            events.push(Event::bare(
+                format!("test: {}", test_entry.name),
+                EventKind::Assertion,
+                Outcome::Skipped,
+                Duration::ZERO,
+            ));
             println!("[{name}]   skip  {}", test_entry.name);
             continue;
         }
@@ -282,12 +282,12 @@ async fn run_test_entry(vm: &dyn Executor, entry: &TestEntry, env_prefix: &str) 
         Err(_) => Outcome::Failed(format!("timed out after {}s", entry.timeout_secs)),
     };
 
-    Event {
-        description: format!("test: {}", entry.name),
-        kind: EventKind::Assertion,
+    Event::bare(
+        format!("test: {}", entry.name),
+        EventKind::Assertion,
         outcome,
-        duration: t.elapsed(),
-    }
+        t.elapsed(),
+    )
 }
 
 /// Build a shell snippet that sources all relevant .env files.
@@ -348,12 +348,12 @@ async fn wait_for_service_with_timeout(
         Err(e) => Outcome::Failed(format!("service didn't start: {e:#}")),
     };
 
-    Event {
-        description: format!("wait for {service}"),
-        kind: EventKind::Step,
+    Event::bare(
+        format!("wait for {service}"),
+        EventKind::Step,
         outcome,
-        duration: t.elapsed(),
-    }
+        t.elapsed(),
+    )
 }
 
 /// Escape a value for embedding inside a single-quoted shell string.
@@ -429,12 +429,12 @@ async fn run_browser_step(
         Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
     };
 
-    Event {
-        description: format!("browser: {step_name}"),
-        kind: EventKind::Assertion,
+    Event::bare(
+        format!("browser: {step_name}"),
+        EventKind::Assertion,
         outcome,
-        duration: t.elapsed(),
-    }
+        t.elapsed(),
+    )
 }
 
 /// Execute a lifecycle test — interleaved actions and assertions.
@@ -481,12 +481,12 @@ pub async fn run_lifecycle_test(
 
         if failed {
             let desc = step.step_name();
-            events.push(Event {
-                description: desc.clone(),
-                kind: EventKind::Step,
-                outcome: Outcome::Skipped,
-                duration: Duration::ZERO,
-            });
+            events.push(Event::bare(
+                desc.clone(),
+                EventKind::Step,
+                Outcome::Skipped,
+                Duration::ZERO,
+            ));
             println!("{p}  skip  {desc}");
             continue;
         }
@@ -689,12 +689,14 @@ async fn run_step_with_poll(
                 let result = tokio::time::timeout(timeout, vm.exec(cmd)).await;
 
                 match result {
-                    Ok(Ok(_)) => {
+                    Ok(Ok(out)) => {
                         return Event {
                             description: format!("run: {step_name}"),
                             kind: EventKind::Step,
                             outcome: Outcome::Passed,
                             duration: t.elapsed(),
+                            stdout: out.stdout,
+                            stderr: out.stderr,
                         };
                     }
                     Ok(Err(e)) => {
@@ -710,15 +712,15 @@ async fn run_step_with_poll(
                 }
             }
 
-            Event {
-                description: format!("run: {step_name}"),
-                kind: EventKind::Step,
-                outcome: Outcome::Failed(format!(
+            Event::bare(
+                format!("run: {step_name}"),
+                EventKind::Step,
+                Outcome::Failed(format!(
                     "failed after {} attempts (interval={}s): {last_err}",
                     poll_cfg.attempts, poll_cfg.interval
                 )),
-                duration: t.elapsed(),
-            }
+                t.elapsed(),
+            )
         }
     }
 }
@@ -737,24 +739,24 @@ async fn wait_for_port(vm: &dyn Executor, test_name: &str, port: &str) -> Event 
     loop {
         let cmd = format!("bash -c 'echo > /dev/tcp/127.0.0.1/{port}' 2>/dev/null");
         if vm.exec(&cmd).await.is_ok() {
-            return Event {
-                description: format!("port {port} ready"),
-                kind: EventKind::Step,
-                outcome: Outcome::Passed,
-                duration: t.elapsed(),
-            };
+            return Event::bare(
+                format!("port {port} ready"),
+                EventKind::Step,
+                Outcome::Passed,
+                t.elapsed(),
+            );
         }
 
         if t.elapsed() > timeout {
-            return Event {
-                description: format!("port {port} ready"),
-                kind: EventKind::Step,
-                outcome: Outcome::Failed(format!(
+            return Event::bare(
+                format!("port {port} ready"),
+                EventKind::Step,
+                Outcome::Failed(format!(
                     "port {port} not responding after {}s",
                     timeout.as_secs()
                 )),
-                duration: t.elapsed(),
-            };
+                t.elapsed(),
+            );
         }
 
         if last_log.elapsed().as_secs() >= 10 {
@@ -848,10 +850,14 @@ async fn run_event_streaming(
     let timeout = Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, vm.exec_streaming(cmd, test_name)).await;
 
-    let outcome = match result {
-        Ok(Ok(_)) => Outcome::Passed,
-        Ok(Err(e)) => Outcome::Failed(format!("{e:#}")),
-        Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
+    let (outcome, stdout, stderr) = match result {
+        Ok(Ok(out)) => (Outcome::Passed, out.stdout, out.stderr),
+        Ok(Err(e)) => (Outcome::Failed(format!("{e:#}")), String::new(), String::new()),
+        Err(_) => (
+            Outcome::Failed(format!("timed out after {timeout_secs}s")),
+            String::new(),
+            String::new(),
+        ),
     };
 
     Event {
@@ -859,6 +865,8 @@ async fn run_event_streaming(
         kind,
         outcome,
         duration: t.elapsed(),
+        stdout,
+        stderr,
     }
 }
 
@@ -868,10 +876,14 @@ async fn run_event(vm: &dyn Executor, kind: EventKind, cmd: &str, timeout_secs: 
     let timeout = Duration::from_secs(timeout_secs);
     let result = tokio::time::timeout(timeout, vm.exec(cmd)).await;
 
-    let outcome = match result {
-        Ok(Ok(_)) => Outcome::Passed,
-        Ok(Err(e)) => Outcome::Failed(format!("{e:#}")),
-        Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
+    let (outcome, stdout, stderr) = match result {
+        Ok(Ok(out)) => (Outcome::Passed, out.stdout, out.stderr),
+        Ok(Err(e)) => (Outcome::Failed(format!("{e:#}")), String::new(), String::new()),
+        Err(_) => (
+            Outcome::Failed(format!("timed out after {timeout_secs}s")),
+            String::new(),
+            String::new(),
+        ),
     };
 
     Event {
@@ -879,5 +891,7 @@ async fn run_event(vm: &dyn Executor, kind: EventKind, cmd: &str, timeout_secs: 
         kind,
         outcome,
         duration: t.elapsed(),
+        stdout,
+        stderr,
     }
 }

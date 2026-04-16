@@ -19,6 +19,26 @@ pub struct Event {
     pub kind: EventKind,
     pub outcome: Outcome,
     pub duration: Duration,
+    /// Captured stdout from the step. Empty on failure (the error message
+    /// already embeds it) and for non-command events (waits, assertions).
+    pub stdout: String,
+    /// Captured stderr from the step. Same rules as stdout.
+    pub stderr: String,
+}
+
+impl Event {
+    /// Event with no captured output — for wait/service-status checks that
+    /// don't run a shell command.
+    pub fn bare(description: String, kind: EventKind, outcome: Outcome, duration: Duration) -> Self {
+        Self {
+            description,
+            kind,
+            outcome,
+            duration,
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,8 +113,28 @@ impl fmt::Display for ScenarioResult {
                 write!(f, "\n         {msg}")?;
             }
             writeln!(f)?;
+
+            // Emit captured stdout/stderr verbatim, indented. On failure the
+            // error message already embeds them, so we only render here when
+            // the step passed.
+            if matches!(event.outcome, Outcome::Passed) {
+                render_output(f, "stdout", &event.stdout)?;
+                render_output(f, "stderr", &event.stderr)?;
+            }
         }
 
         Ok(())
     }
+}
+
+fn render_output(f: &mut fmt::Formatter<'_>, label: &str, text: &str) -> fmt::Result {
+    let trimmed = text.trim_end_matches('\n');
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    writeln!(f, "         [{label}]")?;
+    for line in trimmed.lines() {
+        writeln!(f, "         | {line}")?;
+    }
+    Ok(())
 }

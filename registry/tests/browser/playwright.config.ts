@@ -7,6 +7,7 @@ export default defineConfig({
   use: {
     headless: true,
     ignoreHTTPSErrors: true,
+    trace: "on",
     launchOptions: {
       args: ["--ignore-certificate-errors"],
     },
