@@ -1,0 +1,77 @@
+[service]
+name = "synapse"
+description = "Matrix homeserver (Synapse) + Element web client"
+url = "https://element-hq.github.io/synapse/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 1024
+recommended = 2048
+
+[[ports]]
+name = "http"
+# The user-facing container is Element's nginx which serves on 8080 under
+# rootless podman (can't bind :80 without privileges). Caddy targets this
+# via the service name.
+container_port = 8080
+
+# Note: UID=0 / GID=0 for the synapse container live in its quadlet as
+# Environment= directives, not here — putting UID in .env clashes with
+# bash's readonly $UID when test steps source the file.
+
+# --- Server identity ---
+
+[[env]]
+name = "SYNAPSE_SERVER_NAME"
+value = "{{ service.domain | default('localhost')}}"
+
+[[env]]
+name = "SYNAPSE_PUBLIC_BASEURL"
+value = "{{ service.external_url}}"
+
+[[env]]
+name = "SERVICE_EXTERNAL_URL"
+value = "{{ service.external_url}}"
+
+# --- Postgres (sidecar) ---
+
+[[env]]
+name = "POSTGRES_DB"
+value = "synapse"
+
+[[env]]
+name = "POSTGRES_USER"
+value = "synapse"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+# --- Synapse crypto / auth secrets ---
+
+[[env]]
+name = "SYNAPSE_REGISTRATION_SHARED_SECRET"
+value = "{{secret.registration_secret}}"
+
+[[env]]
+name = "SYNAPSE_MACAROON_SECRET"
+value = "{{secret.macaroon_secret}}"
+
+[[env]]
+name = "SYNAPSE_FORM_SECRET"
+value = "{{secret.form_secret}}"
+
+[integrations]
+auth = ["oidc"]
+oidc_callbacks = ["/_synapse/client/oidc/callback"]
+smtp = false
+
+[mappings.auth]
+# Trigger config-render overlay and make credentials available to
+# render-config.sh which assembles /data/conf.d/oidc.yaml.
+OAUTH_CLIENT_ID = "{{ auth.client_id}}"
+OAUTH_CLIENT_SECRET = "{{ auth.client_secret}}"
+# Synapse validates the `iss` claim in tokens against this URL. Authelia
+# advertises its external (HTTPS) URL as the issuer, so we must use that —
+# the auth-bridge makes it reachable from within the synapse container.
+AUTH_EXTERNAL_URL = "{{ auth.external_url}}"

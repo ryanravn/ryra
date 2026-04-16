@@ -1,0 +1,67 @@
+[test]
+name = "synapse-auth-browser"
+browser = true
+
+# Install caddy (reverse proxy, TLS)
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Install authelia with .localhost domain (resolves to 127.0.0.1 via RFC 6761)
+[[steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+# Install synapse with OIDC auth. --url gives the element/homeserver hostname.
+[[steps]]
+action = "add"
+service = "synapse"
+args = "--auth --url https://chat.localhost:8443"
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "synapse"
+
+# Element responds through Caddy.
+[[steps]]
+action = "http"
+name = "element-responds"
+url = "https://chat.localhost:8443"
+service = "synapse"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+
+# Synapse advertises OIDC in its login flows (confirms our oidc.yaml overlay
+# got rendered and loaded). Poll — the homeserver container keeps coming
+# online a few seconds after Element's nginx starts serving.
+[[steps]]
+action = "shell"
+name = "oidc-advertised"
+run = """for i in $(seq 1 45); do
+  curl -skL https://chat.localhost:8443/_matrix/client/v3/login 2>/dev/null | grep -q 'oidc-authelia' && exit 0
+  sleep 2
+done
+echo "OIDC not advertised after 90s"
+curl -skL https://chat.localhost:8443/_matrix/client/v3/login || true
+exit 1"""
+timeout = 120
+
+# Full SSO browser flow.
+[[steps]]
+action = "playwright"
+name = "playwright-auth-flow"
+spec = "synapse-auth.spec.ts"
+timeout = 180
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123", SYNAPSE_URL = "https://chat.localhost:8443" }

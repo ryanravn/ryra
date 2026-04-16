@@ -1,0 +1,43 @@
+[Unit]
+Description=Synapse — Element web UI with Matrix API path-route
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=synapse-homeserver.service synapse-db.service
+After=synapse-homeserver.service
+
+[Container]
+# The user-facing container of this service is the Element SPA fronted by
+# nginx, which path-routes /_matrix and /_synapse traffic to the homeserver
+# over the internal podman network. ContainerName=synapse so ryra's Caddy
+# integration (which targets the service's name) hits this container.
+Image=docker.io/vectorim/element-web:latest
+ContainerName=synapse
+Network=synapse.network
+PublishPort=${RYRA_PORT_HTTP}:8080
+# Custom nginx config serves Element static files AND path-routes /_matrix and
+# /_synapse to the homeserver container, so the browser sees a single origin.
+# Mounted as the nginx-docker template so the image's entrypoint can envsubst
+# it into /etc/nginx/conf.d/default.conf — mounting over that path directly
+# fails because the entrypoint insists on rewriting it. Our template uses
+# bare `$host` nginx variables, not `${VAR}`, so envsubst leaves them alone.
+Volume=%h/.local/share/ryra/synapse/configs/element-nginx.conf:/etc/nginx/templates/default.conf.template:ro,Z
+# Element's SPA loads /config.json on page load. Rendered by ExecStartPre
+# below since it needs the published port or the --domain URL.
+Volume=%h/.local/share/ryra/synapse/configs/config.json:/app/config.json:ro,Z
+EnvironmentFile=%h/.local/share/ryra/synapse/.env
+HealthCmd=wget -qO- http://localhost:8080 >/dev/null || exit 1
+HealthStartPeriod=10s
+HealthInterval=15s
+HealthRetries=5
+HealthTimeout=5s
+Pull=missing
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/synapse/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+ExecStartPre=/bin/bash %h/.local/share/ryra/synapse/configs/scripts/render-element-config.sh
+
+[Install]
+WantedBy=default.target

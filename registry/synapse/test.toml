@@ -1,0 +1,43 @@
+[[steps]]
+action = "add"
+service = "synapse"
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "synapse"
+
+# Element responds on the published port
+[[steps]]
+action = "http"
+name = "element-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "synapse"
+poll = { interval = 2, attempts = 45 }
+timeout = 120
+
+# Synapse responds through Element's nginx /_matrix path route
+[[steps]]
+action = "http"
+name = "synapse-client-versions"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/_matrix/client/versions"
+service = "synapse"
+poll = { interval = 2, attempts = 45 }
+timeout = 120
+
+# Rendered config.json is served (redirect-free; tests that element-nginx
+# path-route is in place and our render-element-config.sh ran).
+[[steps]]
+action = "http"
+name = "element-config-json"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/config.json"
+service = "synapse"
+poll = { interval = 2, attempts = 5 }
+timeout = 20
+
+# Data dir created by render script
+[[steps]]
+action = "shell"
+name = "homeserver-yaml-rendered"
+run = "test -f $HOME/.local/share/ryra/synapse/data/homeserver.yaml"
+timeout = 10
