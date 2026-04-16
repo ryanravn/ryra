@@ -41,10 +41,12 @@ pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
                 .with_prompt("  SMTP port")
                 .default(587)
                 .interact_text()?;
-            let username: String =
-                Input::new().with_prompt("  SMTP username").interact_text()?;
-            let password: String =
-                Input::new().with_prompt("  SMTP password").interact_text()?;
+            let username: String = Input::new()
+                .with_prompt("  SMTP username")
+                .interact_text()?;
+            let password: String = Input::new()
+                .with_prompt("  SMTP password")
+                .interact_text()?;
             let from: String = Input::new()
                 .with_prompt("  From address")
                 .default(format!("noreply@{host}"))

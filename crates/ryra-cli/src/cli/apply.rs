@@ -129,13 +129,9 @@ async fn execute(step: &Step) -> Result<()> {
                 .map(|o| {
                     let expanded_library = format!("docker.io/library/{image}");
                     let expanded_org = format!("docker.io/{image}");
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .any(|line| {
-                            line == image
-                                || line == expanded_library
-                                || line == expanded_org
-                        })
+                    String::from_utf8_lossy(&o.stdout).lines().any(|line| {
+                        line == image || line == expanded_library || line == expanded_org
+                    })
                 })
                 .unwrap_or(false);
             if in_additional {
@@ -165,8 +161,8 @@ async fn execute(step: &Step) -> Result<()> {
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
         Step::WaitForFile { path, timeout_secs } => {
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(*timeout_secs as u64);
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(*timeout_secs as u64);
             while !path.exists() {
                 if std::time::Instant::now() > deadline {
                     anyhow::bail!("timed out waiting for {}", path.display());

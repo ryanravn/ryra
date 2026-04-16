@@ -218,9 +218,7 @@ pub struct ResetResult {
 }
 
 /// Resolve the registry directory for a service reference.
-pub async fn resolve_registry_dir(
-    service_ref: &registry::resolve::ServiceRef,
-) -> Result<PathBuf> {
+pub async fn resolve_registry_dir(service_ref: &registry::resolve::ServiceRef) -> Result<PathBuf> {
     let paths = ConfigPaths::resolve()?;
     paths.ensure_cache_dir()?;
     let config = config::load_or_default(&paths.config_file)?;
@@ -228,9 +226,7 @@ pub async fn resolve_registry_dir(
 }
 
 /// Build a ServiceRef from an installed service's stored registry name.
-pub fn service_ref_from_installed(
-    installed: &InstalledService,
-) -> registry::resolve::ServiceRef {
+pub fn service_ref_from_installed(installed: &InstalledService) -> registry::resolve::ServiceRef {
     if installed.repo.is_empty() || installed.repo == REGISTRY_BUNDLED {
         registry::resolve::ServiceRef::Bundled(installed.name.clone())
     } else {
@@ -288,13 +284,12 @@ fn resolve_extra_networks(
     // on that network: URL-based services for reverse proxy, auth services
     // to reach the OIDC provider via caddy's TLS, inbucket itself,
     // and SMTP-using services to reach inbucket by container name.
-    let joins_caddy = (has_url || has_smtp || enable_auth || WellKnownService::Inbucket.matches(service_name))
-        && caddy_installed
-        && !WellKnownService::Caddy.matches(service_name);
-    if joins_caddy {
-        if !networks.contains(&WellKnownService::Caddy.to_string()) {
-            networks.push(WellKnownService::Caddy.to_string());
-        }
+    let joins_caddy =
+        (has_url || has_smtp || enable_auth || WellKnownService::Inbucket.matches(service_name))
+            && caddy_installed
+            && !WellKnownService::Caddy.matches(service_name);
+    if joins_caddy && !networks.contains(&WellKnownService::Caddy.to_string()) {
+        networks.push(WellKnownService::Caddy.to_string());
     }
     networks
 }
@@ -304,6 +299,7 @@ fn resolve_extra_networks(
 /// When `pre_built_ctx` is provided, its secrets and auth credentials are
 /// reused instead of generating fresh ones. Pass the context from the
 /// interactive prompt phase so the values the user saw match what gets written.
+#[allow(clippy::too_many_arguments)]
 pub fn add_service(
     service_name: &str,
     url: Option<&str>,
@@ -354,7 +350,10 @@ pub fn add_service(
     }
 
     // --auth requires native OIDC support; forward auth is no longer supported
-    if enable_auth && reg_service.def.integrations.auth.is_empty() && !WellKnownService::Authelia.matches(service_name) {
+    if enable_auth
+        && reg_service.def.integrations.auth.is_empty()
+        && !WellKnownService::Authelia.matches(service_name)
+    {
         return Err(Error::NoOidcSupport(service_name.to_string()));
     }
 
@@ -410,14 +409,25 @@ pub fn add_service(
     let mut extra_volumes = Vec::new();
     let mut extra_env: BTreeMap<String, String> = BTreeMap::new();
 
-    let authelia_installed = config.services.iter().any(|s| WellKnownService::Authelia.matches(&s.name));
-    let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+    let authelia_installed = config
+        .services
+        .iter()
+        .any(|s| WellKnownService::Authelia.matches(&s.name));
+    let caddy_installed = config
+        .services
+        .iter()
+        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
 
     // When auth is enabled and Caddy handles TLS, mount the Caddy root CA cert
     // into service containers so they trust the self-signed HTTPS cert. OIDC
     // clients connect to Caddy's HTTPS port (via network alias), which requires
     // TLS trust.
-    if enable_auth && authelia_installed && caddy_installed && !WellKnownService::Authelia.matches(service_name) && !WellKnownService::Caddy.matches(service_name) {
+    if enable_auth
+        && authelia_installed
+        && caddy_installed
+        && !WellKnownService::Authelia.matches(service_name)
+        && !WellKnownService::Caddy.matches(service_name)
+    {
         // Create a merged CA bundle: system CAs + caddy's self-signed CA.
         // Always create the bundle and mount — caddy-root-ca.crt may not
         // exist yet (caddy is restarted during `ryra add`), but it will be
@@ -433,7 +443,10 @@ pub fn add_service(
         if !merged_bundle.exists() {
             let mut bundle = String::new();
             // Try common system CA bundle paths
-            for sys_path in &["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"] {
+            for sys_path in &[
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/pki/tls/certs/ca-bundle.crt",
+            ] {
                 if let Ok(content) = std::fs::read_to_string(sys_path) {
                     bundle = content;
                     break;
@@ -484,14 +497,21 @@ pub fn add_service(
                  done\n\
                  cat \"$CADDY_CA\" >> \"$MERGED\" 2>/dev/null || true\n\
                  exit 0\n",
-                ryra_dir = service_data.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+                ryra_dir = service_data
+                    .parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
                 service_data = service_data.display(),
             );
             std::fs::write(&refresh_ca_script, &script).ok();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&refresh_ca_script, std::fs::Permissions::from_mode(0o755)).ok();
+                std::fs::set_permissions(
+                    &refresh_ca_script,
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .ok();
             }
         }
 
@@ -500,43 +520,42 @@ pub fn add_service(
         // This is needed because .localhost domains resolve to 127.0.0.1
         // inside containers (RFC 6761), and caddy's IP changes on restart.
         let auth_host_script = service_data.join("resolve-auth-host.sh");
-        if let Some(auth_service) = config.services.iter().find(|s| WellKnownService::Authelia.matches(&s.name)) {
-            if let Some(ref auth_url) = auth_service.url {
-                if let Ok(parsed) = url::Url::parse(auth_url) {
-                    if let Some(host) = parsed.host_str() {
-                        let script = format!(
-                            "#!/bin/bash\n\
-                             # Resolve caddy's current IP for .localhost auth domains\n\
-                             HOSTS=\"{service_data}/auth-hosts.txt\"\n\
-                             CADDY_IP=$(podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
-                             if [ -n \"$CADDY_IP\" ]; then\n\
-                               echo \"$CADDY_IP {host}\" > \"$HOSTS\"\n\
-                             else\n\
-                               echo \"127.0.0.1 {host}\" > \"$HOSTS\"\n\
-                             fi\n\
-                             exit 0\n",
-                            service_data = service_data.display(),
-                            host = host,
-                        );
-                        std::fs::write(&auth_host_script, &script).ok();
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            std::fs::set_permissions(&auth_host_script, std::fs::Permissions::from_mode(0o755)).ok();
-                        }
-                        // Create placeholder hosts file for Volume= mount
-                        let auth_hosts = service_data.join("auth-hosts.txt");
-                        if !auth_hosts.exists() {
-                            std::fs::write(&auth_hosts, format!("127.0.0.1 {host}\n")).ok();
-                        }
-                        // Mount the dynamic hosts file
-                        extra_volumes.push(format!(
-                            "{}:/etc/hosts:z",
-                            auth_hosts.display()
-                        ));
-                    }
-                }
+        if let Some(auth_service) = config
+            .services
+            .iter()
+            .find(|s| WellKnownService::Authelia.matches(&s.name))
+            && let Some(ref auth_url) = auth_service.url
+            && let Ok(parsed) = url::Url::parse(auth_url)
+            && let Some(host) = parsed.host_str()
+        {
+            let script = format!(
+                "#!/bin/bash\n\
+                 # Resolve caddy's current IP for .localhost auth domains\n\
+                 HOSTS=\"{service_data}/auth-hosts.txt\"\n\
+                 CADDY_IP=$(podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
+                 if [ -n \"$CADDY_IP\" ]; then\n\
+                   echo \"$CADDY_IP {host}\" > \"$HOSTS\"\n\
+                 else\n\
+                   echo \"127.0.0.1 {host}\" > \"$HOSTS\"\n\
+                 fi\n\
+                 exit 0\n",
+                service_data = service_data.display(),
+                host = host,
+            );
+            std::fs::write(&auth_host_script, &script).ok();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&auth_host_script, std::fs::Permissions::from_mode(0o755))
+                    .ok();
             }
+            // Create placeholder hosts file for Volume= mount
+            let auth_hosts = service_data.join("auth-hosts.txt");
+            if !auth_hosts.exists() {
+                std::fs::write(&auth_hosts, format!("127.0.0.1 {host}\n")).ok();
+            }
+            // Mount the dynamic hosts file
+            extra_volumes.push(format!("{}:/etc/hosts:z", auth_hosts.display()));
         }
     }
     let has_smtp = reg_service.def.integrations.smtp
@@ -562,7 +581,7 @@ pub fn add_service(
         pre_built_ctx,
     })?;
 
-    let mut podman_args: Vec<String> = Vec::new();
+    let podman_args: Vec<String> = Vec::new();
 
     // Note: .localhost auth domains (e.g. auth.localhost) can't be resolved
     // inside containers — RFC 6761 hardcodes them to 127.0.0.1. The caddy
@@ -590,18 +609,18 @@ pub fn add_service(
     let refresh_ca = service_home(service_name)
         .ok()
         .map(|d| d.join("refresh-ca-bundle.sh"));
-    if let Some(ref script) = refresh_ca {
-        if script.exists() {
-            extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
-        }
+    if let Some(ref script) = refresh_ca
+        && script.exists()
+    {
+        extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
     }
     let auth_host_script = service_home(service_name)
         .ok()
         .map(|d| d.join("resolve-auth-host.sh"));
-    if let Some(ref script) = auth_host_script {
-        if script.exists() {
-            extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
-        }
+    if let Some(ref script) = auth_host_script
+        && script.exists()
+    {
+        extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
     }
 
     // Process quadlet bundle from registry
@@ -696,36 +715,37 @@ pub fn add_service(
 
     // 8. Add Caddy route for services with a URL when Caddy is installed.
     // This creates a reverse proxy from the service's domain to its container port.
-    if let Some(url) = url {
-        if caddy_installed && !WellKnownService::Caddy.matches(service_name) {
-            let parsed = url::Url::parse(url).map_err(|e| {
-                Error::Template(format!("invalid service URL '{url}': {e}"))
-            })?;
-            let domain = parsed.host_str().unwrap_or(url);
-            let container_port = reg_service
-                .def
-                .ports
-                .first()
-                .map(|p| p.container_port)
-                .unwrap_or(80);
-            let block = caddy::render_site_block(&caddy::CaddySiteParams {
-                service_name: service_name.to_string(),
-                domain: domain.to_string(),
-                container_port,
-                https_port: caddy_https_port(&config),
-            });
-            let caddyfile_path = caddy::caddyfile_path()?;
-            let existing = std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+    if let Some(url) = url
+        && caddy_installed
+        && !WellKnownService::Caddy.matches(service_name)
+    {
+        let parsed = url::Url::parse(url)
+            .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
+        let domain = parsed.host_str().unwrap_or(url);
+        let container_port = reg_service
+            .def
+            .ports
+            .first()
+            .map(|p| p.container_port)
+            .unwrap_or(80);
+        let block = caddy::render_site_block(&caddy::CaddySiteParams {
+            service_name: service_name.to_string(),
+            domain: domain.to_string(),
+            container_port,
+            https_port: caddy_https_port(&config),
+        });
+        let caddyfile_path = caddy::caddyfile_path()?;
+        let existing =
+            std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
                 path: caddyfile_path.clone(),
                 source,
             })?;
-            let updated = caddy::add_route(&existing, service_name, &block);
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: caddyfile_path,
-                content: updated,
-            }));
-            steps.push(Step::ReloadCaddy);
-        }
+        let updated = caddy::add_route(&existing, service_name, &block);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: caddyfile_path,
+            content: updated,
+        }));
+        steps.push(Step::ReloadCaddy);
     }
 
     // 9. Reload and start via systemd
@@ -967,7 +987,10 @@ pub fn reset() -> Result<ResetResult> {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             // Only touch files belonging to a ryra-installed service
-            let is_ryra_file = config.services.iter().any(|s| quadlet_belongs_to(&name, &s.name, &all_names));
+            let is_ryra_file = config
+                .services
+                .iter()
+                .any(|s| quadlet_belongs_to(&name, &s.name, &all_names));
             if !is_ryra_file {
                 continue;
             }

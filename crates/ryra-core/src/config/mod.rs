@@ -82,13 +82,13 @@ fn check_version(config: &Config) {
     };
     let binary = parse_major_minor(VERSION);
     let config_v = parse_major_minor(config_version);
-    if let (Some((b_major, b_minor)), Some((c_major, c_minor))) = (binary, config_v) {
-        if (c_major, c_minor) > (b_major, b_minor) {
-            eprintln!(
-                "Warning: config was written by ryra {config_version}, \
-                 but this is ryra {VERSION} — consider upgrading"
-            );
-        }
+    if let (Some((b_major, b_minor)), Some((c_major, c_minor))) = (binary, config_v)
+        && (c_major, c_minor) > (b_major, b_minor)
+    {
+        eprintln!(
+            "Warning: config was written by ryra {config_version}, \
+             but this is ryra {VERSION} — consider upgrading"
+        );
     }
 }
 

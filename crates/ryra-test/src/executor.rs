@@ -119,12 +119,8 @@ impl Executor for LocalExecutor {
         });
 
         let status = child.wait().await?;
-        let stdout_buf = stdout_handle
-            .await
-            .context("stdout reader task panicked")?;
-        let stderr_buf = stderr_handle
-            .await
-            .context("stderr reader task panicked")?;
+        let stdout_buf = stdout_handle.await.context("stdout reader task panicked")?;
+        let stderr_buf = stderr_handle.await.context("stderr reader task panicked")?;
 
         if !status.success() {
             anyhow::bail!(

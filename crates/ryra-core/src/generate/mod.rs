@@ -186,7 +186,6 @@ fn render_env_vars(
     Ok(rendered)
 }
 
-
 pub fn extract_secret_refs(value: &str) -> Vec<String> {
     let mut secrets = Vec::new();
     let mut rest = value;

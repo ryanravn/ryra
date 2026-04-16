@@ -25,7 +25,9 @@ impl ServiceRef {
     pub fn parse(input: &str) -> Result<Self> {
         let parts: Vec<&str> = input.split('/').collect();
         match parts.as_slice() {
-            [""] => Err(Error::InvalidServiceRef("service reference cannot be empty".to_string())),
+            [""] => Err(Error::InvalidServiceRef(
+                "service reference cannot be empty".to_string(),
+            )),
             [name] => {
                 if name.is_empty() {
                     Err(Error::InvalidServiceRef(

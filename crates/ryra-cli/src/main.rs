@@ -248,9 +248,7 @@ async fn main() -> anyhow::Result<()> {
             .await?
         }
         Command::Registry { action } => match action {
-            RegistryAction::Add { ref name, ref url } => {
-                cli::registry_cmd::add(name, url).await?
-            }
+            RegistryAction::Add { ref name, ref url } => cli::registry_cmd::add(name, url).await?,
             RegistryAction::Remove { ref name } => cli::registry_cmd::remove(name)?,
             RegistryAction::Update { ref name } => {
                 cli::registry_cmd::update(name.as_deref()).await?

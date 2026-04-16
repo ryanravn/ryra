@@ -341,7 +341,6 @@ fn discover_from_test_toml(
     })
 }
 
-
 /// Look up the recommended RAM (MB) for a service from its service.toml.
 pub fn service_recommended_ram(registry_path: &Path, service_name: &str) -> Result<Option<u64>> {
     let service_toml = registry_path.join(service_name).join("service.toml");
@@ -408,10 +407,7 @@ pub fn service_min_disk(registry_path: &Path, service_name: &str) -> Result<Opti
         .with_context(|| format!("failed to read {}", service_toml.display()))?;
     let parsed: ServiceTomlDisk = toml::from_str(&content)
         .with_context(|| format!("failed to parse {}", service_toml.display()))?;
-    Ok(parsed
-        .requirements
-        .and_then(|r| r.disk)
-        .map(|d| d.min))
+    Ok(parsed.requirements.and_then(|r| r.disk).map(|d| d.min))
 }
 
 /// Compute the VM disk size (GB) needed for a test. Takes the max of all

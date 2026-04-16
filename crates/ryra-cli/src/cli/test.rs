@@ -49,13 +49,7 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
 
     match params.service {
         Some(service) => {
-            run_live_service(
-                service,
-                params.test_filter,
-                params.yes,
-                params.verbose,
-            )
-            .await
+            run_live_service(service, params.test_filter, params.yes, params.verbose).await
         }
         None => anyhow::bail!("specify a service name with --service <name>"),
     }

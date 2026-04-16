@@ -126,15 +126,36 @@ impl Machine {
         let efi_vars = work_dir.join("efivars.qcow2");
         let seed_iso = work_dir.join("seed.iso");
 
-        run_cmd("cp", &["--reflink=auto", &snapshot.disk.to_string_lossy(), &disk.to_string_lossy()])
-            .await
-            .context("failed to copy snapshot disk")?;
-        run_cmd("cp", &["--reflink=auto", &snapshot.efivars.to_string_lossy(), &efi_vars.to_string_lossy()])
-            .await
-            .context("failed to copy snapshot efivars")?;
-        run_cmd("cp", &["--reflink=auto", &snapshot.seed_iso.to_string_lossy(), &seed_iso.to_string_lossy()])
-            .await
-            .context("failed to copy snapshot seed ISO")?;
+        run_cmd(
+            "cp",
+            &[
+                "--reflink=auto",
+                &snapshot.disk.to_string_lossy(),
+                &disk.to_string_lossy(),
+            ],
+        )
+        .await
+        .context("failed to copy snapshot disk")?;
+        run_cmd(
+            "cp",
+            &[
+                "--reflink=auto",
+                &snapshot.efivars.to_string_lossy(),
+                &efi_vars.to_string_lossy(),
+            ],
+        )
+        .await
+        .context("failed to copy snapshot efivars")?;
+        run_cmd(
+            "cp",
+            &[
+                "--reflink=auto",
+                &snapshot.seed_iso.to_string_lossy(),
+                &seed_iso.to_string_lossy(),
+            ],
+        )
+        .await
+        .context("failed to copy snapshot seed ISO")?;
 
         // Copy shared SSH key to work dir (ssh_key_path() expects it there)
         let key_path = work_dir.join("id_ed25519");
@@ -151,7 +172,10 @@ impl Machine {
         );
         let efi_vars_arg = format!("if=pflash,format=qcow2,file={}", efi_vars.display());
         let disk_arg = format!("if=virtio,file={},format=qcow2", disk.display());
-        let seed_arg = format!("if=virtio,file={},format=raw,readonly=on", seed_iso.display());
+        let seed_arg = format!(
+            "if=virtio,file={},format=raw,readonly=on",
+            seed_iso.display()
+        );
         let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
         let serial_log = work_dir.join("serial.log");
         let serial_arg = format!("file:{}", serial_log.display());
@@ -163,20 +187,33 @@ impl Machine {
         );
 
         let mut args: Vec<&str> = vec![
-            "-machine", "virt",
-            "-cpu", if opts.use_kvm { "host" } else { "max" },
-            "-m", &memory,
-            "-smp", &cpus,
-            "-drive", &efi_code_arg,
-            "-drive", &efi_vars_arg,
-            "-drive", &disk_arg,
-            "-drive", &seed_arg,
-            "-nic", &nic_arg,
+            "-machine",
+            "virt",
+            "-cpu",
+            if opts.use_kvm { "host" } else { "max" },
+            "-m",
+            &memory,
+            "-smp",
+            &cpus,
+            "-drive",
+            &efi_code_arg,
+            "-drive",
+            &efi_vars_arg,
+            "-drive",
+            &disk_arg,
+            "-drive",
+            &seed_arg,
+            "-nic",
+            &nic_arg,
             "-nographic",
-            "-serial", &serial_arg,
-            "-monitor", "none",
-            "-virtfs", &virtfs_arg,
-            "-loadvm", "ready",
+            "-serial",
+            &serial_arg,
+            "-monitor",
+            "none",
+            "-virtfs",
+            &virtfs_arg,
+            "-loadvm",
+            "ready",
         ];
 
         if opts.use_kvm {
@@ -208,7 +245,9 @@ impl Machine {
             .await?;
 
         // Fix clock skew: the snapshot's system clock is frozen at save time
-        let _ = machine.exec("sudo date -s \"$(date -u -R)\" >/dev/null 2>&1").await;
+        let _ = machine
+            .exec("sudo date -s \"$(date -u -R)\" >/dev/null 2>&1")
+            .await;
 
         Ok(machine)
     }
@@ -300,19 +339,31 @@ impl Machine {
         );
 
         let mut args: Vec<&str> = vec![
-            "-machine", "virt",
-            "-cpu", if opts.use_kvm { "host" } else { "max" },
-            "-m", &memory,
-            "-smp", &cpus,
-            "-drive", &efi_code_arg,
-            "-drive", &efi_vars_arg,
-            "-drive", &disk_arg,
-            "-drive", &seed_arg,
-            "-nic", &nic_arg,
+            "-machine",
+            "virt",
+            "-cpu",
+            if opts.use_kvm { "host" } else { "max" },
+            "-m",
+            &memory,
+            "-smp",
+            &cpus,
+            "-drive",
+            &efi_code_arg,
+            "-drive",
+            &efi_vars_arg,
+            "-drive",
+            &disk_arg,
+            "-drive",
+            &seed_arg,
+            "-nic",
+            &nic_arg,
             "-nographic",
-            "-serial", &serial_arg,
-            "-monitor", "none",
-            "-virtfs", &virtfs_arg,
+            "-serial",
+            &serial_arg,
+            "-monitor",
+            "none",
+            "-virtfs",
+            &virtfs_arg,
         ];
 
         if opts.use_kvm {
@@ -353,13 +404,20 @@ impl Machine {
     fn ssh_args(&self) -> Vec<String> {
         let key = self.ssh_key_path();
         vec![
-            "-o".into(), "StrictHostKeyChecking=no".into(),
-            "-o".into(), "UserKnownHostsFile=/dev/null".into(),
-            "-o".into(), "LogLevel=ERROR".into(),
-            "-o".into(), "ConnectTimeout=10".into(),
-            "-o".into(), "BatchMode=yes".into(),
-            "-i".into(), key.to_string_lossy().into_owned(),
-            "-p".into(), self.ssh_port.to_string(),
+            "-o".into(),
+            "StrictHostKeyChecking=no".into(),
+            "-o".into(),
+            "UserKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "LogLevel=ERROR".into(),
+            "-o".into(),
+            "ConnectTimeout=10".into(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-i".into(),
+            key.to_string_lossy().into_owned(),
+            "-p".into(),
+            self.ssh_port.to_string(),
             format!("ryra@{}", self.ssh_host),
         ]
     }
@@ -885,9 +943,13 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
     println!("    loading {image} into shared store...");
     let status = Command::new("podman")
         .args([
-            "--root", &store_dir.display().to_string(),
-            "--storage-driver", "overlay",
-            "load", "-i", &tar_path.display().to_string(),
+            "--root",
+            &store_dir.display().to_string(),
+            "--storage-driver",
+            "overlay",
+            "load",
+            "-i",
+            &tar_path.display().to_string(),
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -917,9 +979,13 @@ async fn image_exists_in_store(store_dir: &Path, image: &str) -> bool {
     for name in [image, short, &expanded_library, &expanded_org] {
         let ok = Command::new("podman")
             .args([
-                "--root", &store_dir.display().to_string(),
-                "--storage-driver", "overlay",
-                "image", "exists", name,
+                "--root",
+                &store_dir.display().to_string(),
+                "--storage-driver",
+                "overlay",
+                "image",
+                "exists",
+                name,
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -945,7 +1011,7 @@ fn strip_docker_io(image: &str) -> &str {
 }
 
 fn sanitize_image_name(image: &str) -> String {
-    image.replace('/', "_").replace(':', "_") + ".tar"
+    image.replace(['/', ':'], "_") + ".tar"
 }
 
 /// Make host container images available in the VM via shared store.
@@ -983,11 +1049,16 @@ pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Resul
 fn scp_base_args(machine: &Machine) -> Vec<String> {
     let key = machine.ssh_key_path();
     vec![
-        "-o".into(), "StrictHostKeyChecking=no".into(),
-        "-o".into(), "UserKnownHostsFile=/dev/null".into(),
-        "-o".into(), "LogLevel=ERROR".into(),
-        "-i".into(), key.to_string_lossy().into_owned(),
-        "-P".into(), machine.ssh_port.to_string(),
+        "-o".into(),
+        "StrictHostKeyChecking=no".into(),
+        "-o".into(),
+        "UserKnownHostsFile=/dev/null".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+        "-i".into(),
+        key.to_string_lossy().into_owned(),
+        "-P".into(),
+        machine.ssh_port.to_string(),
     ]
 }
 
@@ -1050,7 +1121,9 @@ pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Resu
 
     // Create destination dir (needs sudo — /opt is root-owned, chown to ryra user)
     machine
-        .exec("sudo mkdir -p /opt/ryra-test-registry && sudo chown ryra:ryra /opt/ryra-test-registry")
+        .exec(
+            "sudo mkdir -p /opt/ryra-test-registry && sudo chown ryra:ryra /opt/ryra-test-registry",
+        )
         .await?;
 
     // SCP each service dir individually to avoid nesting issues

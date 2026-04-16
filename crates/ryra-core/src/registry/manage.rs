@@ -46,10 +46,7 @@ pub fn remove(name: &str) -> Result<()> {
     // Remove cached clone
     let dest = paths.cache_dir.join("registries").join(name);
     if dest.exists() {
-        std::fs::remove_dir_all(&dest).map_err(|source| Error::FileWrite {
-            path: dest,
-            source,
-        })?;
+        std::fs::remove_dir_all(&dest).map_err(|source| Error::FileWrite { path: dest, source })?;
     }
 
     Ok(())

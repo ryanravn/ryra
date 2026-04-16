@@ -288,7 +288,12 @@ impl ServiceDef {
         if self.service.architecture.contains(&current) {
             None
         } else {
-            let supported: Vec<_> = self.service.architecture.iter().map(|a| a.to_string()).collect();
+            let supported: Vec<_> = self
+                .service
+                .architecture
+                .iter()
+                .map(|a| a.to_string())
+                .collect();
             Some(format!(
                 "{} only supports {} — this system is {current}",
                 self.service.name,

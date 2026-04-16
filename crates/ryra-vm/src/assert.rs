@@ -27,7 +27,10 @@ impl Machine {
         let output = self.exec(&cmd).await?;
         let status = SystemdStatus::parse(output.stdout_trimmed());
         if status != SystemdStatus::Active {
-            bail!("expected service {unit} to be active, got: {}", output.stdout_trimmed());
+            bail!(
+                "expected service {unit} to be active, got: {}",
+                output.stdout_trimmed()
+            );
         }
         Ok(())
     }

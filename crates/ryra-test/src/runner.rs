@@ -2,10 +2,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::registry::{DiscoveredTest, TestEntry};
-use crate::test_toml::StepDef;
-use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
 use crate::executor::Executor;
+use crate::registry::{DiscoveredTest, TestEntry};
+use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
+use crate::test_toml::StepDef;
 
 fn print_event_result(prefix: &str, event: &Event) {
     let elapsed = format!("{:.1}s", event.duration.as_secs_f64());
@@ -23,10 +23,7 @@ fn print_event_result(prefix: &str, event: &Event) {
 /// 3. If quadlets are present, copies them to systemd dir, reloads, starts them
 /// 4. Sources `.env` files
 /// 5. Runs each test command via SSH, checks exit code
-pub async fn run_registry_test(
-    vm: &dyn Executor,
-    test: &DiscoveredTest,
-) -> ScenarioResult {
+pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> ScenarioResult {
     let start = Instant::now();
     let name = test.name();
     let mut events = Vec::new();
@@ -48,13 +45,7 @@ pub async fn run_registry_test(
     // Init
     if !services.is_empty() || !quadlets.is_empty() {
         println!("[{name}]   ryra init...");
-        let init_event = run_event(
-            vm,
-            EventKind::Init,
-            "ryra init",
-            30,
-        )
-        .await;
+        let init_event = run_event(vm, EventKind::Init, "ryra init", 30).await;
         print_event_result(name, &init_event);
         if init_event.outcome.is_fail() {
             failed = true;
@@ -341,7 +332,11 @@ async fn wait_for_service(vm: &dyn Executor, service: &str) -> Event {
 }
 
 /// Wait for a service's systemd unit to become active with a custom timeout.
-async fn wait_for_service_with_timeout(vm: &dyn Executor, service: &str, timeout_secs: u64) -> Event {
+async fn wait_for_service_with_timeout(
+    vm: &dyn Executor,
+    service: &str,
+    timeout_secs: u64,
+) -> Event {
     let t = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
 
@@ -468,13 +463,7 @@ pub async fn run_lifecycle_test(
     // Init first (all lifecycle tests start with ryra init)
     if !retest {
         println!("{p}  ryra init...");
-        let init_event = run_event(
-            vm,
-            EventKind::Init,
-            "ryra init",
-            30,
-        )
-        .await;
+        let init_event = run_event(vm, EventKind::Init, "ryra init", 30).await;
         print_event_result(&p, &init_event);
         if init_event.outcome.is_fail() {
             failed = true;
@@ -569,7 +558,13 @@ pub async fn run_lifecycle_test(
             } => {
                 println!("{p}  run: {step_name}...");
                 let event = run_step_with_poll(
-                    vm, step_name, run, *timeout, poll.as_ref(), verbose, stream_prefix,
+                    vm,
+                    step_name,
+                    run,
+                    *timeout,
+                    poll.as_ref(),
+                    verbose,
+                    stream_prefix,
                 )
                 .await;
                 print_event_result(&p, &event);
@@ -627,8 +622,8 @@ pub async fn run_lifecycle_test(
                 println!("{p}  browser: {step_name}...");
                 let event = run_browser_step(
                     vm,
-                    name,       // test name (for report paths)
-                    step_name,  // step name (for event description)
+                    name,      // test name (for report paths)
+                    step_name, // step name (for event description)
                     spec,
                     env,
                     *timeout,

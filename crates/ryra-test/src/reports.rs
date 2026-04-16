@@ -10,7 +10,6 @@ pub fn reports_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".local/share/ryra/test-reports"))
 }
 
-
 /// Wipe the reports directory so only results from this run remain.
 /// Called at the start of every `ryra test` invocation.
 pub fn wipe_reports_dir() -> Result<()> {
@@ -19,8 +18,7 @@ pub fn wipe_reports_dir() -> Result<()> {
         std::fs::remove_dir_all(&dir)
             .with_context(|| format!("failed to wipe {}", dir.display()))?;
     }
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     Ok(())
 }
 
@@ -98,11 +96,7 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
             Outcome::Failed(_) => "FAIL",
             Outcome::Skipped => "SKIP",
         };
-        println!(
-            "  {}: {status} ({:.1}s)",
-            r.name,
-            r.duration.as_secs_f64()
-        );
+        println!("  {}: {status} ({:.1}s)", r.name, r.duration.as_secs_f64());
         println!("    log:     {display}/{}/run.log", r.name);
         let playwright_index = dir.join(&r.name).join("playwright").join("index.html");
         if playwright_index.exists() {

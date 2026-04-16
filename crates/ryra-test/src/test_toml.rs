@@ -633,6 +633,9 @@ spec = "test.spec.ts"
         assert!(parsed.steps[3].is_setup(), "wait should be setup");
         assert!(!parsed.steps[4].is_setup(), "shell should not be setup");
         assert!(!parsed.steps[5].is_setup(), "http should not be setup");
-        assert!(!parsed.steps[6].is_setup(), "playwright should not be setup");
+        assert!(
+            !parsed.steps[6].is_setup(),
+            "playwright should not be setup"
+        );
     }
 }

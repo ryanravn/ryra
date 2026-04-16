@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::generate::GeneratedFile;
 use crate::generate::bundle::inject_networks;
 use crate::registry::service_def::ServiceDef;
-use crate::{WellKnownService, Step, service_home};
+use crate::{Step, WellKnownService, service_home};
 
 /// Replace the host portion of a URL while preserving scheme, port, and path.
 fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
@@ -41,7 +41,7 @@ pub fn register_oidc_client(
         None => {
             return Err(Error::AuthContext(
                 "auth.client_id not found in template context".into(),
-            ))
+            ));
         }
     };
     let client_secret = match ctx.get("auth.client_secret") {
@@ -49,7 +49,7 @@ pub fn register_oidc_client(
         None => {
             return Err(Error::AuthContext(
                 "auth.client_secret not found in template context".into(),
-            ))
+            ));
         }
     };
 
@@ -104,15 +104,17 @@ pub fn register_oidc_client(
     // redirect_uri that vikunja sends to authelia).
     let mut base_urls = vec![base_url.clone()];
     // Also register the localhost/127.0.0.1 alternate so browser redirects work from either address
-    if let Some(alt) = url_with_host(&base_url, "localhost") {
-        if alt != base_url && !base_urls.contains(&alt) {
-            base_urls.push(alt);
-        }
+    if let Some(alt) = url_with_host(&base_url, "localhost")
+        && alt != base_url
+        && !base_urls.contains(&alt)
+    {
+        base_urls.push(alt);
     }
-    if let Some(alt) = url_with_host(&base_url, "127.0.0.1") {
-        if alt != base_url && !base_urls.contains(&alt) {
-            base_urls.push(alt);
-        }
+    if let Some(alt) = url_with_host(&base_url, "127.0.0.1")
+        && alt != base_url
+        && !base_urls.contains(&alt)
+    {
+        base_urls.push(alt);
     }
     let callbacks = if service_def.integrations.oidc_callbacks.is_empty() {
         // Fallback for services that haven't declared their callbacks yet.
@@ -155,7 +157,11 @@ pub fn register_oidc_client(
                 in_identity_providers = true;
             } else if in_identity_providers && indent == 2 && trimmed.starts_with("oidc:") {
                 in_oidc = true;
-            } else if in_identity_providers && in_oidc && indent == 4 && trimmed.starts_with("clients:") {
+            } else if in_identity_providers
+                && in_oidc
+                && indent == 4
+                && trimmed.starts_with("clients:")
+            {
                 // Found the right `clients:` under identity_providers.oidc
                 // Insert position is right after this line
                 let byte_offset: usize = yaml.lines().take(i + 1).map(|l| l.len() + 1).sum();
@@ -200,7 +206,10 @@ pub fn register_oidc_client(
     // Ensure Caddy joins authelia's network with a domain alias so that
     // containers can resolve the auth FQDN → Caddy → authelia (with proper
     // X-Forwarded-Proto: https headers that authelia requires for OIDC).
-    let caddy_installed = config.services.iter().any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+    let caddy_installed = config
+        .services
+        .iter()
+        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
     let auth_domain = config
         .services
         .iter()
@@ -209,72 +218,66 @@ pub fn register_oidc_client(
         .and_then(|u| url::Url::parse(u).ok())
         .and_then(|parsed| parsed.host_str().map(|h| h.to_string()));
 
-    if caddy_installed {
-        if let Some(ref domain) = auth_domain {
-            let mut need_caddy_restart = false;
-            let authelia = WellKnownService::Authelia;
+    if caddy_installed && let Some(ref domain) = auth_domain {
+        let mut need_caddy_restart = false;
+        let authelia = WellKnownService::Authelia;
 
-            // 1. Add Caddy to authelia's podman network with a domain alias so
-            // that containers resolving the auth domain reach Caddy (HTTPS on
-            // port 8443). OIDC clients require the issuer URL to match exactly,
-            // so services connect to the external URL (https://domain:8443)
-            // which routes through Caddy's TLS termination to authelia.
-            let caddy_quadlet = quadlet_dir.join("caddy.container");
-            if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
-                let network_spec = format!("{authelia}:alias={domain}");
-                if !content.contains(&format!("alias={domain}")) {
-                    let updated = inject_networks(&content, &[network_spec]);
-                    steps.push(Step::WriteFile(GeneratedFile {
-                        path: caddy_quadlet,
-                        content: updated,
-                    }));
-                    need_caddy_restart = true;
-                }
+        // 1. Add Caddy to authelia's podman network with a domain alias so
+        // that containers resolving the auth domain reach Caddy (HTTPS on
+        // port 8443). OIDC clients require the issuer URL to match exactly,
+        // so services connect to the external URL (https://domain:8443)
+        // which routes through Caddy's TLS termination to authelia.
+        let caddy_quadlet = quadlet_dir.join("caddy.container");
+        if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
+            let network_spec = format!("{authelia}:alias={domain}");
+            if !content.contains(&format!("alias={domain}")) {
+                let updated = inject_networks(&content, &[network_spec]);
+                steps.push(Step::WriteFile(GeneratedFile {
+                    path: caddy_quadlet,
+                    content: updated,
+                }));
+                need_caddy_restart = true;
             }
+        }
 
-            // 2. Add an authelia site block to the Caddyfile so Caddy
-            //    terminates TLS and reverse-proxies to authelia. Without this,
-            //    Caddy has no route for the auth domain and returns 404.
-            if let Ok(caddyfile_path) = crate::caddy::caddyfile_path() {
-                if let Ok(caddyfile) = std::fs::read_to_string(&caddyfile_path) {
-                    if !caddyfile.contains(&format!("# ryra:{authelia}")) {
-                        let block = crate::caddy::render_site_block(
-                            &crate::caddy::CaddySiteParams {
-                                service_name: authelia.to_string(),
-                                domain: domain.clone(),
-                                container_port: 9091,
-                                https_port: crate::caddy_https_port(config),
-                            },
-                        );
-                        let updated =
-                            crate::caddy::add_route(&caddyfile, authelia.as_str(), &block);
-                        steps.push(Step::WriteFile(GeneratedFile {
-                            path: caddyfile_path,
-                            content: updated,
-                        }));
-                        need_caddy_restart = true;
-                    }
-                }
-            }
+        // 2. Add an authelia site block to the Caddyfile so Caddy
+        //    terminates TLS and reverse-proxies to authelia. Without this,
+        //    Caddy has no route for the auth domain and returns 404.
+        if let Ok(caddyfile_path) = crate::caddy::caddyfile_path()
+            && let Ok(caddyfile) = std::fs::read_to_string(&caddyfile_path)
+            && !caddyfile.contains(&format!("# ryra:{authelia}"))
+        {
+            let block = crate::caddy::render_site_block(&crate::caddy::CaddySiteParams {
+                service_name: authelia.to_string(),
+                domain: domain.clone(),
+                container_port: 9091,
+                https_port: crate::caddy_https_port(config),
+            });
+            let updated = crate::caddy::add_route(&caddyfile, authelia.as_str(), &block);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: caddyfile_path,
+                content: updated,
+            }));
+            need_caddy_restart = true;
+        }
 
-            if need_caddy_restart {
-                steps.push(Step::DaemonReload);
-                steps.push(Step::RestartService {
-                    unit: "caddy".to_string(),
-                });
-                // Wait for caddy's ExecStartPost to export the CA cert.
-                // The cert is needed by add_service to create the merged CA bundle
-                // for OIDC services. systemctl restart returns after ExecStart but
-                // before ExecStartPost completes.
-                let ca_path = crate::service_home("caddy")?
-                    .parent()
-                    .map(|p| p.join("caddy-root-ca.crt"))
-                    .unwrap_or_default();
-                steps.push(Step::WaitForFile {
-                    path: ca_path,
-                    timeout_secs: 15,
-                });
-            }
+        if need_caddy_restart {
+            steps.push(Step::DaemonReload);
+            steps.push(Step::RestartService {
+                unit: "caddy".to_string(),
+            });
+            // Wait for caddy's ExecStartPost to export the CA cert.
+            // The cert is needed by add_service to create the merged CA bundle
+            // for OIDC services. systemctl restart returns after ExecStart but
+            // before ExecStartPost completes.
+            let ca_path = crate::service_home("caddy")?
+                .parent()
+                .map(|p| p.join("caddy-root-ca.crt"))
+                .unwrap_or_default();
+            steps.push(Step::WaitForFile {
+                path: ca_path,
+                timeout_secs: 15,
+            });
         }
     }
 

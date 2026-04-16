@@ -4,8 +4,7 @@ use include_dir::{Dir, include_dir};
 
 use crate::error::{Error, Result};
 
-static BUNDLED_REGISTRY: Dir<'static> =
-    include_dir!("$CARGO_MANIFEST_DIR/../../registry");
+static BUNDLED_REGISTRY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../registry");
 
 const BUNDLED_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Content hash of the registry at build time — changes when any file is modified,
@@ -25,11 +24,9 @@ pub fn ensure_bundled(cache_dir: &Path) -> Result<PathBuf> {
     // Use "version-hash" format so both release upgrades and dev edits trigger re-extraction.
     let expected = format!("{BUNDLED_VERSION}-{BUNDLED_HASH}");
     let needs_extract = if version_file.exists() {
-        let cached = std::fs::read_to_string(&version_file).map_err(|source| {
-            Error::FileRead {
-                path: version_file.clone(),
-                source,
-            }
+        let cached = std::fs::read_to_string(&version_file).map_err(|source| Error::FileRead {
+            path: version_file.clone(),
+            source,
         })?;
         cached.trim() != expected
     } else {
@@ -96,12 +93,16 @@ mod tests {
 
         // At least one service.toml should be present somewhere under the dir
         let found = walkdir_has_service_toml(&registry_dir);
-        assert!(found, "at least one service.toml should exist in extracted registry");
+        assert!(
+            found,
+            "at least one service.toml should exist in extracted registry"
+        );
         Ok(())
     }
 
     #[test]
-    fn skips_extraction_when_version_matches() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn skips_extraction_when_version_matches() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
         let tmp = TempDir::new()?;
 
         // First extraction
@@ -120,7 +121,10 @@ mod tests {
 
         let mtime_after = std::fs::metadata(&version_file)?.modified()?;
 
-        assert_eq!(mtime_before, mtime_after, "VERSION file should not have been re-written");
+        assert_eq!(
+            mtime_before, mtime_after,
+            "VERSION file should not have been re-written"
+        );
         Ok(())
     }
 

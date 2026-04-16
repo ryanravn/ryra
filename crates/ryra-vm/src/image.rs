@@ -240,7 +240,9 @@ pub async fn ensure_image(
                 })
             }
             Err(e) => {
-                eprintln!("  Warning: failed to create VM snapshot (falling back to cold boot): {e:#}");
+                eprintln!(
+                    "  Warning: failed to create VM snapshot (falling back to cold boot): {e:#}"
+                );
                 None
             }
         }
@@ -283,7 +285,10 @@ pub async fn ensure_browser_image(
 
     // Create browser-specific snapshot
     let cache = cache_dir()?;
-    let snap_prefix = format!("{}-snapshot-{max_memory_mb}", distro.browser_snapshot_base());
+    let snap_prefix = format!(
+        "{}-snapshot-{max_memory_mb}",
+        distro.browser_snapshot_base()
+    );
     let snap_disk = cache.join(format!("{snap_prefix}.qcow2"));
     let snap_efivars = cache.join(format!("{snap_prefix}-efivars.qcow2"));
     let snap_seed = cache.join(format!("{snap_prefix}-seed.iso"));
@@ -892,7 +897,10 @@ async fn create_snapshot(
     );
     let efi_vars_arg = format!("if=pflash,format=qcow2,file={}", efivars.display());
     let disk_arg = format!("if=virtio,file={},format=qcow2", disk.display());
-    let seed_arg = format!("if=virtio,file={},format=raw,readonly=on", seed_iso.display());
+    let seed_arg = format!(
+        "if=virtio,file={},format=raw,readonly=on",
+        seed_iso.display()
+    );
     let nic_arg = format!("user,hostfwd=tcp::{ssh_port}-:22");
     let serial_arg = format!("file:{}", serial_log.display());
     let mon_sock = work_dir.join("mon.sock");
@@ -904,19 +912,31 @@ async fn create_snapshot(
 
     let memory_str = memory_mb.to_string();
     let mut args: Vec<&str> = vec![
-        "-machine", "virt",
-        "-cpu", if use_kvm { "host" } else { "max" },
-        "-m", &memory_str,
-        "-smp", "2",
-        "-drive", &efi_code_arg,
-        "-drive", &efi_vars_arg,
-        "-drive", &disk_arg,
-        "-drive", &seed_arg,
-        "-nic", &nic_arg,
+        "-machine",
+        "virt",
+        "-cpu",
+        if use_kvm { "host" } else { "max" },
+        "-m",
+        &memory_str,
+        "-smp",
+        "2",
+        "-drive",
+        &efi_code_arg,
+        "-drive",
+        &efi_vars_arg,
+        "-drive",
+        &disk_arg,
+        "-drive",
+        &seed_arg,
+        "-nic",
+        &nic_arg,
         "-nographic",
-        "-serial", &serial_arg,
-        "-monitor", &mon_arg,
-        "-virtfs", &virtfs_arg,
+        "-serial",
+        &serial_arg,
+        "-monitor",
+        &mon_arg,
+        "-virtfs",
+        &virtfs_arg,
     ];
     if use_kvm {
         args.extend(crate::accel_args().iter().copied());
@@ -935,14 +955,22 @@ async fn create_snapshot(
     loop {
         let result = Command::new("ssh")
             .args([
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-o", "ConnectTimeout=2",
-                "-o", "BatchMode=yes",
-                "-i", &ssh_key_path.to_string_lossy(),
-                "-p", &port_str,
-                "ryra@127.0.0.1", "true",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                "ConnectTimeout=2",
+                "-o",
+                "BatchMode=yes",
+                "-i",
+                &ssh_key_path.to_string_lossy(),
+                "-p",
+                &port_str,
+                "ryra@127.0.0.1",
+                "true",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -964,13 +992,20 @@ async fn create_snapshot(
     // Wait for cloud-init
     let _ = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            "-o", "BatchMode=yes",
-            "-i", &ssh_key_path.to_string_lossy(),
-            "-p", &port_str,
-            "ryra@127.0.0.1", "cloud-init status --wait",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "BatchMode=yes",
+            "-i",
+            &ssh_key_path.to_string_lossy(),
+            "-p",
+            &port_str,
+            "ryra@127.0.0.1",
+            "cloud-init status --wait",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -988,13 +1023,20 @@ async fn create_snapshot(
         systemctl --user daemon-reload";
     let setup_status = Command::new("ssh")
         .args([
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-o", "LogLevel=ERROR",
-            "-o", "BatchMode=yes",
-            "-i", &ssh_key_path.to_string_lossy(),
-            "-p", &port_str,
-            "ryra@127.0.0.1", setup_cmd,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            "-o",
+            "BatchMode=yes",
+            "-i",
+            &ssh_key_path.to_string_lossy(),
+            "-p",
+            &port_str,
+            "ryra@127.0.0.1",
+            setup_cmd,
         ])
         .output()
         .await
@@ -1006,10 +1048,7 @@ async fn create_snapshot(
 
     // Save snapshot via HMP monitor using socat
     let socat_result = std::process::Command::new("socat")
-        .args([
-            "-",
-            &format!("UNIX-CONNECT:{}", mon_sock.display()),
-        ])
+        .args(["-", &format!("UNIX-CONNECT:{}", mon_sock.display())])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

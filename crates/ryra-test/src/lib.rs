@@ -306,14 +306,12 @@ pub async fn run(args: Args) -> Result<()> {
     // The snapshot must be created at this size so all VMs can restore from it.
     let max_memory: u32 = to_run
         .iter()
-        .map(|t| {
-            memory_override
-                .unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t))
-        })
+        .map(|t| memory_override.unwrap_or_else(|| registry::vm_memory_for_test(&registry_path, t)))
         .max()
         .unwrap_or(1024);
 
-    let base_image = image::ensure_image(&args.distro, args.redownload, use_kvm, max_memory).await?;
+    let base_image =
+        image::ensure_image(&args.distro, args.redownload, use_kvm, max_memory).await?;
 
     if keep_alive_interactive {
         return run_interactive_vm(&base_image, &spawn_opts, &ryra_bin, &registry_path).await;

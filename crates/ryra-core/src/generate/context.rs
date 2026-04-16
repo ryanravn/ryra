@@ -45,7 +45,8 @@ pub fn build_context(
         ctx.insert("service.scheme".into(), "http".into());
     }
     // service.external_url falls back to service.url when no url is set.
-    ctx.entry("service.external_url".into()).or_insert(localhost_url.clone());
+    ctx.entry("service.external_url".into())
+        .or_insert(localhost_url.clone());
     // Ensure service.url is always set (even when external url overrides it)
     ctx.entry("service.url".into()).or_insert(localhost_url);
 
@@ -85,7 +86,10 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let auth_localhost_url = auth.url().to_string();
-        let caddy_installed = config.services.iter().any(|s| crate::WellKnownService::Caddy.matches(&s.name) && s.installed);
+        let caddy_installed = config
+            .services
+            .iter()
+            .any(|s| crate::WellKnownService::Caddy.matches(&s.name) && s.installed);
         // auth.external_url — browser-accessible URL.
         // Uses the stored URL from the auth provider's installed record if available.
         // When Caddy is installed, ensures the URL includes Caddy's HTTPS port
