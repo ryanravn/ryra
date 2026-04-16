@@ -495,12 +495,10 @@ pub fn add_service(
         }
     }
 
-    // Prevent /etc/hosts from leaking into containers with auth — host entries
-    // (e.g., 127.0.0.1 auth.localhost) would override podman DNS aliases that
-    // route to Caddy for OIDC.
-    if enable_auth && caddy_installed && !WellKnownService::Authelia.matches(service_name) && !WellKnownService::Caddy.matches(service_name) {
-        podman_args.push("--no-hosts".into());
-    }
+    // Note: --no-hosts was previously used here to prevent /etc/hosts from
+    // overriding podman DNS. Removed because --no-hosts and --add-host are
+    // mutually exclusive in podman. The --add-host for the auth domain (above)
+    // takes precedence over default /etc/hosts entries.
 
     // Build port variable expansions for quadlet PublishPort directives
     let port_vars: Vec<(String, String)> = reg_service
