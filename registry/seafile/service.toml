@@ -6,8 +6,8 @@ architecture = ["amd64", "arm64"]
 https = "required"
 
 [requirements.ram]
-min = 512
-recommended = 1024
+min = 1024
+recommended = 2048
 
 [[ports]]
 name = "http"
