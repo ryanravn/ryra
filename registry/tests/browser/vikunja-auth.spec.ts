@@ -61,13 +61,23 @@ test("full OIDC login through Authelia creates a session", async ({ browser }) =
   // 2. Click SSO button
   const ssoButton = page.locator("a:has-text('SSO'), button:has-text('SSO')");
   await expect(ssoButton).toBeVisible({ timeout: 15_000 });
-  await ssoButton.first().click();
 
-  // 3. Should redirect to Authelia
-  await page.waitForURL(
-    (url) => url.hostname === "auth.localhost",
-    { timeout: 15_000 },
-  );
+  // Vikunja is a Vue SPA — the button exists in the DOM before the click
+  // handler is attached at hydration, so an early click is a no-op and
+  // waitForURL then times out. Click, check for navigation, retry up to
+  // 8 × 1s so flakes from slow hydration don't fail the test.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await ssoButton.first().click();
+    try {
+      await page.waitForURL(
+        (url) => url.hostname === "auth.localhost",
+        { timeout: 1_500 },
+      );
+      break;
+    } catch {
+      if (attempt === 7) throw new Error("SSO click never redirected to auth.localhost");
+    }
+  }
 
   // 4. Login at Authelia
   await loginToAuthelia(page);
