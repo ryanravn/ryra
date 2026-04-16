@@ -1099,6 +1099,31 @@ async fn scp_dir_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) 
     Ok(())
 }
 
+/// SCP a remote directory recursively from the VM to the given local path.
+/// The local parent directory must exist; the remote directory contents are
+/// written into `local_path`.
+pub async fn scp_dir_from_vm(
+    machine: &Machine,
+    remote_path: &str,
+    local_path: &Path,
+) -> Result<()> {
+    let source = format!("ryra@{}:{remote_path}", machine.ssh_host);
+    let mut args = scp_base_args(machine);
+    args.push("-r".into());
+    args.push(source);
+    args.push(local_path.to_string_lossy().into_owned());
+
+    let status = Command::new("scp")
+        .args(&args)
+        .status()
+        .await
+        .with_context(|| format!("failed to SCP {remote_path} from VM"))?;
+    if !status.success() {
+        anyhow::bail!("SCP of {remote_path} from VM failed");
+    }
+    Ok(())
+}
+
 /// Copy the ryra binary into a running VM via SCP.
 pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
     // SCP to user's home (writable), then sudo-move to system PATH.

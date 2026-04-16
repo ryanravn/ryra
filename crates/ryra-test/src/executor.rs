@@ -1,8 +1,9 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use ryra_vm::machine::{ExecOutput, Machine};
+use ryra_vm::machine::{ExecOutput, Machine, scp_dir_from_vm};
 
 /// Abstraction over where commands run — VM (SSH) or local host.
 #[async_trait]
@@ -15,6 +16,10 @@ pub trait Executor: Send + Sync {
 
     /// Wait for a systemd user service to become active.
     async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()>;
+
+    /// Copy a directory from the execution environment to the host.
+    /// No-op for local execution (files are already on the host).
+    async fn fetch_dir(&self, remote_path: &str, local_path: &Path) -> Result<()>;
 }
 
 /// Executes commands inside a QEMU VM via SSH.
@@ -40,6 +45,14 @@ impl Executor for VmExecutor<'_> {
 
     async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
         self.vm.wait_for_service(unit, timeout).await
+    }
+
+    async fn fetch_dir(&self, remote_path: &str, local_path: &Path) -> Result<()> {
+        // Ensure the local parent dir exists so scp writes into local_path/
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+        scp_dir_from_vm(self.vm, remote_path, local_path).await
     }
 }
 
@@ -160,6 +173,11 @@ impl Executor for LocalExecutor {
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+    }
+
+    async fn fetch_dir(&self, _remote_path: &str, _local_path: &Path) -> Result<()> {
+        // No-op: in local mode the "remote" path is already on the host.
+        Ok(())
     }
 }
 

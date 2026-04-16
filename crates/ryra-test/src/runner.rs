@@ -429,6 +429,22 @@ async fn run_browser_step(
         Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
     };
 
+    // Pull the playwright report out of the execution environment so it lives
+    // at the canonical host path regardless of VM or bare mode. No-op on bare.
+    // We always try — even on failure, because traces on failure are the
+    // most valuable ones to inspect.
+    if let Ok(home) = std::env::var("HOME") {
+        let local_dir = std::path::PathBuf::from(&home)
+            .join(".local/share/ryra/test-reports")
+            .join(test_name)
+            .join("playwright");
+        let remote_dir =
+            format!("/home/ryra/.local/share/ryra/test-reports/{test_name}/playwright");
+        if let Err(e) = vm.fetch_dir(&remote_dir, &local_dir).await {
+            eprintln!("warning: failed to fetch playwright report: {e:#}");
+        }
+    }
+
     Event::bare(
         format!("browser: {step_name}"),
         EventKind::Assertion,
