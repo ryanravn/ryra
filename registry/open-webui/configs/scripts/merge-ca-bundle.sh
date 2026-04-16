@@ -1,7 +1,7 @@
 #!/bin/bash
-set -euo pipefail
 # Merge Caddy's self-signed root CA into certifi's CA bundle so Python/httpx
 # trusts both public CAs and the internal Caddy cert for OIDC discovery.
+# Must not fail — ExecStartPre failure prevents the service from starting.
 SERVICE_HOME="$HOME/.local/share/ryra/open-webui"
 CADDY_CA="$HOME/.local/share/ryra/caddy-root-ca.crt"
 MERGED="$SERVICE_HOME/ca-bundle.crt"
@@ -15,3 +15,4 @@ podman run --rm --entrypoint cat ghcr.io/open-webui/open-webui:latest \
 
 # Append Caddy's root CA
 cat "$CADDY_CA" >> "$MERGED" 2>/dev/null || true
+exit 0

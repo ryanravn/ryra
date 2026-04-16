@@ -1,7 +1,7 @@
 #!/bin/bash
-set -euo pipefail
 # Merge Caddy's self-signed root CA into the system CA bundle so Python/requests
 # trusts the internal Caddy cert for OIDC token exchange with Authelia.
+# Must not fail — ExecStartPre failure prevents the service from starting.
 SERVICE_HOME="$HOME/.local/share/ryra/paperless-ngx"
 CADDY_CA="$HOME/.local/share/ryra/caddy-root-ca.crt"
 MERGED="$SERVICE_HOME/ca-bundle.crt"
@@ -15,3 +15,4 @@ podman run --rm --entrypoint cat ghcr.io/paperless-ngx/paperless-ngx:latest \
 
 # Append Caddy's root CA
 cat "$CADDY_CA" >> "$MERGED" 2>/dev/null || true
+exit 0
