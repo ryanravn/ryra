@@ -28,3 +28,4 @@
 
 # Local certificates
 *.crt
+.claude/
