@@ -899,7 +899,7 @@ fn sanitize_image_name(image: &str) -> String {
 /// (it should be from the snapshot, but re-mounts if needed after cold boot).
 pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
     machine
-        .exec("mountpoint -q /mnt/images 2>/dev/null || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
+        .exec("mkdir -p /mnt/images && mountpoint -q /mnt/images 2>/dev/null || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
         .await
         .context("failed to verify 9p image store mount in VM")?;
 

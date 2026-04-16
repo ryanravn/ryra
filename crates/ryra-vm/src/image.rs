@@ -986,7 +986,7 @@ async fn create_snapshot(
         sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' /etc/containers/storage.conf; \
         printf 'unqualified-search-registries = [\"docker.io\"]\\n' > /etc/containers/registries.conf; \
         systemctl --user daemon-reload";
-    let _ = Command::new("ssh")
+    let setup_status = Command::new("ssh")
         .args([
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -996,10 +996,13 @@ async fn create_snapshot(
             "-p", &port_str,
             "root@127.0.0.1", setup_cmd,
         ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
+        .output()
+        .await
+        .context("failed to SSH for snapshot setup")?;
+    if !setup_status.status.success() {
+        let stderr = String::from_utf8_lossy(&setup_status.stderr);
+        anyhow::bail!("snapshot setup failed: {stderr}");
+    }
 
     // Save snapshot via HMP monitor using socat
     let socat_result = std::process::Command::new("socat")
