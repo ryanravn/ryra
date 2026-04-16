@@ -598,6 +598,17 @@ async fn run_interactive_vm(
     Ok(())
 }
 
+/// Clean host state between bare-mode tests: uninstall all ryra-managed
+/// services and remove the bundled registry cache (which can be polluted by
+/// tests like diff-whoami that intentionally mutate it).
+async fn reset_bare_state(executor: &crate::executor::LocalExecutor) {
+    use crate::executor::Executor;
+    let _ = executor.exec("ryra reset -y").await;
+    let _ = executor
+        .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/ryra/bundled\"")
+        .await;
+}
+
 /// Run tests directly on the host without a VM.
 async fn run_bare(
     args: &Args,
@@ -614,6 +625,14 @@ async fn run_bare(
     for test in to_run {
         let name = test.name().to_string();
         println!("---- START {name} (bare) ----");
+
+        // Reset host state between tests so one test's leftover services or
+        // cache pollution doesn't cascade into the next. Bare mode shares the
+        // host's ryra config/cache across all tests — unlike VM mode where
+        // each test gets a fresh VM. Failures here are non-fatal: the first
+        // reset may find nothing to clean, and test assertions will surface
+        // any real setup failures.
+        reset_bare_state(&executor).await;
 
         let start = std::time::Instant::now();
         let result = match test {
