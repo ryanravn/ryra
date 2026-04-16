@@ -12,6 +12,8 @@ pub struct ProcessBundleParams<'a> {
     pub extra_volumes: &'a [String],
     /// Extra args passed via `PodmanArgs=` in the quadlet.
     pub podman_args: &'a [String],
+    /// Extra ExecStartPre commands to inject into [Service] section.
+    pub extra_exec_start_pre: &'a [String],
     /// Port variable expansions (e.g., `RYRA_PORT_HTTP` → `8080`).
     /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
     /// values because systemd doesn't expand EnvironmentFile vars in directives.
@@ -227,6 +229,17 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             content = inject_networks(&content, params.extra_networks);
             content = inject_extra_volumes(&content, params.extra_volumes);
             content = inject_podman_args(&content, params.podman_args);
+            // Inject ExecStartPre into the main service container
+            // (the one named <service>.container, not sidecars)
+            if file_name == format!("{}.container", params.service_name) {
+                for cmd in params.extra_exec_start_pre {
+                    content = inject_before_section(
+                        &content,
+                        &format!("ExecStartPre={cmd}"),
+                        "[Install]",
+                    );
+                }
+            }
             // Expand ${RYRA_PORT_*} in PublishPort lines — systemd doesn't
             // expand EnvironmentFile vars in quadlet directives.
             for (var, val) in params.port_vars {

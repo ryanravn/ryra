@@ -462,6 +462,52 @@ pub fn add_service(
                 "/etc/ssl/certs/ca-certificates.crt".into(),
             );
         }
+
+        // Create a resolve-auth-host.sh script that dynamically resolves
+        // caddy's IP at service start time and writes an /etc/hosts override.
+        // This is needed because .localhost domains resolve to 127.0.0.1
+        // inside containers (RFC 6761), and caddy's IP changes on restart.
+        let service_data = service_home(service_name)?;
+        std::fs::create_dir_all(&service_data).ok();
+        let auth_host_script = service_data.join("resolve-auth-host.sh");
+        if let Some(auth_service) = config.services.iter().find(|s| WellKnownService::Authelia.matches(&s.name)) {
+            if let Some(ref auth_url) = auth_service.url {
+                if let Ok(parsed) = url::Url::parse(auth_url) {
+                    if let Some(host) = parsed.host_str() {
+                        let script = format!(
+                            "#!/bin/bash\n\
+                             # Resolve caddy's current IP for .localhost auth domains\n\
+                             HOSTS=\"{service_data}/auth-hosts.txt\"\n\
+                             CADDY_IP=$(podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
+                             if [ -n \"$CADDY_IP\" ]; then\n\
+                               echo \"$CADDY_IP {host}\" > \"$HOSTS\"\n\
+                             else\n\
+                               echo \"127.0.0.1 {host}\" > \"$HOSTS\"\n\
+                             fi\n\
+                             exit 0\n",
+                            service_data = service_data.display(),
+                            host = host,
+                        );
+                        std::fs::write(&auth_host_script, &script).ok();
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            std::fs::set_permissions(&auth_host_script, std::fs::Permissions::from_mode(0o755)).ok();
+                        }
+                        // Create placeholder hosts file for Volume= mount
+                        let auth_hosts = service_data.join("auth-hosts.txt");
+                        if !auth_hosts.exists() {
+                            std::fs::write(&auth_hosts, format!("127.0.0.1 {host}\n")).ok();
+                        }
+                        // Mount the dynamic hosts file
+                        extra_volumes.push(format!(
+                            "{}:/etc/hosts:z",
+                            auth_hosts.display()
+                        ));
+                    }
+                }
+            }
+        }
     }
     let has_smtp = reg_service.def.integrations.smtp
         && !reg_service.def.mappings.smtp.is_empty()
@@ -488,35 +534,12 @@ pub fn add_service(
 
     let mut podman_args: Vec<String> = Vec::new();
 
-    // For OIDC services with caddy, resolve .localhost auth domains to caddy's
-    // container IP. RFC 6761 makes .localhost always resolve to 127.0.0.1
-    // (container loopback), so without --add-host the container can't reach caddy.
-    if enable_auth && caddy_installed && !WellKnownService::Authelia.matches(service_name) && !WellKnownService::Caddy.matches(service_name) {
-        // Get auth domain from authelia's URL
-        if let Some(auth_service) = config.services.iter().find(|s| WellKnownService::Authelia.matches(&s.name)) {
-            if let Some(ref auth_url) = auth_service.url {
-                if let Ok(parsed) = url::Url::parse(auth_url) {
-                    if let Some(host) = parsed.host_str() {
-                        // Get caddy's container IP via podman inspect
-                        if let Ok(output) = std::process::Command::new("podman")
-                            .args(["inspect", "caddy", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}"])
-                            .output()
-                        {
-                            let ip = String::from_utf8_lossy(&output.stdout).trim().split_whitespace().next().unwrap_or("").to_string();
-                            if !ip.is_empty() {
-                                podman_args.push(format!("--add-host={host}:{ip}"));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Note: --no-hosts was previously used here to prevent /etc/hosts from
-    // overriding podman DNS. Removed because --no-hosts and --add-host are
-    // mutually exclusive in podman. The --add-host for the auth domain (above)
-    // takes precedence over default /etc/hosts entries.
+    // Note: .localhost auth domains (e.g. auth.localhost) can't be resolved
+    // inside containers — RFC 6761 hardcodes them to 127.0.0.1. The caddy
+    // container's IP is dynamic and changes on restart, so we can't use
+    // static --add-host. Instead, auth-enabled services get a shared
+    // resolve-auth-host.sh ExecStartPre script that dynamically resolves
+    // caddy's current IP at service start time.
 
     // Build port variable expansions for quadlet PublishPort directives
     let port_vars: Vec<(String, String)> = reg_service
@@ -532,6 +555,17 @@ pub fn add_service(
         })
         .collect();
 
+    // Collect ExecStartPre commands for auth host resolution
+    let mut extra_exec_start_pre: Vec<String> = Vec::new();
+    let auth_host_script = service_home(service_name)
+        .ok()
+        .map(|d| d.join("resolve-auth-host.sh"));
+    if let Some(ref script) = auth_host_script {
+        if script.exists() {
+            extra_exec_start_pre.push(format!("-/bin/bash {}", script.display()));
+        }
+    }
+
     // Process quadlet bundle from registry
     let bundle =
         generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
@@ -541,6 +575,7 @@ pub fn add_service(
             extra_networks: &extra_networks,
             extra_volumes: &extra_volumes,
             podman_args: &podman_args,
+            extra_exec_start_pre: &extra_exec_start_pre,
             port_vars: &port_vars,
         })?;
 
