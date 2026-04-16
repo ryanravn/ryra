@@ -101,7 +101,7 @@ REGISTER_RESULT=$(curl -sf -X POST "${GRAPHQL_URL}" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -d "{
-    \"query\": \"mutation { createOIDCIdentityProvider(input: { name: \\\"Authelia\\\", issuer: \\\"${OIDC_EXTERNAL_URL}\\\", clientID: \\\"${OIDC_CLIENT_ID}\\\", clientSecret: \\\"${OIDC_CLIENT_SECRET}\\\" }) { id type issuer name status } }\"
+    \"query\": \"mutation { createOIDCIdentityProvider(input: { name: \\\"Authelia\\\", issuer: \\\"${OIDC_ISSUER_URL}\\\", clientID: \\\"${OIDC_CLIENT_ID}\\\", clientSecret: \\\"${OIDC_CLIENT_SECRET}\\\" }) { id type issuer name status } }\"
   }" 2>/dev/null || true)
 
 if echo "$REGISTER_RESULT" | grep -q '"id"'; then

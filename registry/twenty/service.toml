@@ -91,5 +91,5 @@ EMAIL_SMTP_PASSWORD = "{{smtp.password}}"
 [mappings.auth]
 OIDC_CLIENT_ID = "{{auth.client_id}}"
 OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
-OIDC_ISSUER_URL = "{{auth.issuer}}"
+OIDC_ISSUER_URL = "{{auth.internal_url}}"
 OIDC_EXTERNAL_URL = "{{auth.external_url}}"

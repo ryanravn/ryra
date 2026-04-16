@@ -28,5 +28,5 @@ smtp = false
 [mappings.auth]
 OAUTH_CLIENT_ID = "{{auth.client_id}}"
 OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
-OAUTH_ISSUER_URL = "{{auth.issuer}}"
+OAUTH_ISSUER_URL = "{{auth.internal_url}}"
 OAUTH_REDIRECT_URL = "{{service.external_url}}/sso/OID/redirect/authelia"

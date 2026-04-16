@@ -104,7 +104,7 @@ fi
 ACCESS=$(gql "mutation { getAuthTokensFromLoginToken(loginToken: \"${LOGIN}\", origin: \"${TWENTY_URL}\") { tokens { accessOrWorkspaceAgnosticToken { token } } } }" | jval "data.getAuthTokensFromLoginToken.tokens.accessOrWorkspaceAgnosticToken.token")
 [ -z "$ACCESS" ] && { echo "Failed to get access token"; exit 1; }
 
-RESULT=$(gql "mutation { createOIDCIdentityProvider(input: { name: \"Authelia\", issuer: \"${OIDC_EXTERNAL_URL}\", clientID: \"${OIDC_CLIENT_ID}\", clientSecret: \"${OIDC_CLIENT_SECRET}\" }) { id status } }" "$ACCESS")
+RESULT=$(gql "mutation { createOIDCIdentityProvider(input: { name: \"Authelia\", issuer: \"${OIDC_ISSUER_URL}\", clientID: \"${OIDC_CLIENT_ID}\", clientSecret: \"${OIDC_CLIENT_SECRET}\" }) { id status } }" "$ACCESS")
 echo "$RESULT" | grep -q '"id"' && { echo "OIDC registered"; exit 0; }
 echo "$RESULT" | grep -qi 'already\|exist' && { echo "OIDC already registered"; exit 0; }
 echo "OIDC registration failed: $RESULT"

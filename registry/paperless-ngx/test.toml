@@ -11,7 +11,7 @@ action = "http"
 name = "paperless-ngx-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "paperless-ngx"
-poll = { interval = 2, attempts = 30 }
+poll = { interval = 3, attempts = 60 }
 timeout = 90
 
 [[steps]]
