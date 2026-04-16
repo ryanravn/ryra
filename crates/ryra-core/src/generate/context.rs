@@ -110,12 +110,18 @@ pub fn build_context(
         // auth.internal_url — how containers reach the auth provider for OIDC
         // discovery and token exchange (server-to-server calls).
         //
-        // Always uses direct HTTP to the auth container on the shared podman
-        // network. Cannot use .localhost domains because RFC 6761 requires them
-        // to always resolve to 127.0.0.1, even inside containers with --no-hosts.
-        let internal_url = match auth.port() {
-            Some(port) => format!("http://{}:{port}", auth.provider_name()),
-            None => auth_localhost_url.clone(),
+        // Uses the same URL as external_url (through caddy with HTTPS) because
+        // authelia requires X-Forwarded-Proto/Host headers for OIDC discovery,
+        // which only caddy provides. Containers resolve the .localhost domain
+        // to caddy's IP via custom /etc/hosts entries injected by ExecStartPre
+        // scripts, and trust caddy's self-signed CA via mounted CA bundles.
+        let internal_url = if caddy_installed {
+            external_url.clone()
+        } else {
+            match auth.port() {
+                Some(port) => format!("http://{}:{port}", auth.provider_name()),
+                None => auth_localhost_url.clone(),
+            }
         };
         ctx.insert("auth.url".into(), auth_localhost_url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());

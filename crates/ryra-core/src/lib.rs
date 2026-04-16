@@ -421,6 +421,9 @@ pub fn add_service(
         if ca_cert_host.exists() {
             // Mount the Caddy CA cert as the standard Linux CA bundle path so
             // Go, curl, etc. pick it up automatically.
+            // NOTE: This replaces the entire system CA bundle with just the
+            // caddy cert. Services that need both system CAs and caddy's CA
+            // use their own merge-ca-bundle.sh ExecStartPre scripts.
             // :z relabels for SELinux (shared across containers).
             extra_volumes.push(format!(
                 "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
@@ -466,6 +469,31 @@ pub fn add_service(
     })?;
 
     let mut podman_args: Vec<String> = Vec::new();
+
+    // For OIDC services with caddy, resolve .localhost auth domains to caddy's
+    // container IP. RFC 6761 makes .localhost always resolve to 127.0.0.1
+    // (container loopback), so without --add-host the container can't reach caddy.
+    if enable_auth && caddy_installed && !WellKnownService::Authelia.matches(service_name) && !WellKnownService::Caddy.matches(service_name) {
+        // Get auth domain from authelia's URL
+        if let Some(auth_service) = config.services.iter().find(|s| WellKnownService::Authelia.matches(&s.name)) {
+            if let Some(ref auth_url) = auth_service.url {
+                if let Ok(parsed) = url::Url::parse(auth_url) {
+                    if let Some(host) = parsed.host_str() {
+                        // Get caddy's container IP via podman inspect
+                        if let Ok(output) = std::process::Command::new("podman")
+                            .args(["inspect", "caddy", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}"])
+                            .output()
+                        {
+                            let ip = String::from_utf8_lossy(&output.stdout).trim().split_whitespace().next().unwrap_or("").to_string();
+                            if !ip.is_empty() {
+                                podman_args.push(format!("--add-host={host}:{ip}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Prevent /etc/hosts from leaking into containers with auth — host entries
     // (e.g., 127.0.0.1 auth.localhost) would override podman DNS aliases that
