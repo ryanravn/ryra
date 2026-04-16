@@ -451,6 +451,7 @@ mod tests {
             extra_networks: &[],
             extra_volumes: &[],
             podman_args: &[],
+            extra_exec_start_pre: &[],
             port_vars: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
@@ -487,6 +488,7 @@ mod tests {
             extra_networks: &["caddy".to_string()],
             extra_volumes: &[],
             podman_args: &[],
+            extra_exec_start_pre: &[],
             port_vars: &[],
         };
 
@@ -535,6 +537,7 @@ mod tests {
             extra_networks: &[],
             extra_volumes: &[],
             podman_args: &[],
+            extra_exec_start_pre: &[],
             port_vars: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
