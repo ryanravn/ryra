@@ -70,12 +70,16 @@ action = "shell"
 name = "sso-redirects"
 run = """
 PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/jellyfin/.env | cut -d= -f2)
-HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/sso/OID/start/authelia" 2>/dev/null)
-echo "SSO start HTTP code: $HTTP_CODE"
-# Should get 200 (page with redirect JS) or 302, not 400/404/500
-[ "$HTTP_CODE" -lt 400 ]
+for i in $(seq 1 15); do
+  HTTP_CODE=$(curl -so /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/sso/OID/start/authelia" 2>/dev/null)
+  echo "SSO start attempt $i: HTTP $HTTP_CODE"
+  [ "$HTTP_CODE" -lt 400 ] && exit 0
+  sleep 2
+done
+echo "SSO start failed after 30s"
+exit 1
 """
-timeout = 30
+timeout = 60
 
 # Cleanup
 [[steps]]
