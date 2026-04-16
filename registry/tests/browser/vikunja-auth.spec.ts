@@ -33,19 +33,6 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
   }
 }
 
-test("vikunja login page loads and has SSO option", async ({ browser }) => {
-  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
-  const page = await context.newPage();
-  await page.goto(VIKUNJA_URL, { timeout: 15_000 });
-  await page.waitForLoadState("networkidle");
-
-  // Vikunja shows a login page with an SSO button
-  const ssoButton = page.locator("a:has-text('SSO'), button:has-text('SSO')");
-  await expect(ssoButton).toBeVisible({ timeout: 15_000 });
-  await context.close();
-});
-
 test("full OIDC login through Authelia creates a session", async ({ browser }) => {
   // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
   const context = await browser.newContext({

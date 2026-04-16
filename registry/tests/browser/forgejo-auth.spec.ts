@@ -38,18 +38,6 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
   }
 }
 
-test("forgejo login page loads", async ({ page }) => {
-  await page.goto(FORGEJO_URL);
-  await expect(page).toHaveTitle(/Forgejo/, { timeout: 15_000 });
-});
-
-test("forgejo has Authelia SSO button", async ({ page }) => {
-  await page.goto(`${FORGEJO_URL}/user/login`);
-  const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');
-  await expect(autheliaLink).toBeVisible({ timeout: 15_000 });
-  await expect(autheliaLink).toContainText(/Authelia/);
-});
-
 test("clicking SSO button initiates OIDC flow", async ({ page }) => {
   await page.goto(`${FORGEJO_URL}/user/login`);
   const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');

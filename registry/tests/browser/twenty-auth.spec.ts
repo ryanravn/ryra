@@ -5,12 +5,6 @@ const TWENTY_URL = `http://127.0.0.1:${TWENTY_PORT}`;
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-test("twenty welcome page shows SSO button", async ({ page }) => {
-  await page.goto(`${TWENTY_URL}/welcome`);
-  const ssoButton = page.getByRole("button", { name: /single sign-on|sso/i });
-  await expect(ssoButton).toBeVisible({ timeout: 15_000 });
-});
-
 test("full OIDC login through Authelia reaches Twenty", async ({ browser }) => {
   // Authelia uses HTTPS with a self-signed cert
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
