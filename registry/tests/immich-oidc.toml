@@ -38,7 +38,7 @@ service = "immich"
 [[steps]]
 action = "shell"
 name = "setup-hosts"
-run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
+run = "echo '127.0.0.1 auth.test.local' | sudo tee -a /etc/hosts"
 
 # Verify Immich responds
 [[steps]]

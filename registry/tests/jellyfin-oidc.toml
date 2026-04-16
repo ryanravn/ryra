@@ -37,7 +37,7 @@ service = "jellyfin"
 [[steps]]
 action = "shell"
 name = "setup"
-run = "echo '127.0.0.1 auth.test.local' >> /etc/hosts"
+run = "echo '127.0.0.1 auth.test.local' | sudo tee -a /etc/hosts"
 
 # Wait for Jellyfin HTTP
 [[steps]]
