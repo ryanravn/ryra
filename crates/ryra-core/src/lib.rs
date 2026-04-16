@@ -419,15 +419,32 @@ pub fn add_service(
             .ok_or_else(|| Error::Bundle("caddy service home has no parent directory".into()))?
             .join("caddy-root-ca.crt");
         if ca_cert_host.exists() {
-            // Mount the Caddy CA cert as the standard Linux CA bundle path so
-            // Go, curl, etc. pick it up automatically.
-            // NOTE: This replaces the entire system CA bundle with just the
-            // caddy cert. Services that need both system CAs and caddy's CA
-            // use their own merge-ca-bundle.sh ExecStartPre scripts.
+            // Create a merged CA bundle: system CAs + caddy's self-signed CA.
+            // Mounting just the caddy cert would replace ALL system CAs and
+            // break any service that needs to reach the public internet.
+            let service_data = service_home(service_name)?;
+            let merged_bundle = service_data.join("ca-bundle.crt");
+            if !merged_bundle.exists() {
+                let mut bundle = String::new();
+                // Try common system CA bundle paths
+                for sys_path in &["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"] {
+                    if let Ok(content) = std::fs::read_to_string(sys_path) {
+                        bundle = content;
+                        break;
+                    }
+                }
+                // Append caddy's CA
+                if let Ok(caddy_ca) = std::fs::read_to_string(&ca_cert_host) {
+                    bundle.push_str("\n# ryra-caddy-ca\n");
+                    bundle.push_str(&caddy_ca);
+                }
+                std::fs::write(&merged_bundle, &bundle).ok();
+            }
+            // Mount the merged bundle as the system CA store
             // :z relabels for SELinux (shared across containers).
             extra_volumes.push(format!(
                 "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
-                ca_cert_host.display()
+                merged_bundle.display()
             ));
             // Python (requests/certifi) and Node.js don't use the system CA
             // bundle — they need explicit env vars to find the cert.
