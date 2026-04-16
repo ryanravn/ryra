@@ -894,14 +894,34 @@ fn sanitize_image_name(image: &str) -> String {
 
 /// Make host container images available in the VM via shared store.
 ///
-/// The snapshot already has storage.conf (additionalimagestores), registries.conf,
-/// and the 9p mount configured. This function just verifies the mount is up
-/// (it should be from the snapshot, but re-mounts if needed after cold boot).
+/// On snapshot-restored VMs, the config is already baked in. On cold boot,
+/// this configures everything from scratch. Idempotent — safe to call either way.
 pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
+    // Mount the 9p store (already mounted from snapshot, or needs mounting on cold boot)
     machine
         .exec("mkdir -p /mnt/images && mountpoint -q /mnt/images 2>/dev/null || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
         .await
-        .context("failed to verify 9p image store mount in VM")?;
+        .context("failed to mount 9p image store in VM")?;
+
+    // Configure additionalimagestores (idempotent — skips if already set)
+    machine
+        .exec(
+            "grep -q '/mnt/images' /etc/containers/storage.conf 2>/dev/null || \
+             (cp /usr/share/containers/storage.conf /etc/containers/storage.conf && \
+              sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' \
+              /etc/containers/storage.conf)",
+        )
+        .await
+        .context("failed to configure additionalimagestores in VM")?;
+
+    // Configure registries (idempotent)
+    machine
+        .exec(
+            "grep -q 'docker.io' /etc/containers/registries.conf 2>/dev/null || \
+             printf 'unqualified-search-registries = [\"docker.io\"]\\n' > /etc/containers/registries.conf",
+        )
+        .await
+        .context("failed to configure registries in VM")?;
 
     Ok(())
 }
