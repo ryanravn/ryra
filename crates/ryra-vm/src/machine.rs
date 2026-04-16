@@ -208,7 +208,7 @@ impl Machine {
             .await?;
 
         // Fix clock skew: the snapshot's system clock is frozen at save time
-        let _ = machine.exec("date -s \"$(date -u -R)\" >/dev/null 2>&1").await;
+        let _ = machine.exec("sudo date -s \"$(date -u -R)\" >/dev/null 2>&1").await;
 
         Ok(machine)
     }
@@ -360,7 +360,7 @@ impl Machine {
             "-o".into(), "BatchMode=yes".into(),
             "-i".into(), key.to_string_lossy().into_owned(),
             "-p".into(), self.ssh_port.to_string(),
-            format!("root@{}", self.ssh_host),
+            format!("ryra@{}", self.ssh_host),
         ]
     }
 
@@ -483,7 +483,7 @@ impl Machine {
         println!(
             "  VM still running. Connect with:\n    \
              ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-             -i {}/id_ed25519 -p {} root@{}\n  \
+             -i {}/id_ed25519 -p {} ryra@{}\n  \
              Serial log: {}/serial.log\n  \
              Kill with: kill {}",
             self.work_dir.display(),
@@ -589,22 +589,28 @@ pub(crate) async fn build_seed_iso(
     hostname: &str,
     pub_key: &str,
 ) -> Result<()> {
+    // VMs run podman rootless as UID 1000 (matching host) so rootless user
+    // namespaces correctly map file ownership in the shared image store.
+    // Without this, s6-overlay containers (e.g., paperless-ngx) fail because
+    // the shared store files are owned by UID 1000 on host but would appear
+    // as UID 1000 inside rootful containers.
     let user_data = format!(
         r#"#cloud-config
-disable_root: false
 ssh_pwauth: false
 
 users:
-  - name: root
+  - name: ryra
+    uid: 1000
+    shell: /bin/bash
     lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - {pub_key}
 
 runcmd:
-  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-  - systemctl restart sshd
-  - systemctl enable podman.socket
-  - loginctl enable-linger root
+  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subuid" ]
+  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subgid" ]
+  - loginctl enable-linger ryra
 "#
     );
     write_seed_iso(work_dir, output, hostname, &user_data).await
@@ -626,12 +632,14 @@ pub async fn build_seed_iso_full(
         .join("\n");
     let user_data = format!(
         r#"#cloud-config
-disable_root: false
 ssh_pwauth: false
 
 users:
-  - name: root
+  - name: ryra
+    uid: 1000
+    shell: /bin/bash
     lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - {pub_key}
 
@@ -639,10 +647,9 @@ packages:
 {package_list}
 
 runcmd:
-  - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-  - systemctl restart sshd
-  - systemctl enable podman.socket
-  - loginctl enable-linger root
+  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subuid" ]
+  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subgid" ]
+  - loginctl enable-linger ryra
 "#
     );
     write_seed_iso(work_dir, output, hostname, &user_data).await
@@ -897,31 +904,26 @@ fn sanitize_image_name(image: &str) -> String {
 /// On snapshot-restored VMs, the config is already baked in. On cold boot,
 /// this configures everything from scratch. Idempotent — safe to call either way.
 pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Result<()> {
-    // Mount the 9p store (already mounted from snapshot, or needs mounting on cold boot)
+    // Mount the 9p store (already mounted from snapshot, or needs mounting on cold boot).
+    // Uses sudo because mount is a privileged operation.
     machine
-        .exec("mkdir -p /mnt/images && mountpoint -q /mnt/images 2>/dev/null || mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images")
+        .exec("sudo mkdir -p /mnt/images && (mountpoint -q /mnt/images 2>/dev/null || sudo mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images)")
         .await
         .context("failed to mount 9p image store in VM")?;
 
-    // Configure additionalimagestores (idempotent — skips if already set)
+    // Configure rootless podman storage/registries at the user level
+    // (~/.config/containers/). These are used by the ryra user's rootless
+    // podman and don't require sudo.
     machine
         .exec(
-            "grep -q '/mnt/images' /etc/containers/storage.conf 2>/dev/null || \
-             (cp /usr/share/containers/storage.conf /etc/containers/storage.conf && \
-              sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' \
-              /etc/containers/storage.conf)",
+            "mkdir -p ~/.config/containers && \
+             (grep -q '/mnt/images' ~/.config/containers/storage.conf 2>/dev/null || \
+              printf '[storage]\\ndriver = \"overlay\"\\n[storage.options]\\nadditionalimagestores = [\"/mnt/images\"]\\n' > ~/.config/containers/storage.conf) && \
+             (grep -q 'docker.io' ~/.config/containers/registries.conf 2>/dev/null || \
+              printf 'unqualified-search-registries = [\"docker.io\"]\\n' > ~/.config/containers/registries.conf)",
         )
         .await
-        .context("failed to configure additionalimagestores in VM")?;
-
-    // Configure registries (idempotent)
-    machine
-        .exec(
-            "grep -q 'docker.io' /etc/containers/registries.conf 2>/dev/null || \
-             printf 'unqualified-search-registries = [\"docker.io\"]\\n' > /etc/containers/registries.conf",
-        )
-        .await
-        .context("failed to configure registries in VM")?;
+        .context("failed to configure podman config in VM")?;
 
     Ok(())
 }
@@ -940,7 +942,7 @@ fn scp_base_args(machine: &Machine) -> Vec<String> {
 
 /// SCP a local file into the VM at the given remote path.
 async fn scp_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
-    let dest = format!("root@{}:{remote_path}", machine.ssh_host);
+    let dest = format!("ryra@{}:{remote_path}", machine.ssh_host);
     let mut args = scp_base_args(machine);
     args.push(local_path.to_string_lossy().into_owned());
     args.push(dest);
@@ -958,7 +960,7 @@ async fn scp_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> R
 
 /// SCP a local directory recursively into the VM at the given remote path.
 async fn scp_dir_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
-    let dest = format!("root@{}:{remote_path}", machine.ssh_host);
+    let dest = format!("ryra@{}:{remote_path}", machine.ssh_host);
     let mut args = scp_base_args(machine);
     args.push("-r".into());
     args.push(local_path.to_string_lossy().into_owned());
@@ -977,8 +979,11 @@ async fn scp_dir_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) 
 
 /// Copy the ryra binary into a running VM via SCP.
 pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
-    scp_to_vm(machine, ryra_bin, "/usr/local/bin/ryra").await?;
-    machine.exec("chmod +x /usr/local/bin/ryra").await?;
+    // SCP to user's home (writable), then sudo-move to system PATH.
+    scp_to_vm(machine, ryra_bin, "/tmp/ryra").await?;
+    machine
+        .exec("sudo mv /tmp/ryra /usr/local/bin/ryra && sudo chmod +x /usr/local/bin/ryra")
+        .await?;
     Ok(())
 }
 
@@ -992,8 +997,10 @@ pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Resu
         return Ok(());
     }
 
-    // Create destination dir first
-    machine.exec("mkdir -p /opt/ryra-test-registry").await?;
+    // Create destination dir (needs sudo — /opt is root-owned, chown to ryra user)
+    machine
+        .exec("sudo mkdir -p /opt/ryra-test-registry && sudo chown ryra:ryra /opt/ryra-test-registry")
+        .await?;
 
     // SCP each service dir individually to avoid nesting issues
     // (scp -r dir/ remote:dest/ creates dest/dir/, not dest/contents/)
@@ -1018,7 +1025,9 @@ pub async fn copy_project_to_vm(machine: &Machine, project_dir: &Path) -> Result
         anyhow::bail!("project directory not found: {}", project_dir.display());
     }
 
-    machine.exec("mkdir -p /opt/ryra-test-project").await?;
+    machine
+        .exec("sudo mkdir -p /opt/ryra-test-project && sudo chown ryra:ryra /opt/ryra-test-project")
+        .await?;
 
     // Copy individual files (not directories) — quadlet files and test.toml
     let quadlet_extensions = ["container", "volume", "network", "pod", "kube", "toml"];

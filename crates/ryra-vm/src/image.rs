@@ -640,7 +640,7 @@ async fn prepare_image(
                 &key_path.to_string_lossy(),
                 "-p",
                 &port_str,
-                "root@127.0.0.1",
+                "ryra@127.0.0.1",
                 "true",
             ])
             .stdout(Stdio::null())
@@ -692,7 +692,7 @@ async fn prepare_image(
             &key_path.to_string_lossy(),
             "-p",
             &port_str,
-            "root@127.0.0.1",
+            "ryra@127.0.0.1",
             "cloud-init status --wait",
         ])
         .stdout(Stdio::null())
@@ -721,7 +721,7 @@ async fn prepare_image(
             &key_path.to_string_lossy(),
             "-p",
             &port_str,
-            "root@127.0.0.1",
+            "ryra@127.0.0.1",
             "cloud-init clean --logs && rm -f /etc/ssh/ssh_host_*_key*",
         ])
         .stdout(Stdio::null())
@@ -744,7 +744,7 @@ async fn prepare_image(
             &key_path.to_string_lossy(),
             "-p",
             &port_str,
-            "root@127.0.0.1",
+            "ryra@127.0.0.1",
             "poweroff",
         ])
         .stdout(Stdio::null())
@@ -942,7 +942,7 @@ async fn create_snapshot(
                 "-o", "BatchMode=yes",
                 "-i", &ssh_key_path.to_string_lossy(),
                 "-p", &port_str,
-                "root@127.0.0.1", "true",
+                "ryra@127.0.0.1", "true",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -970,7 +970,7 @@ async fn create_snapshot(
             "-o", "BatchMode=yes",
             "-i", &ssh_key_path.to_string_lossy(),
             "-p", &port_str,
-            "root@127.0.0.1", "cloud-init status --wait",
+            "ryra@127.0.0.1", "cloud-init status --wait",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -978,13 +978,13 @@ async fn create_snapshot(
         .await;
 
     // Configure the VM before snapshotting so every restored VM starts clean.
-    // This avoids stale state issues — storage.conf, registries.conf, and the
-    // 9p mount are all baked into the snapshot.
+    // - 9p mount at /mnt/images (system-level, needs sudo)
+    // - Rootless podman config at ~/.config/containers/ (user-level)
     let setup_cmd = "\
-        mkdir -p /mnt/images && mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images; \
-        cp /usr/share/containers/storage.conf /etc/containers/storage.conf && \
-        sed -i 's|^additionalimagestores = \\[$|additionalimagestores = [\"/mnt/images\"|' /etc/containers/storage.conf; \
-        printf 'unqualified-search-registries = [\"docker.io\"]\\n' > /etc/containers/registries.conf; \
+        sudo mkdir -p /mnt/images && sudo mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images; \
+        mkdir -p ~/.config/containers && \
+        printf '[storage]\\ndriver = \"overlay\"\\n[storage.options]\\nadditionalimagestores = [\"/mnt/images\"]\\n' > ~/.config/containers/storage.conf && \
+        printf 'unqualified-search-registries = [\"docker.io\"]\\n' > ~/.config/containers/registries.conf; \
         systemctl --user daemon-reload";
     let setup_status = Command::new("ssh")
         .args([
@@ -994,7 +994,7 @@ async fn create_snapshot(
             "-o", "BatchMode=yes",
             "-i", &ssh_key_path.to_string_lossy(),
             "-p", &port_str,
-            "root@127.0.0.1", setup_cmd,
+            "ryra@127.0.0.1", setup_cmd,
         ])
         .output()
         .await
