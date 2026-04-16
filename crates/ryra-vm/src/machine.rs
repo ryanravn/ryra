@@ -461,12 +461,25 @@ impl Machine {
         })
     }
 
+    /// Wait for the qemu process to exit on its own (e.g., after a clean
+    /// `sudo poweroff`). Returns once the process is gone or `timeout` elapses.
+    /// Used before snapshotting so the disk is fully released.
+    pub async fn wait_for_exit(&mut self, timeout: std::time::Duration) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if matches!(self.process.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
     /// Shut down the VM and clean up files.
     pub async fn destroy(mut self) -> Result<()> {
         if let Some(pid) = self.process.id() {
             deregister_vm(pid);
         }
-        let _ = self.exec("poweroff").await;
+        let _ = self.exec("sudo poweroff").await;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         let _ = self.process.kill().await;
         let _ = self.process.wait().await;
@@ -581,6 +594,27 @@ async fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Read the host's /etc/subuid entry for the invoking user so the VM can
+/// mirror it. Matching subuid ranges ensures image store files (owned by host
+/// UIDs in the subuid range) map to the correct container UIDs inside the VM.
+fn host_subid_mapping() -> Result<(u32, u32)> {
+    let user = std::env::var("USER").context("USER env var not set")?;
+    let subuid = std::fs::read_to_string("/etc/subuid").context("failed to read /etc/subuid")?;
+    for line in subuid.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() == 3 && parts[0] == user {
+            let start: u32 = parts[1]
+                .parse()
+                .with_context(|| format!("invalid subuid start for {user}: {}", parts[1]))?;
+            let size: u32 = parts[2]
+                .parse()
+                .with_context(|| format!("invalid subuid size for {user}: {}", parts[2]))?;
+            return Ok((start, size));
+        }
+    }
+    anyhow::bail!("no subuid entry found for user {user} in /etc/subuid")
+}
+
 /// Build a minimal cloud-init seed ISO — just SSH key, no package installs.
 /// Used for test VMs backed by a prepared image that already has packages.
 pub(crate) async fn build_seed_iso(
@@ -589,11 +623,13 @@ pub(crate) async fn build_seed_iso(
     hostname: &str,
     pub_key: &str,
 ) -> Result<()> {
-    // VMs run podman rootless as UID 1000 (matching host) so rootless user
-    // namespaces correctly map file ownership in the shared image store.
-    // Without this, s6-overlay containers (e.g., paperless-ngx) fail because
-    // the shared store files are owned by UID 1000 on host but would appear
-    // as UID 1000 inside rootful containers.
+    // VMs run podman rootless as UID 1000 (matching host) and mirror the
+    // host's subuid/subgid range so rootless user namespaces map image store
+    // files correctly. The image store is shared from host via 9p, and files
+    // inside are owned by host UIDs in the subuid range (e.g., postgres UID
+    // 70 in the image → host UID subuid_start+69). Identical VM subuid
+    // mapping makes these appear as the same container UIDs inside the VM.
+    let (subid_start, subid_size) = host_subid_mapping()?;
     let user_data = format!(
         r#"#cloud-config
 ssh_pwauth: false
@@ -607,9 +643,15 @@ users:
     ssh_authorized_keys:
       - {pub_key}
 
+write_files:
+  - path: /etc/subuid
+    content: "ryra:{subid_start}:{subid_size}\n"
+    permissions: '0644'
+  - path: /etc/subgid
+    content: "ryra:{subid_start}:{subid_size}\n"
+    permissions: '0644'
+
 runcmd:
-  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subuid" ]
-  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subgid" ]
   - loginctl enable-linger ryra
 "#
     );
@@ -630,6 +672,7 @@ pub async fn build_seed_iso_full(
         .map(|p| format!("  - {p}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let (subid_start, subid_size) = host_subid_mapping()?;
     let user_data = format!(
         r#"#cloud-config
 ssh_pwauth: false
@@ -646,9 +689,15 @@ users:
 packages:
 {package_list}
 
+write_files:
+  - path: /etc/subuid
+    content: "ryra:{subid_start}:{subid_size}\n"
+    permissions: '0644'
+  - path: /etc/subgid
+    content: "ryra:{subid_start}:{subid_size}\n"
+    permissions: '0644'
+
 runcmd:
-  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subuid" ]
-  - [ sh, -c, "echo 'ryra:100000:65536' >> /etc/subgid" ]
   - loginctl enable-linger ryra
 "#
     );
@@ -913,7 +962,9 @@ pub async fn load_images_into_vm(machine: &Machine, _images: &[String]) -> Resul
 
     // Configure rootless podman storage/registries at the user level
     // (~/.config/containers/). These are used by the ryra user's rootless
-    // podman and don't require sudo.
+    // podman and don't require sudo. The VM's /etc/subuid is set to match
+    // the host's at cloud-init time, so default rootless UID mapping aligns
+    // with the shared image store — no userns=auto needed.
     machine
         .exec(
             "mkdir -p ~/.config/containers && \

@@ -348,26 +348,27 @@ async fn prepare_browser_image(base: &Image, browser_path: &Path, use_kvm: bool)
         disk_gb: 20,
     };
 
-    let vm = Machine::spawn(base, &id, ssh_port, &opts).await?;
+    let mut vm = Machine::spawn(base, &id, ssh_port, &opts).await?;
 
-    // Install unzip (needed by bun installer), bun, playwright + chromium
+    // Install unzip (needed by bun installer), bun, playwright + chromium.
+    // Runs as the ryra user; uses sudo for system-level operations.
     let install_script = r#"
 set -e
-apt-get update -qq && apt-get install -y -qq unzip >/dev/null 2>&1
+sudo apt-get update -qq && sudo apt-get install -y -qq unzip >/dev/null 2>&1
 curl -fsSL https://bun.sh/install | bash
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
 # Create a global playwright project so chromium is cached system-wide
-mkdir -p /opt/playwright
+sudo mkdir -p /opt/playwright && sudo chown $USER:$USER /opt/playwright
 cd /opt/playwright
 bun init -y >/dev/null 2>&1
 bun add playwright @playwright/test
 bunx playwright install chromium --with-deps
 
-# Add bun to PATH for all future SSH sessions
-echo 'export BUN_INSTALL="$HOME/.bun"' >> /root/.bashrc
-echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /root/.bashrc
+# Add bun to PATH for future SSH sessions
+echo 'export BUN_INSTALL="$HOME/.bun"' >> $HOME/.bashrc
+echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> $HOME/.bashrc
 "#;
 
     println!("  Installing bun + playwright + chromium in VM...");
@@ -377,12 +378,11 @@ echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> /root/.bashrc
         anyhow::bail!("failed to install browser tools: {e:#}");
     }
 
-    // Shut down and snapshot
-    let _ = vm.exec("sync && poweroff").await;
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-    // Copy the COW disk as the browser image (flatten the overlay)
+    // Shut down cleanly, wait for qemu to release the disk, then convert.
     let disk = vm.work_dir.join("disk.qcow2");
+    let _ = vm.exec("sudo sync && sudo poweroff").await;
+    vm.wait_for_exit(std::time::Duration::from_secs(30)).await;
+
     let status = Command::new("qemu-img")
         .args([
             "convert",
@@ -745,7 +745,7 @@ async fn prepare_image(
             "-p",
             &port_str,
             "ryra@127.0.0.1",
-            "poweroff",
+            "sudo poweroff",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

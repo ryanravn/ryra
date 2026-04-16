@@ -585,7 +585,7 @@ async fn run_interactive_vm(
     println!("\nVM is ready. Connect with:\n");
     println!(
         "  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-         -i {}/id_ed25519 -p {} root@{}",
+         -i {}/id_ed25519 -p {} ryra@{}",
         vm.work_dir.display(),
         vm.ssh_port,
         vm.ssh_host,
