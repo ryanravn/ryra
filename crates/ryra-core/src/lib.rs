@@ -423,6 +423,7 @@ pub fn add_service(
             // Mounting just the caddy cert would replace ALL system CAs and
             // break any service that needs to reach the public internet.
             let service_data = service_home(service_name)?;
+            std::fs::create_dir_all(&service_data).ok();
             let merged_bundle = service_data.join("ca-bundle.crt");
             if !merged_bundle.exists() {
                 let mut bundle = String::new();
