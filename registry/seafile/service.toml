@@ -24,16 +24,42 @@ name = "MYSQL_LOG_CONSOLE"
 value = "true"
 
 # --- Seafile database connection ---
-# The Seafile image uses DB_HOST and DB_ROOT_PASSWD (not SEAFILE_MYSQL_*)
-# for its wait_for_mysql() and bootstrap scripts.
+# Seafile 13.x reads SEAFILE_MYSQL_DB_HOST and INIT_SEAFILE_MYSQL_ROOT_PASSWORD
+# in wait_for_mysql() (utils.py) and bootstrap.py. Older tutorials referenced
+# DB_HOST/DB_ROOT_PASSWD, but those are ignored by the 13.x image and cause
+# the container to poll `db:3306` forever.
 
 [[env]]
-name = "DB_HOST"
+name = "SEAFILE_MYSQL_DB_HOST"
 value = "mariadb"
 
 [[env]]
-name = "DB_ROOT_PASSWD"
+name = "INIT_SEAFILE_MYSQL_ROOT_PASSWORD"
 value = "{{secret.mysql_root_password}}"
+
+# seaf-server (the C binary) reads SEAFILE_MYSQL_DB_USER/PASSWORD from the
+# environment directly — they are not stored in any config file. Both setup
+# (bootstrap.py creates the user) and runtime (seaf-server authenticates) read
+# these, so they must be persistent across restarts.
+[[env]]
+name = "SEAFILE_MYSQL_DB_USER"
+value = "seafile"
+
+[[env]]
+name = "SEAFILE_MYSQL_DB_PASSWORD"
+value = "{{secret.mysql_seafile_password}}"
+
+[[env]]
+name = "SEAFILE_MYSQL_DB_CCNET_DB_NAME"
+value = "ccnet_db"
+
+[[env]]
+name = "SEAFILE_MYSQL_DB_SEAFILE_DB_NAME"
+value = "seafile_db"
+
+[[env]]
+name = "SEAFILE_MYSQL_DB_SEAHUB_DB_NAME"
+value = "seahub_db"
 
 # --- Seafile server config ---
 
