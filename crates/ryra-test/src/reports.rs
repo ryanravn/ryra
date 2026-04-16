@@ -90,17 +90,23 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
     };
 
     println!("\nResults: {display}/");
+    println!("  summary: cat {display}/summary.json");
     for r in results {
         let status = match &r.outcome {
             Outcome::Passed => "PASS",
             Outcome::Failed(_) => "FAIL",
             Outcome::Skipped => "SKIP",
         };
-        println!("  {}: {status} ({:.1}s)", r.name, r.duration.as_secs_f64());
-        println!("    log:     {display}/{}/run.log", r.name);
+        println!("\n  {}: {status} ({:.1}s)", r.name, r.duration.as_secs_f64());
+        println!("    log:     cat {display}/{}/run.log", r.name);
         let playwright_index = dir.join(&r.name).join("playwright").join("index.html");
         if playwright_index.exists() {
-            println!("    browser: {display}/{}/playwright/index.html", r.name);
+            // The trace viewer requires http:// — file:// can't load the trace
+            // zips — so surface the `show-report` command, not the path.
+            println!(
+                "    browser: (cd registry/tests/browser && bunx playwright show-report {display}/{}/playwright)",
+                r.name
+            );
         }
     }
 }
