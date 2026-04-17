@@ -14,7 +14,7 @@ service = "caddy"
 [[steps]]
 action = "add"
 service = "authelia"
-args = "--url https://auth.test.local:8443"
+args = "--url https://auth.localhost:8443"
 env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 
 [[steps]]
@@ -120,7 +120,7 @@ run = "grep -q 'ryra:authelia' $HOME/.local/share/ryra/caddy/config/Caddyfile"
 [[steps]]
 action = "shell"
 name = "authelia-accessible-via-caddy"
-run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' --resolve auth.test.local:8443:127.0.0.1 https://auth.test.local:8443); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
+run = "CODE=$(curl -sk -o /dev/null -w '%{http_code}' https://auth.localhost:8443); [ \"$CODE\" = '200' ] || [ \"$CODE\" = '302' ]"
 
 # Services are accessed directly on localhost
 [[steps]]
