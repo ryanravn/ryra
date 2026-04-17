@@ -1,6 +1,9 @@
 use anyhow::Result;
-
+use dialoguer::Input;
+use ryra_core::Step;
 use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
+
+use super::apply;
 
 pub async fn ls() -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
@@ -124,6 +127,95 @@ fn format_three_sig_fig(val: f64, unit: &str) -> String {
     } else {
         format!("{val:.2} {unit}")
     }
+}
+
+pub async fn rm(
+    service: &str,
+    yes: bool,
+    dry_run: bool,
+    force: bool,
+) -> Result<()> {
+    let paths = ryra_core::config::ConfigPaths::resolve()?;
+    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let svc = ryra_core::data::enumerate_service(&config, service)?
+        .ok_or_else(|| anyhow::anyhow!("no data found for service '{service}'"))?;
+
+    if matches!(svc.status, ServiceStatus::Installed) && !force {
+        anyhow::bail!(
+            "'{service}' is currently installed. Use `ryra rm {service} --purge` to remove it together with data, or pass `--force` to delete data only."
+        );
+    }
+
+    // If running on an installed service with --force, stop its containers
+    // first so we don't pull data out from under a running workload.
+    let mut steps: Vec<Step> = Vec::new();
+    if matches!(svc.status, ServiceStatus::Installed) && force {
+        let quadlet_path = ryra_core::quadlet_dir()?;
+        if quadlet_path.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&quadlet_path)
+        {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".container")
+                    && ryra_core::quadlet_belongs_to(&name, service, &[service])
+                {
+                    let unit = name.trim_end_matches(".container").to_string();
+                    steps.push(Step::StopService { unit });
+                }
+            }
+        }
+    }
+
+    // Data path deletions.
+    for path in &svc.data_paths {
+        if path.is_dir() {
+            steps.push(Step::RemoveDir(path.clone()));
+        } else {
+            steps.push(Step::RemoveFile(path.clone()));
+        }
+    }
+    // Volume deletions for volumes we attributed to this service.
+    for v in &svc.volumes {
+        steps.push(Step::RemoveVolume { name: v.name.clone() });
+    }
+
+    if steps.is_empty() {
+        println!("{service}: nothing to delete.");
+        return Ok(());
+    }
+
+    if !yes && !dry_run {
+        if !super::is_interactive() {
+            anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
+        }
+        println!("This will delete:");
+        for p in &svc.data_paths {
+            let sz = match ryra_core::data::dir_size_bytes(p) {
+                Ok(b) => human_size(b),
+                Err(_) => "?".to_string(),
+            };
+            println!("  {} ({})", p.display(), sz);
+        }
+        for v in &svc.volumes {
+            println!("  volume:{}", v.name);
+        }
+        println!();
+        let input: String = Input::new()
+            .with_prompt(format!("Type \"{service}\" to confirm"))
+            .interact_text()?;
+        if input != *service {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    if dry_run {
+        super::print_dry_run(&steps);
+    } else {
+        apply::execute_all(&steps).await?;
+        println!("{service}: data removed.");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

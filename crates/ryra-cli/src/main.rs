@@ -177,6 +177,25 @@ enum TestAction {
 enum DataAction {
     /// List per-service data
     Ls,
+    /// Delete data for a service
+    Rm {
+        /// Service name
+        #[arg(required_unless_present = "all")]
+        service: Option<String>,
+        /// Delete data for all orphan services (added in Task 8)
+        #[arg(long, short = 'a')]
+        all: bool,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Allow deletion even if the service is currently installed
+        /// (stops the service first).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -240,6 +259,19 @@ async fn main() -> anyhow::Result<()> {
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Data { action } => match action {
             DataAction::Ls => cli::data::ls().await?,
+            DataAction::Rm {
+                service,
+                all,
+                yes,
+                dry_run,
+                force,
+            } => {
+                if all {
+                    anyhow::bail!("--all is wired in Task 8; pass a service name for now");
+                }
+                let svc = service.ok_or_else(|| anyhow::anyhow!("service name required"))?;
+                cli::data::rm(&svc, yes, dry_run, force).await?;
+            }
         },
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,

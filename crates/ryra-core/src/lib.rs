@@ -666,7 +666,7 @@ pub fn add_service(
 ///
 /// `all_service_names` contains every installed service name — used to detect
 /// when a longer service name owns the file instead.
-fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names: &[&str]) -> bool {
+pub fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names: &[&str]) -> bool {
     if !filename.starts_with(service_name) {
         return false;
     }
