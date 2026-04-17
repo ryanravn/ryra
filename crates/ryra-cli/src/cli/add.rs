@@ -391,7 +391,7 @@ pub async fn run(
                     Ok(remove_result) => {
                         if let Err(cleanup_err) = apply::execute_all(&remove_result.steps).await {
                             eprintln!("Cleanup also failed: {cleanup_err}");
-                            eprintln!("Run manually: ryra remove {service}");
+                            eprintln!("Run manually: ryra rm {service}");
                         } else {
                             if let Err(e) = ryra_core::finalize_remove(service) {
                                 eprintln!("Warning: finalize_remove failed: {e}");
@@ -401,7 +401,7 @@ pub async fn run(
                     }
                     Err(_) => {
                         eprintln!("Could not clean up automatically.");
-                        eprintln!("Run manually: ryra remove {service}");
+                        eprintln!("Run manually: ryra rm {service}");
                     }
                 }
                 return Err(e);

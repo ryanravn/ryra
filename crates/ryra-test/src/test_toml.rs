@@ -297,7 +297,7 @@ impl StepDef {
                     lines.push(format!("  env {k}={v}"));
                 }
             }
-            StepDef::Remove { service } => lines.push(format!("ryra remove {service}")),
+            StepDef::Remove { service } => lines.push(format!("ryra rm --purge {service}")),
             StepDef::Reset => lines.push("ryra reset".to_string()),
             StepDef::Wait { service, timeout } => {
                 lines.push(format!("wait for {service}.service  (timeout={timeout}s)"));

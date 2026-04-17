@@ -557,11 +557,11 @@ pub async fn run_lifecycle_test(
                 events.push(event);
             }
             StepDef::Remove { service } => {
-                println!("{p}  ryra remove {service}...");
+                println!("{p}  ryra rm --purge {service}...");
                 let event = run_event(
                     vm,
                     EventKind::Step,
-                    &format!("ryra remove {service} -y"),
+                    &format!("ryra rm --purge {service} -y"),
                     120,
                 )
                 .await;
