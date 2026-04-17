@@ -25,7 +25,7 @@ timeout = 10
 # OIDC browser flow. Ups RAM to 2048 — open-webui + authelia + caddy
 # together spike above the 1GB default.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 ram = 2048
 [[tests.steps]]

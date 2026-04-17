@@ -24,7 +24,7 @@ run = "test -d $HOME/.local/share/ryra/immich"
 # Full SSO flow via caddy + authelia. Heavy test — immich build takes a
 # while so give it 900s.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 [[tests.steps]]
 action = "add"

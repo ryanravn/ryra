@@ -73,7 +73,7 @@ timeout = 90
 
 # OIDC browser flow.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 ram = 2048
 [[tests.steps]]

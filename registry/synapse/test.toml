@@ -39,7 +39,7 @@ timeout = 10
 # OIDC browser flow — Element loads via Caddy on chat.localhost, Synapse
 # advertises OIDC in its login flows.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 [[tests.steps]]
 action = "add"

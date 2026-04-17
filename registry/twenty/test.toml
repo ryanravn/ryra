@@ -83,7 +83,7 @@ timeout = 120
 # OIDC browser flow — registers the OIDC provider through Twenty's
 # GraphQL API, then runs the Playwright spec.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 [[tests.steps]]
 action = "add"

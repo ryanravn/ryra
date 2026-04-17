@@ -23,7 +23,7 @@ run = "test -d $HOME/.local/share/ryra/jellyfin"
 # Full SSO flow: complete startup wizard via API, verify SSO plugin,
 # then run the playwright OIDC login spec.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 [[tests.steps]]
 action = "add"

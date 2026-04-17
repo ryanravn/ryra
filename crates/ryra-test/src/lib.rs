@@ -96,7 +96,7 @@ fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
     };
 
     if !service_groups.is_empty() {
-        println!("─── Service tests ───");
+        println!("─── Service tests  (registry/<service>/test.toml) ───");
         for (svc, tests) in &service_groups {
             println!("{svc}");
             for t in tests {
@@ -106,7 +106,7 @@ fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
     }
 
     if !cross_cutting.is_empty() {
-        println!("─── Service-agnostic tests ───");
+        println!("─── Service-agnostic tests  (registry/tests/*.toml) ───");
         for t in &cross_cutting {
             line(t, "");
         }

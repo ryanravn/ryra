@@ -71,7 +71,7 @@ timeout = 90
 
 # OIDC browser flow — seafile goes through caddy over HTTPS.
 [[tests]]
-name = "auth-browser"
+name = "oidc"
 browser = true
 [[tests.steps]]
 action = "add"
