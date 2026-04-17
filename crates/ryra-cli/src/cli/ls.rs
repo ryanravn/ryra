@@ -43,9 +43,9 @@ pub fn run(all: bool, long: bool) -> Result<()> {
 
     let home = std::env::var("HOME").unwrap_or_default();
     if long {
-        print_long(&visible, &home);
+        print_long(&visible, &home, all);
     } else {
-        print_short(&visible, &home);
+        print_short(&visible, &home, all);
     }
 
     // Nudge about hidden orphans when the user ran the default view.
@@ -58,43 +58,52 @@ pub fn run(all: bool, long: bool) -> Result<()> {
     Ok(())
 }
 
-/// Fast path: name, status, data path. Skips the parallel volume-size
-/// walk entirely — no podman shell-outs, no `du` subprocesses. Good for
-/// "what services do I have" glance queries.
-fn print_short(svcs: &[&ServiceData], home: &str) {
+/// Fast path: name [status] data path. STATUS column only appears when
+/// orphans may be in the mix (i.e. `-a` was passed) — otherwise every
+/// row would read `installed` and add nothing.
+fn print_short(svcs: &[&ServiceData], home: &str, show_status: bool) {
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() + 1);
-    lines.push(format!("{:<15} {:<10} DATA", "SERVICE", "STATUS"));
+    if show_status {
+        lines.push(format!("{:<15} {:<10} DATA", "SERVICE", "STATUS"));
+    } else {
+        lines.push(format!("{:<15} DATA", "SERVICE"));
+    }
     for svc in svcs {
-        let status = match svc.status {
-            ServiceStatus::Installed => "installed",
-            ServiceStatus::Orphan => "orphan",
-        };
         let path = shorten_home(&svc.home_dir.display().to_string(), home);
-        lines.push(format!("{:<15} {:<10} {}", svc.service, status, path));
+        if show_status {
+            let status = match svc.status {
+                ServiceStatus::Installed => "installed",
+                ServiceStatus::Orphan => "orphan",
+            };
+            lines.push(format!("{:<15} {:<10} {}", svc.service, status, path));
+        } else {
+            lines.push(format!("{:<15} {}", svc.service, path));
+        }
     }
     println!("{}", lines.join("\n"));
     println!();
     println!("Show sizes + volumes:  ryra ls -l");
 }
 
-/// Long path: adds size + volume sub-rows + cleanup footer. Pays the
-/// ~250 ms cost of parallel `podman unshare du` per volume.
-fn print_long(svcs: &[&ServiceData], home: &str) {
-    // `compute_total` needs the size of every volume's mountpoint, each
-    // of which costs a `podman unshare du` shell-out (~30ms). Walking
-    // them sequentially in the table-render loop is too slow on a busy
-    // host. Pre-compute every volume's size in parallel up front, then
-    // the per-service rendering is pure string formatting.
+/// Long path: adds SIZE column (and STATUS if `-a`), plus volume
+/// sub-rows and a cleanup footer. Pays the ~250 ms cost of parallel
+/// `podman unshare du` per volume.
+fn print_long(svcs: &[&ServiceData], home: &str, show_status: bool) {
+    // Pre-compute every volume's size in parallel (see prefetch_volume_sizes).
     let owned: Vec<ServiceData> = svcs.iter().map(|s| (*s).clone()).collect();
     let vol_sizes = prefetch_volume_sizes(&owned);
 
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
-    lines.push(format!(
-        "{:<15} {:<10} {:<10} DATA",
-        "SERVICE", "STATUS", "SIZE"
-    ));
+    if show_status {
+        lines.push(format!(
+            "{:<15} {:<10} {:<10} DATA",
+            "SERVICE", "STATUS", "SIZE"
+        ));
+    } else {
+        lines.push(format!("{:<15} {:<10} DATA", "SERVICE", "SIZE"));
+    }
     for svc in svcs {
-        lines.extend(format_service(svc, home, &vol_sizes));
+        lines.extend(format_service(svc, home, &vol_sizes, show_status));
     }
     println!("{}", lines.join("\n"));
     println!();
@@ -136,11 +145,8 @@ fn format_service(
     svc: &ServiceData,
     home: &str,
     vol_sizes: &std::collections::HashMap<String, Option<u64>>,
+    show_status: bool,
 ) -> Vec<String> {
-    let status = match svc.status {
-        ServiceStatus::Installed => "installed",
-        ServiceStatus::Orphan => "orphan",
-    };
     // Total size: sum per-component sizes so a single unreadable component
     // (e.g. a subuid-owned volume mountpoint) doesn't abort the whole row.
     let size = match compute_total(svc, vol_sizes) {
@@ -150,15 +156,26 @@ fn format_service(
     };
     let path = shorten_home(&svc.home_dir.display().to_string(), home);
     let mut out = Vec::with_capacity(1 + svc.volumes.len());
-    out.push(format!(
-        "{:<15} {:<10} {:<10} {}",
-        svc.service, status, size, path
-    ));
-    for v in &svc.volumes {
+    if show_status {
+        let status = match svc.status {
+            ServiceStatus::Installed => "installed",
+            ServiceStatus::Orphan => "orphan",
+        };
         out.push(format!(
-            "{:<15} {:<10} {:<10} volume:{}",
-            "", "", "", v.name
+            "{:<15} {:<10} {:<10} {}",
+            svc.service, status, size, path
         ));
+        for v in &svc.volumes {
+            out.push(format!(
+                "{:<15} {:<10} {:<10} volume:{}",
+                "", "", "", v.name
+            ));
+        }
+    } else {
+        out.push(format!("{:<15} {:<10} {}", svc.service, size, path));
+        for v in &svc.volumes {
+            out.push(format!("{:<15} {:<10} volume:{}", "", "", v.name));
+        }
     }
     out
 }
