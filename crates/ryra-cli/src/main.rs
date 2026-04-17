@@ -37,6 +37,12 @@ enum Command {
         /// Enable auth (forward auth via Caddy, or native OIDC if supported)
         #[arg(long)]
         auth: bool,
+        /// Configure SMTP non-interactively. Currently the only choice is
+        /// "inbucket", which auto-installs the inbucket SMTP test server and
+        /// points this install (and any service added in the same batch)
+        /// at it. Skipped if SMTP is already configured.
+        #[arg(long, value_enum)]
+        smtp: Option<cli::add::SmtpProvider>,
         /// Skip confirmation prompts (including untrusted registry warnings)
         #[arg(long, short = 'y')]
         yes: bool,
@@ -184,12 +190,13 @@ async fn main() -> anyhow::Result<()> {
             ref services,
             ref url,
             auth,
+            smtp,
             yes,
             dry_run,
             verbose,
         } => {
             crate::verbose::set(verbose);
-            cli::add::run(services, url.as_deref(), auth, dry_run, yes).await?
+            cli::add::run(services, url.as_deref(), auth, smtp, dry_run, yes).await?
         }
         Command::Remove {
             ref services,

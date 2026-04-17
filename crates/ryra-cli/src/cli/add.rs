@@ -19,10 +19,25 @@ const DEFAULT_AUTHELIA_PORT: u16 = 9091;
 /// Inbucket's internal SMTP container port.
 const INBUCKET_SMTP_PORT: u16 = 2500;
 
+/// Non-interactive choice for `--smtp=…` on `ryra add`.
+///
+/// Modelled as an enum so the compiler rejects typos at the CLI boundary
+/// and so we can grow additional providers (e.g. an explicit
+/// `--smtp=custom --smtp-host=… --smtp-port=…` combo) without breaking
+/// the existing call sites.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum SmtpProvider {
+    /// Auto-install inbucket and wire `config.smtp` to it. For testing
+    /// and local development — inbucket is a disposable SMTP sink with a
+    /// web UI and an HTTP API for inspecting received mail.
+    Inbucket,
+}
+
 pub async fn run(
     services: &[String],
     url: Option<&str>,
     auth: bool,
+    smtp: Option<SmtpProvider>,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
@@ -35,6 +50,15 @@ pub async fn run(
     // Auto-install authelia for --auth
     if !dry_run {
         ensure_dependencies(auth, interactive).await?;
+    }
+
+    // --smtp=<provider>: non-interactive equivalent of the prompts below.
+    // Runs once before the per-service loop so every SMTP-using service in
+    // the same batch picks up the newly-written config.smtp.
+    if let Some(provider) = smtp
+        && !dry_run
+    {
+        ensure_smtp_for_add(provider).await?;
     }
 
     let paths = ryra_core::config::ConfigPaths::resolve()?;
@@ -118,6 +142,7 @@ pub async fn run(
                             &[WellKnownService::Inbucket.to_string()],
                             None,
                             false,
+                            None,
                             false,
                             true,
                         ))
@@ -658,6 +683,7 @@ async fn ensure_tls_configured(
                         &[WellKnownService::Caddy.to_string()],
                         None,
                         false,
+                        None,
                         false,
                         true,
                     ))
@@ -721,6 +747,7 @@ async fn ensure_tls_configured(
                     &[WellKnownService::Caddy.to_string()],
                     None,
                     false,
+                    None,
                     false,
                     true,
                 ))
@@ -767,6 +794,61 @@ async fn ensure_tls_configured(
     Ok(())
 }
 
+/// Auto-install inbucket and point `config.smtp` at it for `--smtp=inbucket`.
+/// Idempotent: does nothing if `config.smtp` is already set.
+async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+
+    if config.smtp.is_some() {
+        // Already configured — whether by a previous --smtp, prompt, or a
+        // hand-edited ryra.toml. Don't clobber it.
+        return Ok(());
+    }
+
+    match provider {
+        SmtpProvider::Inbucket => {
+            let inbucket_installed = config
+                .services
+                .iter()
+                .any(|s| WellKnownService::Inbucket.matches(&s.name));
+            if !inbucket_installed {
+                println!("\nInstalling inbucket...\n");
+                Box::pin(run(
+                    &[WellKnownService::Inbucket.to_string()],
+                    None,
+                    false,
+                    None,
+                    false,
+                    true,
+                ))
+                .await?;
+                // Reload — the inner run() mutated config on disk.
+                config = ryra_core::config::load_or_default(&paths.config_file)?;
+            }
+            // Target inbucket by container name — services on the same
+            // podman network resolve it via DNS. `:2500` is inbucket's
+            // internal SMTP port; the host-side PublishPort isn't used.
+            config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
+                host: "inbucket".to_string(),
+                port: INBUCKET_SMTP_PORT,
+                username: String::new(),
+                password: String::new(),
+                from: "ryra@localhost".to_string(),
+                security: ryra_core::config::schema::SmtpSecurity::Off,
+            });
+            paths.ensure_dirs()?;
+            ryra_core::config::save_config(&paths.config_file, &config)?;
+            println!(
+                "  SMTP configured (inbucket). Saved to {}\n",
+                paths.config_file.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Auto-install authelia when --auth requires it.
 async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
     let config = ryra_core::config::load_or_default(
@@ -799,6 +881,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             &[WellKnownService::Caddy.to_string()],
             None,
             false,
+            None,
             false,
             true,
         ))
@@ -824,6 +907,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             &[WellKnownService::Authelia.to_string()],
             Some(&authelia_url),
             false,
+            None,
             false,
             true,
         ))
@@ -838,6 +922,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             &[WellKnownService::Authelia.to_string()],
             Some(&authelia_url),
             false,
+            None,
             false,
             true,
         ))
@@ -895,6 +980,7 @@ async fn ensure_auth_for_add(
                     &[WellKnownService::Caddy.to_string()],
                     None,
                     false,
+                    None,
                     dry_run,
                     true,
                 ))
@@ -908,6 +994,7 @@ async fn ensure_auth_for_add(
                 &[WellKnownService::Authelia.to_string()],
                 Some(&authelia_url),
                 false,
+                None,
                 dry_run,
                 true,
             ))
