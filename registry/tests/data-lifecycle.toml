@@ -42,7 +42,7 @@ timeout = 60
 [[steps]]
 action = "shell"
 name = "orphan-shows-in-ls"
-run = "ryra ls | grep -E '^vikunja\\s+orphan'"
+run = "ryra ls -a | grep -E '^vikunja\\s+orphan'"
 timeout = 30
 
 # `ryra rm vikunja --purge -y` on an orphan must wipe home dir + volumes.
@@ -61,5 +61,5 @@ timeout = 60
 [[steps]]
 action = "shell"
 name = "ls-no-vikunja-after-purge"
-run = "! ryra ls | grep -E '^vikunja\\s'"
+run = "! ryra ls -a | grep -E '^vikunja\\s'"
 timeout = 30
