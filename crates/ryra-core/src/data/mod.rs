@@ -112,6 +112,11 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
     Ok(out)
 }
 
+/// Look up a single service. Calls `enumerate_all` and filters —
+/// O(n) in the number of services with full filesystem + podman
+/// walks. Fine for the CLI, but if a hot path ever wants just one
+/// service, consider a dedicated `enumerate_one` that skips unrelated
+/// name collection.
 pub fn enumerate_service(config: &Config, name: &str) -> Result<Option<ServiceData>> {
     Ok(enumerate_all(config)?.into_iter().find(|s| s.service == name))
 }
@@ -119,7 +124,18 @@ pub fn enumerate_service(config: &Config, name: &str) -> Result<Option<ServiceDa
 /// Walk `path` recursively, summing file sizes. Does not follow symlinks.
 /// Returns 0 if the path does not exist.
 pub fn dir_size_bytes(path: &Path) -> Result<u64> {
-    if !path.exists() {
+    let root_meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(source) => {
+            return Err(Error::FileRead {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    // Caller passed a symlink root — don't follow it.
+    if root_meta.file_type().is_symlink() {
         return Ok(0);
     }
     let mut total = 0u64;
@@ -184,5 +200,16 @@ mod tests {
             dir_size_bytes(std::path::Path::new("/nonexistent-xyz-789")).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn dir_size_skips_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("real.bin"), vec![0u8; 200]).unwrap();
+        // A dangling symlink inside the dir — must not cause a read error
+        // and must not be counted.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/nonexistent-target", dir.path().join("link")).unwrap();
+        assert_eq!(dir_size_bytes(dir.path()).unwrap(), 200);
     }
 }

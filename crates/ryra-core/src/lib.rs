@@ -90,11 +90,7 @@ pub fn service_data_root() -> Result<std::path::PathBuf> {
 
 /// Data directory for a service: ~/.local/share/ryra/<name>
 pub fn service_home(service_name: &str) -> Result<PathBuf> {
-    let base = match dirs::data_local_dir() {
-        Some(d) => d,
-        None => home_dir()?.join(".local/share"),
-    };
-    Ok(base.join("ryra").join(service_name))
+    Ok(service_data_root()?.join(service_name))
 }
 
 /// Quadlet directory: ~/.config/containers/systemd
