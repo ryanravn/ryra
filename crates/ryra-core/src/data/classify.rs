@@ -1,3 +1,7 @@
+use std::path::{Path, PathBuf};
+
+use crate::error::{Error, Result};
+
 /// Names/paths of files and dirs under a service home dir that ryra
 /// generates and can regenerate on next `ryra add`. Everything NOT
 /// matching this list is treated as user data.
@@ -14,16 +18,21 @@ pub const EPHEMERAL_EXTENSIONS: &[&str] = &["crt", "sh"];
 ///
 /// Returns `(data, ephemeral)`. Both are sorted by path for deterministic
 /// output. Entries are absolute paths rooted at `home_dir`.
-pub fn classify_home_dir(
-    home_dir: &std::path::Path,
-) -> std::io::Result<(Vec<std::path::PathBuf>, Vec<std::path::PathBuf>)> {
+pub fn classify_home_dir(home_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
     let mut data = Vec::new();
     let mut ephemeral = Vec::new();
     if !home_dir.exists() {
         return Ok((data, ephemeral));
     }
-    for entry in std::fs::read_dir(home_dir)? {
-        let entry = entry?;
+    let entries = std::fs::read_dir(home_dir).map_err(|source| Error::FileRead {
+        path: home_dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::FileRead {
+            path: home_dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
@@ -69,11 +78,16 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert!(eph_names.contains(&".env".to_string()));
-        assert!(eph_names.contains(&"configs".to_string()));
-        assert!(eph_names.contains(&"ca-bundle.crt".to_string()));
-        assert!(eph_names.contains(&"resolve-auth-host.sh".to_string()));
-        assert!(eph_names.contains(&"auth-hosts.txt".to_string()));
+        assert_eq!(
+            eph_names,
+            vec![
+                ".env".to_string(),
+                "auth-hosts.txt".to_string(),
+                "ca-bundle.crt".to_string(),
+                "configs".to_string(),
+                "resolve-auth-host.sh".to_string(),
+            ]
+        );
         let data_names: Vec<String> = data
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
