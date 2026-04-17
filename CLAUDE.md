@@ -1,6 +1,13 @@
+# Ryra Development Guidelines
+
 ## Core Principle: Make Invalid State Unrepresentable
 
-Use enums and pattern matching everywhere instead of string comparisons, boolean flags, or if-chains. This applies at every layer
+Use enums and pattern matching everywhere instead of string comparisons, boolean flags, or if-chains. This applies at every layer:
+
+- **Config values**: DNS, SSL, SMTP, auth providers are enums with associated data, not string fields with optional companions
+- **Commands/actions**: Operations returned from core to CLI are typed enums (e.g., `Step::WriteFile { .. }`, `Step::StartService { .. }`), not string commands that get parsed with `.contains()`
+- **Service status**: `Available | Installed`, not a bool flag
+- **Service kind**: `Application | Infrastructure`, not a string
 
 When adding new functionality, ask: "Can this state be invalid?" If yes, restructure with enums so the type system prevents it. Pattern matching (`match`) must be exhaustive — the compiler enforces that every case is handled.
 
@@ -8,6 +15,17 @@ When adding new functionality, ask: "Can this state be invalid?" If yes, restruc
 - `if config.provider == "letsencrypt"` → use `match config.ssl { SslConfig::Letsencrypt { .. } => .. }`
 - `if cmd.contains("start")` → use `match step { Step::StartService { .. } => .. }`
 - Optional fields that are only valid in certain states → put them inside enum variants
+
+### Validate at the boundary
+
+All TOML files are validated immediately after deserialization — if parsing succeeds, the data is safe to use without further checks:
+
+- **`ServiceDef::validate()`** — duplicate names (ports, env), env var name format, env kind consistency, RAM consistency (recommended >= minimum)
+- **`TestToml::validate()`** — mutually exclusive `[[tests]]`/`[[steps]]`, required fields per step action type
+- **`Config::validate()`** — no duplicate service names
+- **`StepAction`** is an enum, not a string — serde rejects unknown actions at parse time
+
+When adding new fields or service definitions, the compiler and `validate()` should catch structural errors. Never silently default on missing/invalid data — error loudly at load time.
 
 ## No Unwraps, No Silent Failures
 
@@ -35,6 +53,12 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - `ryra-cli`: thin shell that calls core and handles sudo/system interaction
 - `ryra-vm`: QEMU/SSH/cloud-init VM orchestration library
 - `ryra-test`: E2E test runner, depends on ryra-vm
+- Core returns typed results describing what needs to happen; CLI decides whether to apply or print
+- All services run under the invoking user's rootless podman (`systemctl --user`)
+- Quadlet files go to `~/.config/containers/systemd/`
+- Service data goes to `~/.local/share/ryra/<name>/`
+- `service_home()` and `quadlet_dir()` return `Result<PathBuf>` — they error if `$HOME` is unset rather than silently falling back to `/tmp`
+- Warns if running as root
 
 ## Auth and Caddy Integration
 
@@ -42,10 +66,28 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 
 Services run at `http://127.0.0.1:<port>` by default — no domain, no HTTPS, no `/etc/hosts` entries needed. The `--domain` flag is opt-in for when the user wants to expose a service through Caddy with a custom hostname.
 
-The only exception is **authelia**, which requires a domain because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a domain (defaults to `auth.localhost`). `.localhost` domains resolve to 127.0.0.1 automatically (RFC 6761) — no `/etc/hosts` entry needed. Some services require HTTPS to work.
+The only exception is **authelia**, which requires a domain because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a domain (defaults to `auth.localhost`). `.localhost` domains resolve to 127.0.0.1 automatically (RFC 6761) — no `/etc/hosts` entry needed.
 
 This keeps the default experience frictionless (no sudo, no DNS, no certs) while still supporting custom domains for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding.
 
+### How `--domain` works
+
+When `ryra add <service> --domain foo.example.com` is called:
+1. The domain is passed to the template context as `{{service.domain}}`
+2. If Caddy is installed, a site block is added to the Caddyfile routing the domain to the service's port
+3. `caddy reload` applies the new route
+4. On `ryra remove`, the route is cleaned up (reload is skipped if the Caddyfile becomes empty)
+
+### How `--auth` works
+
+When `ryra add <service> --auth` is called:
+1. An OIDC client ID and secret are generated and injected into the template context (`{{auth.client_id}}`, `{{auth.client_secret}}`, `{{auth.issuer}}`, etc.)
+2. Services with native OIDC mappings (`[mappings.auth]` in service.toml) get OIDC env vars written to `.env`
+3. Native OIDC services join the auth provider's podman network for direct HTTP communication
+4. OIDC client registration is handled by `authelia.rs` (edits authelia's configuration.yml)
+5. Quadlet `ExecStartPost=` scripts handle runtime OIDC setup (API calls, config injection) after the container starts
+6. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
+7. Services work at `http://127.0.0.1:<port>` without `--domain` — the OIDC redirect goes through authelia (HTTPS) and back to the service (HTTP)
 
 ### Pre-start and post-start scripts
 
@@ -97,6 +139,49 @@ This applies during development too — when a service fails after `ryra add`, c
 
 ## E2E Testing
 
-When creating tests of any kind, always aim to understand the structure first. The fastest way to do this is to start systems normally using `ryra add ...`, making sure we have a clean testing environment on the host, then perhaps call endpoints. If you intend to write a playwright test, you can use things like chrome MCP / extensions to explore the webpage, or use playwirght to understand more than test at first, and only then create the test and iterate on the host. After this, try running it in the VM, if it fails, do --keep-alive, and iterate untill you find issues and finalize the test with ephemeral VM test.
+Key points:
+
+- Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
+- `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image (flags on the test runner binary, not `ryra test`)
+- Test runner lives in `crates/ryra-test/`, VM orchestration in `crates/ryra-vm/`
+- Tests are defined in `registry/` via `[[tests]]` in service.toml and lifecycle test files in `registry/tests/`
+- VMs use cloud images + cloud-init for setup, SSH for command execution
+- `--parallel=N` controls concurrency (default 1), each VM gets a unique SSH port
+- VM memory is auto-sized per test based on `[requirements.ram]` in each service's service.toml
+- KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower, flag on test runner binary)
+- `--keep-alive` keeps the VM running after tests for interactive debugging
+- `--verbose` dumps the serial log on failure
+- Host prerequisites (Debian/Ubuntu): `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
+- Host prerequisites (Fedora): `qemu-system-aarch64 qemu-img edk2-aarch64 genisoimage openssh-clients curl`
+
+### Test types
+
+- **SingleService tests**: defined in `[[tests]]` within `service.toml` — auto-discovered, run `ryra add` then assertions
+- **Lifecycle tests**: defined in `registry/tests/<name>.toml` — multi-step sequences of add/remove/assert/wait/run steps
+
+### OIDC lifecycle tests
+
+OIDC tests must install caddy and authelia before adding services with `--auth --domain`. The test steps are:
+1. `ryra add caddy` — reverse proxy
+2. `ryra add authelia --domain auth.test.local` — OIDC provider
+3. `ryra add <service> --auth --domain <service>.test.local` — service with OIDC
+4. Assertions verify HTTP responds and OIDC is configured
+
+### Adding a new service
+
+After creating a service definition (service.toml, quadlets, configs), always run the E2E tests to verify it works. Use `--keep-alive` extensively to iterate — it boots the VM once and keeps it running so you can SSH in, inspect logs, check the UI, and fix issues without waiting for a fresh boot each time.
+
+1. Start with `--keep-alive` to validate the service starts:
+   - Boot the VM: `ryra test <service> --keep-alive --yes`
+   - SSH in and check logs: `journalctl --user -u <service>.service`, `podman logs systemd-<service>`
+   - Verify the service is actually responding before writing assertions
+2. Run the simple tests: `ryra test <service>` — verify the service starts and responds
+3. If the service has OIDC integration (`auth = ["oidc"]` in service.toml), write a browser test:
+   - Create `registry/tests/<service>-auth-browser.toml` with `browser = true`
+   - Create `registry/tests/browser/<service>-auth.spec.ts` with Playwright tests
+   - Use `--keep-alive` on the auth browser test to boot the VM with caddy + authelia + the service, then SSH in and use `curl` to inspect the actual login page HTML — find the real CSS selectors, button text, and post-login indicators before writing the Playwright spec
+   - The browser test must click the SSO button, authenticate with Authelia (fill username/password, submit, handle consent), and verify the redirect back results in an authenticated session
+   - Don't guess at selectors — look at the real page. Iterate with `--keep-alive` until the test passes
+4. Run the full auth browser test: `ryra test <service>-auth-browser`
 
 When E2E tests have long setup times (pulling images, waiting for services), don't just wait — check logs periodically. If a service takes more than 60s to become ready, SSH in via `--keep-alive` and investigate rather than increasing timeouts blindly.
