@@ -38,19 +38,19 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     std::process::exit(130); // 128 + SIGINT
 }
 
-/// Render `--list` output: group tests by their source `test.toml` so the
-/// user sees where each test lives (and can edit it), and show the
-/// distinct step kinds so it's obvious at a glance what a test does
-/// (e.g. `playwright` means browser test).
+/// Render `--list` output: group tests by source `test.toml`, showing
+/// step kinds so `playwright` / `shell` / `http` tell you what each test
+/// does at a glance. Cross-cutting tests under `registry/tests/` render
+/// last, after a divider.
 fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
     if discovered.is_empty() {
         println!("No tests discovered.");
         return;
     }
 
-    // Stable insertion-order grouping: iterate sorted-by-name tests and
-    // bucket by source path. Display paths relative to the registry root
-    // when possible; otherwise fall back to the absolute path.
+    let tests_dir = registry_path.join("tests");
+    let is_cross_cutting = |p: &Path| p.starts_with(&tests_dir);
+
     let mut groups: Vec<(PathBuf, Vec<&registry::DiscoveredTest>)> = Vec::new();
     for test in discovered {
         let src = test.source().to_path_buf();
@@ -61,30 +61,41 @@ fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
         }
     }
     groups.sort_by(|a, b| a.0.cmp(&b.0));
+    let (service_groups, cross_cutting_groups): (Vec<_>, Vec<_>) = groups
+        .into_iter()
+        .partition(|(p, _)| !is_cross_cutting(p));
 
     let total_tests: usize = discovered.len();
-    println!(
-        "{total_tests} tests across {} file(s):",
-        groups.len()
-    );
+    let file_count = service_groups.len() + cross_cutting_groups.len();
+    println!("{total_tests} tests across {file_count} files");
 
-    for (source, tests) in &groups {
+    let render_group = |source: &Path, tests: &[&registry::DiscoveredTest]| {
         let display_path = source
             .strip_prefix(registry_path)
             .map(|p| format!("registry/{}", p.display()))
             .unwrap_or_else(|_| source.display().to_string());
-        println!();
-        println!("  {display_path}");
+        println!("{display_path}");
         for t in tests {
             let kinds = t.step_kinds().join(" → ");
             let browser = if t.needs_browser() { " [browser]" } else { "" };
             let step_count = t.test_count();
             println!(
-                "    {:<34} {} step{}{browser}  · {kinds}",
+                "  {:<34} {} step{}{browser}  · {kinds}",
                 t.name(),
                 step_count,
                 if step_count == 1 { "" } else { "s" },
             );
+        }
+    };
+
+    for (source, tests) in &service_groups {
+        render_group(source, tests);
+    }
+
+    if !cross_cutting_groups.is_empty() {
+        println!("──── cross-cutting tests ────");
+        for (source, tests) in &cross_cutting_groups {
+            render_group(source, tests);
         }
     }
 }
