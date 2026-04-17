@@ -592,6 +592,9 @@ pub async fn run_lifecycle_test(
             StepDef::Http {
                 name: http_name,
                 url,
+                method,
+                body,
+                content_type,
                 status,
                 service,
                 poll,
@@ -607,9 +610,27 @@ pub async fn run_lifecycle_test(
                     Some(svc) => format!(". $HOME/.local/share/ryra/{svc}/.env"),
                     None => "for f in $HOME/.local/share/ryra/*/.env; do [ -f \"$f\" ] && . \"$f\"; done".to_string(),
                 };
+                // Assemble curl. For non-GET methods we prepend a heredoc so
+                // the body flows verbatim into a $RYRA_BODY variable — this
+                // dodges all the shell-quoting edge cases of embedding
+                // arbitrary JSON/form bodies directly in the command string.
+                let verb = method.as_curl_arg();
+                let ct_esc = content_type.replace('"', r#"\""#);
+                let curl = match body {
+                    Some(b) => format!(
+                        "RYRA_BODY=$(cat <<'RYRA_HTTP_BODY_EOF'\n{b}\nRYRA_HTTP_BODY_EOF\n) && \
+                         HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' \
+                            -X {verb} \
+                            -H \"Content-Type: {ct_esc}\" \
+                            --data-raw \"$RYRA_BODY\" \
+                            \"{url_esc}\")"
+                    ),
+                    None => format!(
+                        "HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' -X {verb} \"{url_esc}\")"
+                    ),
+                };
                 let cmd = format!(
-                    "set -a && {env_source} && set +a && \
-                     HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' \"{url_esc}\") && \
+                    "set -a && {env_source} && set +a && {curl} && \
                      [ \"$HTTP_CODE\" = \"{status}\" ]"
                 );
                 let event = run_step_with_poll(

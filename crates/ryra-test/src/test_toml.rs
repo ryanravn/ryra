@@ -58,6 +58,34 @@ fn default_http_status() -> u16 {
     200
 }
 
+fn default_content_type() -> String {
+    "application/json".into()
+}
+
+/// HTTP method for the `http` test step. Kept as a typed enum so parsing
+/// rejects typos at the boundary (per CLAUDE.md: enums over strings).
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HttpMethod {
+    #[default]
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
+impl HttpMethod {
+    /// Upper-case verb for curl's `-X` flag.
+    pub fn as_curl_arg(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "GET",
+            HttpMethod::Post => "POST",
+            HttpMethod::Put => "PUT",
+            HttpMethod::Delete => "DELETE",
+        }
+    }
+}
+
 /// Retry configuration for run steps. The runner re-executes the command
 /// up to `attempts` times, sleeping `interval` seconds between tries.
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +138,16 @@ pub enum StepDef {
         #[serde(default)]
         name: Option<String>,
         url: String,
+        #[serde(default)]
+        method: HttpMethod,
+        /// Request body for POST/PUT. Shell heredoc-safe: arbitrary bytes
+        /// are supported including quotes and newlines.
+        #[serde(default)]
+        body: Option<String>,
+        /// Content-Type header for requests with a body. Defaults to
+        /// application/json since most API triggers we use ship JSON.
+        #[serde(default = "default_content_type")]
+        content_type: String,
         #[serde(default = "default_http_status")]
         status: u16,
         /// When set, only source this service's `.env` file (needed when
