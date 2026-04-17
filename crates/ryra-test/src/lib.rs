@@ -467,6 +467,11 @@ pub async fn run(args: Args) -> Result<()> {
     let semaphore = std::sync::Arc::new(Semaphore::new(args.parallel));
     let mut handles = vec![];
     let total_tests = to_run.len();
+    // Shared progress counters — each task increments these when its VM
+    // ends so the tail of the output doubles as a live progress ticker
+    // (works under --parallel, order-independent).
+    let progress_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let progress_passed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
@@ -500,6 +505,8 @@ pub async fn run(args: Args) -> Result<()> {
         let single_test = total_tests == 1;
         let name = test.name().to_string();
         let has_quadlets = test.has_quadlets();
+        let progress_done = progress_done.clone();
+        let progress_passed = progress_passed.clone();
         // Extract quadlet_dir before spawning task (DiscoveredTest isn't Send)
         let quadlet_dir = match test {
             registry::DiscoveredTest::Simple { setup, .. } => setup.quadlet_dir.clone(),
@@ -633,7 +640,21 @@ pub async fn run(args: Args) -> Result<()> {
                 }
             }
 
-            println!("[{name}] ---- VM END ({status}, {:.1}s) ----", elapsed.as_secs_f64());
+            use std::sync::atomic::Ordering;
+            let done = progress_done.fetch_add(1, Ordering::SeqCst) + 1;
+            if result.passed() {
+                progress_passed.fetch_add(1, Ordering::SeqCst);
+            }
+            let passed_so_far = progress_passed.load(Ordering::SeqCst);
+            let failed_so_far = done - passed_so_far;
+            let wall = wall_clock.elapsed().as_secs();
+            let (mins, secs) = (wall / 60, wall % 60);
+            println!(
+                "[{name}] ---- VM END ({status}, test {:.1}s) ---- \
+                 [{done}/{total_tests} · {passed_so_far} pass · {failed_so_far} fail · \
+                 total {mins}:{secs:02}]",
+                elapsed.as_secs_f64()
+            );
             result
         }));
     }
