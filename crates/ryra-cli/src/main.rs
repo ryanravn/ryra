@@ -54,7 +54,7 @@ enum Command {
         verbose: bool,
     },
     /// Remove a service
-    Remove {
+    Rm {
         /// Service name(s) to remove
         #[arg(required = true, num_args = 1..)]
         services: Vec<String>,
@@ -64,9 +64,11 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
+        /// Destructive: also delete data subdirs and podman named volumes.
+        /// Without this flag, data is preserved and `ryra data ls` will
+        /// show the service as orphan afterwards.
+        #[arg(long)]
+        purge: bool,
     },
     /// Tear down all services, containers, and config
     Reset {
@@ -91,7 +93,7 @@ enum Command {
         service: Option<String>,
     },
     /// List installed services
-    List,
+    Ls,
     // -- Read-only / VM-based commands --
     /// Show what changed in a service's registry definition since install
     Diff {
@@ -210,15 +212,12 @@ async fn main() -> anyhow::Result<()> {
             crate::verbose::set(verbose);
             cli::add::run(services, url.as_deref(), auth, smtp, dry_run, yes).await?
         }
-        Command::Remove {
+        Command::Rm {
             ref services,
             yes,
             dry_run,
-            verbose,
-        } => {
-            crate::verbose::set(verbose);
-            cli::remove::run(services, yes, dry_run).await?
-        }
+            purge,
+        } => cli::rm::run(services, yes, dry_run, purge).await?,
         Command::Reset {
             yes,
             dry_run,
@@ -230,7 +229,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
-        Command::List => cli::list::run()?,
+        Command::Ls => cli::ls::run()?,
         Command::Search {
             ref query,
             ref registry,

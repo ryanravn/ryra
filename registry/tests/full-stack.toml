@@ -133,4 +133,4 @@ run = "curl -sf http://127.0.0.1:$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/w
 [[steps]]
 action = "shell"
 name = "status-shows-all"
-run = "ryra list | grep -q whoami && ryra list | grep -q forgejo && ryra list | grep -q vaultwarden && ryra list | grep -q authelia && ryra list | grep -q caddy"
+run = "ryra ls | grep -q whoami && ryra ls | grep -q forgejo && ryra ls | grep -q vaultwarden && ryra ls | grep -q authelia && ryra ls | grep -q caddy"
