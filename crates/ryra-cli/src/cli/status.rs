@@ -28,35 +28,18 @@ fn print_global(info: &StatusInfo) {
     println!("Auth:       {}", format_provider(&info.auth));
     println!();
 
+    // Per-service details (URL, ports, data paths) live in `ryra ls` so
+    // there's one canonical listing instead of two overlapping ones here
+    // and there. Point the user at it only if they actually have anything
+    // installed — otherwise the hint would be noise.
     if info.services.is_empty() {
-        println!("Services:   none installed");
+        println!("Services:   none installed — run `ryra add <service>` to install one");
     } else {
-        println!("Services:");
-        for svc in &info.services {
-            let ports: Vec<String> = svc
-                .ports
-                .iter()
-                .map(|(name, port)| format!("{name}={port}"))
-                .collect();
-            let status = if svc.installed { "" } else { " (incomplete)" };
-            match (svc.url.as_deref(), ports.is_empty()) {
-                (Some(url), true) => {
-                    println!("  {}{status} ({})", svc.name, url);
-                }
-                (Some(url), false) => {
-                    println!("  {}{status} ({}) [{}]", svc.name, url, ports.join(", "));
-                }
-                (None, true) => {
-                    println!("  {}{status}", svc.name);
-                }
-                (None, false) => {
-                    println!("  {}{status} [{}]", svc.name, ports.join(", "));
-                }
-            }
-        }
+        println!(
+            "Services:   {} installed — run `ryra ls` to list them",
+            info.services.len()
+        );
     }
-
-    println!();
 }
 
 async fn run_service(service: &str) -> Result<()> {

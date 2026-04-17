@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
@@ -5,6 +7,24 @@ pub fn run(all: bool, long: bool) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     let mut svcs = enumerate_all(&config)?;
+
+    // Pre-format every installed service's allocated ports. `ServiceData`
+    // doesn't carry them (it's data-focused), so we source them from the
+    // config. Orphans simply don't have an entry — fine, they'll show as
+    // blank in the PORTS column.
+    let ports: HashMap<String, String> = config
+        .services
+        .iter()
+        .map(|s| {
+            let formatted = s
+                .ports
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (s.name.clone(), formatted)
+        })
+        .collect();
 
     if svcs.is_empty() {
         println!("No services installed. Run `ryra search` to browse available services.");
@@ -43,9 +63,9 @@ pub fn run(all: bool, long: bool) -> Result<()> {
 
     let home = std::env::var("HOME").unwrap_or_default();
     if long {
-        print_long(&visible, &home, all);
+        print_long(&visible, &home, all, &ports);
     } else {
-        print_short(&visible, &home, all);
+        print_short(&visible, &home, all, &ports);
     }
 
     // Nudge about hidden orphans when the user ran the default view.
@@ -58,26 +78,43 @@ pub fn run(all: bool, long: bool) -> Result<()> {
     Ok(())
 }
 
-/// Fast path: name [status] data path. STATUS column only appears when
-/// orphans may be in the mix (i.e. `-a` was passed) — otherwise every
-/// row would read `installed` and add nothing.
-fn print_short(svcs: &[&ServiceData], home: &str, show_status: bool) {
+/// Fast path: name [status] ports data-path. STATUS column only appears
+/// when orphans may be in the mix (i.e. `-a` was passed) — otherwise
+/// every row would read `installed` and add nothing. PORTS is always
+/// shown so users can see how to reach each service without a second
+/// command.
+fn print_short(svcs: &[&ServiceData], home: &str, show_status: bool, ports: &HashMap<String, String>) {
+    // Width the PORTS column to the longest value so paths still line up.
+    // Minimum 5 so the header itself doesn't look cramped.
+    let ports_w = svcs
+        .iter()
+        .map(|s| ports.get(&s.service).map(|s| s.len()).unwrap_or(0))
+        .max()
+        .unwrap_or(0)
+        .max(5);
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() + 1);
     if show_status {
-        lines.push(format!("{:<15} {:<10} DATA", "SERVICE", "STATUS"));
+        lines.push(format!(
+            "{:<15} {:<10} {:<ports_w$} DATA",
+            "SERVICE", "STATUS", "PORTS"
+        ));
     } else {
-        lines.push(format!("{:<15} DATA", "SERVICE"));
+        lines.push(format!("{:<15} {:<ports_w$} DATA", "SERVICE", "PORTS"));
     }
     for svc in svcs {
         let path = shorten_home(&svc.home_dir.display().to_string(), home);
+        let p = ports.get(&svc.service).cloned().unwrap_or_default();
         if show_status {
             let status = match svc.status {
                 ServiceStatus::Installed => "installed",
                 ServiceStatus::Orphan => "orphan",
             };
-            lines.push(format!("{:<15} {:<10} {}", svc.service, status, path));
+            lines.push(format!(
+                "{:<15} {:<10} {:<ports_w$} {}",
+                svc.service, status, p, path
+            ));
         } else {
-            lines.push(format!("{:<15} {}", svc.service, path));
+            lines.push(format!("{:<15} {:<ports_w$} {}", svc.service, p, path));
         }
     }
     println!("{}", lines.join("\n"));
@@ -86,22 +123,36 @@ fn print_short(svcs: &[&ServiceData], home: &str, show_status: bool) {
 /// Long path: adds SIZE column (and STATUS if `-a`), plus volume
 /// sub-rows and a cleanup footer. Pays the ~250 ms cost of parallel
 /// `podman unshare du` per volume.
-fn print_long(svcs: &[&ServiceData], home: &str, show_status: bool) {
+fn print_long(
+    svcs: &[&ServiceData],
+    home: &str,
+    show_status: bool,
+    ports: &HashMap<String, String>,
+) {
     // Pre-compute every volume's size in parallel (see prefetch_volume_sizes).
     let owned: Vec<ServiceData> = svcs.iter().map(|s| (*s).clone()).collect();
     let vol_sizes = prefetch_volume_sizes(&owned);
 
+    let ports_w = svcs
+        .iter()
+        .map(|s| ports.get(&s.service).map(|s| s.len()).unwrap_or(0))
+        .max()
+        .unwrap_or(0)
+        .max(5);
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
     if show_status {
         lines.push(format!(
-            "{:<15} {:<10} {:<10} DATA",
-            "SERVICE", "STATUS", "SIZE"
+            "{:<15} {:<10} {:<10} {:<ports_w$} DATA",
+            "SERVICE", "STATUS", "SIZE", "PORTS"
         ));
     } else {
-        lines.push(format!("{:<15} {:<10} DATA", "SERVICE", "SIZE"));
+        lines.push(format!(
+            "{:<15} {:<10} {:<ports_w$} DATA",
+            "SERVICE", "SIZE", "PORTS"
+        ));
     }
     for svc in svcs {
-        lines.extend(format_service(svc, home, &vol_sizes, show_status));
+        lines.extend(format_service(svc, home, &vol_sizes, show_status, ports, ports_w));
     }
     println!("{}", lines.join("\n"));
 }
@@ -140,6 +191,8 @@ fn format_service(
     home: &str,
     vol_sizes: &std::collections::HashMap<String, Option<u64>>,
     show_status: bool,
+    ports: &HashMap<String, String>,
+    ports_w: usize,
 ) -> Vec<String> {
     // Total size: sum per-component sizes so a single unreadable component
     // (e.g. a subuid-owned volume mountpoint) doesn't abort the whole row.
@@ -149,6 +202,7 @@ fn format_service(
         Size::Unknown => "?".to_string(),
     };
     let path = shorten_home(&svc.home_dir.display().to_string(), home);
+    let p = ports.get(&svc.service).cloned().unwrap_or_default();
     let mut out = Vec::with_capacity(1 + svc.volumes.len());
     if show_status {
         let status = match svc.status {
@@ -156,19 +210,25 @@ fn format_service(
             ServiceStatus::Orphan => "orphan",
         };
         out.push(format!(
-            "{:<15} {:<10} {:<10} {}",
-            svc.service, status, size, path
+            "{:<15} {:<10} {:<10} {:<ports_w$} {}",
+            svc.service, status, size, p, path
         ));
         for v in &svc.volumes {
             out.push(format!(
-                "{:<15} {:<10} {:<10} volume:{}",
-                "", "", "", v.name
+                "{:<15} {:<10} {:<10} {:<ports_w$} volume:{}",
+                "", "", "", "", v.name
             ));
         }
     } else {
-        out.push(format!("{:<15} {:<10} {}", svc.service, size, path));
+        out.push(format!(
+            "{:<15} {:<10} {:<ports_w$} {}",
+            svc.service, size, p, path
+        ));
         for v in &svc.volumes {
-            out.push(format!("{:<15} {:<10} volume:{}", "", "", v.name));
+            out.push(format!(
+                "{:<15} {:<10} {:<ports_w$} volume:{}",
+                "", "", "", v.name
+            ));
         }
     }
     out
