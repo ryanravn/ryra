@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all, size_bytes};
+use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
 pub async fn ls() -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
@@ -31,14 +31,63 @@ fn print_service(svc: &ServiceData) -> Result<()> {
         ServiceStatus::Installed => "installed",
         ServiceStatus::Orphan => "orphan",
     };
-    let total = size_bytes(svc)?;
-    let size = human_size(total);
+    // Total size: sum per-component sizes so a single unreadable component
+    // (e.g. a subuid-owned volume mountpoint) doesn't abort the whole row.
+    let size = match compute_total(svc) {
+        Size::Bytes(b) => human_size(b),
+        Size::Partial(b) => format!("{}+?", human_size(b)),
+        Size::Unknown => "?".to_string(),
+    };
     let first_path = svc.home_dir.display().to_string();
     println!("{:<15} {:<10} {:<10} {}", svc.service, status, size, first_path);
     for v in &svc.volumes {
         println!("{:<15} {:<10} {:<10} volume:{}", "", "", "", v.name);
     }
     Ok(())
+}
+
+enum Size {
+    /// Every component read cleanly.
+    Bytes(u64),
+    /// At least one component read cleanly; at least one could not.
+    Partial(u64),
+    /// No component could be read.
+    Unknown,
+}
+
+fn compute_total(svc: &ServiceData) -> Size {
+    use ryra_core::data::{dir_size_bytes, volumes::mountpoint_of};
+    let mut total: u64 = 0;
+    let mut any_ok = false;
+    let mut any_err = false;
+    for p in &svc.data_paths {
+        match dir_size_bytes(p) {
+            Ok(b) => {
+                total += b;
+                any_ok = true;
+            }
+            Err(_) => any_err = true,
+        }
+    }
+    for v in &svc.volumes {
+        let Some(mp) = mountpoint_of(&v.name) else {
+            continue;
+        };
+        match dir_size_bytes(&mp) {
+            Ok(b) => {
+                total += b;
+                any_ok = true;
+            }
+            Err(_) => any_err = true,
+        }
+    }
+    match (any_ok, any_err) {
+        (true, false) => Size::Bytes(total),
+        (true, true) => Size::Partial(total),
+        (false, true) => Size::Unknown,
+        // No volumes AND no data paths — orphan with nothing left; report 0.
+        (false, false) => Size::Bytes(0),
+    }
 }
 
 fn human_size(bytes: u64) -> String {
@@ -75,5 +124,12 @@ mod tests {
         assert_eq!(human_size(15_000), "15.0 KB");
         assert_eq!(human_size(150_000), "150 KB");
         assert_eq!(human_size(2_300_000_000), "2.30 GB");
+    }
+
+    #[test]
+    fn size_formatting_variants() {
+        // Direct checks on human_size for the partial display shape.
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1_500_000), "1.50 MB");
     }
 }
