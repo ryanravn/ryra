@@ -45,7 +45,11 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
 /// Each line shows the test name, step count, `[browser]` flag, and
 /// distinct step kinds so `playwright`/`shell`/`http` tell you what
 /// the test does at a glance.
-fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
+///
+/// When `verbose` is set, each test also gets a breakdown of every step
+/// (commands, URLs, polls, heredoc bodies) so the caller can see exactly
+/// what the test runs without opening the `.toml`.
+fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path, verbose: bool) {
     if discovered.is_empty() {
         println!("No tests discovered.");
         return;
@@ -93,6 +97,35 @@ fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
             step_count,
             if step_count == 1 { "" } else { "s" },
         );
+        if !verbose {
+            return;
+        }
+        // Verbose: print each step's details. Use a deeper indent so the
+        // hierarchy (group → test → step lines) stays readable.
+        let step_indent = format!("{indent}    ");
+        if let registry::DiscoveredTest::Lifecycle { steps, .. } = t {
+            for (i, step) in steps.iter().enumerate() {
+                let described = step.describe();
+                if let Some((head, rest)) = described.split_first() {
+                    println!("{step_indent}{:>2}. {head}", i + 1);
+                    for l in rest {
+                        println!("{step_indent}    {l}");
+                    }
+                }
+            }
+        } else if let registry::DiscoveredTest::Simple { tests, .. } = t {
+            for (i, entry) in tests.iter().enumerate() {
+                println!(
+                    "{step_indent}{:>2}. shell '{}'  (timeout={}s)",
+                    i + 1,
+                    entry.name,
+                    entry.timeout_secs
+                );
+                for l in entry.run.trim().lines() {
+                    println!("{step_indent}    | {l}");
+                }
+            }
+        }
     };
 
     if !service_groups.is_empty() {
@@ -301,7 +334,17 @@ pub async fn run(args: Args) -> Result<()> {
     let registry_path = registry_path.unwrap_or_else(|_| PathBuf::from("registry"));
 
     if args.list {
-        render_list(&discovered, registry_path.as_path());
+        // Respect positional filters: `ryra test --list whoami` shows only
+        // whoami tests. Same substring-contains semantics as the run path.
+        let filtered: Vec<registry::DiscoveredTest> = if args.tests.is_empty() {
+            discovered
+        } else {
+            discovered
+                .into_iter()
+                .filter(|t| args.tests.iter().any(|f| t.name().contains(f.as_str())))
+                .collect()
+        };
+        render_list(&filtered, registry_path.as_path(), args.verbose);
         return Ok(());
     }
 

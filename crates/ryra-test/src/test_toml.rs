@@ -274,6 +274,123 @@ impl StepDef {
     pub fn step_name(&self) -> String {
         format!("{self}")
     }
+
+    /// Multi-line description for `--list -v`. Shows every field that
+    /// meaningfully changes behaviour (args, env, headers, body, …).
+    /// The caller indents each returned line.
+    pub fn describe(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        match self {
+            StepDef::Add {
+                service,
+                args,
+                env,
+                timeout,
+            } => {
+                let args_s = args
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|a| format!(" {a}"))
+                    .unwrap_or_default();
+                lines.push(format!("ryra add {service}{args_s}  (timeout={timeout}s)"));
+                for (k, v) in env {
+                    lines.push(format!("  env {k}={v}"));
+                }
+            }
+            StepDef::Remove { service } => lines.push(format!("ryra remove {service}")),
+            StepDef::Reset => lines.push("ryra reset".to_string()),
+            StepDef::Wait { service, timeout } => {
+                lines.push(format!("wait for {service}.service  (timeout={timeout}s)"));
+            }
+            StepDef::Shell {
+                name,
+                run,
+                timeout,
+                poll,
+            } => {
+                let poll_s = match poll {
+                    Some(p) => {
+                        format!("  poll={{interval={}s, attempts={}}}", p.interval, p.attempts)
+                    }
+                    None => String::new(),
+                };
+                lines.push(format!("shell '{name}'  (timeout={timeout}s{poll_s})"));
+                for l in run.trim().lines() {
+                    lines.push(format!("  | {l}"));
+                }
+            }
+            StepDef::Http {
+                name,
+                url,
+                method,
+                body,
+                content_type,
+                headers,
+                status,
+                service,
+                poll,
+                timeout,
+            } => {
+                let label = name.as_deref().unwrap_or("(anon)");
+                let verb = method.as_curl_arg();
+                lines.push(format!(
+                    "http '{label}': {verb} {url}  (expect {status}, timeout={timeout}s)"
+                ));
+                if let Some(svc) = service {
+                    lines.push(format!("  env-source: {svc}/.env"));
+                }
+                for (k, v) in headers {
+                    lines.push(format!("  header {k}: {v}"));
+                }
+                if let Some(b) = body {
+                    lines.push(format!("  content-type: {content_type}"));
+                    for l in b.trim().lines() {
+                        lines.push(format!("  body> {l}"));
+                    }
+                }
+                if let Some(p) = poll {
+                    lines.push(format!(
+                        "  poll: every {}s, up to {} attempts",
+                        p.interval, p.attempts
+                    ));
+                }
+            }
+            StepDef::Playwright {
+                name,
+                spec,
+                env,
+                timeout,
+            } => {
+                let label = name.as_deref().unwrap_or(spec);
+                lines.push(format!(
+                    "playwright '{label}': spec={spec}  (timeout={timeout}s)"
+                ));
+                for (k, v) in env {
+                    lines.push(format!("  env {k}={v}"));
+                }
+            }
+            StepDef::Mail {
+                name,
+                mailbox,
+                contains,
+                poll,
+                timeout,
+            } => {
+                let label = name.as_deref().unwrap_or(mailbox);
+                lines.push(format!(
+                    "mail '{label}': mailbox={mailbox}  (timeout={timeout}s)"
+                ));
+                if let Some(c) = contains {
+                    lines.push(format!("  contains: {c}"));
+                }
+                lines.push(format!(
+                    "  poll: every {}s, up to {} attempts",
+                    poll.interval, poll.attempts
+                ));
+            }
+        }
+        lines
+    }
 }
 
 impl TestToml {
