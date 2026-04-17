@@ -2,3 +2,4 @@
 //! data-preserving variant of `ryra rm`.
 
 pub mod classify;
+pub mod volumes;
