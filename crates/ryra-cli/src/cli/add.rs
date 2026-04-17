@@ -158,7 +158,7 @@ pub async fn run(
                         port: INBUCKET_SMTP_PORT, // inbucket's internal container port
                         username: String::new(),
                         password: String::new(),
-                        from: "ryra@localhost".to_string(),
+                        from: "noreply@example.com".to_string(),
                         security: ryra_core::config::schema::SmtpSecurity::Off,
                     });
                     paths.ensure_dirs()?;
@@ -834,7 +834,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
                 port: INBUCKET_SMTP_PORT,
                 username: String::new(),
                 password: String::new(),
-                from: "ryra@localhost".to_string(),
+                from: "noreply@example.com".to_string(),
                 security: ryra_core::config::schema::SmtpSecurity::Off,
             });
             paths.ensure_dirs()?;

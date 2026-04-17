@@ -21,7 +21,7 @@ timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "signup-works"
-run = ". $HOME/.local/share/ryra/supabase/.env && curl -sf -X POST -H \"apikey: $ANON_KEY\" -H \"Content-Type: application/json\" -d '{\"email\":\"e2e@test.local\",\"password\":\"testpassword123\"}' http://localhost:$RYRA_PORT_HTTP/auth/v1/signup | grep access_token"
+run = ". $HOME/.local/share/ryra/supabase/.env && curl -sf -X POST -H \"apikey: $ANON_KEY\" -H \"Content-Type: application/json\" -d '{\"email\":\"e2e@example.com\",\"password\":\"testpassword123\"}' http://localhost:$RYRA_PORT_HTTP/auth/v1/signup | grep access_token"
 timeout = 30
 [[tests.steps]]
 action = "shell"
@@ -63,7 +63,7 @@ method = "post"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP/auth/v1/signup"
 service = "supabase"
 headers = { apikey = "$ANON_KEY" }
-body = '{"email":"smtptest@ryra.local","password":"Testing-Smtp-123!"}'
+body = '{"email":"smtptest@example.com","password":"Testing-Smtp-123!"}'
 timeout = 30
 [[tests.steps]]
 action = "http"
@@ -72,7 +72,7 @@ method = "post"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP/auth/v1/recover"
 service = "supabase"
 headers = { apikey = "$ANON_KEY" }
-body = '{"email":"smtptest@ryra.local"}'
+body = '{"email":"smtptest@example.com"}'
 timeout = 30
 [[tests.steps]]
 action = "mail"

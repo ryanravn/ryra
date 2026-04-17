@@ -5,7 +5,7 @@ name = "immich"
 [[tests.steps]]
 action = "add"
 service = "immich"
-env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@example.com", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 [[tests.steps]]
 action = "wait"
 service = "immich"
@@ -45,7 +45,7 @@ service = "authelia"
 action = "add"
 service = "immich"
 args = "--auth"
-env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@example.com", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 [[tests.steps]]
 action = "wait"
@@ -64,7 +64,7 @@ run = """
 PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
 curl -sf -X POST "http://127.0.0.1:$PORT/api/auth/admin-sign-up" \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@test.local","password":"testpassword123","name":"Admin"}' \
+  -d '{"email":"admin@example.com","password":"testpassword123","name":"Admin"}' \
   >/dev/null 2>&1 || true
 """
 [[tests.steps]]

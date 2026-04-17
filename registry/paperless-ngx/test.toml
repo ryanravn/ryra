@@ -50,7 +50,7 @@ timeout = 180
 action = "shell"
 name = "trigger-smtp-mail"
 run = """for i in $(seq 1 10); do
-  podman exec paperless-ngx python manage.py sendtestemail smtptest@ryra.local && exit 0
+  podman exec paperless-ngx python manage.py sendtestemail smtptest@example.com && exit 0
   sleep 3
 done
 exit 1"""

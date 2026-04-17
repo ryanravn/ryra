@@ -68,7 +68,7 @@ name = "create-mail-target-user"
 run = """for i in $(seq 1 15); do
   podman exec -u git forgejo forgejo admin user create \
     --username smtptest \
-    --email smtptest@ryra.local \
+    --email smtptest@example.com \
     --password 'Testing-Smtp-123!' \
     --must-change-password=false && exit 0
   sleep 2

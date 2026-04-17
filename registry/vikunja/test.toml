@@ -52,7 +52,7 @@ name = "trigger-signup-email"
 method = "post"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/register"
 service = "vikunja"
-body = '{"username":"smtptest","email":"smtptest@ryra.local","password":"Testing-Smtp-123!"}'
+body = '{"username":"smtptest","email":"smtptest@example.com","password":"Testing-Smtp-123!"}'
 timeout = 30
 [[tests.steps]]
 action = "mail"

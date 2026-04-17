@@ -203,7 +203,7 @@ pub enum StepDef {
     Mail {
         #[serde(default)]
         name: Option<String>,
-        /// Local-part of the recipient address (`smtptest` for `smtptest@ryra.local`).
+        /// Local-part of the recipient address (`smtptest` for `smtptest@example.com`).
         mailbox: String,
         /// Optional substring required in the response body. Matches
         /// against the raw inbucket JSON, which includes subject + body.

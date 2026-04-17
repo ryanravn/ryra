@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 const TWENTY_URL = process.env.TWENTY_URL || "https://twenty.localhost:8443";
-const INVITE_EMAIL = process.env.INVITE_EMAIL || "smtptest@ryra.local";
+const INVITE_EMAIL = process.env.INVITE_EMAIL || "smtptest@example.com";
 
 /**
  * Walk Twenty's first-run onboarding (signup → create workspace → profile →
@@ -25,7 +25,7 @@ test("onboarding invite sends an email through the SMTP worker", async ({
 
   // 2. Email → Continue
   await page.getByRole("textbox", { name: /email/i })
-    .fill("admin@ryra.local");
+    .fill("admin@example.com");
   await page.getByRole("button", { name: /continue/i }).click();
 
   // 3. Password → Sign up

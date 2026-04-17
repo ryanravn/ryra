@@ -28,7 +28,7 @@ service = "authelia"
 action = "add"
 service = "seafile"
 args = "--auth"
-env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
+env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]
@@ -40,7 +40,7 @@ service = "seafile"
 action = "add"
 service = "immich"
 args = "--auth"
-env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@example.com", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]

@@ -58,7 +58,7 @@ value = "local"
 
 [[env]]
 name = "RYRA_ADMIN_EMAIL"
-value = "admin@ryra.local"
+value = "admin@example.com"
 kind = "prompted"
 prompt = "Admin email"
 

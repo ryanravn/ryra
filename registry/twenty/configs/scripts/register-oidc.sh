@@ -7,7 +7,7 @@ set -euo pipefail
 
 TWENTY_URL="http://127.0.0.1:${RYRA_PORT_HTTP}"
 GRAPHQL_URL="${TWENTY_URL}/metadata"
-ADMIN_EMAIL="${RYRA_ADMIN_EMAIL:-admin@ryra.local}"
+ADMIN_EMAIL="${RYRA_ADMIN_EMAIL:-admin@example.com}"
 ADMIN_PASSWORD="${RYRA_ADMIN_PASSWORD}"
 
 # Helper: extract a value from JSON using a dotted path (e.g. "data.signIn.tokens")

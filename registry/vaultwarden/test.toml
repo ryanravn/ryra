@@ -20,7 +20,7 @@ host = "localhost"
 port = 1025
 username = "test"
 password = "test"
-from = "noreply@test.local"
+from = "noreply@example.com"
 TOML'''
 [[tests.steps]]
 action = "add"
@@ -51,7 +51,7 @@ run = "grep -q 'SMTP_HOST=localhost' $HOME/.local/share/ryra/vaultwarden/.env"
 [[tests.steps]]
 action = "shell"
 name = "smtp-from-rendered"
-run = "grep -q 'SMTP_FROM=noreply@test.local' $HOME/.local/share/ryra/vaultwarden/.env"
+run = "grep -q 'SMTP_FROM=noreply@example.com' $HOME/.local/share/ryra/vaultwarden/.env"
 
 # SMTP delivery via vaultwarden's /admin/test/smtp endpoint. ADMIN_TOKEN
 # is set so /admin becomes reachable — otherwise vaultwarden hides it.
@@ -87,7 +87,7 @@ run = """for i in $(seq 1 10); do
        -d "token=test-admin-token-for-smtp-test" -o /dev/null -w '%{http_code}' | grep -q 200; then
     curl -sk -b /tmp/vw-cookies -X POST https://vault.localhost:8443/admin/test/smtp \
       -H 'Content-Type: application/json' \
-      -d '{"email":"smtptest@ryra.local"}' \
+      -d '{"email":"smtptest@example.com"}' \
       -o /dev/null -w '%{http_code}' | grep -q 200 && exit 0
   fi
   sleep 3

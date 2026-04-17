@@ -19,7 +19,7 @@ service = "caddy"
 action = "add"
 service = "seafile"
 args = "--smtp=inbucket --url https://seafile.localhost:8443"
-env = { INIT_SEAFILE_ADMIN_EMAIL = "smtptest@ryra.local", INIT_SEAFILE_ADMIN_PASSWORD = "Testing-Smtp-123!" }
+env = { INIT_SEAFILE_ADMIN_EMAIL = "smtptest@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "Testing-Smtp-123!" }
 timeout = 900
 [[tests.steps]]
 action = "wait"
@@ -47,7 +47,7 @@ run = """for i in $(seq 1 10); do
     export SEAFILE_DATA_DIR=${TOPDIR}/seafile-data
     export DJANGO_SETTINGS_MODULE=seahub.settings
     cd ${INSTALLPATH}
-    python3 seahub/manage.py sendtestemail smtptest@ryra.local
+    python3 seahub/manage.py sendtestemail smtptest@example.com
   ' && exit 0
   sleep 3
 done
@@ -84,7 +84,7 @@ service = "authelia"
 action = "add"
 service = "seafile"
 args = "--auth --url https://seafile.localhost:8443"
-env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
+env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 [[tests.steps]]
 action = "wait"

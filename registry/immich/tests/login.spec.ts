@@ -17,7 +17,7 @@ test("login page has email and password fields", async ({ page }) => {
 });
 
 test("can log in with admin credentials", async ({ page }) => {
-  const email = process.env.INIT_IMMICH_ADMIN_EMAIL || "admin@test.local";
+  const email = process.env.INIT_IMMICH_ADMIN_EMAIL || "admin@example.com";
   const password =
     process.env.INIT_IMMICH_ADMIN_PASSWORD || "testpassword123";
 

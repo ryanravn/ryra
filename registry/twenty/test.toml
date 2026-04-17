@@ -63,7 +63,7 @@ action = "playwright"
 name = "onboarding-invite-flow"
 spec = "twenty-smtp.spec.ts"
 timeout = 180
-env = { TWENTY_URL = "https://twenty.localhost:8443", INVITE_EMAIL = "smtptest@ryra.local" }
+env = { TWENTY_URL = "https://twenty.localhost:8443", INVITE_EMAIL = "smtptest@example.com" }
 [[tests.steps]]
 action = "mail"
 name = "mail-delivered-to-inbucket"
@@ -117,7 +117,7 @@ TWENTY_URL="http://127.0.0.1:${TWENTY_PORT}"
 GQL="${TWENTY_URL}/metadata"
 
 eval "$(grep -E '^OIDC_|^RYRA_ADMIN' $HOME/.local/share/ryra/twenty/.env)"
-ADMIN_EMAIL="${RYRA_ADMIN_EMAIL:-admin@ryra.local}"
+ADMIN_EMAIL="${RYRA_ADMIN_EMAIL:-admin@example.com}"
 
 jval() {
   python3 -c "
