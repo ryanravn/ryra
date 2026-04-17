@@ -59,24 +59,24 @@ Service definitions in `registry/<name>/service.toml` use template variables in 
 
 ## Managing data
 
-`ryra ls` shows every service ryra knows about — installed services
+`ryra list` shows every service ryra knows about — installed services
 plus "orphans" (removed services whose data still lives on disk).
 Each row includes the size, home-dir path, and podman volumes.
 
 Removing a service keeps its data by default:
 
-    ryra rm seafile           # stops + deregisters; keeps data + volumes
-    ryra rm seafile --purge   # stops + deregisters + wipes everything
+    ryra remove seafile           # stops + deregisters; keeps data + volumes
+    ryra remove seafile --purge   # stops + deregisters + wipes everything
 
 `--purge` also works on orphans to clean up leftover data:
 
-    ryra ls                   # shows seafile as `orphan` after a soft rm
-    ryra rm seafile --purge   # wipes the leftover home dir + volumes
+    ryra list                     # shows seafile as `orphan` after a soft remove
+    ryra remove seafile --purge   # wipes the leftover home dir + volumes
 
 Bulk:
 
-    ryra rm -a                # preserve data for every installed service
-    ryra rm -a --purge        # wipe every service + every orphan's data
+    ryra remove -a                # preserve data for every installed service
+    ryra remove -a --purge        # wipe every service + every orphan's data
 
 `ryra reset` additionally wipes ryra's own config, the Caddy CA from the
 system trust store, snapshots, and registry caches.
@@ -98,7 +98,7 @@ Tests run in ephemeral QEMU VMs. Requires KVM and QEMU packages (see `CLAUDE.md`
 ```
 cargo run -- test                    # run all tests
 cargo run -- test whoami             # run tests matching "whoami"
-cargo run -- test ls                 # list available tests (add -v for full step details)
+cargo run -- test list               # list available tests (add -v for full step details)
 cargo run -- test --parallel=3       # run 3 VMs concurrently
 cargo run -- test --keep-alive       # boot a VM for interactive debugging
 ```

@@ -114,14 +114,14 @@ async fn remove_one(
         return Ok(());
     }
 
-    // Not installed — treat as orphan. `ryra rm <orphan>` without --purge
-    // has nothing to do (the service is already deregistered). Tell the
-    // user how to finish cleanup.
+    // Not installed — treat as orphan. `ryra remove <orphan>` without
+    // --purge has nothing to do (the service is already deregistered).
+    // Tell the user how to finish cleanup.
     if !purge {
         let svc = ryra_core::data::enumerate_service(config, service)?;
         if svc.is_some() {
             anyhow::bail!(
-                "'{service}' is already removed but still has data. Run `ryra rm {service} --purge` to wipe it."
+                "'{service}' is already removed but still has data. Run `ryra remove {service} --purge` to wipe it."
             );
         }
         anyhow::bail!("no service named '{service}'");
@@ -182,7 +182,7 @@ fn prompt_installed(service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
         ryra_core::RemoveMode::Preserve => {
             println!("  - Delete config + .env at {}", home_dir.display());
             println!(
-                "  - Keep data subdirs and podman volumes (run `ryra rm {service} --purge` later to delete)"
+                "  - Keep data subdirs and podman volumes (run `ryra remove {service} --purge` later to delete)"
             );
         }
     }
@@ -235,7 +235,7 @@ fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Resu
     if purge {
         println!("Mode: --purge — every listed service AND its data/volumes will be wiped.");
     } else {
-        println!("Mode: data-preserving — run `ryra rm -a --purge` later to wipe data.");
+        println!("Mode: data-preserving — run `ryra remove -a --purge` later to wipe data.");
     }
     println!();
     let input: String = Input::new()
@@ -257,7 +257,7 @@ fn print_installed_tail(service: &str, mode: ryra_core::RemoveMode) -> Result<()
                 "\n{service} removed. Data preserved at {}.",
                 ryra_core::service_home(service)?.display()
             );
-            println!("Run `ryra rm {service} --purge` to delete.");
+            println!("Run `ryra remove {service} --purge` to delete.");
         }
     }
     Ok(())

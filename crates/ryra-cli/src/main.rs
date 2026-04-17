@@ -54,7 +54,7 @@ enum Command {
         verbose: bool,
     },
     /// Remove a service
-    Rm {
+    Remove {
         /// Service name(s) to remove
         #[arg(
             required_unless_present_any = ["all", "orphans"],
@@ -66,7 +66,7 @@ enum Command {
         /// config + CA + snapshots)
         #[arg(long, short = 'a', conflicts_with = "orphans")]
         all: bool,
-        /// Purge every orphan service's data (leftover from prior `ryra rm`).
+        /// Purge every orphan service's data (leftover from prior `ryra remove`).
         /// Never touches installed services.
         #[arg(long)]
         orphans: bool,
@@ -77,7 +77,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Destructive: also delete data subdirs and podman named volumes.
-        /// Without this flag, data is preserved and `ryra ls` will show
+        /// Without this flag, data is preserved and `ryra list` will show
         /// the service as orphan afterwards. Also works on orphans to
         /// clean up their leftover data.
         #[arg(long)]
@@ -106,7 +106,7 @@ enum Command {
         service: Option<String>,
     },
     /// List installed services
-    Ls {
+    List {
         /// Also show orphan services (removed but data still on disk)
         #[arg(long, short = 'a')]
         all: bool,
@@ -180,7 +180,7 @@ enum Command {
 #[derive(Subcommand)]
 enum TestAction {
     /// List available tests (optionally filtered by name substrings)
-    Ls {
+    List {
         /// Test name filters
         names: Vec<String>,
         /// Show full step details (commands, URLs, poll config, …)
@@ -233,14 +233,14 @@ async fn main() -> anyhow::Result<()> {
             crate::verbose::set(verbose);
             cli::add::run(services, url.as_deref(), auth, smtp, dry_run, yes).await?
         }
-        Command::Rm {
+        Command::Remove {
             ref services,
             all,
             orphans,
             yes,
             dry_run,
             purge,
-        } => cli::rm::run(services, all, orphans, yes, dry_run, purge).await?,
+        } => cli::remove::run(services, all, orphans, yes, dry_run, purge).await?,
         Command::Reset {
             yes,
             dry_run,
@@ -252,7 +252,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
-        Command::Ls { all, long } => cli::ls::run(all, long)?,
+        Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {
             ref query,
             ref registry,
@@ -272,11 +272,11 @@ async fn main() -> anyhow::Result<()> {
             parallel,
             ref action,
         } => {
-            // `ryra test ls [-v] [names…]` is a subcommand; everything
+            // `ryra test list [-v] [names…]` is a subcommand; everything
             // else is the normal run path.
             let (effective_list, effective_verbose, effective_names): (bool, bool, &[String]) =
                 match action {
-                    Some(TestAction::Ls {
+                    Some(TestAction::List {
                         names: list_names,
                         verbose: list_verbose,
                     }) => (true, *list_verbose || verbose, list_names.as_slice()),

@@ -1,5 +1,5 @@
-//! Per-service data enumeration for `ryra data` + the
-//! data-preserving variant of `ryra rm`.
+//! Per-service data enumeration for `ryra list` + the
+//! data-preserving variant of `ryra remove`.
 
 pub mod classify;
 pub mod volumes;

@@ -36,7 +36,7 @@ This shows the service's container state, exposed ports, and configuration.
 ## 4. List your services
 
 ```bash
-ryra ls
+ryra list
 ```
 
 ## 5. Browse available services

@@ -31,7 +31,7 @@ To expose a service on a domain with automatic HTTPS:
 
 Ryra adds a site block to the Caddyfile that routes `vault.example.com` to the service's port. Caddy handles TLS certificate provisioning automatically.
 
-When you remove a service with `ryra rm`, its Caddy route is cleaned up automatically.
+When you remove a service with `ryra remove`, its Caddy route is cleaned up automatically.
 
 ## Authentication with Authelia
 

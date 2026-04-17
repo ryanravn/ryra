@@ -53,7 +53,7 @@ pub fn run(all: bool, long: bool) -> Result<()> {
     if visible.is_empty() {
         if orphan_count > 0 {
             println!(
-                "No installed services. {orphan_count} orphan(s) with leftover data — use `ryra ls -a` to see."
+                "No installed services. {orphan_count} orphan(s) with leftover data — use `ryra list -a` to see."
             );
         } else {
             println!("No services installed. Run `ryra search` to browse available services.");
@@ -72,7 +72,7 @@ pub fn run(all: bool, long: bool) -> Result<()> {
     if !all && orphan_count > 0 {
         println!();
         println!(
-            "{orphan_count} orphan service(s) with leftover data — use `ryra ls -a` to see."
+            "{orphan_count} orphan service(s) with leftover data — use `ryra list -a` to see."
         );
     }
     Ok(())

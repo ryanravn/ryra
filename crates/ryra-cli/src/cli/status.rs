@@ -28,7 +28,7 @@ fn print_global(info: &StatusInfo) {
     println!("Auth:       {}", format_provider(&info.auth));
     println!();
 
-    // Per-service details (URL, ports, data paths) live in `ryra ls` so
+    // Per-service details (URL, ports, data paths) live in `ryra list` so
     // there's one canonical listing instead of two overlapping ones here
     // and there. Point the user at it only if they actually have anything
     // installed — otherwise the hint would be noise.
@@ -36,7 +36,7 @@ fn print_global(info: &StatusInfo) {
         println!("Services:   none installed — run `ryra add <service>` to install one");
     } else {
         println!(
-            "Services:   {} installed — run `ryra ls` to list them",
+            "Services:   {} installed — run `ryra list` to list them",
             info.services.len()
         );
     }
