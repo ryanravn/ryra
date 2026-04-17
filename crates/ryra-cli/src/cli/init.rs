@@ -61,6 +61,11 @@ pub async fn run(dry_run: bool) -> Result<()> {
             println!("ryra initialized!");
             println!("  Config: {config_path}");
             println!("  Run `ryra search` to browse available services.");
+
+            // Warn the user if systemd lingering is off — rootless services
+            // would otherwise silently die on logout. Do this after the
+            // success banner so the warning is the last thing on screen.
+            super::linger::warn_if_disabled().await?;
         }
     }
 

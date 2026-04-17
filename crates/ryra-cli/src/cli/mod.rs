@@ -3,6 +3,7 @@ pub mod apply;
 pub mod config_cmd;
 pub mod diff;
 pub mod init;
+pub mod linger;
 pub mod ls;
 pub mod prompts;
 pub mod registry_cmd;

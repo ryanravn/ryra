@@ -470,6 +470,14 @@ pub async fn run(
         }
     } // end for service_input in services
 
+    // Remind the user about lingering — if they reboot or log out without
+    // it, every service we just wrote a quadlet for will silently stop.
+    // Only warn in non-dry-run; a plan shouldn't produce system-state
+    // warnings.
+    if !dry_run {
+        super::linger::warn_if_disabled().await?;
+    }
+
     Ok(())
 }
 
