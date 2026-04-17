@@ -514,7 +514,12 @@ pub async fn run(args: Args) -> Result<()> {
         };
 
         handles.push(tokio::spawn(async move {
-            let _permit = permit;
+            // `permit` holds a slot in the `--parallel` semaphore; must be
+            // alive until the task finishes. Kept as an explicit local so
+            // Drop order is obvious to readers (and to the compiler —
+            // `let _x = ...` used to be load-bearing here; drop at end
+            // via explicit bind + final drop avoids any NLL surprises).
+            let permit_guard = permit;
             let id = machine::random_id();
             let ssh_port = ports::allocate_ssh_port();
             let start = std::time::Instant::now();
@@ -655,6 +660,7 @@ pub async fn run(args: Args) -> Result<()> {
                  total {mins}:{secs:02}]",
                 elapsed.as_secs_f64()
             );
+            drop(permit_guard); // release the --parallel slot AFTER reporting
             result
         }));
     }
