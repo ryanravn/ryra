@@ -25,22 +25,23 @@ pub async fn ls() -> Result<()> {
     // Buffer the whole table: compute_total walks each volume's mountpoint
     // and can be slow. Emitting rows inline makes them trickle out one by
     // one, which feels janky. Collect everything first, then print once.
+    let home = std::env::var("HOME").unwrap_or_default();
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
     lines.push(format!(
-        "{:<15} {:<10} {:<10} PATH + VOLUMES",
+        "{:<15} {:<10} {:<10} DATA",
         "SERVICE", "STATUS", "SIZE"
     ));
     for svc in &svcs {
-        lines.extend(format_service(svc));
+        lines.extend(format_service(svc, &home));
     }
     println!("{}", lines.join("\n"));
     println!();
-    println!("Delete a service's data:  ryra data rm <service>");
-    println!("Or manually:              rm -rf <path>  &&  podman volume rm <volume>");
+    println!("Delete via ryra:  ryra data rm <service>");
+    println!("Delete manually:  rm -rf <path>  &&  podman volume rm <volume-name>");
     Ok(())
 }
 
-fn format_service(svc: &ServiceData) -> Vec<String> {
+fn format_service(svc: &ServiceData, home: &str) -> Vec<String> {
     let status = match svc.status {
         ServiceStatus::Installed => "installed",
         ServiceStatus::Orphan => "orphan",
@@ -52,11 +53,11 @@ fn format_service(svc: &ServiceData) -> Vec<String> {
         Size::Partial(b) => format!("{}+?", human_size(b)),
         Size::Unknown => "?".to_string(),
     };
-    let first_path = svc.home_dir.display().to_string();
+    let path = shorten_home(&svc.home_dir.display().to_string(), home);
     let mut out = Vec::with_capacity(1 + svc.volumes.len());
     out.push(format!(
         "{:<15} {:<10} {:<10} {}",
-        svc.service, status, size, first_path
+        svc.service, status, size, path
     ));
     for v in &svc.volumes {
         out.push(format!(
@@ -65,6 +66,18 @@ fn format_service(svc: &ServiceData) -> Vec<String> {
         ));
     }
     out
+}
+
+/// Replace the user's home-dir prefix with `~` for display. Keeps long
+/// paths readable without hiding where they actually live.
+fn shorten_home(path: &str, home: &str) -> String {
+    if !home.is_empty()
+        && let Some(rest) = path.strip_prefix(home)
+    {
+        format!("~{rest}")
+    } else {
+        path.to_string()
+    }
 }
 
 enum Size {
