@@ -140,17 +140,29 @@ enum Command {
         /// Show real-time output from VM commands
         #[arg(long, short)]
         verbose: bool,
-        /// List available tests
-        #[arg(long)]
-        list: bool,
         /// Max concurrent VMs (default: 1)
         #[arg(long)]
         parallel: Option<usize>,
+        /// Subcommand (e.g. `list`). Omit to run tests.
+        #[command(subcommand)]
+        action: Option<TestAction>,
     },
     /// Manage custom registries
     Registry {
         #[command(subcommand)]
         action: RegistryAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum TestAction {
+    /// List available tests (optionally filtered by name substrings)
+    List {
+        /// Test name filters
+        names: Vec<String>,
+        /// Show full step details (commands, URLs, poll config, …)
+        #[arg(long, short)]
+        verbose: bool,
     },
 }
 
@@ -235,9 +247,19 @@ async fn main() -> anyhow::Result<()> {
             keep_alive,
             yes,
             verbose,
-            list,
             parallel,
+            ref action,
         } => {
+            // `ryra test list [-v] [names…]` is a subcommand; everything
+            // else is the normal run path.
+            let (effective_list, effective_verbose, effective_names): (bool, bool, &[String]) =
+                match action {
+                    Some(TestAction::List {
+                        names: list_names,
+                        verbose: list_verbose,
+                    }) => (true, *list_verbose || verbose, list_names.as_slice()),
+                    None => (false, verbose, names.as_slice()),
+                };
             cli::test::run(cli::test::TestRunParams {
                 service: service.as_deref(),
                 test_filter: test.as_deref(),
@@ -247,10 +269,10 @@ async fn main() -> anyhow::Result<()> {
                 retest,
                 keep_alive,
                 yes,
-                verbose,
-                list,
+                verbose: effective_verbose,
+                list: effective_list,
                 parallel,
-                names,
+                names: effective_names,
             })
             .await?
         }

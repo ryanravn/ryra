@@ -74,7 +74,7 @@ Tests run in ephemeral QEMU VMs. Requires KVM and QEMU packages (see `CLAUDE.md`
 ```
 cargo run -- test                    # run all tests
 cargo run -- test whoami             # run tests matching "whoami"
-cargo run -- test --list             # list available tests
+cargo run -- test list               # list available tests (add -v for full step details)
 cargo run -- test --parallel=3       # run 3 VMs concurrently
 cargo run -- test --keep-alive       # boot a VM for interactive debugging
 ```
