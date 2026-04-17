@@ -1065,10 +1065,58 @@ async fn create_snapshot(
 
     match socat_result {
         Ok(mut child) => {
-            // Wait for savevm to complete — writes all VM memory to the qcow2.
-            // Conservative: ~1s per 200MB, minimum 15s.
-            let save_secs = std::cmp::max(15, (memory_mb as u64) / 200 + 5);
-            tokio::time::sleep(std::time::Duration::from_secs(save_secs)).await;
+            // Wait for savevm to finish writing RAM state into the qcow2. We
+            // poll the disk file's size: savevm grows it as it streams memory
+            // out, so once the size is steady for a handful of consecutive
+            // polls, we know the write is done. A plain `sleep(N)` is fragile
+            // because `N` has to be large enough for the slowest host (6GB
+            // can take 5+ min on a loaded Asahi) yet we pay it every boot on
+            // fast hosts too. Polling ends as soon as the disk goes quiet.
+            //
+            // A hard ceiling prevents a hung savevm from pinning the process
+            // forever, scaled to VM memory since bigger VMs legitimately take
+            // longer.
+            let start = std::time::Instant::now();
+            let max_wait =
+                std::time::Duration::from_secs(std::cmp::max(300, (memory_mb as u64) * 2));
+            let poll_interval = std::time::Duration::from_secs(2);
+            // Consider savevm done when the file size hasn't changed for
+            // this many polls in a row (≈ 6 seconds of quiet). QEMU buffers
+            // writes, so we want enough stability to rule out "briefly idle
+            // between chunks".
+            let stable_polls_needed = 3;
+
+            let mut last_size: u64 = 0;
+            let mut stable_polls: u32 = 0;
+            // Give savevm a moment to actually start writing before we begin
+            // checking — otherwise we'd see the disk at its initial tiny size
+            // and declare it "stable" before a single byte was written.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+            loop {
+                let size = tokio::fs::metadata(&disk)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                if size == last_size && size > 0 {
+                    stable_polls += 1;
+                    if stable_polls >= stable_polls_needed {
+                        break;
+                    }
+                } else {
+                    stable_polls = 0;
+                    last_size = size;
+                }
+                if start.elapsed() > max_wait {
+                    eprintln!(
+                        "  warning: savevm hit max wait ({}s) — qcow2 size {}MB, proceeding anyway",
+                        max_wait.as_secs(),
+                        size / (1024 * 1024),
+                    );
+                    break;
+                }
+                tokio::time::sleep(poll_interval).await;
+            }
             let _ = child.kill();
             let _ = child.wait();
         }

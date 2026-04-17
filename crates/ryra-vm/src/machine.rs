@@ -56,6 +56,25 @@ pub struct Machine {
     process: tokio::process::Child,
 }
 
+impl Drop for Machine {
+    /// Kill the QEMU process if it's still alive. Needed because tokio's
+    /// `Child::drop` does NOT reap the process by default, so any early
+    /// return from `spawn_*` (e.g. SSH timeout during wait_for_ssh) would
+    /// otherwise orphan a QEMU holding the forwarded SSH port. Async destroy
+    /// paths that want to survive this (keep_alive) use `std::mem::forget`
+    /// to skip Drop entirely.
+    fn drop(&mut self) {
+        if let Some(pid) = self.process.id() {
+            // SIGKILL is sync and cheap. `Child::start_kill` would work too but
+            // we're in Drop so we can't .await anything.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            deregister_vm(pid);
+        }
+    }
+}
+
 /// Options that affect how the VM is launched.
 pub struct SpawnOpts {
     pub use_kvm: bool,
@@ -239,9 +258,11 @@ impl Machine {
             register_vm(pid, &machine.work_dir);
         }
 
-        // Wait for SSH — should be nearly instant since we're restoring from snapshot
+        // Wait for SSH — snapshot restore is sub-second once pages are warm,
+        // but the very first restore in a session can take >30s on a cold page
+        // cache (hundreds of MB of snapshot state faulted in from disk).
         machine
-            .wait_for_ssh(std::time::Duration::from_secs(30))
+            .wait_for_ssh(std::time::Duration::from_secs(60))
             .await?;
 
         // Fix clock skew: the snapshot's system clock is frozen at save time
