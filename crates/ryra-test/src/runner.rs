@@ -290,18 +290,36 @@ async fn run_test_entry(vm: &dyn Executor, entry: &TestEntry, env_prefix: &str) 
     )
 }
 
+/// Shell snippet that loads an .env file into the current shell's exported
+/// environment **safely** — `read`-per-line + single split on `=`, so values
+/// containing whitespace or shell metacharacters (e.g. supabase's
+/// `DB_AFTER_CONNECT_QUERY=SET search_path TO …` or `ERL_AFLAGS=-proto_dist
+/// inet_tcp`) don't get parsed as inline commands like `. file` would.
+///
+/// The .env format ryra writes intentionally avoids quoting so podman's
+/// --env-file can consume it verbatim (podman does NOT strip quotes), which
+/// means bash `source` / `.` is unsafe against any value with whitespace.
+fn load_env_shell(path: &str) -> String {
+    format!(
+        "while IFS='=' read -r __k __v; do \
+         case \"$__k\" in \"\"|\\#*) continue ;; esac; \
+         export \"$__k=$__v\"; \
+         done < {path}"
+    )
+}
+
 /// Build a shell snippet that sources all relevant .env files.
 ///
-/// Single-service: `. $HOME/.local/share/ryra/<service>/.env` (unprefixed)
-/// Multi-service: reads each .env and exports with SERVICE__ prefix
+/// Single-service: loads `<service>/.env` into the current shell unprefixed.
+/// Multi-service: reads each .env and exports with SERVICE__ prefix.
 async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<String> {
     match test {
         DiscoveredTest::Simple { setup, .. } => {
             if setup.services.len() == 1 {
-                Ok(format!(
-                    ". $HOME/.local/share/ryra/{}/.env",
+                Ok(load_env_shell(&format!(
+                    "$HOME/.local/share/ryra/{}/.env",
                     setup.services[0]
-                ))
+                )))
             } else if setup.services.len() > 1 {
                 // For multi-service, we generate a script that reads each .env
                 // and re-exports vars with the service name prefix
@@ -310,7 +328,8 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
                     let prefix = service.to_uppercase();
                     lines.push(format!(
                         "while IFS='=' read -r key val; do \
-                         [ -n \"$key\" ] && export {prefix}__$key=\"$val\"; \
+                         case \"$key\" in \"\"|\\#*) continue ;; esac; \
+                         export {prefix}__$key=\"$val\"; \
                          done < $HOME/.local/share/ryra/{service}/.env"
                     ));
                 }
@@ -397,12 +416,16 @@ async fn run_browser_step(
     // 6. Run playwright with the html reporter pointed at the canonical path.
     //    Also use the list reporter so the user sees live progress.
     // 7. Exit with playwright's own exit code.
+    // Per-file safe .env load — same rationale as load_env_shell(): raw
+    // `.` would choke on values with whitespace (supabase `DB_AFTER_*`, etc.)
+    let env_loop = format!(
+        "for __f in $HOME/.local/share/ryra/*/.env; do \
+           [ -f \"$__f\" ] && {loader}; \
+         done",
+        loader = load_env_shell("\"$__f\"")
+    );
     let cmd = format!(
-        "set -a && \
-         for env_file in $HOME/.local/share/ryra/*/.env; do \
-           [ -f \"$env_file\" ] && . \"$env_file\"; \
-         done && \
-         set +a && \
+        "{env_loop} && \
          DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}/playwright\" && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
@@ -608,8 +631,11 @@ pub async fn run_lifecycle_test(
                 // URL uses double quotes so shell variables expand.
                 let url_esc = url.replace('"', r#"\""#);
                 let env_source = match service {
-                    Some(svc) => format!(". $HOME/.local/share/ryra/{svc}/.env"),
-                    None => "for f in $HOME/.local/share/ryra/*/.env; do [ -f \"$f\" ] && . \"$f\"; done".to_string(),
+                    Some(svc) => load_env_shell(&format!("$HOME/.local/share/ryra/{svc}/.env")),
+                    None => format!(
+                        "for __f in $HOME/.local/share/ryra/*/.env; do [ -f \"$__f\" ] && {}; done",
+                        load_env_shell("\"$__f\"")
+                    ),
                 };
                 // Assemble curl. For non-GET methods we prepend a heredoc so
                 // the body flows verbatim into a $RYRA_BODY variable — this
