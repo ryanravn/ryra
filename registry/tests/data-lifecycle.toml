@@ -15,11 +15,13 @@ action = "wait"
 service = "vikunja"
 timeout = 120
 
-# After add, `ryra ls` must report vikunja as installed.
+# After add, `ryra ls -a` must report vikunja as installed. Plain `ryra ls`
+# drops the STATUS column (everything shown is installed by definition), so
+# `-a` is required to assert the literal "installed" marker.
 [[steps]]
 action = "shell"
 name = "installed-shows-in-ls"
-run = "ryra ls | grep -E '^vikunja\\s+installed'"
+run = "ryra ls -a | grep -E '^vikunja\\s+installed'"
 timeout = 30
 
 # Data-preserving rm (no --purge): service home dir and podman

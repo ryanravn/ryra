@@ -6,7 +6,12 @@ architecture = ["amd64", "arm64"]
 
 [requirements.ram]
 min = 1024
-recommended = 2560
+# Immich bundles a photo server, postgres, valkey, and a Python ML model
+# loader. At boot, the main immich process alone RSSes ~2.2GB; add
+# postgres shared_buffers + workers + ML model + kernel/page-cache
+# headroom and the VM gets OOM-killed under ~6GB. Test VMs are sized
+# off `recommended + 512MB` so aim for plenty of headroom here.
+recommended = 6144
 
 [[ports]]
 name = "http"
