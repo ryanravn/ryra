@@ -1,0 +1,27 @@
+[[steps]]
+action = "add"
+service = "docuseal"
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "docuseal"
+
+# Root page responds (serves the first-run admin signup form).
+[[steps]]
+action = "http"
+name = "docuseal-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "docuseal"
+poll = { interval = 2, attempts = 45 }
+timeout = 120
+
+# SQLite db created by Rails migration on first boot — proof the app
+# actually initialised, not just that the server is serving a placeholder.
+# DocuSeal stores its sqlite under /data/docuseal/db.sqlite3 (the nested
+# dir is created by the Rails app at startup).
+[[steps]]
+action = "shell"
+name = "sqlite-db-initialised"
+run = "test -s $HOME/.local/share/ryra/docuseal/data/docuseal/db.sqlite3"
+timeout = 30

@@ -1,0 +1,46 @@
+[service]
+name = "docuseal"
+description = "DocuSeal — open-source document signing (DocuSign alternative)"
+url = "https://www.docuseal.com/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 256
+recommended = 512
+
+[[ports]]
+name = "http"
+container_port = 3000
+
+# --- App config ---
+
+# HOST is included in signer-email links and used for canonical URL rendering.
+# Falls back to loopback:port when no --url is passed, so local runs still
+# produce clickable emails (via whatever SMTP provider you've configured).
+[[env]]
+name = "HOST"
+value = "{{ service.external_url }}"
+
+[[env]]
+name = "SECRET_KEY_BASE"
+value = "{{secret.secret_key_base}}"
+
+# Rails trusts X-Forwarded-Proto when behind a reverse proxy so the app
+# generates https:// links. Caddy sets this header when --url is https://.
+[[env]]
+name = "FORCE_SSL"
+value = "false"
+
+[integrations]
+# Community edition has no OIDC/SAML — SSO is Pro-tier only. Admins log in
+# with email + password they set on first-run signup.
+auth = []
+smtp = true
+
+[mappings.smtp]
+# DocuSeal uses standard Rails ActionMailer SMTP env vars.
+SMTP_ADDRESS = "{{smtp.host}}"
+SMTP_PORT = "{{smtp.port}}"
+SMTP_USERNAME = "{{smtp.username}}"
+SMTP_PASSWORD = "{{smtp.password}}"
+SMTP_FROM = "{{smtp.from}}"
