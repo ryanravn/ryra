@@ -18,10 +18,13 @@ pub fn run() -> Result<()> {
         a_key.cmp(&b_key)
     });
 
-    // Buffer the whole table: compute_total walks each volume's mountpoint
-    // via `podman unshare du` — can take ~30ms per volume on larger sets.
-    // Collect everything first, then print once so the table doesn't
-    // trickle out row by row.
+    // `compute_total` needs the size of every volume's mountpoint, each
+    // of which costs a `podman unshare du` shell-out (~30ms). Walking
+    // them sequentially in the table-render loop is too slow on a busy
+    // host. Pre-compute every volume's size in parallel up front, then
+    // the per-service rendering is pure string formatting.
+    let vol_sizes = prefetch_volume_sizes(&svcs);
+
     let home = std::env::var("HOME").unwrap_or_default();
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
     lines.push(format!(
@@ -29,7 +32,7 @@ pub fn run() -> Result<()> {
         "SERVICE", "STATUS", "SIZE"
     ));
     for svc in &svcs {
-        lines.extend(format_service(svc, &home));
+        lines.extend(format_service(svc, &home, &vol_sizes));
     }
     println!("{}", lines.join("\n"));
     println!();
@@ -39,14 +42,47 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn format_service(svc: &ServiceData, home: &str) -> Vec<String> {
+/// Spawn one OS thread per unique volume name and shell out to
+/// `podman unshare du -sb` concurrently. Returns a map of
+/// `volume_name -> Some(bytes)` on success, `volume_name -> None` when
+/// the walk failed (volume missing, podman unavailable, subuid mismatch).
+fn prefetch_volume_sizes(
+    svcs: &[ServiceData],
+) -> std::collections::HashMap<String, Option<u64>> {
+    use ryra_core::data::volumes::volume_size_bytes;
+    let mut names: Vec<String> = svcs
+        .iter()
+        .flat_map(|s| s.volumes.iter().map(|v| v.name.clone()))
+        .collect();
+    names.sort();
+    names.dedup();
+    std::thread::scope(|s| {
+        let handles: Vec<_> = names
+            .iter()
+            .map(|n| {
+                let n = n.clone();
+                s.spawn(move || (n.clone(), volume_size_bytes(&n)))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok())
+            .collect()
+    })
+}
+
+fn format_service(
+    svc: &ServiceData,
+    home: &str,
+    vol_sizes: &std::collections::HashMap<String, Option<u64>>,
+) -> Vec<String> {
     let status = match svc.status {
         ServiceStatus::Installed => "installed",
         ServiceStatus::Orphan => "orphan",
     };
     // Total size: sum per-component sizes so a single unreadable component
     // (e.g. a subuid-owned volume mountpoint) doesn't abort the whole row.
-    let size = match compute_total(svc) {
+    let size = match compute_total(svc, vol_sizes) {
         Size::Bytes(b) => human_size(b),
         Size::Partial(b) => format!("{}+?", human_size(b)),
         Size::Unknown => "?".to_string(),
@@ -87,8 +123,11 @@ enum Size {
     Unknown,
 }
 
-fn compute_total(svc: &ServiceData) -> Size {
-    use ryra_core::data::{dir_size_bytes, volumes::volume_size_bytes};
+fn compute_total(
+    svc: &ServiceData,
+    vol_sizes: &std::collections::HashMap<String, Option<u64>>,
+) -> Size {
+    use ryra_core::data::dir_size_bytes;
     let mut total: u64 = 0;
     let mut any_ok = false;
     let mut any_err = false;
@@ -102,7 +141,7 @@ fn compute_total(svc: &ServiceData) -> Size {
         }
     }
     for v in &svc.volumes {
-        match volume_size_bytes(&v.name) {
+        match vol_sizes.get(&v.name).copied().flatten() {
             Some(b) => {
                 total += b;
                 any_ok = true;
