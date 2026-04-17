@@ -81,8 +81,6 @@ fn print_short(svcs: &[&ServiceData], home: &str, show_status: bool) {
         }
     }
     println!("{}", lines.join("\n"));
-    println!();
-    println!("Show sizes + volumes:  ryra ls -l");
 }
 
 /// Long path: adds SIZE column (and STATUS if `-a`), plus volume
@@ -106,10 +104,6 @@ fn print_long(svcs: &[&ServiceData], home: &str, show_status: bool) {
         lines.extend(format_service(svc, home, &vol_sizes, show_status));
     }
     println!("{}", lines.join("\n"));
-    println!();
-    println!("Remove a service:            ryra rm <service>           (keeps data)");
-    println!("                             ryra rm <service> --purge   (wipes data)");
-    println!("Remove everything:           ryra rm -a --purge");
 }
 
 /// Spawn one OS thread per unique volume name and shell out to
