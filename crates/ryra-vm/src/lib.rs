@@ -7,8 +7,16 @@ use std::process::Stdio;
 
 use anyhow::Result;
 
-/// Read current memory usage. Returns (total_mb, used_mb).
-pub fn read_host_memory() -> Option<(u64, u64)> {
+/// Host memory snapshot in MB.
+pub struct HostMemory {
+    pub total_mb: u64,
+    pub available_mb: u64,
+    pub swap_total_mb: u64,
+    pub swap_used_mb: u64,
+}
+
+/// Read current memory usage.
+pub fn read_host_memory() -> Option<HostMemory> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let parse_kb = |key: &str| -> Option<u64> {
         meminfo
@@ -19,9 +27,14 @@ pub fn read_host_memory() -> Option<(u64, u64)> {
     };
     let total_kb = parse_kb("MemTotal:")?;
     let avail_kb = parse_kb("MemAvailable:")?;
-    let total_mb = total_kb / 1024;
-    let used_mb = total_mb.saturating_sub(avail_kb / 1024);
-    Some((total_mb, used_mb))
+    let swap_total_kb = parse_kb("SwapTotal:").unwrap_or(0);
+    let swap_free_kb = parse_kb("SwapFree:").unwrap_or(0);
+    Some(HostMemory {
+        total_mb: total_kb / 1024,
+        available_mb: avail_kb / 1024,
+        swap_total_mb: swap_total_kb / 1024,
+        swap_used_mb: swap_total_kb.saturating_sub(swap_free_kb) / 1024,
+    })
 }
 
 /// Check that required tools are installed.
