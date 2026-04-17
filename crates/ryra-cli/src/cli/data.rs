@@ -151,13 +151,14 @@ pub async fn rm(
     let mut steps: Vec<Step> = Vec::new();
     if matches!(svc.status, ServiceStatus::Installed) && force {
         let quadlet_path = ryra_core::quadlet_dir()?;
+        let all_names: Vec<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
         if quadlet_path.is_dir()
             && let Ok(entries) = std::fs::read_dir(&quadlet_path)
         {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.ends_with(".container")
-                    && ryra_core::quadlet_belongs_to(&name, service, &[service])
+                    && ryra_core::quadlet_belongs_to(&name, service, &all_names)
                 {
                     let unit = name.trim_end_matches(".container").to_string();
                     steps.push(Step::StopService { unit });
@@ -189,6 +190,17 @@ pub async fn rm(
             anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
         }
         println!("This will delete:");
+        // Preview stop steps so the user knows containers will be halted.
+        let stop_units: Vec<&str> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::StopService { unit } => Some(unit.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !stop_units.is_empty() {
+            println!("  (first, stop: {})", stop_units.join(", "));
+        }
         for p in &svc.data_paths {
             let sz = match ryra_core::data::dir_size_bytes(p) {
                 Ok(b) => human_size(b),
