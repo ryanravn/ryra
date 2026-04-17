@@ -57,6 +57,19 @@ Service definitions in `registry/<name>/service.toml` use template variables in 
 - `{{services.<name>.port.<port_name>}}`, `{{services.<name>.env.<VAR>}}`
 - `{{secret.<name>}}` — auto-generated secrets
 
+## Managing data
+
+Removing a service keeps its data by default:
+
+    ryra rm seafile           # keeps ~/.local/share/ryra/seafile + volumes
+    ryra rm seafile --purge   # deletes everything
+
+Inspect or clean up data explicitly:
+
+    ryra data ls              # show per-service data + volumes + sizes
+    ryra data rm seafile      # delete one orphan's data
+    ryra data rm --all        # delete all orphan data
+
 ## Development
 
 Requires Rust (stable).

@@ -138,7 +138,7 @@ pub struct InstalledService {
     pub url: Option<String>,
     /// Whether the service was fully installed (all steps completed).
     /// Services with `installed: false` are partially installed and can be
-    /// retried with `ryra add` or cleaned up with `ryra remove`.
+    /// retried with `ryra add` or cleaned up with `ryra rm`.
     #[serde(default)]
     pub installed: bool,
 }
