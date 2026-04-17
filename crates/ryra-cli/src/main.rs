@@ -180,7 +180,7 @@ enum Command {
 #[derive(Subcommand)]
 enum TestAction {
     /// List available tests (optionally filtered by name substrings)
-    List {
+    Ls {
         /// Test name filters
         names: Vec<String>,
         /// Show full step details (commands, URLs, poll config, …)
@@ -272,11 +272,11 @@ async fn main() -> anyhow::Result<()> {
             parallel,
             ref action,
         } => {
-            // `ryra test list [-v] [names…]` is a subcommand; everything
+            // `ryra test ls [-v] [names…]` is a subcommand; everything
             // else is the normal run path.
             let (effective_list, effective_verbose, effective_names): (bool, bool, &[String]) =
                 match action {
-                    Some(TestAction::List {
+                    Some(TestAction::Ls {
                         names: list_names,
                         verbose: list_verbose,
                     }) => (true, *list_verbose || verbose, list_names.as_slice()),
