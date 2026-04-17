@@ -143,8 +143,26 @@ async fn execute(step: &Step) -> Result<()> {
         }
         Step::RemoveFile(path) => std::fs::remove_file(path)
             .with_context(|| format!("failed to remove {}", path.display())),
-        Step::RemoveDir(path) => std::fs::remove_dir_all(path)
-            .with_context(|| format!("failed to remove directory {}", path.display())),
+        Step::RemoveDir(path) => {
+            // Service data dirs can contain files owned by podman subuids
+            // (from rootless user-namespace mappings). Plain `rm -rf` as the
+            // host user gets EPERM on those. `podman unshare rm -rf` runs
+            // inside the user namespace where our UID maps to root, so it
+            // nukes anything regardless of subuid ownership. Fall back to
+            // std::fs on any podman failure (e.g. plain-user-owned paths
+            // like ~/.config/ryra) so non-podman dirs still work.
+            let path_str = path.display().to_string();
+            let unshare = Command::new("podman")
+                .args(["unshare", "rm", "-rf", "--", &path_str])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match unshare {
+                Ok(status) if status.success() => Ok(()),
+                _ => std::fs::remove_dir_all(path)
+                    .with_context(|| format!("failed to remove directory {}", path.display())),
+            }
+        }
         Step::RemoveVolume { name } => {
             // Volume removal is best-effort — the volume may not exist if the
             // container never started, or podman may need the container gone first.
