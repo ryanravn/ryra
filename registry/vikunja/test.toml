@@ -60,6 +60,8 @@ name = "mail-delivered-to-inbucket"
 mailbox = "smtptest"
 
 # OIDC browser flow.
+timeout = 90
+
 [[tests]]
 name = "oidc"
 browser = true

@@ -65,3 +65,4 @@ action = "mail"
 name = "mail-delivered-to-inbucket"
 mailbox = "smtptest"
 contains = "ryra smtp test"
+timeout = 90

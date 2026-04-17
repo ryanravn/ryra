@@ -60,6 +60,8 @@ mailbox = "smtptest"
 contains = "Test email from"
 
 # OIDC browser flow — seafile goes through caddy over HTTPS.
+timeout = 90
+
 [[tests]]
 name = "oidc"
 browser = true

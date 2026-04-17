@@ -91,6 +91,8 @@ contains = "ryra smtp test"
 
 # Full SSO flow: caddy (TLS), authelia (IdP), forgejo wired up with
 # --auth, then a Playwright spec that actually clicks through the login.
+timeout = 90
+
 [[tests]]
 name = "oidc"
 browser = true

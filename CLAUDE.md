@@ -171,17 +171,20 @@ OIDC tests must install caddy and authelia before adding services with `--auth -
 
 After creating a service definition (service.toml, quadlets, configs), always run the E2E tests to verify it works. Use `--keep-alive` extensively to iterate — it boots the VM once and keeps it running so you can SSH in, inspect logs, check the UI, and fix issues without waiting for a fresh boot each time.
 
+**Before writing a new test, skim existing ones with `ryra test --list -v [name-filter]`.** The verbose listing shows every step (ryra subcommand, HTTP probes, shell bodies, mail polls, playwright env) inline — it's the fastest way to learn the conventions for basic install / `--smtp=inbucket` / `--auth` flows without opening a bunch of `.toml` files.
+
+Tests for a service all live in `registry/<service>/test.toml` as a `[[tests]]` array. Convention: the first test is named after the service (so `ryra test <svc>` runs only it); additional tests are named `smtp`, `oidc`, `diff`, etc., and get prefixed automatically (`<svc>-smtp`, `<svc>-oidc`). Cross-cutting multi-service tests live in `registry/tests/*.toml`.
+
 1. Start with `--keep-alive` to validate the service starts:
    - Boot the VM: `ryra test <service> --keep-alive --yes`
    - SSH in and check logs: `journalctl --user -u <service>.service`, `podman logs systemd-<service>`
    - Verify the service is actually responding before writing assertions
-2. Run the simple tests: `ryra test <service>` — verify the service starts and responds
-3. If the service has OIDC integration (`auth = ["oidc"]` in service.toml), write a browser test:
-   - Create `registry/tests/<service>-auth-browser.toml` with `browser = true`
+2. Add a basic install test as the first `[[tests]]` entry in `registry/<service>/test.toml`. Run `ryra test <service>` to verify.
+3. If the service has OIDC integration (`auth = ["oidc"]` in service.toml), add an `oidc` test entry with `browser = true`:
    - Create `registry/tests/browser/<service>-auth.spec.ts` with Playwright tests
-   - Use `--keep-alive` on the auth browser test to boot the VM with caddy + authelia + the service, then SSH in and use `curl` to inspect the actual login page HTML — find the real CSS selectors, button text, and post-login indicators before writing the Playwright spec
+   - Use `--keep-alive` on `ryra test <service>-oidc` to boot the VM with caddy + authelia + the service, then SSH in and use `curl` to inspect the actual login page HTML — find the real CSS selectors, button text, and post-login indicators before writing the Playwright spec
    - The browser test must click the SSO button, authenticate with Authelia (fill username/password, submit, handle consent), and verify the redirect back results in an authenticated session
    - Don't guess at selectors — look at the real page. Iterate with `--keep-alive` until the test passes
-4. Run the full auth browser test: `ryra test <service>-auth-browser`
+4. If the service sends mail, add an `smtp` test using the `mail` step to assert inbucket delivery (see `registry/forgejo/test.toml` or `ryra test --list -v forgejo-smtp`).
 
 When E2E tests have long setup times (pulling images, waiting for services), don't just wait — check logs periodically. If a service takes more than 60s to become ready, SSH in via `--keep-alive` and investigate rather than increasing timeouts blindly.

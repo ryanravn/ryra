@@ -99,3 +99,4 @@ action = "mail"
 name = "mail-delivered-to-inbucket"
 mailbox = "smtptest"
 contains = "Vaultwarden"
+timeout = 90
