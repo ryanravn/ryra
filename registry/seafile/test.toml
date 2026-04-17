@@ -1,41 +1,37 @@
-[test]
-name = "seafile-smtp"
+# seafile tests — SMTP delivery + OIDC browser SSO flow.
+#
+# There is no stand-alone "basic install" test for seafile: the service
+# requires a domain (Caddy) to even come up, so the simplest meaningful
+# test is already the SMTP flow below.
 
-[[steps]]
+# SMTP via seahub's `manage.py sendtestemail`. Seafile's Python shim
+# needs PYTHONPATH + several SEAFILE_* env vars that `seahub.sh` would
+# normally set; we recreate them inline.
+[[tests]]
+name = "smtp"
+[[tests.steps]]
 action = "add"
 service = "caddy"
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "caddy"
-
-# Seafile ships mariadb + redis sidecars. Budget a long timeout — the
-# seafile-mc image does schema migrations on first boot.
-[[steps]]
+[[tests.steps]]
 action = "add"
 service = "seafile"
 args = "--smtp=inbucket --url https://seafile.localhost:8443"
 env = { INIT_SEAFILE_ADMIN_EMAIL = "smtptest@ryra.local", INIT_SEAFILE_ADMIN_PASSWORD = "Testing-Smtp-123!" }
 timeout = 900
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "seafile"
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "seafile-responds"
 url = "https://seafile.localhost:8443"
 service = "seafile"
 poll = { interval = 3, attempts = 60 }
 timeout = 240
-
-# seahub (seafile's Django web app) ships the standard Django management
-# command `sendtestemail`, but its seaserv/ccnet extensions need the exact
-# PYTHONPATH + SEAFILE_{CENTRAL_CONF,CONF,DATA}_DIR / CCNET_CONF_DIR
-# environment that seahub.sh:prepare_env() constructs. We recreate that
-# env inline so the shell step doesn't have to depend on the script itself.
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "trigger-smtp-mail"
 run = """for i in $(seq 1 10); do
@@ -57,8 +53,7 @@ run = """for i in $(seq 1 10); do
 done
 exit 1"""
 timeout = 90
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "mail-delivered-to-inbucket"
 run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
@@ -73,3 +68,44 @@ echo "no mail for smtptest@ryra.local after 60s"
 curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
 exit 1"""
 timeout = 90
+
+# OIDC browser flow — seafile goes through caddy over HTTPS.
+[[tests]]
+name = "auth-browser"
+browser = true
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "authelia"
+[[tests.steps]]
+action = "add"
+service = "seafile"
+args = "--auth --url https://seafile.localhost:8443"
+env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@test.local", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
+timeout = 900
+[[tests.steps]]
+action = "wait"
+service = "seafile"
+[[tests.steps]]
+action = "http"
+name = "seafile-http-ready"
+url = "https://seafile.localhost:8443"
+poll = { interval = 5, attempts = 60 }
+timeout = 360
+[[tests.steps]]
+action = "playwright"
+name = "playwright-sso"
+spec = "seafile-auth.spec.ts"
+timeout = 120
+env = { SEAFILE_DOMAIN = "seafile.localhost:8443", AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

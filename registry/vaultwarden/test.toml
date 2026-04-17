@@ -1,0 +1,111 @@
+# vaultwarden tests — full lifecycle (requires HTTPS via caddy) + SMTP.
+
+# Full lifecycle: caddy for TLS, injected SMTP config so SMTP mappings
+# render, then vaultwarden + assertions including SMTP env var rendering.
+[[tests]]
+name = "vaultwarden"
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "shell"
+name = "inject-smtp-config"
+run = '''cat >> $HOME/.config/ryra/ryra.toml <<'TOML'
+
+[smtp]
+host = "localhost"
+port = 1025
+username = "test"
+password = "test"
+from = "noreply@test.local"
+TOML'''
+[[tests.steps]]
+action = "add"
+service = "vaultwarden"
+args = "--url https://vault.localhost:8443"
+[[tests.steps]]
+action = "wait"
+service = "vaultwarden"
+[[tests.steps]]
+action = "http"
+name = "http-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "vaultwarden"
+poll = { interval = 2, attempts = 10 }
+[[tests.steps]]
+action = "http"
+name = "alive-endpoint"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/alive"
+service = "vaultwarden"
+[[tests.steps]]
+action = "shell"
+name = "data-dir-exists"
+run = "test -d $HOME/.local/share/ryra/vaultwarden"
+[[tests.steps]]
+action = "shell"
+name = "smtp-host-rendered"
+run = "grep -q 'SMTP_HOST=localhost' $HOME/.local/share/ryra/vaultwarden/.env"
+[[tests.steps]]
+action = "shell"
+name = "smtp-from-rendered"
+run = "grep -q 'SMTP_FROM=noreply@test.local' $HOME/.local/share/ryra/vaultwarden/.env"
+
+# SMTP delivery via vaultwarden's /admin/test/smtp endpoint. ADMIN_TOKEN
+# is set so /admin becomes reachable — otherwise vaultwarden hides it.
+[[tests]]
+name = "smtp"
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "vaultwarden"
+args = "--smtp=inbucket --url https://vault.localhost:8443"
+env = { ADMIN_TOKEN = "test-admin-token-for-smtp-test" }
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "vaultwarden"
+[[tests.steps]]
+action = "http"
+name = "vault-responds"
+url = "https://vault.localhost:8443/admin"
+service = "vaultwarden"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "shell"
+name = "trigger-smtp-mail"
+run = """for i in $(seq 1 10); do
+  if curl -sk -c /tmp/vw-cookies -X POST https://vault.localhost:8443/admin \
+       -d "token=test-admin-token-for-smtp-test" -o /dev/null -w '%{http_code}' | grep -q 200; then
+    curl -sk -b /tmp/vw-cookies -X POST https://vault.localhost:8443/admin/test/smtp \
+      -H 'Content-Type: application/json' \
+      -d '{"email":"smtptest@ryra.local"}' \
+      -o /dev/null -w '%{http_code}' | grep -q 200 && exit 0
+  fi
+  sleep 3
+done
+exit 1"""
+timeout = 60
+[[tests.steps]]
+action = "shell"
+name = "mail-delivered-to-inbucket"
+run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
+for i in $(seq 1 30); do
+  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
+  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+    echo "$BODY" | grep -q 'Vaultwarden' && exit 0
+  fi
+  sleep 2
+done
+echo "no mail for smtptest@ryra.local after 60s"
+curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
+exit 1"""
+timeout = 90

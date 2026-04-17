@@ -1,21 +1,75 @@
-[[steps]]
+# immich tests — basic install + OIDC browser SSO flow.
+
+[[tests]]
+name = "immich"
+[[tests.steps]]
 action = "add"
 service = "immich"
 env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "immich"
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "immich-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
 service = "immich"
 poll = { interval = 5, attempts = 60 }
 timeout = 360
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/immich"
+
+# Full SSO flow via caddy + authelia. Heavy test — immich build takes a
+# while so give it 900s.
+[[tests]]
+name = "auth-browser"
+browser = true
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "authelia"
+[[tests.steps]]
+action = "add"
+service = "immich"
+args = "--auth"
+env = { INIT_IMMICH_ADMIN_EMAIL = "admin@test.local", INIT_IMMICH_ADMIN_PASSWORD = "testpassword123" }
+timeout = 900
+[[tests.steps]]
+action = "wait"
+service = "immich"
+[[tests.steps]]
+action = "http"
+name = "immich-http-ready"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
+service = "immich"
+poll = { interval = 5, attempts = 60 }
+timeout = 360
+[[tests.steps]]
+action = "shell"
+name = "create-admin"
+run = """
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+curl -sf -X POST "http://127.0.0.1:$PORT/api/auth/admin-sign-up" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@test.local","password":"testpassword123","name":"Admin"}' \
+  >/dev/null 2>&1 || true
+"""
+[[tests.steps]]
+action = "playwright"
+name = "playwright-sso-tests"
+spec = "immich-auth.spec.ts"
+timeout = 120
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

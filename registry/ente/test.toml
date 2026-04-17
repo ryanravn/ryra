@@ -1,28 +1,28 @@
-[[steps]]
+# ente tests — install only (API + photos web).
+
+[[tests]]
+name = "ente"
+[[tests.steps]]
 action = "add"
 service = "ente"
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "ente"
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "api-ping"
 url = "http://localhost:$RYRA_PORT_HTTP/ping"
 service = "ente"
 poll = { interval = 2, attempts = 60 }
 timeout = 150
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "photos-web"
 url = "http://localhost:$RYRA_PORT_PHOTOS/"
 service = "ente"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/ente"

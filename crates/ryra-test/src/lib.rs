@@ -38,6 +38,57 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     std::process::exit(130); // 128 + SIGINT
 }
 
+/// Render `--list` output: group tests by their source `test.toml` so the
+/// user sees where each test lives (and can edit it), and show the
+/// distinct step kinds so it's obvious at a glance what a test does
+/// (e.g. `playwright` means browser test).
+fn render_list(discovered: &[registry::DiscoveredTest], registry_path: &Path) {
+    if discovered.is_empty() {
+        println!("No tests discovered.");
+        return;
+    }
+
+    // Stable insertion-order grouping: iterate sorted-by-name tests and
+    // bucket by source path. Display paths relative to the registry root
+    // when possible; otherwise fall back to the absolute path.
+    let mut groups: Vec<(PathBuf, Vec<&registry::DiscoveredTest>)> = Vec::new();
+    for test in discovered {
+        let src = test.source().to_path_buf();
+        if let Some((_, bucket)) = groups.iter_mut().find(|(p, _)| p == &src) {
+            bucket.push(test);
+        } else {
+            groups.push((src, vec![test]));
+        }
+    }
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let total_tests: usize = discovered.len();
+    println!(
+        "{total_tests} tests across {} file(s):",
+        groups.len()
+    );
+
+    for (source, tests) in &groups {
+        let display_path = source
+            .strip_prefix(registry_path)
+            .map(|p| format!("registry/{}", p.display()))
+            .unwrap_or_else(|_| source.display().to_string());
+        println!();
+        println!("  {display_path}");
+        for t in tests {
+            let kinds = t.step_kinds().join(" → ");
+            let browser = if t.needs_browser() { " [browser]" } else { "" };
+            let step_count = t.test_count();
+            println!(
+                "    {:<34} {} step{}{browser}  · {kinds}",
+                t.name(),
+                step_count,
+                if step_count == 1 { "" } else { "s" },
+            );
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "ryra-e2e",
@@ -226,32 +277,7 @@ pub async fn run(args: Args) -> Result<()> {
     let registry_path = registry_path.unwrap_or_else(|_| PathBuf::from("registry"));
 
     if args.list {
-        if !discovered.is_empty() {
-            println!("Available tests:");
-        }
-        for test in &discovered {
-            if test.is_lifecycle() {
-                println!(
-                    "  {:<30} ({} steps, lifecycle)",
-                    test.name(),
-                    test.test_count(),
-                );
-            } else if test.has_quadlets() {
-                println!(
-                    "  {:<30} ({} tests, quadlets)",
-                    test.name(),
-                    test.test_count(),
-                );
-            } else {
-                let svc_list = test.services().join(" + ");
-                println!(
-                    "  {:<30} ({} tests, services: {})",
-                    test.name(),
-                    test.test_count(),
-                    svc_list
-                );
-            }
-        }
+        render_list(&discovered, registry_path.as_path());
         return Ok(());
     }
 

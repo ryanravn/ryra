@@ -1,22 +1,67 @@
-[[steps]]
+# open-webui tests — basic install + OIDC browser SSO flow.
+
+[[tests]]
+name = "open-webui"
+[[tests.steps]]
 action = "add"
 service = "open-webui"
 env = { OLLAMA_BASE_URL = "" }
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "open-webui"
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "open-webui-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "open-webui"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/open-webui"
 timeout = 10
+
+# OIDC browser flow. Ups RAM to 2048 — open-webui + authelia + caddy
+# together spike above the 1GB default.
+[[tests]]
+name = "auth-browser"
+browser = true
+ram = 2048
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "authelia"
+[[tests.steps]]
+action = "add"
+service = "open-webui"
+args = "--auth"
+env = { OLLAMA_BASE_URL = "" }
+timeout = 600
+[[tests.steps]]
+action = "wait"
+service = "open-webui"
+[[tests.steps]]
+action = "http"
+name = "open-webui-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "open-webui"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "playwright"
+name = "playwright-auth-flow"
+spec = "open-webui-auth.spec.ts"
+timeout = 180
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

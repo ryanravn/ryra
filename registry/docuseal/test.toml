@@ -1,27 +1,77 @@
-[[steps]]
+# docuseal tests — basic install + SMTP delivery.
+
+# Basic install: add, wait, probe the first-run admin signup page,
+# assert the sqlite db landed (proof Rails migrations ran).
+[[tests]]
+name = "docuseal"
+[[tests.steps]]
 action = "add"
 service = "docuseal"
 timeout = 300
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "docuseal"
-
-# Root page responds (serves the first-run admin signup form).
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "docuseal-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "docuseal"
 poll = { interval = 2, attempts = 45 }
 timeout = 120
-
-# SQLite db created by Rails migration on first boot — proof the app
-# actually initialised, not just that the server is serving a placeholder.
-# DocuSeal stores its sqlite under /data/docuseal/db.sqlite3 (the nested
-# dir is created by the Rails app at startup).
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "sqlite-db-initialised"
 run = "test -s $HOME/.local/share/ryra/docuseal/data/docuseal/db.sqlite3"
 timeout = 30
+
+# SMTP: `rails runner` triggers a mail through the app's configured
+# ActionMailer, bypassing the need for admin signup + API tokens.
+# STARTTLS is force-disabled because inbucket is plain SMTP.
+[[tests]]
+name = "smtp"
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "docuseal"
+args = "--smtp=inbucket"
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "docuseal"
+[[tests.steps]]
+action = "http"
+name = "docuseal-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "docuseal"
+poll = { interval = 2, attempts = 45 }
+timeout = 120
+[[tests.steps]]
+action = "shell"
+name = "trigger-smtp-mail"
+run = """for i in $(seq 1 10); do
+  podman exec -w /app docuseal bundle exec rails runner \
+    's=ActionMailer::Base.smtp_settings.merge(enable_starttls: false, openssl_verify_mode: 0); Mail.defaults { delivery_method :smtp, s }; Mail.deliver { from "ryra@localhost"; to "smtptest@ryra.local"; subject "ryra smtp test"; body "delivered through inbucket" }' && exit 0
+  sleep 3
+done
+exit 1"""
+timeout = 90
+[[tests.steps]]
+action = "shell"
+name = "mail-delivered-to-inbucket"
+run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
+for i in $(seq 1 30); do
+  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
+  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+    echo "$BODY" | grep -q 'ryra smtp test' && exit 0
+  fi
+  sleep 2
+done
+echo "no mail for smtptest@ryra.local after 60s"
+curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
+exit 1"""
+timeout = 90

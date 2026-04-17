@@ -1,26 +1,159 @@
-[[steps]]
+# forgejo tests — install, SMTP delivery via inbucket, and full
+# browser-driven OIDC flow via authelia + caddy.
+#
+# Uses the new multi-test format: three independent `[[tests]]` blocks,
+# each with its own `[[tests.steps]]`. Test names become:
+#   - `forgejo`         (plain install + HTTP probe)
+#   - `forgejo-smtp`    (outbound mail via inbucket)
+#   - `forgejo-auth-browser` (SSO via authelia + playwright)
+
+# Plain install. Mirrors the old per-service test: adds forgejo, checks
+# HTTP responds, and asserts postgres is not leaking to the host (it
+# should be pod-internal).
+[[tests]]
+name = "forgejo"
+[[tests.steps]]
 action = "add"
 service = "forgejo"
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "forgejo"
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "forgejo-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "forgejo"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "postgres-not-on-localhost"
 run = "! ss -tlnp | grep -q ':5432 '"
 timeout = 5
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/forgejo"
+
+# SMTP delivery via inbucket. Caddy is required so that inbucket + forgejo
+# share a podman network and can resolve each other by container name.
+# Creates a user, triggers a broadcast mail, then polls inbucket's HTTP
+# API until the message shows up in the target mailbox.
+[[tests]]
+name = "smtp"
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "forgejo"
+args = "--smtp=inbucket"
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "forgejo"
+[[tests.steps]]
+action = "http"
+name = "forgejo-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "forgejo"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "shell"
+name = "create-mail-target-user"
+run = """for i in $(seq 1 15); do
+  podman exec -u git forgejo forgejo admin user create \
+    --username smtptest \
+    --email smtptest@ryra.local \
+    --password 'Testing-Smtp-123!' \
+    --must-change-password=false && exit 0
+  sleep 2
+done
+exit 1"""
+timeout = 40
+[[tests.steps]]
+action = "shell"
+name = "trigger-smtp-mail"
+run = """podman exec -u git forgejo forgejo admin sendmail \
+  --title 'ryra smtp test' \
+  --content 'delivered through inbucket' \
+  --force"""
+timeout = 30
+[[tests.steps]]
+action = "shell"
+name = "mail-delivered-to-inbucket"
+run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
+for i in $(seq 1 30); do
+  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
+  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+    echo "$BODY" | grep -q 'ryra smtp test' && exit 0
+  fi
+  sleep 2
+done
+echo "no mail for smtptest@ryra.local after 60s"
+curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
+exit 1"""
+timeout = 90
+
+# Full SSO flow: caddy (TLS), authelia (IdP), forgejo wired up with
+# --auth, then a Playwright spec that actually clicks through the login.
+[[tests]]
+name = "auth-browser"
+browser = true
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "authelia"
+[[tests.steps]]
+action = "add"
+service = "forgejo"
+args = "--auth"
+timeout = 600
+[[tests.steps]]
+action = "wait"
+service = "forgejo"
+[[tests.steps]]
+action = "shell"
+name = "oidc-registered"
+run = """FORGEJO_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/forgejo/.env | cut -d= -f2)
+for i in $(seq 1 60); do
+  curl -sf http://127.0.0.1:$FORGEJO_PORT/user/login 2>/dev/null | grep -q 'oauth2/Authelia' && exit 0
+  sleep 2
+done
+echo "OIDC provider not found after 120s"
+podman exec -u git forgejo forgejo admin auth list 2>&1 || true
+journalctl --user -u forgejo.service --no-pager -n 20 2>&1 | grep -iE 'oidc|oauth|error|fail' || true
+exit 1"""
+timeout = 150
+[[tests.steps]]
+action = "http"
+name = "forgejo-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "forgejo"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "http"
+name = "authelia-via-caddy"
+url = "https://auth.localhost:8443"
+[[tests.steps]]
+action = "playwright"
+name = "playwright-auth-flow"
+spec = "forgejo-auth.spec.ts"
+timeout = 120
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

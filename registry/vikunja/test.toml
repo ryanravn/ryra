@@ -1,21 +1,112 @@
-[[steps]]
+# vikunja tests — basic install + SMTP delivery + OIDC browser flow.
+
+[[tests]]
+name = "vikunja"
+[[tests.steps]]
 action = "add"
 service = "vikunja"
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "vikunja"
-
-[[steps]]
+[[tests.steps]]
 action = "http"
 name = "vikunja-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "vikunja"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/vikunja"
 timeout = 10
+
+# SMTP: register a user — Vikunja's mailer sends a confirmation email
+# on successful registration.
+[[tests]]
+name = "smtp"
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "vikunja"
+args = "--smtp=inbucket"
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "vikunja"
+[[tests.steps]]
+action = "http"
+name = "vikunja-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "vikunja"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "http"
+name = "trigger-signup-email"
+method = "post"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/register"
+service = "vikunja"
+body = '{"username":"smtptest","email":"smtptest@ryra.local","password":"Testing-Smtp-123!"}'
+timeout = 30
+[[tests.steps]]
+action = "shell"
+name = "mail-delivered-to-inbucket"
+run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
+for i in $(seq 1 30); do
+  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
+  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+    exit 0
+  fi
+  sleep 2
+done
+echo "no mail for smtptest@ryra.local after 60s"
+curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
+exit 1"""
+timeout = 90
+
+# OIDC browser flow.
+[[tests]]
+name = "auth-browser"
+browser = true
+[[tests.steps]]
+action = "add"
+service = "caddy"
+[[tests.steps]]
+action = "wait"
+service = "caddy"
+[[tests.steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.localhost:8443"
+env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "authelia"
+[[tests.steps]]
+action = "add"
+service = "vikunja"
+args = "--auth"
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "vikunja"
+[[tests.steps]]
+action = "http"
+name = "vikunja-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "vikunja"
+poll = { interval = 2, attempts = 20 }
+timeout = 60
+[[tests.steps]]
+action = "playwright"
+name = "playwright-auth-flow"
+spec = "vikunja-auth.spec.ts"
+timeout = 120
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

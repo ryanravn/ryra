@@ -1,17 +1,18 @@
-[[steps]]
+# caddy tests — install only (no SMTP/auth flavors apply).
+
+[[tests]]
+name = "caddy"
+[[tests.steps]]
 action = "add"
 service = "caddy"
-
-[[steps]]
+[[tests.steps]]
 action = "wait"
 service = "caddy"
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "responds-on-http-port"
 run = ". $HOME/.local/share/ryra/caddy/.env && for i in $(seq 1 10); do CODE=$(curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$RYRA_PORT_HTTP 2>/dev/null) && echo \"$CODE\" | grep -qE '200|404' && exit 0; sleep 1; done; exit 1"
-
-[[steps]]
+[[tests.steps]]
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/caddy"

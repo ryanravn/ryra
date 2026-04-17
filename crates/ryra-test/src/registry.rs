@@ -10,6 +10,9 @@ pub enum DiscoveredTest {
     /// Simple tests: setup services/quadlets, then run assertions.
     Simple {
         name: String,
+        /// The test.toml this test was loaded from. Used by `--list` to
+        /// group tests by file and show where to edit them.
+        source: PathBuf,
         setup: SetupConfig,
         tests: Vec<TestEntry>,
         browser: bool,
@@ -18,6 +21,7 @@ pub enum DiscoveredTest {
     /// Lifecycle tests: interleaved actions and assertions.
     Lifecycle {
         name: String,
+        source: PathBuf,
         steps: Vec<StepDef>,
         browser: bool,
         ram_override: Option<u32>,
@@ -37,6 +41,53 @@ impl DiscoveredTest {
             DiscoveredTest::Simple { name, .. } => name,
             DiscoveredTest::Lifecycle { name, .. } => name,
         }
+    }
+
+    /// Path to the `test.toml` this test was discovered in. Same-file
+    /// tests share this path — used by `--list` to group and show
+    /// editable paths.
+    pub fn source(&self) -> &Path {
+        match self {
+            DiscoveredTest::Simple { source, .. } => source,
+            DiscoveredTest::Lifecycle { source, .. } => source,
+        }
+    }
+
+    /// Distinct step action kinds in order of first appearance. Used to
+    /// summarize what a test does on `--list` (e.g., "add → wait → http →
+    /// playwright" tells you it's a browser test without reading the file).
+    pub fn step_kinds(&self) -> Vec<&'static str> {
+        let mut kinds: Vec<&'static str> = Vec::new();
+        let push = |k: &'static str, v: &mut Vec<&'static str>| {
+            if !v.contains(&k) {
+                v.push(k);
+            }
+        };
+        match self {
+            DiscoveredTest::Lifecycle { steps, .. } => {
+                for step in steps {
+                    let kind = match step {
+                        StepDef::Add { .. } => "add",
+                        StepDef::Remove { .. } => "remove",
+                        StepDef::Reset => "reset",
+                        StepDef::Wait { .. } => "wait",
+                        StepDef::Shell { .. } => "shell",
+                        StepDef::Http { .. } => "http",
+                        StepDef::Playwright { .. } => "playwright",
+                    };
+                    push(kind, &mut kinds);
+                }
+            }
+            DiscoveredTest::Simple { setup, tests, .. } => {
+                if !setup.services.is_empty() || !setup.quadlets.is_empty() {
+                    push("setup", &mut kinds);
+                }
+                if !tests.is_empty() {
+                    push("shell", &mut kinds);
+                }
+            }
+        }
+        kinds
     }
 
     /// All services that need to be deployed for this test, in install order.
@@ -169,8 +220,20 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
         .unwrap_or("project")
         .to_string();
 
-    let mut test =
+    let mut tests =
         discover_from_test_toml(&test_toml_path, &parsed, &dir_name, Some(&project_dir))?;
+
+    // Local projects are a single-file, single-test concept — a `.container`
+    // directory with a `test.toml` is expected to describe exactly one test
+    // suite. The new multi-test format is a registry-level feature.
+    if tests.len() != 1 {
+        anyhow::bail!(
+            "local project test.toml must describe exactly one test (got {}); \
+             multi-test [[tests]] arrays are only supported inside the registry",
+            tests.len()
+        );
+    }
+    let mut test = tests.remove(0);
 
     // Populate quadlets from discovered files if not explicitly set in [setup]
     if let DiscoveredTest::Simple { ref mut setup, .. } = test
@@ -218,7 +281,7 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
         match TestToml::parse(&test_toml_path) {
             Ok(parsed) => {
                 match discover_from_test_toml(&test_toml_path, &parsed, &dir_name, None) {
-                    Ok(test) => discovered.push(test),
+                    Ok(tests) => discovered.extend(tests),
                     Err(e) => {
                         eprintln!(
                             "warning: failed to process {}: {e}",
@@ -255,7 +318,7 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
 
             match TestToml::parse(&path) {
                 Ok(parsed) => match discover_from_test_toml(&path, &parsed, &file_stem, None) {
-                    Ok(test) => discovered.push(test),
+                    Ok(tests) => discovered.extend(tests),
                     Err(e) => {
                         eprintln!("warning: failed to process {}: {e}", path.display());
                     }
@@ -278,47 +341,92 @@ pub fn discover(registry_path: &Path) -> Result<Vec<DiscoveredTest>> {
 /// `service_name_hint` is used as the default test name and (for service-level test.toml)
 /// as the default setup service when no [setup] section exists.
 /// `quadlet_dir` is set for local project tests to point to the project directory.
+/// Convert a parsed `test.toml` into one-or-more `DiscoveredTest`s.
+///
+/// Three file shapes are handled:
+///
+/// 1. **New multi-test**: one-or-more `[[tests]]` entries each with their
+///    own `[[tests.steps]]`. Each becomes its own `Lifecycle` test, named
+///    as `<service>-<test-name>` (or just `<test-name>` for cross-cutting
+///    files in `registry/tests/`).
+/// 2. **Legacy lifecycle**: top-level `[[steps]]`, optionally with
+///    `[test] name = …`. One `Lifecycle` test per file.
+/// 3. **Legacy shell**: `[setup]` + `[[tests]] run = …`. One `Simple`
+///    test per file, multiple assertion steps.
 fn discover_from_test_toml(
     path: &Path,
     parsed: &TestToml,
     service_name_hint: &str,
     quadlet_dir: Option<&Path>,
-) -> Result<DiscoveredTest> {
+) -> Result<Vec<DiscoveredTest>> {
+    // --- Shape 1: new multi-test format ---
+    let new_format_tests: Vec<&crate::test_toml::TestDef> = parsed
+        .tests
+        .iter()
+        .filter(|t| !t.steps.is_empty())
+        .collect();
+    if !new_format_tests.is_empty() {
+        // Decide how to namespace. For a service's own test.toml (under
+        // registry/<svc>/), prefix test names with the service so each
+        // test is globally addressable (`ryra test forgejo-smtp`). For
+        // cross-cutting tests under registry/tests/, the file stem is
+        // already unique; use the test name as-is.
+        let is_service_owned = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some(service_name_hint);
+
+        let mut out = Vec::with_capacity(new_format_tests.len());
+        for t in new_format_tests {
+            let qualified = if is_service_owned && t.name != service_name_hint {
+                format!("{service_name_hint}-{}", t.name)
+            } else {
+                t.name.clone()
+            };
+            out.push(DiscoveredTest::Lifecycle {
+                name: qualified,
+                source: path.to_path_buf(),
+                steps: t.steps.clone(),
+                browser: t.browser || parsed.needs_browser(),
+                ram_override: t.ram.or(parsed.ram_override()),
+            });
+        }
+        return Ok(out);
+    }
+
+    // --- Shape 2: legacy lifecycle ---
     let name = parsed.name_or_default(path);
-    // Use the explicit name if available, otherwise fall back to the hint
     let test_name = if parsed.test.as_ref().and_then(|t| t.name.as_ref()).is_some() {
         name
     } else {
         service_name_hint.to_string()
     };
-
     let browser = parsed.needs_browser();
     let ram_override = parsed.ram_override();
 
     if parsed.is_lifecycle() {
-        return Ok(DiscoveredTest::Lifecycle {
+        return Ok(vec![DiscoveredTest::Lifecycle {
             name: test_name,
+            source: path.to_path_buf(),
             steps: parsed.steps.clone(),
             browser,
             ram_override,
-        });
+        }]);
     }
 
-    // Simple test
+    // --- Shape 3: legacy shell-style ---
     let setup = match &parsed.setup {
         Some(s) => SetupConfig {
             services: s.services.clone(),
             quadlets: s.quadlets.clone(),
             quadlet_dir: quadlet_dir.map(PathBuf::from),
         },
-        None => {
-            // For service-level test.toml, infer the service from directory name
-            SetupConfig {
-                services: vec![service_name_hint.to_string()],
-                quadlets: Vec::new(),
-                quadlet_dir: quadlet_dir.map(PathBuf::from),
-            }
-        }
+        None => SetupConfig {
+            services: vec![service_name_hint.to_string()],
+            quadlets: Vec::new(),
+            quadlet_dir: quadlet_dir.map(PathBuf::from),
+        },
     };
 
     let tests = parsed
@@ -326,19 +434,20 @@ fn discover_from_test_toml(
         .iter()
         .map(|t| TestEntry {
             name: t.name.clone(),
-            run: t.run.clone(),
+            run: t.run.clone().unwrap_or_default(),
             timeout_secs: t.timeout,
             env: t.env.clone(),
         })
         .collect();
 
-    Ok(DiscoveredTest::Simple {
+    Ok(vec![DiscoveredTest::Simple {
         name: test_name,
+        source: path.to_path_buf(),
         setup,
         tests,
         browser,
         ram_override,
-    })
+    }])
 }
 
 /// Look up the recommended RAM (MB) for a service from its service.toml.
@@ -598,7 +707,9 @@ timeout = 10
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+        assert_eq!(out.len(), 1, "legacy shell form produces a single Simple test");
+        let test = out.remove(0);
 
         assert_eq!(test.name(), "whoami");
         assert!(!test.is_lifecycle());
@@ -629,7 +740,9 @@ run = "echo ok"
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "combo", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "combo", None).unwrap();
+        assert_eq!(out.len(), 1);
+        let test = out.remove(0);
 
         assert_eq!(test.name(), "whoami-plus-postgres");
         assert_eq!(test.services(), vec!["whoami", "postgres"]);
@@ -672,7 +785,9 @@ run = "! id whoami"
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "remove-test", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "remove-test", None).unwrap();
+        assert_eq!(out.len(), 1);
+        let test = out.remove(0);
 
         assert_eq!(test.name(), "remove-test");
         assert!(test.is_lifecycle());
@@ -704,7 +819,9 @@ run = "curl -sf http://proxy.test.local"
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "auth-test", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "auth-test", None).unwrap();
+        assert_eq!(out.len(), 1);
+        let test = out.remove(0);
 
         assert!(test.is_lifecycle());
         if let DiscoveredTest::Lifecycle { steps, .. } = &test {
@@ -717,6 +834,115 @@ run = "curl -sf http://proxy.test.local"
         } else {
             panic!("expected Lifecycle variant");
         }
+    }
+
+    #[test]
+    fn discover_multi_test_service_owned() {
+        // Simulate a service-owned test.toml (path: .../whoami/test.toml)
+        // with three named tests, each bringing their own steps.
+        let dir = tempfile::tempdir().unwrap();
+        let svc_dir = dir.path().join("whoami");
+        std::fs::create_dir(&svc_dir).unwrap();
+        let test_toml = svc_dir.join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
+[[tests]]
+name = "whoami"
+[[tests.steps]]
+action = "add"
+service = "whoami"
+[[tests.steps]]
+action = "wait"
+service = "whoami"
+
+[[tests]]
+name = "diff"
+[[tests.steps]]
+action = "add"
+service = "whoami"
+[[tests.steps]]
+action = "shell"
+name = "idempotent"
+run = "true"
+
+[[tests]]
+name = "remove"
+[[tests.steps]]
+action = "add"
+service = "whoami"
+[[tests.steps]]
+action = "remove"
+service = "whoami"
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let out = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+        assert_eq!(out.len(), 3);
+
+        // Test name equal to service name stays un-prefixed. Others get
+        // `<service>-<test>` so they're uniquely addressable on the CLI.
+        let names: Vec<&str> = out.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["whoami", "whoami-diff", "whoami-remove"]);
+        for t in &out {
+            assert!(t.is_lifecycle());
+        }
+    }
+
+    #[test]
+    fn discover_multi_test_cross_cutting() {
+        // Cross-cutting file under `tests/<stem>.toml` — no service-dir prefix.
+        let dir = tempfile::tempdir().unwrap();
+        let tests_dir = dir.path().join("tests");
+        std::fs::create_dir(&tests_dir).unwrap();
+        let test_toml = tests_dir.join("cross-thing.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
+[[tests]]
+name = "first"
+[[tests.steps]]
+action = "add"
+service = "whoami"
+
+[[tests]]
+name = "second"
+[[tests.steps]]
+action = "add"
+service = "whoami"
+"#,
+        )
+        .unwrap();
+
+        let parsed = TestToml::parse(&test_toml).unwrap();
+        let out = discover_from_test_toml(&test_toml, &parsed, "cross-thing", None).unwrap();
+        assert_eq!(out.len(), 2);
+        let names: Vec<&str> = out.iter().map(|t| t.name()).collect();
+        assert_eq!(names, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn reject_test_with_both_run_and_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let test_toml = dir.path().join("test.toml");
+        std::fs::write(
+            &test_toml,
+            r#"
+[[tests]]
+name = "bad"
+run = "true"
+[[tests.steps]]
+action = "add"
+service = "whoami"
+"#,
+        )
+        .unwrap();
+
+        let err = TestToml::parse(&test_toml).expect_err("must reject run+steps");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("exactly one of `run` or `steps`"), "got: {msg}");
     }
 
     #[test]
@@ -870,7 +1096,9 @@ run = "true"
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
+        assert_eq!(out.len(), 1);
+        let test = out.remove(0);
         assert!(!test.has_quadlets());
     }
 
@@ -892,7 +1120,9 @@ run = "true"
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "my-test", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "my-test", None).unwrap();
+        assert_eq!(out.len(), 1);
+        let test = out.remove(0);
         assert!(test.needs_browser());
     }
 
@@ -920,7 +1150,9 @@ run = "true"
         .unwrap();
 
         let parsed = TestToml::parse(&test_toml).unwrap();
-        let test = discover_from_test_toml(&test_toml, &parsed, "sso-test", None).unwrap();
+        let mut out = discover_from_test_toml(&test_toml, &parsed, "sso-test", None).unwrap();
+        assert_eq!(out.len(), 1);
+        let test = out.remove(0);
         assert!(test.needs_browser());
         assert!(test.is_lifecycle());
     }

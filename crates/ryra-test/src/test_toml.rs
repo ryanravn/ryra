@@ -36,14 +36,36 @@ pub struct SetupSection {
     pub quadlets: Vec<String>,
 }
 
+/// A single named test within a test.toml file.
+///
+/// Two shapes are accepted for backwards compatibility during the
+/// [[tests]]-array migration:
+///
+/// - **Multi-step (new)**: `steps` non-empty; `run` unset. Produces a
+///   lifecycle-style execution reading the given steps directly.
+/// - **Shell (legacy)**: `run` set; `steps` empty. Relies on `[setup]`
+///   at the file level to deploy services before running `run`.
+///
+/// Exactly one of `run` / `steps` must be present — validated at parse time.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TestDef {
     pub name: String,
-    pub run: String,
+    /// Legacy: a single shell command run after `[setup]` services deploy.
+    #[serde(default)]
+    pub run: Option<String>,
+    /// New: a sequence of lifecycle steps (add / wait / http / shell / …).
+    #[serde(default)]
+    pub steps: Vec<StepDef>,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Needs a browser VM image (for Playwright steps). Can also be set
+    /// at the file level via `[test] browser = true`.
+    #[serde(default)]
+    pub browser: bool,
+    /// Per-test RAM override (MB). File-level `[test] ram` still works.
+    pub ram: Option<u32>,
 }
 
 fn default_timeout() -> u64 {
@@ -242,11 +264,33 @@ impl TestToml {
     pub fn validate(&self, path: &Path) -> Result<()> {
         let ctx = path.display();
 
-        if !self.tests.is_empty() && !self.steps.is_empty() {
+        // Top-level [[tests]] coexists with [[steps]] ONLY if all [[tests]]
+        // are new-format (each brings its own `steps`). The legacy shape
+        // (shell-style `run`-based tests with a shared [setup]) remains
+        // mutually exclusive with top-level [[steps]].
+        let has_legacy_run_tests = self
+            .tests
+            .iter()
+            .any(|t| t.run.is_some() && t.steps.is_empty());
+        if has_legacy_run_tests && !self.steps.is_empty() {
             anyhow::bail!(
-                "{ctx}: test.toml cannot have both [[tests]] and [[steps]] — \
-                 use [[tests]] for simple assertions or [[steps]] for lifecycle tests",
+                "{ctx}: test.toml cannot mix [setup]+[[tests]] (legacy shell) with top-level [[steps]] — \
+                 migrate to the new [[tests]] + [[tests.steps]] format instead",
             );
+        }
+
+        for t in &self.tests {
+            let has_run = t.run.is_some();
+            let has_steps = !t.steps.is_empty();
+            if has_run == has_steps {
+                anyhow::bail!(
+                    "{ctx}: test '{}' must set exactly one of `run` or `steps` \
+                     (got run={}, steps={})",
+                    t.name,
+                    has_run,
+                    has_steps,
+                );
+            }
         }
 
         Ok(())
@@ -337,7 +381,10 @@ run = "curl -sf http://localhost:8080"
         );
         assert_eq!(parsed.tests.len(), 1);
         assert_eq!(parsed.tests[0].name, "app responds");
-        assert_eq!(parsed.tests[0].run, "curl -sf http://localhost:8080");
+        assert_eq!(
+            parsed.tests[0].run.as_deref(),
+            Some("curl -sf http://localhost:8080")
+        );
         assert!(!parsed.is_lifecycle());
     }
 
