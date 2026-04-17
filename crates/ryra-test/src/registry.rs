@@ -555,6 +555,53 @@ pub fn service_image(registry_path: &Path, service_name: &str) -> Result<Option<
     Ok(images.into_iter().next())
 }
 
+/// Parse a `ryra add <svc> …` args string and return the well-known service
+/// names it *implicitly* pulls in (so the caller can pre-cache their images).
+///
+/// - `--smtp=<name>` / `--smtp <name>` → `<name>` (typically `inbucket`)
+/// - `--auth` → `authelia`
+/// - `--domain …` / `--url …` → `caddy`
+///
+/// Unknown flag values pass through untouched; the caller decides what's real.
+fn implied_services_from_args(args: &str) -> Vec<&str> {
+    let tokens: Vec<&str> = args.split_whitespace().collect();
+    let mut out: Vec<&str> = Vec::new();
+
+    let push = |svc: &'static str, out: &mut Vec<&str>| {
+        if !out.contains(&svc) {
+            out.push(svc);
+        }
+    };
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let t = tokens[i];
+        if let Some(val) = t.strip_prefix("--smtp=") {
+            if !val.is_empty() && !out.contains(&val) {
+                out.push(val);
+            }
+        } else if t == "--smtp" {
+            if let Some(val) = tokens.get(i + 1)
+                && !val.starts_with("--")
+                && !out.contains(val)
+            {
+                out.push(val);
+                i += 1;
+            }
+        } else if t == "--auth" || t.starts_with("--auth=") {
+            push("authelia", &mut out);
+        } else if t == "--domain"
+            || t.starts_with("--domain=")
+            || t == "--url"
+            || t.starts_with("--url=")
+        {
+            push("caddy", &mut out);
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Get all container images for a service by scanning its `quadlets/` directory.
 pub fn service_images(registry_path: &Path, service_name: &str) -> Vec<String> {
     let quadlets_dir = registry_path.join(service_name).join("quadlets");
@@ -585,30 +632,54 @@ pub fn service_images(registry_path: &Path, service_name: &str) -> Vec<String> {
 /// Get all container images needed for a test.
 pub fn images_for_test(registry_path: &Path, test: &DiscoveredTest) -> Vec<String> {
     let mut images = Vec::new();
+    let add_image = |img: String, out: &mut Vec<String>| {
+        if !out.contains(&img) {
+            out.push(img);
+        }
+    };
+    let include_service = |svc: &str, out: &mut Vec<String>| {
+        for image in service_images(registry_path, svc) {
+            add_image(image, out);
+        }
+    };
 
     match test {
         DiscoveredTest::Lifecycle { steps, .. } => {
-            // Look up images for services referenced in add steps or run steps
-            // that call `ryra add <service>`
             for step in steps {
-                let service_name = match step {
-                    StepDef::Add { service, .. } => Some(service.as_str()),
-                    StepDef::Shell { run, .. } => {
-                        // Parse "ryra add <service>" from run commands
-                        run.split_whitespace()
-                            .collect::<Vec<_>>()
-                            .windows(3)
-                            .find(|w| w[0] == "ryra" && w[1] == "add")
-                            .map(|w| w[2])
-                    }
-                    _ => None,
-                };
-                if let Some(service) = service_name {
-                    for image in service_images(registry_path, service) {
-                        if !images.contains(&image) {
-                            images.push(image);
+                match step {
+                    StepDef::Add { service, args, .. } => {
+                        include_service(service, &mut images);
+                        // `ryra add <svc> --smtp=<mail> --auth --domain …` pulls
+                        // additional well-known services (inbucket, authelia,
+                        // caddy) in *without* explicit add steps. We need to
+                        // pre-cache their images too, otherwise the in-VM
+                        // podman pull hits the public registry — and any
+                        // Docker Hub flake there fails the test.
+                        if let Some(args_str) = args {
+                            for implied in implied_services_from_args(args_str) {
+                                include_service(implied, &mut images);
+                            }
                         }
                     }
+                    StepDef::Shell { run, .. } => {
+                        // Parse "ryra add <service>" from run commands.
+                        let tokens: Vec<&str> = run.split_whitespace().collect();
+                        if let Some(idx) = tokens
+                            .windows(2)
+                            .position(|w| w[0] == "ryra" && w[1] == "add")
+                        {
+                            if let Some(svc) = tokens.get(idx + 2) {
+                                include_service(svc, &mut images);
+                            }
+                            // Also sweep any --smtp=<x> / --auth / --url flags
+                            // that appear further along in the same command.
+                            let rest = &tokens[idx + 2..];
+                            for implied in implied_services_from_args(&rest.join(" ")) {
+                                include_service(implied, &mut images);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
