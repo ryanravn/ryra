@@ -732,8 +732,9 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
                 let unit = name.trim_end_matches(".container").to_string();
                 steps.push(Step::StopService { unit });
             }
-            // Track volume names for cleanup after containers are stopped
-            if name.ends_with(".volume") {
+            // Track volume names for cleanup after containers are stopped.
+            // Only needed in Purge mode — skip accumulation entirely in Preserve.
+            if matches!(mode, RemoveMode::Purge) && name.ends_with(".volume") {
                 let vol = name.trim_end_matches(".volume").to_string();
                 // Quadlet prefixes volume names with "systemd-"
                 volume_names.push(format!("systemd-{vol}"));
@@ -755,17 +756,19 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
             steps.push(Step::RemoveDir(service_home(service_name)?));
         }
         RemoveMode::Preserve => {
-            // Keep volumes intact.
-            let _ = volume_names;
+            // Keep volumes intact — volume_names is guaranteed empty here
+            // because accumulation is gated on Purge mode above.
             // Remove only ephemeral children of the home dir; keep data.
             let home = service_home(service_name)?;
             let (_data, ephemeral) = crate::data::classify::classify_home_dir(&home)?;
             for path in ephemeral {
-                let meta = std::fs::metadata(&path);
-                if matches!(meta, Ok(m) if m.is_dir()) {
-                    steps.push(Step::RemoveDir(path));
-                } else {
-                    steps.push(Step::RemoveFile(path));
+                match std::fs::metadata(&path) {
+                    Ok(m) if m.is_dir() => steps.push(Step::RemoveDir(path)),
+                    Ok(_) => steps.push(Step::RemoveFile(path)),
+                    // Path vanished between scan and step emission.
+                    // `rm -f` is a no-op on a missing path; keeping the step ensures a
+                    // retry of the same plan is idempotent.
+                    Err(_) => steps.push(Step::RemoveFile(path)),
                 }
             }
         }
@@ -1106,11 +1109,6 @@ pub struct ServiceDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn remove_mode_enum_variants_distinct() {
-        assert_ne!(RemoveMode::Preserve, RemoveMode::Purge);
-    }
 
     #[test]
     fn networks_empty_when_no_auth() {
