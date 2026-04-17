@@ -34,6 +34,9 @@ pub async fn ls() -> Result<()> {
         lines.extend(format_service(svc));
     }
     println!("{}", lines.join("\n"));
+    println!();
+    println!("Delete a service's data:  ryra data rm <service>");
+    println!("Or manually:              rm -rf <path>  &&  podman volume rm <volume>");
     Ok(())
 }
 
@@ -58,20 +61,10 @@ fn format_service(svc: &ServiceData) -> Vec<String> {
     for v in &svc.volumes {
         out.push(format!(
             "{:<15} {:<10} {:<10} volume:{}",
-            "",
-            "",
-            "",
-            display_volume(&v.name)
+            "", "", "", v.name
         ));
     }
     out
-}
-
-/// Strip quadlet's `systemd-` prefix from a volume name for display.
-/// The underlying podman operation still uses the full name — this is
-/// purely cosmetic to avoid the prefix appearing on every row.
-fn display_volume(name: &str) -> &str {
-    name.strip_prefix("systemd-").unwrap_or(name)
 }
 
 enum Size {
@@ -242,7 +235,7 @@ pub async fn rm(
             println!("  {} ({})", p.display(), sz);
         }
         for v in &svc.volumes {
-            println!("  volume:{}", display_volume(&v.name));
+            println!("  volume:{}", v.name);
         }
         println!();
         let input: String = Input::new()
