@@ -33,29 +33,3 @@ grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
   echo "exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())" >> "$CONF/seahub_settings.py"
 
 echo "OAuth config injected into seahub_settings.py"
-
-# Restart seahub so it picks up the OAuth config. seahub.sh restart is
-# idempotent — it stops any running instance (no-op if not running) and
-# starts a fresh one, so we don't need to probe for the process first.
-# start.py's initial `seahub.sh start` can race with DB readiness; this
-# ensures seahub is running with OAuth config loaded regardless.
-echo "Restarting seahub to apply OAuth config..."
-for attempt in 1 2 3; do
-  if podman exec seafile /opt/seafile/seafile-server-latest/seahub.sh restart 2>&1; then
-    echo "Seahub restarted (attempt $attempt)."
-    # Verify seahub is listening on its port (8000) before exiting.
-    for i in $(seq 1 30); do
-      if podman exec seafile curl -sf -o /dev/null http://localhost:8000/ 2>/dev/null; then
-        echo "Seahub is responding."
-        exit 0
-      fi
-      sleep 2
-    done
-    echo "  seahub restart succeeded but not responding — retrying..."
-  else
-    echo "  seahub.sh restart failed — retrying..."
-    sleep 5
-  fi
-done
-echo "ERROR: seahub failed to start after 3 attempts"
-exit 1
