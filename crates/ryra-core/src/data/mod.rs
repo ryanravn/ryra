@@ -28,6 +28,11 @@ pub struct ServiceData {
     pub volumes: Vec<volumes::VolumeRef>,
 }
 
+/// Top-level dirs under `~/.local/share/ryra/` that are NOT services —
+/// written by ryra itself for tooling (e.g. test reports). Skip them so
+/// `ryra data ls` doesn't surface them as orphan services.
+const NON_SERVICE_DIRS: &[&str] = &["test-reports"];
+
 /// Walk every ryra-visible service and return one `ServiceData` per service.
 pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
     let home_root = crate::service_data_root()?;
@@ -54,6 +59,7 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
                 })?
                 .is_dir()
                 && let Some(n) = entry.file_name().to_str()
+                && !NON_SERVICE_DIRS.contains(&n)
             {
                 names.insert(n.to_string());
             }

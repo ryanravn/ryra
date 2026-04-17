@@ -56,9 +56,22 @@ fn format_service(svc: &ServiceData) -> Vec<String> {
         svc.service, status, size, first_path
     ));
     for v in &svc.volumes {
-        out.push(format!("{:<15} {:<10} {:<10} volume:{}", "", "", "", v.name));
+        out.push(format!(
+            "{:<15} {:<10} {:<10} volume:{}",
+            "",
+            "",
+            "",
+            display_volume(&v.name)
+        ));
     }
     out
+}
+
+/// Strip quadlet's `systemd-` prefix from a volume name for display.
+/// The underlying podman operation still uses the full name — this is
+/// purely cosmetic to avoid the prefix appearing on every row.
+fn display_volume(name: &str) -> &str {
+    name.strip_prefix("systemd-").unwrap_or(name)
 }
 
 enum Size {
@@ -229,7 +242,7 @@ pub async fn rm(
             println!("  {} ({})", p.display(), sz);
         }
         for v in &svc.volumes {
-            println!("  volume:{}", v.name);
+            println!("  volume:{}", display_volume(&v.name));
         }
         println!();
         let input: String = Input::new()
