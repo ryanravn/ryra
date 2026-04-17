@@ -358,29 +358,37 @@ pub fn add_service(
         return Err(Error::NoOidcSupport(service_name.to_string()));
     }
 
-    // Determine host port: use fixed host_port from service def if set,
-    // allocate one if container port is privileged or already in use,
-    // otherwise use container port directly.
-    let has_fixed_ports = reg_service.def.ports.iter().any(|p| p.host_port.is_some());
+    // Resolve a host port for every entry in [[ports]]. Each port gets its
+    // own distinct host port — a prior bug allocated one port and gave it
+    // to every entry, so services with multiple [[ports]] (ente-web:
+    // 3000/3002/3003, inbucket: http+smtp) hit `bind: address already in
+    // use` on all but the first.
     let mut port_warnings: Vec<Warning> = Vec::new();
-    let needs_allocation = reg_service.def.ports.iter().any(|p| {
-        p.host_port.is_none()
-            && (p.container_port < 1024 || system::port::is_port_in_use(p.container_port))
-    });
-    let host_port = if has_fixed_ports {
-        // Fixed ports are set per-port in the service def (e.g. Caddy 80/443)
-        None
-    } else if needs_allocation {
-        let allocated = system::port::allocate_port(&config)?;
-        // Warn about each port that was reassigned
-        for p in &reg_service.def.ports {
-            if p.host_port.is_none() {
-                let reason = if p.container_port < 1024 {
+    let mut claimed: std::collections::HashSet<u16> = reg_service
+        .def
+        .ports
+        .iter()
+        .filter_map(|p| p.host_port)
+        .collect();
+    let mut resolved_ports: Vec<(String, u16)> = Vec::with_capacity(reg_service.def.ports.len());
+    for p in &reg_service.def.ports {
+        let host = if let Some(hp) = p.host_port {
+            hp
+        } else {
+            let privileged = p.container_port < 1024;
+            let claimed_in_service = claimed.contains(&p.container_port);
+            let in_use = system::port::is_port_in_use(p.container_port);
+            if privileged || claimed_in_service || in_use {
+                let allocated = system::port::allocate_port_excluding(&config, &claimed)?;
+                let reason = if privileged {
                     "port is privileged (requires root)".to_string()
-                } else if system::port::is_port_in_use(p.container_port) {
-                    format!("port {} is already in use", p.container_port)
+                } else if claimed_in_service {
+                    format!(
+                        "port {} is already claimed by another port in this service",
+                        p.container_port
+                    )
                 } else {
-                    continue;
+                    format!("port {} is already in use", p.container_port)
                 };
                 port_warnings.push(Warning::PortReassigned {
                     service_name: service_name.to_string(),
@@ -389,18 +397,29 @@ pub fn add_service(
                     assigned_port: allocated,
                     reason,
                 });
+                allocated
+            } else {
+                p.container_port
             }
-        }
-        Some(allocated)
-    } else {
-        None
-    };
+        };
+        claimed.insert(host);
+        resolved_ports.push((p.name.clone(), host));
+    }
+
+    // Primary host port drives service.url / service.port templating.
+    // Prefer "http", fall back to the first defined port.
+    let host_port = resolved_ports
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("http"))
+        .or_else(|| resolved_ports.first())
+        .map(|(_, p)| *p);
 
     // Check for port conflicts by probing whether the port is already bound.
-    for p in &reg_service.def.ports {
-        let port = p.host_port.unwrap_or(host_port.unwrap_or(p.container_port));
-        if system::port::is_port_in_use(port) {
-            return Err(Error::PortConflict { port });
+    // For explicitly-set host_port entries, allocate_port_excluding didn't run
+    // so we re-check here.
+    for (_, port) in &resolved_ports {
+        if system::port::is_port_in_use(*port) {
+            return Err(Error::PortConflict { port: *port });
         }
     }
 
@@ -448,6 +467,7 @@ pub fn add_service(
         service_def: &reg_service.def,
         auth_kind: auth_kind.as_ref(),
         host_port,
+        resolved_ports: &resolved_ports,
         env_overrides,
         url,
         extra_env,
@@ -456,16 +476,14 @@ pub fn add_service(
 
     let podman_args: Vec<String> = Vec::new();
 
-    // Build port variable expansions for quadlet PublishPort directives
-    let port_vars: Vec<(String, String)> = reg_service
-        .def
-        .ports
+    // Build port variable expansions for quadlet PublishPort directives.
+    // Each port has its own resolved host port (see `resolved_ports` above).
+    let port_vars: Vec<(String, String)> = resolved_ports
         .iter()
-        .map(|p| {
-            let resolved = p.host_port.unwrap_or(host_port.unwrap_or(p.container_port));
+        .map(|(name, port)| {
             (
-                format!("RYRA_PORT_{}", p.name.to_uppercase()),
-                resolved.to_string(),
+                format!("RYRA_PORT_{}", name.to_uppercase()),
+                port.to_string(),
             )
         })
         .collect();
@@ -608,15 +626,7 @@ pub fn add_service(
     });
 
     // Collect post-install info
-    let allocated_ports: Vec<(String, u16)> = reg_service
-        .def
-        .ports
-        .iter()
-        .map(|p| {
-            let port = p.host_port.unwrap_or(host_port.unwrap_or(p.container_port));
-            (p.name.clone(), port)
-        })
-        .collect();
+    let allocated_ports: Vec<(String, u16)> = resolved_ports.clone();
 
     // Secret names from env var templates (not stored in state)
     let mut generated_secrets: Vec<String> = reg_service

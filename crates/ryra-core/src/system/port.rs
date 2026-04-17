@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::net::TcpListener;
 
 use crate::config::schema::Config;
@@ -8,11 +9,23 @@ const PORT_RANGE_END: u16 = 11000;
 
 /// Allocate the next available port from the range, checking against installed services.
 pub fn allocate_port(config: &Config) -> Result<u16> {
-    let used: std::collections::HashSet<u16> = config
+    allocate_port_excluding(config, &HashSet::new())
+}
+
+/// Like `allocate_port`, but also skips any port in `extra_used`.
+///
+/// Use this when allocating multiple ports in the same `add_service` call —
+/// each newly-allocated port needs to be added to `extra_used` before the
+/// next call, so the ports a service is about to claim don't collide with
+/// one another (services with multiple `[[ports]]` entries, e.g. ente-web
+/// publishing 3000/3002/3003 to distinct host ports).
+pub fn allocate_port_excluding(config: &Config, extra_used: &HashSet<u16>) -> Result<u16> {
+    let mut used: HashSet<u16> = config
         .services
         .iter()
         .flat_map(|s| s.ports.values().copied())
         .collect();
+    used.extend(extra_used.iter().copied());
 
     (PORT_RANGE_START..PORT_RANGE_END)
         .find(|p| !used.contains(p) && !is_port_in_use(*p))

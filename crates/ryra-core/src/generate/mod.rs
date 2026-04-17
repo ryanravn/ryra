@@ -20,7 +20,12 @@ pub struct GenerateEnvParams<'a> {
     pub service_def: &'a ServiceDef,
     /// The auth kind the user chose to enable, if any.
     pub auth_kind: Option<&'a AuthKind>,
+    /// Primary host port (for `service.url` / `service.port` templating).
     pub host_port: Option<u16>,
+    /// Per-port resolved host ports, keyed by port name (e.g. "http", "smtp").
+    /// Used to emit `RYRA_PORT_*` lines in the .env file — each entry here
+    /// corresponds to one `[[ports]]` definition in service.toml.
+    pub resolved_ports: &'a [(String, u16)],
     pub env_overrides: &'a BTreeMap<String, String>,
     /// Public URL for the service (used in templates as `{{service.external_url}}`).
     pub url: Option<&'a str>,
@@ -64,12 +69,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
 
     // Build .env file content
     let home_dir = crate::service_home(name)?;
-    let mut env_file = build_env_file(
-        &home_dir,
-        &rendered_env,
-        params.service_def,
-        params.host_port,
-    );
+    let mut env_file = build_env_file(&home_dir, &rendered_env, params.resolved_ports);
 
     // Append extra env vars (e.g., CA cert trust for OIDC)
     for (key, value) in &params.extra_env {
@@ -83,8 +83,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
 fn build_env_file(
     home_dir: &std::path::Path,
     rendered_env: &[EnvVar],
-    service_def: &ServiceDef,
-    host_port: Option<u16>,
+    resolved_ports: &[(String, u16)],
 ) -> GeneratedFile {
     let mut lines = Vec::new();
 
@@ -99,14 +98,11 @@ fn build_env_file(
     // Expose service home path so scripts can reference it
     lines.push(format!("RYRA_SERVICE_HOME={}", home_dir.display()));
 
-    // Expose port as RYRA_PORT_* — use the fixed host_port from the port definition
-    // if set, otherwise the allocated host port, otherwise the container port.
-    for port_def in &service_def.ports {
-        let port = port_def
-            .host_port
-            .or(host_port)
-            .unwrap_or(port_def.container_port);
-        let var_name = format!("RYRA_PORT_{}", port_def.name.to_uppercase());
+    // Expose each [[ports]] entry as RYRA_PORT_<NAME> with its resolved
+    // host port. Caller passes the per-port mapping computed in
+    // `add_service` so multi-port services get distinct values.
+    for (name, port) in resolved_ports {
+        let var_name = format!("RYRA_PORT_{}", name.to_uppercase());
         lines.push(format!("{var_name}={port}"));
     }
 
