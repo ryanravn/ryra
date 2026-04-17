@@ -265,10 +265,29 @@ impl Machine {
             .wait_for_ssh(std::time::Duration::from_secs(60))
             .await?;
 
-        // Fix clock skew: the snapshot's system clock is frozen at save time
-        let _ = machine
-            .exec("sudo date -s \"$(date -u -R)\" >/dev/null 2>&1")
-            .await;
+        // Fix clock skew: the snapshot's system clock is frozen at save time,
+        // which can be hours or days behind wall clock. Services that enforce
+        // fresh time (authelia's NTP startup check, TLS cert validity, OIDC
+        // token expiry, …) fail hard when the guest clock is off, so we
+        // force-set it before any test starts.
+        //
+        // Expand the timestamp on the HOST side and send it as a literal.
+        // The obvious-looking `date -s "$(date -u -R)"` evaluates the inner
+        // `$()` inside the guest, which just reads the frozen clock and
+        // rewrites it to itself — effectively a no-op.
+        let host_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if host_epoch > 0
+            && let Err(e) = machine
+                .exec(&format!(
+                    "sudo date -s @{host_epoch} >/dev/null 2>&1 && sudo hwclock --systohc >/dev/null 2>&1 || true"
+                ))
+                .await
+        {
+            eprintln!("  warning: failed to sync clock in snapshot-booted VM: {e:#}");
+        }
 
         Ok(machine)
     }

@@ -1013,10 +1013,19 @@ async fn create_snapshot(
         .await;
 
     // Configure the VM before snapshotting so every restored VM starts clean.
-    // - 9p mount at /mnt/images (system-level, needs sudo)
+    // - `/mnt/images` dir created (but NOT mounted — see below)
     // - Rootless podman config at ~/.config/containers/ (user-level)
+    //
+    // QEMU refuses `savevm` with "Migration is disabled when VirtFS export
+    // path is mounted in the guest". So we deliberately leave /mnt/images
+    // un-mounted while the snapshot is being saved. On cold boot the test
+    // runner's `load_images_into_vm` mounts it on demand; when restoring
+    // from this snapshot the same helper runs and handles the mount too.
+    // The podman config still references /mnt/images — that path is
+    // resolved lazily on first podman operation, so a stale reference
+    // during snapshot save is harmless.
     let setup_cmd = "\
-        sudo mkdir -p /mnt/images && sudo mount -t 9p -o trans=virtio,version=9p2000.L,ro images /mnt/images; \
+        sudo mkdir -p /mnt/images; \
         mkdir -p ~/.config/containers && \
         printf '[storage]\\ndriver = \"overlay\"\\n[storage.options]\\nadditionalimagestores = [\"/mnt/images\"]\\n' > ~/.config/containers/storage.conf && \
         printf 'unqualified-search-registries = [\"docker.io\"]\\n' > ~/.config/containers/registries.conf; \
