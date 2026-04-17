@@ -233,10 +233,18 @@ pub async fn rm(
 pub async fn rm_all(yes: bool, dry_run: bool) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let in_config: std::collections::HashSet<String> =
+        config.services.iter().map(|s| s.name.clone()).collect();
     let all = ryra_core::data::enumerate_all(&config)?;
     let orphans: Vec<_> = all
         .into_iter()
-        .filter(|s| matches!(s.status, ServiceStatus::Orphan))
+        .filter(|s| {
+            // True orphans only: no ryra.toml entry. Services with
+            // `installed: false` are mid-install-failure state; they
+            // belong to `ryra rm --purge` / `ryra add` retry, not to
+            // bulk sweeping.
+            matches!(s.status, ServiceStatus::Orphan) && !in_config.contains(&s.service)
+        })
         .collect();
 
     if orphans.is_empty() {

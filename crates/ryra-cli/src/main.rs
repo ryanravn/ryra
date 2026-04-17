@@ -180,7 +180,7 @@ enum DataAction {
     /// Delete data for a service
     Rm {
         /// Service name
-        #[arg(required_unless_present = "all")]
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
         service: Option<String>,
         /// Delete data for all orphan services (added in Task 8)
         #[arg(long, short = 'a')]
@@ -269,6 +269,9 @@ async fn main() -> anyhow::Result<()> {
                 if all {
                     if service.is_some() {
                         anyhow::bail!("pass a service name OR --all, not both");
+                    }
+                    if force {
+                        anyhow::bail!("--force is not applicable with --all (only orphan services are targeted)");
                     }
                     cli::data::rm_all(yes, dry_run).await?;
                 } else {
