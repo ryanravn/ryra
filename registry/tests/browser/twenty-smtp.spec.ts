@@ -38,10 +38,13 @@ test("onboarding invite sends an email through the SMTP worker", async ({
   await page.getByRole("textbox").first().fill("Ryra");
   await page.getByRole("button", { name: /continue/i }).click();
 
-  // 5. Profile → First + last name → Continue
+  // 5. Profile → First + last name → Continue. Twenty silently rejects a
+  //    single-character last name (no visible error, Continue click is a
+  //    no-op and the URL stays on /create/profile), so use a name long
+  //    enough to pass whatever min-length validation is in play.
   await page.waitForURL(/\/create\/profile/, { timeout: 15_000 });
   await page.getByRole("textbox", { name: /first name/i }).fill("Ada");
-  await page.getByRole("textbox", { name: /last name/i }).fill("L");
+  await page.getByRole("textbox", { name: /last name/i }).fill("Lovelace");
   await page.getByRole("button", { name: /continue/i }).click();
 
   // 6. Skip email sync (the "Continue without sync" link, not the "Continue"

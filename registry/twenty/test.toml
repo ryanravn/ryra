@@ -56,8 +56,10 @@ action = "http"
 name = "twenty-responds"
 url = "https://twenty.localhost:8443/healthz"
 service = "twenty"
-poll = { interval = 3, attempts = 40 }
-timeout = 180
+# Twenty's worker + server initial boot + DB migrations can take 2-3min
+# on a cold VM. Match the non-smtp variant's poll budget.
+poll = { interval = 5, attempts = 60 }
+timeout = 360
 [[tests.steps]]
 action = "playwright"
 name = "onboarding-invite-flow"
