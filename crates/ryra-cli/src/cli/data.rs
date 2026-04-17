@@ -22,14 +22,22 @@ pub async fn ls() -> Result<()> {
         a_key.cmp(&b_key)
     });
 
-    println!("{:<15} {:<10} {:<10} PATH + VOLUMES", "SERVICE", "STATUS", "SIZE");
+    // Buffer the whole table: compute_total walks each volume's mountpoint
+    // and can be slow. Emitting rows inline makes them trickle out one by
+    // one, which feels janky. Collect everything first, then print once.
+    let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
+    lines.push(format!(
+        "{:<15} {:<10} {:<10} PATH + VOLUMES",
+        "SERVICE", "STATUS", "SIZE"
+    ));
     for svc in &svcs {
-        print_service(svc);
+        lines.extend(format_service(svc));
     }
+    println!("{}", lines.join("\n"));
     Ok(())
 }
 
-fn print_service(svc: &ServiceData) {
+fn format_service(svc: &ServiceData) -> Vec<String> {
     let status = match svc.status {
         ServiceStatus::Installed => "installed",
         ServiceStatus::Orphan => "orphan",
@@ -42,10 +50,15 @@ fn print_service(svc: &ServiceData) {
         Size::Unknown => "?".to_string(),
     };
     let first_path = svc.home_dir.display().to_string();
-    println!("{:<15} {:<10} {:<10} {}", svc.service, status, size, first_path);
+    let mut out = Vec::with_capacity(1 + svc.volumes.len());
+    out.push(format!(
+        "{:<15} {:<10} {:<10} {}",
+        svc.service, status, size, first_path
+    ));
     for v in &svc.volumes {
-        println!("{:<15} {:<10} {:<10} volume:{}", "", "", "", v.name);
+        out.push(format!("{:<15} {:<10} {:<10} volume:{}", "", "", "", v.name));
     }
+    out
 }
 
 enum Size {
