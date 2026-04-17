@@ -2,6 +2,7 @@ pub mod auth_bridge;
 pub mod authelia;
 pub mod caddy;
 pub mod config;
+pub mod data;
 pub mod diff;
 pub mod error;
 pub mod generate;
