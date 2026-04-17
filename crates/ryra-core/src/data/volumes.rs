@@ -133,6 +133,31 @@ pub fn mountpoint_of(volume_name: &str) -> Option<PathBuf> {
     }
 }
 
+/// Compute a volume's on-disk size in bytes.
+///
+/// Rootless podman stores volumes under subuid-owned directories the
+/// host user can't stat — a direct filesystem walk returns `EACCES`.
+/// `podman unshare` enters the user's subuid namespace where the walk
+/// succeeds. `du -sb` is POSIX-portable (every supported distro ships
+/// coreutils).
+///
+/// Returns `None` if podman or `du` isn't available, the volume
+/// doesn't exist, or the output can't be parsed.
+pub fn volume_size_bytes(volume_name: &str) -> Option<u64> {
+    let mp = mountpoint_of(volume_name)?;
+    let out = std::process::Command::new("podman")
+        .args(["unshare", "du", "-sb", "--"])
+        .arg(&mp)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // `du -sb` prints `<bytes>\t<path>\n`
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout.split_whitespace().next()?.parse::<u64>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

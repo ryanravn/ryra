@@ -90,7 +90,7 @@ enum Size {
 }
 
 fn compute_total(svc: &ServiceData) -> Size {
-    use ryra_core::data::{dir_size_bytes, volumes::mountpoint_of};
+    use ryra_core::data::{dir_size_bytes, volumes::volume_size_bytes};
     let mut total: u64 = 0;
     let mut any_ok = false;
     let mut any_err = false;
@@ -104,13 +104,14 @@ fn compute_total(svc: &ServiceData) -> Size {
         }
     }
     for v in &svc.volumes {
-        let Some(mp) = mountpoint_of(&v.name) else {
-            any_err = true;
-            continue;
-        };
-        match dir_size_bytes(&mp) {
-            Ok(b) => { total += b; any_ok = true; }
-            Err(_) => any_err = true,
+        // volume_size_bytes shells out to `podman unshare du -sb` so it
+        // works across rootless podman's subuid namespace.
+        match volume_size_bytes(&v.name) {
+            Some(b) => {
+                total += b;
+                any_ok = true;
+            }
+            None => any_err = true,
         }
     }
     match (any_ok, any_err) {
