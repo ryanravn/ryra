@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
-pub fn run(long: bool) -> Result<()> {
+pub fn run(all: bool, long: bool) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     let mut svcs = enumerate_all(&config)?;
@@ -18,11 +18,42 @@ pub fn run(long: bool) -> Result<()> {
         a_key.cmp(&b_key)
     });
 
+    // Count orphans BEFORE filtering so we can hint about them when
+    // they're hidden from the default view.
+    let orphan_count = svcs
+        .iter()
+        .filter(|s| matches!(s.status, ServiceStatus::Orphan))
+        .count();
+
+    let visible: Vec<&ServiceData> = svcs
+        .iter()
+        .filter(|s| all || matches!(s.status, ServiceStatus::Installed))
+        .collect();
+
+    if visible.is_empty() {
+        if orphan_count > 0 {
+            println!(
+                "No installed services. {orphan_count} orphan(s) with leftover data — use `ryra ls -a` to see."
+            );
+        } else {
+            println!("No services installed. Run `ryra search` to browse available services.");
+        }
+        return Ok(());
+    }
+
     let home = std::env::var("HOME").unwrap_or_default();
     if long {
-        print_long(&svcs, &home);
+        print_long(&visible, &home);
     } else {
-        print_short(&svcs, &home);
+        print_short(&visible, &home);
+    }
+
+    // Nudge about hidden orphans when the user ran the default view.
+    if !all && orphan_count > 0 {
+        println!();
+        println!(
+            "{orphan_count} orphan service(s) with leftover data — use `ryra ls -a` to see."
+        );
     }
     Ok(())
 }
@@ -30,7 +61,7 @@ pub fn run(long: bool) -> Result<()> {
 /// Fast path: name, status, data path. Skips the parallel volume-size
 /// walk entirely — no podman shell-outs, no `du` subprocesses. Good for
 /// "what services do I have" glance queries.
-fn print_short(svcs: &[ServiceData], home: &str) {
+fn print_short(svcs: &[&ServiceData], home: &str) {
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() + 1);
     lines.push(format!("{:<15} {:<10} DATA", "SERVICE", "STATUS"));
     for svc in svcs {
@@ -48,13 +79,14 @@ fn print_short(svcs: &[ServiceData], home: &str) {
 
 /// Long path: adds size + volume sub-rows + cleanup footer. Pays the
 /// ~250 ms cost of parallel `podman unshare du` per volume.
-fn print_long(svcs: &[ServiceData], home: &str) {
+fn print_long(svcs: &[&ServiceData], home: &str) {
     // `compute_total` needs the size of every volume's mountpoint, each
     // of which costs a `podman unshare du` shell-out (~30ms). Walking
     // them sequentially in the table-render loop is too slow on a busy
     // host. Pre-compute every volume's size in parallel up front, then
     // the per-service rendering is pure string formatting.
-    let vol_sizes = prefetch_volume_sizes(svcs);
+    let owned: Vec<ServiceData> = svcs.iter().map(|s| (*s).clone()).collect();
+    let vol_sizes = prefetch_volume_sizes(&owned);
 
     let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
     lines.push(format!(

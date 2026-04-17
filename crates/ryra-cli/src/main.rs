@@ -99,6 +99,9 @@ enum Command {
     },
     /// List installed services
     Ls {
+        /// Also show orphan services (removed but data still on disk)
+        #[arg(long, short = 'a')]
+        all: bool,
         /// Long listing — include size + volume breakdown. Takes longer
         /// because each volume requires a podman subprocess to measure.
         #[arg(long, short = 'l')]
@@ -240,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
-        Command::Ls { long } => cli::ls::run(long)?,
+        Command::Ls { all, long } => cli::ls::run(all, long)?,
         Command::Search {
             ref query,
             ref registry,
