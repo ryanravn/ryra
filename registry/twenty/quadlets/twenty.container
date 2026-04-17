@@ -3,6 +3,10 @@ Description=Twenty CRM server
 StartLimitIntervalSec=60
 StartLimitBurst=3
 Requires=twenty-postgres.service twenty-redis.service
+# The worker consumes the email (and other bullmq) queues — without it,
+# invites / password-reset mail land on the queue and sit there forever.
+# Wants= so it's pulled in automatically without being failure-blocking.
+Wants=twenty-worker.service
 After=twenty-postgres.service twenty-redis.service
 
 [Container]

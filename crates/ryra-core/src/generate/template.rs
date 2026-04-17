@@ -24,6 +24,16 @@ fn authelia_scheme(value: &str) -> String {
     }
 }
 
+/// Boolean-as-string flag for "SMTP is plaintext, don't try STARTTLS or TLS".
+/// "true" when security is "off", "false" otherwise — matches the shape of
+/// env vars like Twenty's EMAIL_SMTP_NO_TLS.
+fn smtp_no_tls(value: &str) -> String {
+    match value {
+        "off" => "true".to_string(),
+        _ => "false".to_string(),
+    }
+}
+
 /// Render a template string with the given context variables.
 pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<String> {
     let mut env = Environment::new();
@@ -37,6 +47,9 @@ pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<
     });
     env.add_filter("authelia_scheme", |value: &str| -> String {
         authelia_scheme(value)
+    });
+    env.add_filter("smtp_no_tls", |value: &str| -> String {
+        smtp_no_tls(value)
     });
 
     env.add_template("tpl", template_str)
