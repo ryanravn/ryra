@@ -87,6 +87,11 @@ enum Command {
         /// Section to configure (smtp, auth)
         section: Option<String>,
     },
+    /// Inspect and manage per-service data
+    Data {
+        #[command(subcommand)]
+        action: DataAction,
+    },
     /// Show global config, or details about a specific service
     Status {
         /// Service name (omit for global overview)
@@ -169,6 +174,12 @@ enum TestAction {
 }
 
 #[derive(Subcommand)]
+enum DataAction {
+    /// List per-service data
+    Ls,
+}
+
+#[derive(Subcommand)]
 enum RegistryAction {
     /// Add a custom registry
     Add {
@@ -227,6 +238,9 @@ async fn main() -> anyhow::Result<()> {
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
+        Command::Data { action } => match action {
+            DataAction::Ls => cli::data::ls().await?,
+        },
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
         Command::Ls => cli::ls::run()?,
