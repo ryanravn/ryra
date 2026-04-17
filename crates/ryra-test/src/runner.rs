@@ -595,6 +595,7 @@ pub async fn run_lifecycle_test(
                 method,
                 body,
                 content_type,
+                headers,
                 status,
                 service,
                 poll,
@@ -616,17 +617,28 @@ pub async fn run_lifecycle_test(
                 // arbitrary JSON/form bodies directly in the command string.
                 let verb = method.as_curl_arg();
                 let ct_esc = content_type.replace('"', r#"\""#);
+                // Extra headers — rendered as a sequence of `-H "K: V"` args.
+                // Values go through double-quotes so $VAR expansion against
+                // the sourced .env files works (useful for apikey, tokens).
+                let header_args = headers
+                    .iter()
+                    .map(|(k, v)| {
+                        let k = k.replace('"', r#"\""#);
+                        let v = v.replace('"', r#"\""#);
+                        format!(r#" -H "{k}: {v}""#)
+                    })
+                    .collect::<String>();
                 let curl = match body {
                     Some(b) => format!(
                         "RYRA_BODY=$(cat <<'RYRA_HTTP_BODY_EOF'\n{b}\nRYRA_HTTP_BODY_EOF\n) && \
                          HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' \
                             -X {verb} \
-                            -H \"Content-Type: {ct_esc}\" \
+                            -H \"Content-Type: {ct_esc}\"{header_args} \
                             --data-raw \"$RYRA_BODY\" \
                             \"{url_esc}\")"
                     ),
                     None => format!(
-                        "HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' -X {verb} \"{url_esc}\")"
+                        "HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' -X {verb}{header_args} \"{url_esc}\")"
                     ),
                 };
                 let cmd = format!(

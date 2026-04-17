@@ -148,6 +148,10 @@ pub enum StepDef {
         /// application/json since most API triggers we use ship JSON.
         #[serde(default = "default_content_type")]
         content_type: String,
+        /// Extra request headers (e.g., `apikey`, `Authorization`). Values
+        /// support shell variable expansion after `.env` sourcing.
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
         #[serde(default = "default_http_status")]
         status: u16,
         /// When set, only source this service's `.env` file (needed when
