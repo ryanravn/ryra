@@ -8,6 +8,7 @@ use super::apply;
 pub async fn run(
     services: &[String],
     all: bool,
+    orphans: bool,
     yes: bool,
     dry_run: bool,
     purge: bool,
@@ -15,11 +16,26 @@ pub async fn run(
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
 
+    // `--orphans` purges every orphan service (leftover data with no
+    // config entry). Never touches installed services. `--purge` is
+    // implied — orphans have nothing else to preserve.
     // `-a` expands to every installed service. With `--purge` it also
-    // sweeps every orphan (services with leftover data but no ryra.toml
-    // entry). `ryra reset` remains distinct — it additionally wipes
-    // ryra's own config, CAs, snapshots, registry caches.
-    let targets: Vec<String> = if all {
+    // sweeps every orphan. `ryra reset` remains distinct — it
+    // additionally wipes ryra's own config, CAs, snapshots, registry
+    // caches.
+    let (targets, effective_purge) = if orphans {
+        let names: Vec<String> = ryra_core::data::enumerate_all(&config)?
+            .into_iter()
+            .filter(|s| matches!(s.status, ServiceStatus::Orphan))
+            .map(|s| s.service)
+            .collect();
+        if names.is_empty() {
+            println!("No orphan data to purge.");
+            return Ok(());
+        }
+        confirm_bulk(&names, true, yes, dry_run)?;
+        (names, true)
+    } else if all {
         let mut names: Vec<String> = config
             .services
             .iter()
@@ -27,7 +43,6 @@ pub async fn run(
             .map(|s| s.name.clone())
             .collect();
         if purge {
-            // Pick up orphans too — data-only leftovers we want gone.
             for svc in ryra_core::data::enumerate_all(&config)? {
                 if matches!(svc.status, ServiceStatus::Orphan)
                     && !names.contains(&svc.service)
@@ -42,17 +57,18 @@ pub async fn run(
         }
         names.sort();
         confirm_bulk(&names, purge, yes, dry_run)?;
-        names
+        (names, purge)
     } else {
-        services.to_vec()
+        (services.to_vec(), purge)
     };
 
-    // With `-a`, the bulk prompt ran once up front. With `-y` or
-    // `--dry-run`, we don't prompt at all. Otherwise prompt per service.
-    let skip_prompt = all || yes || dry_run;
+    // With `-a` or `--orphans`, the bulk prompt ran once up front. With
+    // `-y` or `--dry-run`, we don't prompt at all. Otherwise prompt
+    // per service.
+    let skip_prompt = all || orphans || yes || dry_run;
 
     for service in &targets {
-        remove_one(&config, service, purge, skip_prompt, dry_run).await?;
+        remove_one(&config, service, effective_purge, skip_prompt, dry_run).await?;
     }
     Ok(())
 }

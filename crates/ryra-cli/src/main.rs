@@ -56,12 +56,20 @@ enum Command {
     /// Remove a service
     Rm {
         /// Service name(s) to remove
-        #[arg(required_unless_present = "all", num_args = 1.., conflicts_with = "all")]
+        #[arg(
+            required_unless_present_any = ["all", "orphans"],
+            num_args = 1..,
+            conflicts_with_all = ["all", "orphans"]
+        )]
         services: Vec<String>,
         /// Remove every installed service (use `ryra reset` to also wipe ryra's
         /// config + CA + snapshots)
-        #[arg(long, short = 'a')]
+        #[arg(long, short = 'a', conflicts_with = "orphans")]
         all: bool,
+        /// Purge every orphan service's data (leftover from prior `ryra rm`).
+        /// Never touches installed services.
+        #[arg(long)]
+        orphans: bool,
         /// Skip confirmation prompt
         #[arg(long, short = 'y')]
         yes: bool,
@@ -228,10 +236,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Rm {
             ref services,
             all,
+            orphans,
             yes,
             dry_run,
             purge,
-        } => cli::rm::run(services, all, yes, dry_run, purge).await?,
+        } => cli::rm::run(services, all, orphans, yes, dry_run, purge).await?,
         Command::Reset {
             yes,
             dry_run,
