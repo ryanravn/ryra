@@ -711,6 +711,48 @@ pub async fn run_lifecycle_test(
                 }
                 events.push(event);
             }
+            StepDef::Mail {
+                name: mail_name,
+                mailbox,
+                contains,
+                poll,
+                timeout,
+            } => {
+                let step_name = mail_name.as_deref().unwrap_or(mailbox);
+                println!("{p}  mail: {step_name}...");
+                // Single-shot probe: discover inbucket's port, fetch the
+                // mailbox JSON, check non-empty + (optional) substring.
+                // run_step_with_poll retries this until the mail lands.
+                let mailbox_esc = shell_escape(mailbox);
+                let contains_check = match contains {
+                    Some(c) => format!(
+                        " && echo \"$RYRA_BODY\" | grep -q -- '{}'",
+                        shell_escape(c),
+                    ),
+                    None => String::new(),
+                };
+                let cmd = format!(
+                    "INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env 2>/dev/null | cut -d= -f2); \
+                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/.local/share/ryra/inbucket/.env'; exit 2; }}; \
+                     RYRA_BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
+                     [ -n \"$RYRA_BODY\" ] && [ \"$RYRA_BODY\" != '[]' ]{contains_check}"
+                );
+                let event = run_step_with_poll(
+                    vm,
+                    step_name,
+                    &cmd,
+                    *timeout,
+                    Some(poll),
+                    verbose,
+                    stream_prefix,
+                )
+                .await;
+                print_event_result(&p, &event);
+                if event.outcome.is_fail() {
+                    failed = true;
+                }
+                events.push(event);
+            }
         }
     }
 

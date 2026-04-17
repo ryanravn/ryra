@@ -65,19 +65,11 @@ spec = "twenty-smtp.spec.ts"
 timeout = 180
 env = { TWENTY_URL = "https://twenty.localhost:8443", INVITE_EMAIL = "smtptest@ryra.local" }
 [[tests.steps]]
-action = "shell"
+action = "mail"
 name = "mail-delivered-to-inbucket"
-run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
-for i in $(seq 1 45); do
-  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
-  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
-    echo "$BODY" | grep -qi 'twenty\\|join' && exit 0
-  fi
-  sleep 2
-done
-echo "no mail for smtptest@ryra.local after 90s"
-curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
-exit 1"""
+mailbox = "smtptest"
+contains = "Twenty"
+poll = { interval = 2, attempts = 45 }
 timeout = 120
 
 # OIDC browser flow — registers the OIDC provider through Twenty's

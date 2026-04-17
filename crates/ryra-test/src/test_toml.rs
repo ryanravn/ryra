@@ -195,6 +195,34 @@ pub enum StepDef {
         #[serde(default = "default_browser_timeout")]
         timeout: u64,
     },
+    /// Inbucket mail-delivery assertion. Polls inbucket's `/api/v1/mailbox/
+    /// <mailbox>` endpoint until a non-empty response arrives; when
+    /// `contains` is set, additionally requires that substring in the raw
+    /// JSON body. Collapses the 8-line port-discovery + curl-poll pattern
+    /// that previously lived in every SMTP test into one step.
+    Mail {
+        #[serde(default)]
+        name: Option<String>,
+        /// Local-part of the recipient address (`smtptest` for `smtptest@ryra.local`).
+        mailbox: String,
+        /// Optional substring required in the response body. Matches
+        /// against the raw inbucket JSON, which includes subject + body.
+        #[serde(default)]
+        contains: Option<String>,
+        /// Retry config. Defaults favour short SMTP mail delivery; apps
+        /// with async mail queues (twenty, supabase) should widen these.
+        #[serde(default = "default_mail_poll")]
+        poll: PollConfig,
+        #[serde(default = "default_timeout")]
+        timeout: u64,
+    },
+}
+
+fn default_mail_poll() -> PollConfig {
+    PollConfig {
+        interval: 2,
+        attempts: 30,
+    }
 }
 
 fn default_browser_timeout() -> u64 {
@@ -214,6 +242,9 @@ impl std::fmt::Display for StepDef {
             }
             StepDef::Playwright { name, spec, .. } => {
                 write!(f, "browser: {}", name.as_deref().unwrap_or(spec))
+            }
+            StepDef::Mail { name, mailbox, .. } => {
+                write!(f, "mail: {}", name.as_deref().unwrap_or(mailbox))
             }
         }
     }
@@ -680,6 +711,61 @@ url = "http://localhost:8080"
             assert_eq!(timeout, 30);
         } else {
             panic!("expected Http step");
+        }
+    }
+
+    #[test]
+    fn mail_step_parses() {
+        let toml = r#"
+[[steps]]
+action = "mail"
+mailbox = "smtptest"
+contains = "ryra smtp test"
+poll = { interval = 3, attempts = 20 }
+timeout = 60
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Mail {
+            ref mailbox,
+            ref contains,
+            ref poll,
+            timeout,
+            ..
+        } = parsed.steps[0]
+        {
+            assert_eq!(mailbox, "smtptest");
+            assert_eq!(contains.as_deref(), Some("ryra smtp test"));
+            assert_eq!(poll.interval, 3);
+            assert_eq!(poll.attempts, 20);
+            assert_eq!(timeout, 60);
+        } else {
+            panic!("expected Mail step");
+        }
+    }
+
+    #[test]
+    fn mail_step_defaults() {
+        let toml = r#"
+[[steps]]
+action = "mail"
+mailbox = "smtptest"
+"#;
+        let (_dir, path) = write_temp(toml);
+        let parsed = TestToml::parse(&path).expect("parse");
+        if let StepDef::Mail {
+            ref contains,
+            ref poll,
+            timeout,
+            ..
+        } = parsed.steps[0]
+        {
+            assert!(contains.is_none(), "contains defaults to None");
+            assert_eq!(poll.interval, 2, "default poll interval");
+            assert_eq!(poll.attempts, 30, "default poll attempts");
+            assert_eq!(timeout, 30);
+        } else {
+            panic!("expected Mail step");
         }
     }
 

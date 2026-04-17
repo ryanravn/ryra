@@ -74,6 +74,7 @@ impl DiscoveredTest {
                         StepDef::Shell { .. } => "shell",
                         StepDef::Http { .. } => "http",
                         StepDef::Playwright { .. } => "playwright",
+                        StepDef::Mail { .. } => "mail",
                     };
                     push(kind, &mut kinds);
                 }
