@@ -230,6 +230,73 @@ pub async fn rm(
     Ok(())
 }
 
+pub async fn rm_all(yes: bool, dry_run: bool) -> Result<()> {
+    let paths = ryra_core::config::ConfigPaths::resolve()?;
+    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let all = ryra_core::data::enumerate_all(&config)?;
+    let orphans: Vec<_> = all
+        .into_iter()
+        .filter(|s| matches!(s.status, ServiceStatus::Orphan))
+        .collect();
+
+    if orphans.is_empty() {
+        println!("No orphan data to delete.");
+        return Ok(());
+    }
+
+    let mut steps: Vec<Step> = Vec::new();
+    for svc in &orphans {
+        for path in &svc.data_paths {
+            if path.is_dir() {
+                steps.push(Step::RemoveDir(path.clone()));
+            } else {
+                steps.push(Step::RemoveFile(path.clone()));
+            }
+        }
+        for v in &svc.volumes {
+            steps.push(Step::RemoveVolume { name: v.name.clone() });
+        }
+    }
+
+    if !yes && !dry_run {
+        if !super::is_interactive() {
+            anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
+        }
+        println!("This will delete data for {} orphan service(s):", orphans.len());
+        for svc in &orphans {
+            let sz = size_or_unknown(svc);
+            println!("  {} ({})", svc.service, sz);
+        }
+        println!();
+        let input: String = Input::new()
+            .with_prompt("Type \"delete all\" to confirm")
+            .interact_text()?;
+        if input != "delete all" {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    if dry_run {
+        super::print_dry_run(&steps);
+    } else {
+        apply::execute_all(&steps).await?;
+        println!("Deleted data for {} orphan service(s).", orphans.len());
+    }
+    Ok(())
+}
+
+/// Total size for a service's data + volumes, rendered to the same
+/// `<size>` / `<size>+?` / `?` shape `ryra data ls` uses. Private
+/// helper to keep `rm_all`'s confirm preview aligned with the listing.
+fn size_or_unknown(svc: &ryra_core::data::ServiceData) -> String {
+    match compute_total(svc) {
+        Size::Bytes(b) => human_size(b),
+        Size::Partial(b) => format!("{}+?", human_size(b)),
+        Size::Unknown => "?".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

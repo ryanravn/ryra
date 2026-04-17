@@ -267,10 +267,16 @@ async fn main() -> anyhow::Result<()> {
                 force,
             } => {
                 if all {
-                    anyhow::bail!("--all is wired in Task 8; pass a service name for now");
+                    if service.is_some() {
+                        anyhow::bail!("pass a service name OR --all, not both");
+                    }
+                    cli::data::rm_all(yes, dry_run).await?;
+                } else {
+                    let svc = service.ok_or_else(|| {
+                        anyhow::anyhow!("service name required (or pass --all)")
+                    })?;
+                    cli::data::rm(&svc, yes, dry_run, force).await?;
                 }
-                let svc = service.ok_or_else(|| anyhow::anyhow!("service name required"))?;
-                cli::data::rm(&svc, yes, dry_run, force).await?;
             }
         },
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
