@@ -102,9 +102,9 @@ pub fn reconcile(quadlet_refs: Vec<VolumeRef>, podman_names: Vec<String>) -> Vec
         if seen.contains(&name) {
             continue;
         }
-        // Owner inference: strip the systemd- prefix, then prefix-match
-        // against known services. Re-use match_owner with an empty list
-        // here; caller will re-match after building the service list.
+        // Podman-only entries have no quadlet file and no owner here. The
+        // caller holds the list of known services and is responsible for
+        // attributing ownership via match_owner() after reconcile() returns.
         out.push(VolumeRef {
             name,
             quadlet_file: None,
@@ -195,7 +195,6 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::bool_assert_comparison)]
 mod tests_reconcile {
     use super::*;
 
