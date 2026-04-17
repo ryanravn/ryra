@@ -188,6 +188,13 @@ pub async fn rm(
             steps.push(Step::RemoveFile(path.clone()));
         }
     }
+    // Remove the home-dir shell so no empty directory lingers after the
+    // data subdirs are gone. Matters for services like vikunja whose data
+    // lives entirely in named volumes (data_paths is empty, but the home
+    // dir exists as an empty shell after `ryra rm` stripped ephemerals).
+    if svc.home_dir.exists() {
+        steps.push(Step::RemoveDir(svc.home_dir.clone()));
+    }
     // Volume deletions for volumes we attributed to this service.
     for v in &svc.volumes {
         steps.push(Step::RemoveVolume { name: v.name.clone() });
@@ -273,6 +280,10 @@ pub async fn rm_all(yes: bool, dry_run: bool) -> Result<()> {
             } else {
                 steps.push(Step::RemoveFile(path.clone()));
             }
+        }
+        // Clean up the home-dir shell (see rm() comment for rationale).
+        if svc.home_dir.exists() {
+            steps.push(Step::RemoveDir(svc.home_dir.clone()));
         }
         for v in &svc.volumes {
             steps.push(Step::RemoveVolume { name: v.name.clone() });
