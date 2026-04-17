@@ -98,7 +98,12 @@ enum Command {
         service: Option<String>,
     },
     /// List installed services
-    Ls,
+    Ls {
+        /// Long listing — include size + volume breakdown. Takes longer
+        /// because each volume requires a podman subprocess to measure.
+        #[arg(long, short = 'l')]
+        long: bool,
+    },
     // -- Read-only / VM-based commands --
     /// Show what changed in a service's registry definition since install
     Diff {
@@ -235,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
-        Command::Ls => cli::ls::run()?,
+        Command::Ls { long } => cli::ls::run(long)?,
         Command::Search {
             ref query,
             ref registry,
