@@ -1,0 +1,67 @@
+[test]
+name = "vaultwarden-smtp"
+
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Vaultwarden only exposes the /admin panel (and its "Send test email"
+# endpoint) when ADMIN_TOKEN is set to a non-empty value. Provide one via
+# the env map so the test can authenticate into /admin programmatically.
+[[steps]]
+action = "add"
+service = "vaultwarden"
+args = "--smtp=inbucket --url https://vault.localhost:8443"
+env = { ADMIN_TOKEN = "test-admin-token-for-smtp-test" }
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "vaultwarden"
+
+[[steps]]
+action = "http"
+name = "vault-responds"
+url = "https://vault.localhost:8443/admin"
+service = "vaultwarden"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+
+# Log into /admin with the token — sets a VW_ADMIN cookie — then POST
+# /admin/test/smtp, which instructs vaultwarden to send a diagnostic mail
+# using its actual configured SMTP settings.
+[[steps]]
+action = "shell"
+name = "trigger-smtp-mail"
+run = """for i in $(seq 1 10); do
+  if curl -sk -c /tmp/vw-cookies -X POST https://vault.localhost:8443/admin \
+       -d "token=test-admin-token-for-smtp-test" -o /dev/null -w '%{http_code}' | grep -q 200; then
+    curl -sk -b /tmp/vw-cookies -X POST https://vault.localhost:8443/admin/test/smtp \
+      -H 'Content-Type: application/json' \
+      -d '{"email":"smtptest@ryra.local"}' \
+      -o /dev/null -w '%{http_code}' | grep -q 200 && exit 0
+  fi
+  sleep 3
+done
+exit 1"""
+timeout = 60
+
+[[steps]]
+action = "shell"
+name = "mail-delivered-to-inbucket"
+run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
+for i in $(seq 1 30); do
+  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
+  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+    echo "$BODY" | grep -q 'Vaultwarden' && exit 0
+  fi
+  sleep 2
+done
+echo "no mail for smtptest@ryra.local after 60s"
+curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
+exit 1"""
+timeout = 90

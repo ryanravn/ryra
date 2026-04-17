@@ -25,6 +25,16 @@ value = "true"
 name = "WEBSOCKET_ENABLED"
 value = "true"
 
+# Enables the /admin management UI when set to a non-empty value. Optional —
+# empty means no admin panel (default, safest). Users who want the admin UI
+# can supply a token interactively or via `env = { ADMIN_TOKEN = "…" }`
+# on `ryra add`.
+[[env]]
+name = "ADMIN_TOKEN"
+value = ""
+kind = "prompted"
+prompt = "Admin token for /admin panel (leave empty to disable)"
+
 [integrations]
 auth = []
 smtp = true

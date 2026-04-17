@@ -1,0 +1,75 @@
+[test]
+name = "seafile-smtp"
+
+[[steps]]
+action = "add"
+service = "caddy"
+
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# Seafile ships mariadb + redis sidecars. Budget a long timeout — the
+# seafile-mc image does schema migrations on first boot.
+[[steps]]
+action = "add"
+service = "seafile"
+args = "--smtp=inbucket --url https://seafile.localhost:8443"
+env = { INIT_SEAFILE_ADMIN_EMAIL = "smtptest@ryra.local", INIT_SEAFILE_ADMIN_PASSWORD = "Testing-Smtp-123!" }
+timeout = 900
+
+[[steps]]
+action = "wait"
+service = "seafile"
+
+[[steps]]
+action = "http"
+name = "seafile-responds"
+url = "https://seafile.localhost:8443"
+service = "seafile"
+poll = { interval = 3, attempts = 60 }
+timeout = 240
+
+# seahub (seafile's Django web app) ships the standard Django management
+# command `sendtestemail`, but its seaserv/ccnet extensions need the exact
+# PYTHONPATH + SEAFILE_{CENTRAL_CONF,CONF,DATA}_DIR / CCNET_CONF_DIR
+# environment that seahub.sh:prepare_env() constructs. We recreate that
+# env inline so the shell step doesn't have to depend on the script itself.
+[[steps]]
+action = "shell"
+name = "trigger-smtp-mail"
+run = """for i in $(seq 1 10); do
+  podman exec seafile bash -c '
+    INSTALLPATH=/opt/seafile/seafile-server-latest
+    TOPDIR=/opt/seafile
+    export PYTHONPATH=${INSTALLPATH}/seafile/lib/python3/site-packages:${INSTALLPATH}/seafile/lib64/python3/site-packages:${INSTALLPATH}/seahub:${INSTALLPATH}/seahub/thirdpart:${INSTALLPATH}/pro/python
+    export SEAFES_DIR=${INSTALLPATH}/pro/python/seafes
+    export SEAHUB_DIR=${INSTALLPATH}/seahub
+    export SEAFILE_CENTRAL_CONF_DIR=${TOPDIR}/conf
+    export CCNET_CONF_DIR=${TOPDIR}/ccnet
+    export SEAFILE_CONF_DIR=${TOPDIR}/seafile-data
+    export SEAFILE_DATA_DIR=${TOPDIR}/seafile-data
+    export DJANGO_SETTINGS_MODULE=seahub.settings
+    cd ${INSTALLPATH}
+    python3 seahub/manage.py sendtestemail smtptest@ryra.local
+  ' && exit 0
+  sleep 3
+done
+exit 1"""
+timeout = 90
+
+[[steps]]
+action = "shell"
+name = "mail-delivered-to-inbucket"
+run = """INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env | cut -d= -f2)
+for i in $(seq 1 30); do
+  BODY=$(curl -sf http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest 2>/dev/null)
+  if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+    echo "$BODY" | grep -q 'Test email from' && exit 0
+  fi
+  sleep 2
+done
+echo "no mail for smtptest@ryra.local after 60s"
+curl -sf "http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/smtptest" || true
+exit 1"""
+timeout = 90
