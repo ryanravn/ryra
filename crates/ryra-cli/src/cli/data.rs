@@ -21,12 +21,12 @@ pub async fn ls() -> Result<()> {
 
     println!("{:<15} {:<10} {:<10} PATH + VOLUMES", "SERVICE", "STATUS", "SIZE");
     for svc in &svcs {
-        print_service(svc)?;
+        print_service(svc);
     }
     Ok(())
 }
 
-fn print_service(svc: &ServiceData) -> Result<()> {
+fn print_service(svc: &ServiceData) {
     let status = match svc.status {
         ServiceStatus::Installed => "installed",
         ServiceStatus::Orphan => "orphan",
@@ -43,7 +43,6 @@ fn print_service(svc: &ServiceData) -> Result<()> {
     for v in &svc.volumes {
         println!("{:<15} {:<10} {:<10} volume:{}", "", "", "", v.name);
     }
-    Ok(())
 }
 
 enum Size {
@@ -71,13 +70,11 @@ fn compute_total(svc: &ServiceData) -> Size {
     }
     for v in &svc.volumes {
         let Some(mp) = mountpoint_of(&v.name) else {
+            any_err = true;
             continue;
         };
         match dir_size_bytes(&mp) {
-            Ok(b) => {
-                total += b;
-                any_ok = true;
-            }
+            Ok(b) => { total += b; any_ok = true; }
             Err(_) => any_err = true,
         }
     }
@@ -85,31 +82,48 @@ fn compute_total(svc: &ServiceData) -> Size {
         (true, false) => Size::Bytes(total),
         (true, true) => Size::Partial(total),
         (false, true) => Size::Unknown,
-        // No volumes AND no data paths — orphan with nothing left; report 0.
+        // No data_paths and no volumes — entry exists in ryra.toml but neither
+        // a home dir nor any volume remains (config out of sync with filesystem).
         (false, false) => Size::Bytes(0),
     }
 }
 
 fn human_size(bytes: u64) -> String {
-    const UNITS: [(&str, u64); 4] = [
-        ("GB", 1_000_000_000),
-        ("MB", 1_000_000),
-        ("KB", 1_000),
-        ("B", 1),
-    ];
-    for (unit, div) in UNITS {
-        if bytes >= div {
-            let val = bytes as f64 / div as f64;
-            return if val >= 100.0 {
-                format!("{val:.0} {unit}")
-            } else if val >= 10.0 {
-                format!("{val:.1} {unit}")
-            } else {
-                format!("{val:.2} {unit}")
-            };
-        }
+    const GB: u64 = 1_000_000_000;
+    const MB: u64 = 1_000_000;
+    const KB: u64 = 1_000;
+
+    if bytes >= GB {
+        let val = bytes as f64 / GB as f64;
+        return format_three_sig_fig(val, "GB");
     }
-    "0 B".to_string()
+    if bytes >= MB {
+        let val = bytes as f64 / MB as f64;
+        // Guard against rounding up into the next unit at display time.
+        if val >= 999.5 {
+            return format_three_sig_fig(bytes as f64 / GB as f64, "GB");
+        }
+        return format_three_sig_fig(val, "MB");
+    }
+    if bytes >= KB {
+        let val = bytes as f64 / KB as f64;
+        if val >= 999.5 {
+            return format_three_sig_fig(bytes as f64 / MB as f64, "MB");
+        }
+        return format_three_sig_fig(val, "KB");
+    }
+    // Bytes: integer-only.
+    format!("{bytes} B")
+}
+
+fn format_three_sig_fig(val: f64, unit: &str) -> String {
+    if val >= 100.0 {
+        format!("{val:.0} {unit}")
+    } else if val >= 10.0 {
+        format!("{val:.1} {unit}")
+    } else {
+        format!("{val:.2} {unit}")
+    }
 }
 
 #[cfg(test)]
@@ -127,9 +141,12 @@ mod tests {
     }
 
     #[test]
-    fn size_formatting_variants() {
-        // Direct checks on human_size for the partial display shape.
-        assert_eq!(human_size(0), "0 B");
-        assert_eq!(human_size(1_500_000), "1.50 MB");
+    fn human_size_boundaries() {
+        assert_eq!(human_size(1), "1 B");
+        assert_eq!(human_size(999), "999 B");
+        assert_eq!(human_size(999_499_999), "999 MB");
+        assert_eq!(human_size(999_500_000), "1.00 GB");
+        assert_eq!(human_size(999_999_999), "1.00 GB");
+        assert_eq!(human_size(1_000_000_000), "1.00 GB");
     }
 }
