@@ -1,5 +1,6 @@
-# End-to-end lifecycle test for `ryra rm` (data-preserving) +
-# `ryra data ls` + `ryra data rm`.
+# End-to-end lifecycle test for `ryra rm` (data-preserving) and
+# `ryra rm --purge` (destructive), covering both installed and orphan
+# states via the unified `ryra ls` view.
 
 [test]
 name = "data-lifecycle"
@@ -14,15 +15,15 @@ action = "wait"
 service = "vikunja"
 timeout = 120
 
-# After add, `ryra data ls` must report vikunja as installed.
+# After add, `ryra ls` must report vikunja as installed.
 [[steps]]
 action = "shell"
-name = "installed-shows-in-data-ls"
-run = "ryra data ls | grep -E '^vikunja\\s+installed'"
+name = "installed-shows-in-ls"
+run = "ryra ls | grep -E '^vikunja\\s+installed'"
 timeout = 30
 
 # Data-preserving rm (no --purge): service home dir and podman
-# volume must both survive.
+# volumes must both survive.
 [[steps]]
 action = "shell"
 name = "rm-preserves-data"
@@ -37,27 +38,28 @@ podman volume exists systemd-vikunja-files
 """
 timeout = 60
 
-# After rm (without --purge), ls must now report vikunja as orphan.
+# After rm (without --purge), `ryra ls` must now report vikunja as orphan.
 [[steps]]
 action = "shell"
-name = "orphan-shows-in-data-ls"
-run = "ryra data ls | grep -E '^vikunja\\s+orphan'"
+name = "orphan-shows-in-ls"
+run = "ryra ls | grep -E '^vikunja\\s+orphan'"
 timeout = 30
 
-# `ryra data rm vikunja -y` must wipe both the home dir and the volumes.
+# `ryra rm vikunja --purge -y` on an orphan must wipe home dir + volumes.
 [[steps]]
 action = "shell"
-name = "data-rm-cleans-up"
+name = "purge-cleans-up"
 run = """set -e
-ryra data rm vikunja -y
+ryra rm vikunja --purge -y
 ! test -d ~/.local/share/ryra/vikunja
 ! podman volume exists systemd-vikunja-db
 ! podman volume exists systemd-vikunja-files
 """
 timeout = 60
 
+# After the purge, vikunja must not appear in `ryra ls` at all.
 [[steps]]
 action = "shell"
-name = "data-ls-no-vikunja-after-rm"
-run = "! ryra data ls | grep -E '^vikunja\\s'"
+name = "ls-no-vikunja-after-purge"
+run = "! ryra ls | grep -E '^vikunja\\s'"
 timeout = 30

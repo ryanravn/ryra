@@ -1,7 +1,6 @@
 pub mod add;
 pub mod apply;
 pub mod config_cmd;
-pub mod data;
 pub mod diff;
 pub mod init;
 pub mod ls;

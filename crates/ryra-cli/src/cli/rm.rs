@@ -1,5 +1,7 @@
 use anyhow::Result;
 use dialoguer::Input;
+use ryra_core::Step;
+use ryra_core::data::{ServiceData, ServiceStatus};
 
 use super::apply;
 
@@ -10,97 +12,76 @@ pub async fn run(
     dry_run: bool,
     purge: bool,
 ) -> Result<()> {
-    let mode = if purge {
-        ryra_core::RemoveMode::Purge
-    } else {
-        ryra_core::RemoveMode::Preserve
-    };
+    let paths = ryra_core::config::ConfigPaths::resolve()?;
+    let config = ryra_core::config::load_or_default(&paths.config_file)?;
 
-    // `-a` mode expands to every installed service and uses a single
-    // confirmation prompt. `ryra reset` stays the nuke-everything
-    // command — it additionally wipes ryra's own config, CAs, snapshots,
-    // registry caches. `rm -a` only touches services.
+    // `-a` expands to every installed service. With `--purge` it also
+    // sweeps every orphan (services with leftover data but no ryra.toml
+    // entry). `ryra reset` remains distinct — it additionally wipes
+    // ryra's own config, CAs, snapshots, registry caches.
     let targets: Vec<String> = if all {
-        let paths = ryra_core::config::ConfigPaths::resolve()?;
-        let config = ryra_core::config::load_or_default(&paths.config_file)?;
-        let names: Vec<String> = config
+        let mut names: Vec<String> = config
             .services
             .iter()
             .filter(|s| s.installed)
             .map(|s| s.name.clone())
             .collect();
+        if purge {
+            // Pick up orphans too — data-only leftovers we want gone.
+            for svc in ryra_core::data::enumerate_all(&config)? {
+                if matches!(svc.status, ServiceStatus::Orphan)
+                    && !names.contains(&svc.service)
+                {
+                    names.push(svc.service);
+                }
+            }
+        }
         if names.is_empty() {
-            println!("No installed services.");
+            println!("Nothing to remove.");
             return Ok(());
         }
-        if !yes && !dry_run {
-            if !super::is_interactive() {
-                anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
-            }
-            println!("This will remove {} service(s):", names.len());
-            for n in &names {
-                println!("  {n}");
-            }
-            println!();
-            match mode {
-                ryra_core::RemoveMode::Purge => {
-                    println!("Mode: --purge — data and volumes will also be DELETED.");
-                }
-                ryra_core::RemoveMode::Preserve => {
-                    println!(
-                        "Mode: data-preserving — run `ryra data rm --all` later to clean."
-                    );
-                }
-            }
-            println!();
-            let input: String = Input::new()
-                .with_prompt("Type \"remove all\" to confirm")
-                .interact_text()?;
-            if input != "remove all" {
-                println!("Cancelled.");
-                return Ok(());
-            }
-        }
+        names.sort();
+        confirm_bulk(&names, purge, yes, dry_run)?;
         names
     } else {
         services.to_vec()
     };
 
-    // `--all` runs the bulk prompt once up front, so per-service prompts
-    // are redundant there. `-y` and `--dry-run` also skip the prompt.
-    let skip_per_service_prompt = all || yes || dry_run;
+    // With `-a`, the bulk prompt ran once up front. With `-y` or
+    // `--dry-run`, we don't prompt at all. Otherwise prompt per service.
+    let skip_prompt = all || yes || dry_run;
 
     for service in &targets {
-        let service = service.as_str();
+        remove_one(&config, service, purge, skip_prompt, dry_run).await?;
+    }
+    Ok(())
+}
+
+/// Remove a single service. Handles both the "installed" path (stops +
+/// deregisters via `remove_service`) and the "orphan + purge" path
+/// (wipes leftover home dir + volumes directly).
+async fn remove_one(
+    config: &ryra_core::config::schema::Config,
+    service: &str,
+    purge: bool,
+    skip_prompt: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let is_installed = config
+        .services
+        .iter()
+        .any(|s| s.name == service && s.installed);
+
+    if is_installed {
+        let mode = if purge {
+            ryra_core::RemoveMode::Purge
+        } else {
+            ryra_core::RemoveMode::Preserve
+        };
         let result = ryra_core::remove_service(service, mode)?;
 
-        if !skip_per_service_prompt {
-            if !super::is_interactive() {
-                anyhow::bail!("use --yes (-y) to confirm removal in non-interactive mode");
-            }
-            let home_dir = ryra_core::service_home(service)?;
-            println!("This will:");
-            println!("  - Stop and remove {service}");
-            match mode {
-                ryra_core::RemoveMode::Purge => {
-                    println!("  - Delete ALL data and config at {}", home_dir.display());
-                    println!("  - Remove any podman named volumes for this service");
-                }
-                ryra_core::RemoveMode::Preserve => {
-                    println!("  - Delete config + .env at {}", home_dir.display());
-                    println!(
-                        "  - Keep data subdirs and podman volumes (run `ryra data rm {service}` later to delete)"
-                    );
-                }
-            }
-            println!();
-            let input: String = Input::new()
-                .with_prompt(format!("Type \"{service}\" to confirm"))
-                .interact_text()?;
-            if input != *service {
-                println!("Cancelled.");
-                return Ok(());
-            }
+        if !skip_prompt {
+            prompt_installed(service, mode)?;
         }
 
         if dry_run {
@@ -112,20 +93,156 @@ pub async fn run(
             if ryra_core::WellKnownService::Caddy.matches(service) {
                 super::remove_caddy_ca();
             }
-            match mode {
-                ryra_core::RemoveMode::Purge => {
-                    println!("\n{service} removed (purged).");
-                }
-                ryra_core::RemoveMode::Preserve => {
-                    println!(
-                        "\n{service} removed. Data preserved at {}.",
-                        ryra_core::service_home(service)?.display()
-                    );
-                    println!("Run `ryra data rm {service}` to delete.");
-                }
-            }
+            print_installed_tail(service, mode)?;
         }
+        return Ok(());
     }
 
+    // Not installed — treat as orphan. `ryra rm <orphan>` without --purge
+    // has nothing to do (the service is already deregistered). Tell the
+    // user how to finish cleanup.
+    if !purge {
+        let svc = ryra_core::data::enumerate_service(config, service)?;
+        if svc.is_some() {
+            anyhow::bail!(
+                "'{service}' is already removed but still has data. Run `ryra rm {service} --purge` to wipe it."
+            );
+        }
+        anyhow::bail!("no service named '{service}'");
+    }
+
+    // Orphan + --purge: purge its leftover data.
+    let svc = ryra_core::data::enumerate_service(config, service)?.ok_or_else(|| {
+        anyhow::anyhow!("no service or leftover data for '{service}'")
+    })?;
+    let steps = orphan_purge_steps(&svc);
+    if steps.is_empty() {
+        println!("{service}: nothing to purge.");
+        return Ok(());
+    }
+    if !skip_prompt {
+        prompt_orphan(&svc)?;
+    }
+    if dry_run {
+        super::print_dry_run(&steps);
+    } else {
+        println!("Purging {service}...");
+        apply::execute_all(&steps).await?;
+        println!("\n{service} purged.");
+    }
+    Ok(())
+}
+
+fn orphan_purge_steps(svc: &ServiceData) -> Vec<Step> {
+    let mut steps = Vec::new();
+    for path in &svc.data_paths {
+        if path.is_dir() {
+            steps.push(Step::RemoveDir(path.clone()));
+        } else {
+            steps.push(Step::RemoveFile(path.clone()));
+        }
+    }
+    if svc.home_dir.exists() {
+        steps.push(Step::RemoveDir(svc.home_dir.clone()));
+    }
+    for v in &svc.volumes {
+        steps.push(Step::RemoveVolume { name: v.name.clone() });
+    }
+    steps
+}
+
+fn prompt_installed(service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
+    if !super::is_interactive() {
+        anyhow::bail!("use --yes (-y) to confirm removal in non-interactive mode");
+    }
+    let home_dir = ryra_core::service_home(service)?;
+    println!("This will:");
+    println!("  - Stop and remove {service}");
+    match mode {
+        ryra_core::RemoveMode::Purge => {
+            println!("  - Delete ALL data and config at {}", home_dir.display());
+            println!("  - Remove any podman named volumes for this service");
+        }
+        ryra_core::RemoveMode::Preserve => {
+            println!("  - Delete config + .env at {}", home_dir.display());
+            println!(
+                "  - Keep data subdirs and podman volumes (run `ryra rm {service} --purge` later to delete)"
+            );
+        }
+    }
+    println!();
+    let input: String = Input::new()
+        .with_prompt(format!("Type \"{service}\" to confirm"))
+        .interact_text()?;
+    if input != *service {
+        anyhow::bail!("cancelled");
+    }
+    Ok(())
+}
+
+fn prompt_orphan(svc: &ServiceData) -> Result<()> {
+    if !super::is_interactive() {
+        anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
+    }
+    println!("This will purge leftover data for '{}':", svc.service);
+    for p in &svc.data_paths {
+        println!("  {}", p.display());
+    }
+    if svc.home_dir.exists() {
+        println!("  {}", svc.home_dir.display());
+    }
+    for v in &svc.volumes {
+        println!("  volume:{}", v.name);
+    }
+    println!();
+    let input: String = Input::new()
+        .with_prompt(format!("Type \"{}\" to confirm", svc.service))
+        .interact_text()?;
+    if input != svc.service {
+        anyhow::bail!("cancelled");
+    }
+    Ok(())
+}
+
+fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Result<()> {
+    if yes || dry_run {
+        return Ok(());
+    }
+    if !super::is_interactive() {
+        anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
+    }
+    println!("This will affect {} service(s):", names.len());
+    for n in names {
+        println!("  {n}");
+    }
+    println!();
+    if purge {
+        println!("Mode: --purge — every listed service AND its data/volumes will be wiped.");
+    } else {
+        println!("Mode: data-preserving — run `ryra rm -a --purge` later to wipe data.");
+    }
+    println!();
+    let input: String = Input::new()
+        .with_prompt("Type \"remove all\" to confirm")
+        .interact_text()?;
+    if input != "remove all" {
+        anyhow::bail!("cancelled");
+    }
+    Ok(())
+}
+
+fn print_installed_tail(service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
+    match mode {
+        ryra_core::RemoveMode::Purge => {
+            println!("\n{service} removed (purged).");
+        }
+        ryra_core::RemoveMode::Preserve => {
+            println!(
+                "\n{service} removed. Data preserved at {}.",
+                ryra_core::service_home(service)?.display()
+            );
+            println!("Run `ryra rm {service} --purge` to delete.");
+        }
+    }
     Ok(())
 }

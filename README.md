@@ -59,16 +59,27 @@ Service definitions in `registry/<name>/service.toml` use template variables in 
 
 ## Managing data
 
+`ryra ls` shows every service ryra knows about — installed services
+plus "orphans" (removed services whose data still lives on disk).
+Each row includes the size, home-dir path, and podman volumes.
+
 Removing a service keeps its data by default:
 
-    ryra rm seafile           # keeps ~/.local/share/ryra/seafile + volumes
-    ryra rm seafile --purge   # deletes everything
+    ryra rm seafile           # stops + deregisters; keeps data + volumes
+    ryra rm seafile --purge   # stops + deregisters + wipes everything
 
-Inspect or clean up data explicitly:
+`--purge` also works on orphans to clean up leftover data:
 
-    ryra data ls              # show per-service data + volumes + sizes
-    ryra data rm seafile      # delete one orphan's data
-    ryra data rm --all        # delete all orphan data
+    ryra ls                   # shows seafile as `orphan` after a soft rm
+    ryra rm seafile --purge   # wipes the leftover home dir + volumes
+
+Bulk:
+
+    ryra rm -a                # preserve data for every installed service
+    ryra rm -a --purge        # wipe every service + every orphan's data
+
+`ryra reset` additionally wipes ryra's own config, the Caddy CA from the
+system trust store, snapshots, and registry caches.
 
 ## Development
 

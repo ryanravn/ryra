@@ -69,8 +69,9 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Destructive: also delete data subdirs and podman named volumes.
-        /// Without this flag, data is preserved and `ryra data ls` will
-        /// show the service as orphan afterwards.
+        /// Without this flag, data is preserved and `ryra ls` will show
+        /// the service as orphan afterwards. Also works on orphans to
+        /// clean up their leftover data.
         #[arg(long)]
         purge: bool,
     },
@@ -90,11 +91,6 @@ enum Command {
     Config {
         /// Section to configure (smtp, auth)
         section: Option<String>,
-    },
-    /// Inspect and manage per-service data
-    Data {
-        #[command(subcommand)]
-        action: DataAction,
     },
     /// Show global config, or details about a specific service
     Status {
@@ -178,31 +174,6 @@ enum TestAction {
 }
 
 #[derive(Subcommand)]
-enum DataAction {
-    /// List per-service data
-    Ls,
-    /// Delete data for a service
-    Rm {
-        /// Service name
-        #[arg(required_unless_present = "all", conflicts_with = "all")]
-        service: Option<String>,
-        /// Delete data for all orphan services (added in Task 8)
-        #[arg(long, short = 'a')]
-        all: bool,
-        /// Skip confirmation prompt
-        #[arg(long, short = 'y')]
-        yes: bool,
-        /// Show what would happen without making changes
-        #[arg(long)]
-        dry_run: bool,
-        /// Allow deletion even if the service is currently installed
-        /// (stops the service first).
-        #[arg(long)]
-        force: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum RegistryAction {
     /// Add a custom registry
     Add {
@@ -262,31 +233,6 @@ async fn main() -> anyhow::Result<()> {
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
-        Command::Data { action } => match action {
-            DataAction::Ls => cli::data::ls().await?,
-            DataAction::Rm {
-                service,
-                all,
-                yes,
-                dry_run,
-                force,
-            } => {
-                if all {
-                    if service.is_some() {
-                        anyhow::bail!("pass a service name OR --all, not both");
-                    }
-                    if force {
-                        anyhow::bail!("--force is not applicable with --all (only orphan services are targeted)");
-                    }
-                    cli::data::rm_all(yes, dry_run).await?;
-                } else {
-                    let svc = service.ok_or_else(|| {
-                        anyhow::anyhow!("service name required (or pass --all)")
-                    })?;
-                    cli::data::rm(&svc, yes, dry_run, force).await?;
-                }
-            }
-        },
         Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
         Command::Ls => cli::ls::run()?,
