@@ -7,10 +7,12 @@ name = "data-lifecycle"
 [[steps]]
 action = "add"
 service = "vikunja"
+timeout = 300
 
 [[steps]]
 action = "wait"
 service = "vikunja"
+timeout = 120
 
 # After add, `ryra data ls` must report vikunja as installed.
 [[steps]]
@@ -29,8 +31,9 @@ ryra rm vikunja -y
 test -d ~/.local/share/ryra/vikunja
 # .env must be gone (ephemeral)
 ! test -f ~/.local/share/ryra/vikunja/.env
-# The podman volume must still exist
-podman volume ls --format '{{.Name}}' | grep -q '^systemd-vikunja-db$'
+# The podman volumes must still exist
+podman volume exists systemd-vikunja-db
+podman volume exists systemd-vikunja-files
 """
 timeout = 60
 
@@ -41,13 +44,20 @@ name = "orphan-shows-in-data-ls"
 run = "ryra data ls | grep -E '^vikunja\\s+orphan'"
 timeout = 30
 
-# `ryra data rm vikunja -y` must wipe both the home dir and the volume.
+# `ryra data rm vikunja -y` must wipe both the home dir and the volumes.
 [[steps]]
 action = "shell"
 name = "data-rm-cleans-up"
 run = """set -e
 ryra data rm vikunja -y
 ! test -d ~/.local/share/ryra/vikunja
-! podman volume ls --format '{{.Name}}' | grep -q '^systemd-vikunja-db$'
+! podman volume exists systemd-vikunja-db
+! podman volume exists systemd-vikunja-files
 """
 timeout = 60
+
+[[steps]]
+action = "shell"
+name = "data-ls-no-vikunja-after-rm"
+run = "! ryra data ls | grep -E '^vikunja\\s'"
+timeout = 30
