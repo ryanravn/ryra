@@ -273,7 +273,7 @@ pub async fn run(
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 println!("{service} was partially installed — cleaning up before retry...");
-                let remove_result = ryra_core::remove_service(service)?;
+                let remove_result = ryra_core::remove_service(service, ryra_core::RemoveMode::Purge)?;
                 apply::execute_all(&remove_result.steps).await?;
                 ryra_core::finalize_remove(service)?;
                 // Retry now that the partial state is gone
@@ -387,7 +387,7 @@ pub async fn run(
                 eprintln!("Cleaning up partial installation...");
                 // Attempt cleanup so the user doesn't have to do it manually.
                 // If cleanup fails, fall back to telling the user how to do it.
-                match ryra_core::remove_service(service) {
+                match ryra_core::remove_service(service, ryra_core::RemoveMode::Purge) {
                     Ok(remove_result) => {
                         if let Err(cleanup_err) = apply::execute_all(&remove_result.steps).await {
                             eprintln!("Cleanup also failed: {cleanup_err}");

@@ -688,8 +688,20 @@ fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names: &[&
     })
 }
 
+/// How destructive `remove_service` should be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveMode {
+    /// Stop + remove quadlets + delete ephemeral config files, but keep
+    /// the data subdirs under the service home dir and keep all podman
+    /// named volumes. After this, `ryra data ls` reports the service as
+    /// `Orphan`.
+    Preserve,
+    /// Stop + remove everything: quadlets, entire home dir, named volumes.
+    Purge,
+}
+
 /// Remove a service: update state, return cleanup steps.
-pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
+pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_config(&paths.config_file)?;
 
@@ -733,15 +745,33 @@ pub fn remove_service(service_name: &str) -> Result<RemoveResult> {
     // Reload systemd after removing quadlet files
     steps.push(Step::DaemonReload);
 
-    // Remove podman volumes after containers and units are gone
-    for vol_name in volume_names {
-        steps.push(Step::RemoveVolume { name: vol_name });
+    match mode {
+        RemoveMode::Purge => {
+            // Remove podman volumes after containers and units are gone
+            for vol_name in volume_names {
+                steps.push(Step::RemoveVolume { name: vol_name });
+            }
+            // Wipe entire service data directory
+            steps.push(Step::RemoveDir(service_home(service_name)?));
+        }
+        RemoveMode::Preserve => {
+            // Keep volumes intact.
+            let _ = volume_names;
+            // Remove only ephemeral children of the home dir; keep data.
+            let home = service_home(service_name)?;
+            let (_data, ephemeral) = crate::data::classify::classify_home_dir(&home)?;
+            for path in ephemeral {
+                let meta = std::fs::metadata(&path);
+                if matches!(meta, Ok(m) if m.is_dir()) {
+                    steps.push(Step::RemoveDir(path));
+                } else {
+                    steps.push(Step::RemoveFile(path));
+                }
+            }
+        }
     }
 
     let url = installed.url.clone();
-
-    // Remove service data directory
-    steps.push(Step::RemoveDir(service_home(service_name)?));
 
     Ok(RemoveResult {
         steps,
@@ -1076,6 +1106,11 @@ pub struct ServiceDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_mode_enum_variants_distinct() {
+        assert_ne!(RemoveMode::Preserve, RemoveMode::Purge);
+    }
 
     #[test]
     fn networks_empty_when_no_auth() {

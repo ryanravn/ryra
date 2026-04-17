@@ -5,7 +5,7 @@ use super::apply;
 
 pub async fn run(services: &[String], yes: bool, dry_run: bool) -> Result<()> {
     for service in services {
-        let result = ryra_core::remove_service(service)?;
+        let result = ryra_core::remove_service(service, ryra_core::RemoveMode::Purge)?;
 
         if !yes && !dry_run {
             if super::is_interactive() {
