@@ -79,7 +79,7 @@ length = 32
 
 [[env]]
 name = "INIT_SEAFILE_ADMIN_EMAIL"
-value = "{{admin.email | default('admin@localhost')}}"
+value = "{{admin.email | default('admin@example.com')}}"
 kind = "prompted"
 prompt = "Admin email"
 
