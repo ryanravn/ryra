@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
 pub fn run(all: bool, long: bool) -> Result<()> {
@@ -8,52 +9,39 @@ pub fn run(all: bool, long: bool) -> Result<()> {
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     let mut svcs = enumerate_all(&config)?;
 
-    // Pre-format every installed service's allocated ports. `ServiceData`
-    // doesn't carry them (it's data-focused), so we source them from the
-    // config. Orphans simply don't have an entry — fine, they'll show as
-    // blank in the PORTS column.
-    let ports: HashMap<String, String> = config
-        .services
-        .iter()
-        .map(|s| {
-            let formatted = s
-                .ports
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            (s.name.clone(), formatted)
-        })
-        .collect();
-
+    // Fast path when there's literally nothing to show. Short-circuits
+    // the status probe + volume sizing.
     if svcs.is_empty() {
         println!("No services installed. Run `ryra search` to browse available services.");
         return Ok(());
     }
 
-    // Order: Installed alphabetical, then Orphan alphabetical.
+    // Installed (running/stopped) first, alphabetical. Then removed.
     svcs.sort_by(|a, b| {
         let a_key = (matches!(a.status, ServiceStatus::Orphan), &a.service);
         let b_key = (matches!(b.status, ServiceStatus::Orphan), &b.service);
         a_key.cmp(&b_key)
     });
 
-    // Count orphans BEFORE filtering so we can hint about them when
-    // they're hidden from the default view.
-    let orphan_count = svcs
+    // `-l` always includes removed services — when you're asking for
+    // sizes you're deciding what to purge, which is a superset of
+    // what's currently running.
+    let show_removed = all || long;
+
+    let removed_count = svcs
         .iter()
         .filter(|s| matches!(s.status, ServiceStatus::Orphan))
         .count();
 
     let visible: Vec<&ServiceData> = svcs
         .iter()
-        .filter(|s| all || matches!(s.status, ServiceStatus::Installed))
+        .filter(|s| show_removed || matches!(s.status, ServiceStatus::Installed))
         .collect();
 
     if visible.is_empty() {
-        if orphan_count > 0 {
+        if removed_count > 0 {
             println!(
-                "No installed services. {orphan_count} orphan(s) with leftover data — use `ryra list -a` to see."
+                "No installed services. {removed_count} removed service(s) with preserved data — use `ryra list -a` to see."
             );
         } else {
             println!("No services installed. Run `ryra search` to browse available services.");
@@ -61,119 +49,184 @@ pub fn run(all: bool, long: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Lookup the InstalledService entry for each visible service (if any —
+    // removed services won't have one). Drives URL + port derivation.
+    let by_name: HashMap<&str, &InstalledService> = config
+        .services
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
+
+    // One subprocess for every service's systemd state — cheaper than N
+    // `systemctl is-active` calls.
+    let active_units = active_user_units();
+
     let home = std::env::var("HOME").unwrap_or_default();
     if long {
-        print_long(&visible, &home, all, &ports);
+        print_long(&visible, &by_name, &active_units, &home);
     } else {
-        print_short(&visible, &home, all, &ports);
+        print_short(&visible, &by_name, &active_units);
     }
 
-    // Nudge about hidden orphans when the user ran the default view.
-    if !all && orphan_count > 0 {
+    // Nudge about hidden removed services when running the default view.
+    if !show_removed && removed_count > 0 {
         println!();
         println!(
-            "{orphan_count} orphan service(s) with leftover data — use `ryra list -a` to see."
+            "{removed_count} removed service(s) with preserved data — `ryra list -a` to see, `ryra remove <name> --purge` to delete."
         );
     }
     Ok(())
 }
 
-/// Fast path: name [status] ports data-path. STATUS column only appears
-/// when orphans may be in the mix (i.e. `-a` was passed) — otherwise
-/// every row would read `installed` and add nothing. PORTS is always
-/// shown so users can see how to reach each service without a second
-/// command.
 fn print_short(
     svcs: &[&ServiceData],
-    home: &str,
-    show_status: bool,
-    ports: &HashMap<String, String>,
+    by_name: &HashMap<&str, &InstalledService>,
+    active: &HashSet<String>,
 ) {
-    // Width the PORTS column to the longest value so paths still line up.
-    // Minimum 5 so the header itself doesn't look cramped.
-    let ports_w = svcs
-        .iter()
-        .map(|s| ports.get(&s.service).map(|s| s.len()).unwrap_or(0))
-        .max()
-        .unwrap_or(0)
-        .max(5);
-    let mut lines: Vec<String> = Vec::with_capacity(svcs.len() + 1);
-    if show_status {
-        lines.push(format!(
-            "{:<15} {:<10} {:<ports_w$} DATA",
-            "SERVICE", "STATUS", "PORTS"
-        ));
-    } else {
-        lines.push(format!("{:<15} {:<ports_w$} DATA", "SERVICE", "PORTS"));
-    }
+    let name_w = svcs.iter().map(|s| s.service.len()).max().unwrap_or(7).max(7);
+    println!("{:<name_w$} {:<8}  URL", "SERVICE", "STATUS");
     for svc in svcs {
-        let path = shorten_home(&svc.home_dir.display().to_string(), home);
-        let p = ports.get(&svc.service).cloned().unwrap_or_default();
-        if show_status {
-            let status = match svc.status {
-                ServiceStatus::Installed => "installed",
-                ServiceStatus::Orphan => "orphan",
-            };
-            lines.push(format!(
-                "{:<15} {:<10} {:<ports_w$} {}",
-                svc.service, status, p, path
-            ));
-        } else {
-            lines.push(format!("{:<15} {:<ports_w$} {}", svc.service, p, path));
-        }
+        let installed = by_name.get(svc.service.as_str()).copied();
+        let status = status_label(svc, active);
+        let url = url_for(svc, installed);
+        println!("{:<name_w$} {:<8}  {}", svc.service, status, url);
     }
-    println!("{}", lines.join("\n"));
 }
 
-/// Long path: adds SIZE column (and STATUS if `-a`), plus volume
-/// sub-rows and a cleanup footer. Pays the ~250 ms cost of parallel
-/// `podman unshare du` per volume.
 fn print_long(
     svcs: &[&ServiceData],
+    by_name: &HashMap<&str, &InstalledService>,
+    active: &HashSet<String>,
     home: &str,
-    show_status: bool,
-    ports: &HashMap<String, String>,
 ) {
-    // Pre-compute every volume's size in parallel (see prefetch_volume_sizes).
+    // Pre-fetch volume sizes in parallel (`podman unshare du` per volume).
     let owned: Vec<ServiceData> = svcs.iter().map(|s| (*s).clone()).collect();
     let vol_sizes = prefetch_volume_sizes(&owned);
 
-    let ports_w = svcs
+    let name_w = svcs.iter().map(|s| s.service.len()).max().unwrap_or(7).max(7);
+    // URL width — cap at 45 so a long --url doesn't push SIZE/STORAGE
+    // off the screen; overly long URLs just wrap softly.
+    let url_w = svcs
         .iter()
-        .map(|s| ports.get(&s.service).map(|s| s.len()).unwrap_or(0))
+        .map(|s| url_for(s, by_name.get(s.service.as_str()).copied()).len())
         .max()
-        .unwrap_or(0)
-        .max(5);
-    let mut lines: Vec<String> = Vec::with_capacity(svcs.len() * 2 + 1);
-    if show_status {
-        lines.push(format!(
-            "{:<15} {:<10} {:<10} {:<ports_w$} DATA",
-            "SERVICE", "STATUS", "SIZE", "PORTS"
-        ));
-    } else {
-        lines.push(format!(
-            "{:<15} {:<10} {:<ports_w$} DATA",
-            "SERVICE", "SIZE", "PORTS"
-        ));
-    }
+        .unwrap_or(3)
+        .clamp(3, 45);
+    let size_w = 8;
+    println!(
+        "{:<name_w$} {:<8}  {:<url_w$}  {:<size_w$}  STORAGE",
+        "SERVICE", "STATUS", "URL", "SIZE"
+    );
     for svc in svcs {
-        lines.extend(format_service(
-            svc,
-            home,
-            &vol_sizes,
-            show_status,
-            ports,
-            ports_w,
-        ));
+        let installed = by_name.get(svc.service.as_str()).copied();
+        let status = status_label(svc, active);
+        let url = url_for(svc, installed);
+        let size = match compute_total(svc, &vol_sizes) {
+            Size::Bytes(b) => human_size(b),
+            Size::Partial(b) => format!("{}+?", human_size(b)),
+            Size::Unknown => "?".to_string(),
+        };
+        let storage = storage_label(svc, home);
+        println!(
+            "{:<name_w$} {:<8}  {:<url_w$}  {:<size_w$}  {}",
+            svc.service, status, url, size, storage
+        );
     }
-    println!("{}", lines.join("\n"));
 }
 
-/// Spawn one OS thread per unique volume name and shell out to
-/// `podman unshare du -sb` concurrently. Returns a map of
-/// `volume_name -> Some(bytes)` on success, `volume_name -> None` when
-/// the walk failed (volume missing, podman unavailable, subuid mismatch).
-fn prefetch_volume_sizes(svcs: &[ServiceData]) -> std::collections::HashMap<String, Option<u64>> {
+/// The three-state label shown in the STATUS column. Installed + active
+/// → running; installed + inactive → stopped; removed-but-data-preserved
+/// → removed.
+fn status_label(svc: &ServiceData, active: &HashSet<String>) -> &'static str {
+    match svc.status {
+        ServiceStatus::Installed => {
+            if active.contains(&svc.service) {
+                "running"
+            } else {
+                "stopped"
+            }
+        }
+        ServiceStatus::Orphan => "removed",
+    }
+}
+
+/// Resolve the primary URL for a service:
+///   1. `--url` set → use it verbatim.
+///   2. port named "http" → `http://127.0.0.1:<port>`.
+///   3. any other port → `127.0.0.1:<port>` (no scheme — postgres, …).
+///   4. nothing → `—`.
+fn url_for(svc: &ServiceData, installed: Option<&InstalledService>) -> String {
+    let Some(entry) = installed else {
+        return "—".to_string();
+    };
+    if let Some(url) = &entry.url {
+        return url.clone();
+    }
+    if let Some(http_port) = entry.ports.get("http") {
+        return format!("http://127.0.0.1:{http_port}");
+    }
+    // Pick the lowest-valued other port for determinism across runs.
+    let mut ports: Vec<(&String, &u16)> = entry.ports.iter().collect();
+    ports.sort_by_key(|(_, p)| *p);
+    if let Some((_, port)) = ports.first() {
+        return format!("127.0.0.1:{port}");
+    }
+    // Avoid noisy empty column for the (uncommon) no-ports service.
+    let _ = svc;
+    "—".to_string()
+}
+
+/// What's actually on disk for this service: "home" if the service
+/// bind-mounts into `~/.local/share/ryra/<svc>/`, "N volume(s)" for
+/// podman named volumes, or both joined with ` + `.
+fn storage_label(svc: &ServiceData, home: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !svc.data_paths.is_empty() {
+        parts.push(shorten_home(&svc.home_dir.display().to_string(), home));
+    }
+    let n = svc.volumes.len();
+    match n {
+        0 => {}
+        1 => parts.push("1 volume".to_string()),
+        _ => parts.push(format!("{n} volumes")),
+    }
+    if parts.is_empty() {
+        "—".to_string()
+    } else {
+        parts.join(" + ")
+    }
+}
+
+/// One `systemctl --user list-units` call returns every active unit on
+/// the user manager. Faster than N `is-active` probes when `ryra list`
+/// covers a dozen services.
+fn active_user_units() -> HashSet<String> {
+    let out = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "list-units",
+            "--type=service",
+            "--state=active",
+            "--no-legend",
+            "--plain",
+            "--no-pager",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return HashSet::new();
+    };
+    if !out.status.success() {
+        return HashSet::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter_map(|unit| unit.strip_suffix(".service"))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn prefetch_volume_sizes(svcs: &[ServiceData]) -> HashMap<String, Option<u64>> {
     use ryra_core::data::volumes::volume_size_bytes;
     let mut names: Vec<String> = svcs
         .iter()
@@ -193,56 +246,6 @@ fn prefetch_volume_sizes(svcs: &[ServiceData]) -> std::collections::HashMap<Stri
     })
 }
 
-fn format_service(
-    svc: &ServiceData,
-    home: &str,
-    vol_sizes: &std::collections::HashMap<String, Option<u64>>,
-    show_status: bool,
-    ports: &HashMap<String, String>,
-    ports_w: usize,
-) -> Vec<String> {
-    // Total size: sum per-component sizes so a single unreadable component
-    // (e.g. a subuid-owned volume mountpoint) doesn't abort the whole row.
-    let size = match compute_total(svc, vol_sizes) {
-        Size::Bytes(b) => human_size(b),
-        Size::Partial(b) => format!("{}+?", human_size(b)),
-        Size::Unknown => "?".to_string(),
-    };
-    let path = shorten_home(&svc.home_dir.display().to_string(), home);
-    let p = ports.get(&svc.service).cloned().unwrap_or_default();
-    let mut out = Vec::with_capacity(1 + svc.volumes.len());
-    if show_status {
-        let status = match svc.status {
-            ServiceStatus::Installed => "installed",
-            ServiceStatus::Orphan => "orphan",
-        };
-        out.push(format!(
-            "{:<15} {:<10} {:<10} {:<ports_w$} {}",
-            svc.service, status, size, p, path
-        ));
-        for v in &svc.volumes {
-            out.push(format!(
-                "{:<15} {:<10} {:<10} {:<ports_w$} volume:{}",
-                "", "", "", "", v.name
-            ));
-        }
-    } else {
-        out.push(format!(
-            "{:<15} {:<10} {:<ports_w$} {}",
-            svc.service, size, p, path
-        ));
-        for v in &svc.volumes {
-            out.push(format!(
-                "{:<15} {:<10} {:<ports_w$} volume:{}",
-                "", "", "", v.name
-            ));
-        }
-    }
-    out
-}
-
-/// Replace the user's home-dir prefix with `~` for display. Keeps long
-/// paths readable without hiding where they actually live.
 fn shorten_home(path: &str, home: &str) -> String {
     if !home.is_empty()
         && let Some(rest) = path.strip_prefix(home)
@@ -254,18 +257,12 @@ fn shorten_home(path: &str, home: &str) -> String {
 }
 
 enum Size {
-    /// Every component read cleanly.
     Bytes(u64),
-    /// At least one component read cleanly; at least one could not.
     Partial(u64),
-    /// No component could be read.
     Unknown,
 }
 
-fn compute_total(
-    svc: &ServiceData,
-    vol_sizes: &std::collections::HashMap<String, Option<u64>>,
-) -> Size {
+fn compute_total(svc: &ServiceData, vol_sizes: &HashMap<String, Option<u64>>) -> Size {
     use ryra_core::data::dir_size_bytes;
     let mut total: u64 = 0;
     let mut any_ok = false;
@@ -292,8 +289,6 @@ fn compute_total(
         (true, false) => Size::Bytes(total),
         (true, true) => Size::Partial(total),
         (false, true) => Size::Unknown,
-        // No data_paths and no volumes — entry exists in ryra.toml but neither
-        // a home dir nor any volume remains (config out of sync with filesystem).
         (false, false) => Size::Bytes(0),
     }
 }

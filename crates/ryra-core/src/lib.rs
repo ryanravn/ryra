@@ -720,6 +720,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let quadlet_path = quadlet_dir()?;
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
+    let mut has_named_volumes = false;
     let all_names: Vec<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
 
     if quadlet_path.is_dir()
@@ -736,12 +737,13 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
                 let unit = name.trim_end_matches(".container").to_string();
                 steps.push(Step::StopService { unit });
             }
-            // Track volume names for cleanup after containers are stopped.
-            // Only needed in Purge mode — skip accumulation entirely in Preserve.
-            if matches!(mode, RemoveMode::Purge) && name.ends_with(".volume") {
-                let vol = name.trim_end_matches(".volume").to_string();
-                // Quadlet prefixes volume names with "systemd-"
-                volume_names.push(format!("systemd-{vol}"));
+            if name.ends_with(".volume") {
+                has_named_volumes = true;
+                if matches!(mode, RemoveMode::Purge) {
+                    let vol = name.trim_end_matches(".volume").to_string();
+                    // Quadlet prefixes volume names with "systemd-"
+                    volume_names.push(format!("systemd-{vol}"));
+                }
             }
             steps.push(Step::RemoveFile(entry.path()));
         }
@@ -799,7 +801,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
             // because accumulation is gated on Purge mode above.
             // Remove only ephemeral children of the home dir; keep data.
             let home = service_home(service_name)?;
-            let (_data, ephemeral) = crate::data::classify::classify_home_dir(&home)?;
+            let (data, ephemeral) = crate::data::classify::classify_home_dir(&home)?;
             for path in ephemeral {
                 match std::fs::metadata(&path) {
                     Ok(m) if m.is_dir() => steps.push(Step::RemoveDir(path)),
@@ -809,6 +811,16 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
                     // retry of the same plan is idempotent.
                     Err(_) => steps.push(Step::RemoveFile(path)),
                 }
+            }
+            // If the service has no bind-mounted data *and* no podman
+            // named volumes, preserve-mode has literally nothing to
+            // preserve — the home dir would just be an empty ghost.
+            // Drop it in that case. When volumes exist (twenty,
+            // postgres, …) we keep the home dir so owner inference in
+            // enumerate_all can still attribute the volumes back to
+            // this service; `ryra list` then reports a real orphan.
+            if data.is_empty() && !has_named_volumes && home.exists() {
+                steps.push(Step::RemoveDir(home));
             }
         }
     }
