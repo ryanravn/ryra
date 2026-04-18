@@ -1,20 +1,109 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use crate::config::schema::Config;
+use crate::error::{Error, Result};
+use crate::generate::GeneratedFile;
+use crate::generate::bundle::inject_networks;
+use crate::{Step, WellKnownService};
 
 /// Path to the ryra-managed Caddyfile.
 ///
 /// Lives inside the caddy service's data dir so the existing volume mount
 /// (`%h/config` -> `/etc/caddy/`) picks it up automatically.
-pub fn caddyfile_path() -> crate::error::Result<PathBuf> {
+pub fn caddyfile_path() -> Result<PathBuf> {
     Ok(
-        crate::service_home(crate::WellKnownService::Caddy.as_str())?
+        crate::service_home(WellKnownService::Caddy.as_str())?
             .join("config")
             .join("Caddyfile"),
     )
 }
 
-/// Check if Caddy is installed (Caddyfile exists on disk).
-pub fn is_installed() -> bool {
-    caddyfile_path().map(|p| p.exists()).unwrap_or(false)
+/// Ensure Caddy is set up to route requests for the auth provider.
+///
+/// Returns steps to (a) add Caddy to the auth provider's podman network with
+/// a domain alias so service containers resolving the auth FQDN reach Caddy,
+/// and (b) install a site block in the Caddyfile that terminates TLS and
+/// reverse-proxies to the auth provider (which requires proper
+/// X-Forwarded-Proto/Host headers for OIDC).
+///
+/// A no-op when Caddy isn't installed — returns an empty Vec.
+pub fn ensure_auth_provider_routed(
+    config: &Config,
+    auth_service: WellKnownService,
+    auth_domain: &str,
+    auth_container_port: u16,
+    quadlet_dir: &Path,
+) -> Result<Vec<Step>> {
+    let caddy_installed = config
+        .services
+        .iter()
+        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+    if !caddy_installed {
+        return Ok(Vec::new());
+    }
+
+    let mut steps = Vec::new();
+    let mut need_caddy_restart = false;
+
+    // Caddy is installed, so caddy.container must exist — a missing or
+    // unreadable file here means something has gone wrong that we should
+    // surface, not swallow (OIDC discovery silently breaks otherwise).
+    let caddy_quadlet = quadlet_dir.join("caddy.container");
+    let content = std::fs::read_to_string(&caddy_quadlet).map_err(|source| Error::FileRead {
+        path: caddy_quadlet.clone(),
+        source,
+    })?;
+    let network_spec = format!("{auth_service}:alias={auth_domain}");
+    if !content.contains(&format!("alias={auth_domain}")) {
+        let updated = inject_networks(&content, &[network_spec]);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: caddy_quadlet,
+            content: updated,
+        }));
+        need_caddy_restart = true;
+    }
+
+    let caddyfile_path = caddyfile_path()?;
+    let caddyfile =
+        std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+            path: caddyfile_path.clone(),
+            source,
+        })?;
+    if !caddyfile.contains(&format!("# ryra:{auth_service}")) {
+        let block = render_site_block(&CaddySiteParams {
+            service_name: auth_service.to_string(),
+            domain: auth_domain.to_string(),
+            container_port: auth_container_port,
+            https_port: crate::caddy_https_port(config),
+        });
+        let updated = add_route(&caddyfile, auth_service.as_str(), &block);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: caddyfile_path,
+            content: updated,
+        }));
+        need_caddy_restart = true;
+    }
+
+    if need_caddy_restart {
+        steps.push(Step::DaemonReload);
+        steps.push(Step::RestartService {
+            unit: "caddy".to_string(),
+        });
+        // Wait for caddy's ExecStartPost to export the CA cert. The cert is
+        // needed by add_service to create the merged CA bundle for OIDC
+        // services. `systemctl restart` returns after ExecStart but before
+        // ExecStartPost completes.
+        let ca_path = crate::service_home("caddy")?
+            .parent()
+            .map(|p| p.join("caddy-root-ca.crt"))
+            .unwrap_or_default();
+        steps.push(Step::WaitForFile {
+            path: ca_path,
+            timeout_secs: 15,
+        });
+    }
+
+    Ok(steps)
 }
 
 /// Parameters for generating a Caddy site block.

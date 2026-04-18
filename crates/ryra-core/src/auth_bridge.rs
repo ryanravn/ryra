@@ -205,6 +205,8 @@ mod tests {
     use crate::config::schema::{AuthCredentials, InstalledService};
     use std::collections::BTreeMap;
 
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
     fn installed(name: &str, url: Option<&str>) -> InstalledService {
         InstalledService {
             name: name.into(),
@@ -237,8 +239,8 @@ mod tests {
     }
 
     #[test]
-    fn returns_none_when_auth_disabled() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn returns_none_when_auth_disabled() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let cfg = config_with(
             vec![installed("authelia", Some("https://auth.localhost"))],
             None,
@@ -248,28 +250,28 @@ mod tests {
             enable_auth: false,
             config: &cfg,
             service_data: tmp.path(),
-        })
-        .unwrap();
+        })?;
         assert!(out.is_none());
+        Ok(())
     }
 
     #[test]
-    fn returns_none_when_authelia_not_installed() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn returns_none_when_authelia_not_installed() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let cfg = config_with(vec![installed("caddy", None)], None);
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
             service_data: tmp.path(),
-        })
-        .unwrap();
+        })?;
         assert!(out.is_none());
+        Ok(())
     }
 
     #[test]
-    fn returns_none_when_caddy_not_installed() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn returns_none_when_caddy_not_installed() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let cfg = config_with(
             vec![installed("authelia", Some("https://auth.localhost"))],
             None,
@@ -279,14 +281,14 @@ mod tests {
             enable_auth: true,
             config: &cfg,
             service_data: tmp.path(),
-        })
-        .unwrap();
+        })?;
         assert!(out.is_none());
+        Ok(())
     }
 
     #[test]
-    fn returns_none_for_authelia_itself() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn returns_none_for_authelia_itself() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let cfg = config_with(
             vec![
                 installed("authelia", Some("https://auth.localhost")),
@@ -299,14 +301,14 @@ mod tests {
             enable_auth: true,
             config: &cfg,
             service_data: tmp.path(),
-        })
-        .unwrap();
+        })?;
         assert!(out.is_none());
+        Ok(())
     }
 
     #[test]
-    fn returns_none_for_caddy_itself() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn returns_none_for_caddy_itself() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let cfg = config_with(
             vec![
                 installed("authelia", Some("https://auth.localhost")),
@@ -319,18 +321,18 @@ mod tests {
             enable_auth: true,
             config: &cfg,
             service_data: tmp.path(),
-        })
-        .unwrap();
+        })?;
         assert!(out.is_none());
+        Ok(())
     }
 
     #[test]
-    fn build_does_not_write_to_service_data() {
+    fn build_does_not_write_to_service_data() -> TestResult {
         // The whole point of this refactor: a pure planning call must not
         // touch the service's data dir.
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        std::fs::create_dir_all(&service_data).unwrap();
+        std::fs::create_dir_all(&service_data)?;
 
         let cfg = config_with(
             vec![
@@ -344,60 +346,54 @@ mod tests {
             enable_auth: true,
             config: &cfg,
             service_data: &service_data,
-        })
-        .unwrap();
+        })?;
         assert!(out.is_some());
 
-        let entries: Vec<_> = std::fs::read_dir(&service_data).unwrap().collect();
+        let entries: Vec<_> = std::fs::read_dir(&service_data)?.collect();
         assert!(
             entries.is_empty(),
             "build() must not write to service_data, found: {entries:?}"
         );
+        Ok(())
     }
 
-    #[test]
-    fn emits_expected_write_file_steps() {
-        let tmp = tempfile::tempdir().unwrap();
-        let service_data = tmp.path().join("forgejo");
+    fn build_forgejo_bridge(service_data: &Path, authelia_url: Option<&str>) -> Result<AuthBridge> {
         let cfg = config_with(
-            vec![
-                installed("authelia", Some("https://auth.localhost")),
-                installed("caddy", None),
-            ],
+            vec![installed("authelia", authelia_url), installed("caddy", None)],
             None,
         );
-        let bridge = build(&AuthBridgeParams {
+        build(&AuthBridgeParams {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
-            service_data: &service_data,
+            service_data,
+        })?
+        .ok_or_else(|| {
+            Error::Bundle(
+                "auth bridge unexpectedly returned None for forgejo + authelia + caddy".into(),
+            )
         })
-        .unwrap()
-        .unwrap();
+    }
+
+    #[test]
+    fn emits_expected_write_file_steps() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let service_data = tmp.path().join("forgejo");
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.localhost"))?;
 
         let paths = write_paths(&bridge);
         assert!(paths.contains(&service_data.join("ca-bundle.crt").as_path()));
         assert!(paths.contains(&service_data.join("refresh-ca-bundle.sh").as_path()));
         assert!(paths.contains(&service_data.join("resolve-auth-host.sh").as_path()));
         assert!(paths.contains(&service_data.join("auth-hosts.txt").as_path()));
+        Ok(())
     }
 
     #[test]
-    fn skips_auth_hosts_when_authelia_has_no_url() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn skips_auth_hosts_when_authelia_has_no_url() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let cfg = config_with(
-            vec![installed("authelia", None), installed("caddy", None)],
-            None,
-        );
-        let bridge = build(&AuthBridgeParams {
-            service_name: "forgejo",
-            enable_auth: true,
-            config: &cfg,
-            service_data: &service_data,
-        })
-        .unwrap()
-        .unwrap();
+        let bridge = build_forgejo_bridge(&service_data, None)?;
 
         let paths = write_paths(&bridge);
         assert!(paths.contains(&service_data.join("ca-bundle.crt").as_path()));
@@ -405,27 +401,14 @@ mod tests {
         assert!(!paths.contains(&service_data.join("resolve-auth-host.sh").as_path()));
         assert!(!paths.contains(&service_data.join("auth-hosts.txt").as_path()));
         assert!(!bridge.volumes.iter().any(|v| v.contains("/etc/hosts")));
+        Ok(())
     }
 
     #[test]
-    fn emits_ca_trust_volume_and_env() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn emits_ca_trust_volume_and_env() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let cfg = config_with(
-            vec![
-                installed("authelia", Some("https://auth.localhost")),
-                installed("caddy", None),
-            ],
-            None,
-        );
-        let bridge = build(&AuthBridgeParams {
-            service_name: "forgejo",
-            enable_auth: true,
-            config: &cfg,
-            service_data: &service_data,
-        })
-        .unwrap()
-        .unwrap();
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.localhost"))?;
 
         let bundle_mount = format!(
             "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
@@ -444,27 +427,14 @@ mod tests {
             bridge.env.get("NODE_EXTRA_CA_CERTS").map(String::as_str),
             Some("/etc/ssl/certs/ca-certificates.crt")
         );
+        Ok(())
     }
 
     #[test]
-    fn auth_hosts_contains_authelia_hostname() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn auth_hosts_contains_authelia_hostname() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let cfg = config_with(
-            vec![
-                installed("authelia", Some("https://auth.test.local")),
-                installed("caddy", None),
-            ],
-            None,
-        );
-        let bridge = build(&AuthBridgeParams {
-            service_name: "forgejo",
-            enable_auth: true,
-            config: &cfg,
-            service_data: &service_data,
-        })
-        .unwrap()
-        .unwrap();
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.test.local"))?;
 
         let hosts_step = bridge
             .steps
@@ -473,29 +443,16 @@ mod tests {
                 Step::WriteFile(f) if f.path == service_data.join("auth-hosts.txt") => Some(f),
                 _ => None,
             })
-            .expect("auth-hosts.txt step missing");
+            .ok_or("auth-hosts.txt step missing")?;
         assert_eq!(hosts_step.content, "127.0.0.1 auth.test.local\n");
+        Ok(())
     }
 
     #[test]
-    fn exec_start_pre_references_emitted_scripts() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn exec_start_pre_references_emitted_scripts() -> TestResult {
+        let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let cfg = config_with(
-            vec![
-                installed("authelia", Some("https://auth.localhost")),
-                installed("caddy", None),
-            ],
-            None,
-        );
-        let bridge = build(&AuthBridgeParams {
-            service_name: "forgejo",
-            enable_auth: true,
-            config: &cfg,
-            service_data: &service_data,
-        })
-        .unwrap()
-        .unwrap();
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.localhost"))?;
 
         let refresh = format!(
             "-/bin/bash {}",
@@ -507,5 +464,6 @@ mod tests {
         );
         assert!(bridge.exec_start_pre.contains(&refresh));
         assert!(bridge.exec_start_pre.contains(&resolve));
+        Ok(())
     }
 }

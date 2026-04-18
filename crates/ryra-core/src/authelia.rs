@@ -4,7 +4,6 @@ use std::path::Path;
 use crate::config::schema::{AuthCredentials, Config};
 use crate::error::Error;
 use crate::generate::GeneratedFile;
-use crate::generate::bundle::inject_networks;
 use crate::registry::service_def::ServiceDef;
 use crate::{Step, WellKnownService, service_home};
 
@@ -203,91 +202,24 @@ pub fn register_oidc_client(
         unit: WellKnownService::Authelia.to_string(),
     });
 
-    // Ensure Caddy joins authelia's network with a domain alias so that
-    // containers can resolve the auth FQDN → Caddy → authelia (with proper
-    // X-Forwarded-Proto: https headers that authelia requires for OIDC).
-    let caddy_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-    let auth_domain = config
+    // Ensure Caddy routes requests for the authelia domain so that OIDC
+    // discovery goes through Caddy's TLS termination (authelia needs the
+    // X-Forwarded-Proto/Host headers for issuer validation).
+    if let Some(domain) = config
         .services
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name))
         .and_then(|s| s.url.as_ref())
         .and_then(|u| url::Url::parse(u).ok())
-        .and_then(|parsed| parsed.host_str().map(|h| h.to_string()));
-
-    if caddy_installed && let Some(ref domain) = auth_domain {
-        let mut need_caddy_restart = false;
-        let authelia = WellKnownService::Authelia;
-
-        // 1. Add Caddy to authelia's podman network with a domain alias so
-        // that containers resolving the auth domain reach Caddy (HTTPS on
-        // port 8443). OIDC clients require the issuer URL to match exactly,
-        // so services connect to the external URL (https://domain:8443)
-        // which routes through Caddy's TLS termination to authelia.
-        //
-        // Caddy is installed, so caddy.container must exist — a missing or
-        // unreadable file here means something has gone wrong that we should
-        // surface, not swallow (OIDC discovery silently breaks otherwise).
-        let caddy_quadlet = quadlet_dir.join("caddy.container");
-        let content = std::fs::read_to_string(&caddy_quadlet).map_err(|source| Error::FileRead {
-            path: caddy_quadlet.clone(),
-            source,
-        })?;
-        let network_spec = format!("{authelia}:alias={domain}");
-        if !content.contains(&format!("alias={domain}")) {
-            let updated = inject_networks(&content, &[network_spec]);
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: caddy_quadlet,
-                content: updated,
-            }));
-            need_caddy_restart = true;
-        }
-
-        // 2. Add an authelia site block to the Caddyfile so Caddy
-        //    terminates TLS and reverse-proxies to authelia. Without this,
-        //    Caddy has no route for the auth domain and returns 404.
-        let caddyfile_path = crate::caddy::caddyfile_path()?;
-        let caddyfile =
-            std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
-                path: caddyfile_path.clone(),
-                source,
-            })?;
-        if !caddyfile.contains(&format!("# ryra:{authelia}")) {
-            let block = crate::caddy::render_site_block(&crate::caddy::CaddySiteParams {
-                service_name: authelia.to_string(),
-                domain: domain.clone(),
-                container_port: 9091,
-                https_port: crate::caddy_https_port(config),
-            });
-            let updated = crate::caddy::add_route(&caddyfile, authelia.as_str(), &block);
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: caddyfile_path,
-                content: updated,
-            }));
-            need_caddy_restart = true;
-        }
-
-        if need_caddy_restart {
-            steps.push(Step::DaemonReload);
-            steps.push(Step::RestartService {
-                unit: "caddy".to_string(),
-            });
-            // Wait for caddy's ExecStartPost to export the CA cert.
-            // The cert is needed by add_service to create the merged CA bundle
-            // for OIDC services. systemctl restart returns after ExecStart but
-            // before ExecStartPost completes.
-            let ca_path = crate::service_home("caddy")?
-                .parent()
-                .map(|p| p.join("caddy-root-ca.crt"))
-                .unwrap_or_default();
-            steps.push(Step::WaitForFile {
-                path: ca_path,
-                timeout_secs: 15,
-            });
-        }
+        .and_then(|parsed| parsed.host_str().map(|h| h.to_string()))
+    {
+        steps.extend(crate::caddy::ensure_auth_provider_routed(
+            config,
+            WellKnownService::Authelia,
+            &domain,
+            9091,
+            quadlet_dir,
+        )?);
     }
 
     Ok(steps)

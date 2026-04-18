@@ -141,6 +141,10 @@ pub enum Step {
     CreateDir(PathBuf),
     /// Wait for a file to appear (with timeout).
     WaitForFile { path: PathBuf, timeout_secs: u32 },
+    /// Copy a file from the registry (or similar source) to a destination.
+    /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
+    /// that don't fit the templated `configs/` pipeline.
+    CopyFile { src: PathBuf, dst: PathBuf },
 }
 
 impl Step {
@@ -164,6 +168,7 @@ impl Step {
             Step::WaitForFile { path, timeout_secs } => {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
+            Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
         }
     }
 }
@@ -326,6 +331,7 @@ pub fn add_service(
     registry_name: &str,
     repo_dir: &Path,
     pre_built_ctx: Option<BTreeMap<String, String>>,
+    port_in_use: &dyn Fn(u16) -> bool,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
@@ -393,9 +399,10 @@ pub fn add_service(
         } else {
             let privileged = p.container_port < 1024;
             let claimed_in_service = claimed.contains(&p.container_port);
-            let in_use = system::port::is_port_in_use(p.container_port);
+            let in_use = port_in_use(p.container_port);
             if privileged || claimed_in_service || in_use {
-                let allocated = system::port::allocate_port_excluding(&config, &claimed)?;
+                let allocated =
+                    system::port::allocate_port_excluding(&config, &claimed, port_in_use)?;
                 let reason = if privileged {
                     "port is privileged (requires root)".to_string()
                 } else if claimed_in_service {
@@ -434,7 +441,7 @@ pub fn add_service(
     // For explicitly-set host_port entries, allocate_port_excluding didn't run
     // so we re-check here.
     for (_, port) in &resolved_ports {
-        if system::port::is_port_in_use(*port) {
+        if port_in_use(*port) {
             return Err(Error::PortConflict { port: *port });
         }
     }
@@ -565,6 +572,13 @@ pub fn add_service(
     // 4. Write config files from bundle
     for file in bundle.config_files {
         steps.push(Step::WriteFile(file));
+    }
+
+    // 4b. Copy vendored files (plugin DLLs, archives etc.) from the
+    // registry into service_home. The config pipeline is UTF-8 /
+    // template-only; binary payloads flow through CopyFile instead.
+    for (src, dst) in bundle.files {
+        steps.push(Step::CopyFile { src, dst });
     }
 
     // 5. Write .env file

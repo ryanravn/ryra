@@ -65,6 +65,23 @@ pub async fn run(
     // per service.
     let skip_prompt = all || orphans || yes || dry_run;
 
+    // Serialize concurrent removals so two processes don't clobber each
+    // other's edits to authelia's configuration.yml when unregistering
+    // OIDC clients. Matches the lock acquired in `add.rs::run`.
+    let _auth_lock = if !dry_run {
+        paths.ensure_dirs()?;
+        let lock_path = paths.config_dir.join(".authelia-oidc.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        file.lock()?;
+        Some(file)
+    } else {
+        None
+    };
+
     for service in &targets {
         remove_one(&config, service, effective_purge, skip_prompt, dry_run).await?;
     }

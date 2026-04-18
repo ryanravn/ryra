@@ -195,6 +195,18 @@ async fn execute(step: &Step) -> Result<()> {
             }
             Ok(())
         }
+        Step::CopyFile { src, dst } => {
+            println!("  Copying {} -> {}", src.display(), dst.display());
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create parent dir {}", parent.display())
+                })?;
+            }
+            std::fs::copy(src, dst).with_context(|| {
+                format!("failed to copy {} -> {}", src.display(), dst.display())
+            })?;
+            Ok(())
+        }
     }
 }
 

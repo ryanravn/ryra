@@ -96,3 +96,55 @@ pub async fn offer_enable() -> Result<()> {
 
     Ok(())
 }
+
+/// On `ryra reset`, ask whether to disable lingering. Ryra doesn't own the
+/// linger bit — the user may have had it enabled before installing ryra for
+/// other `systemd --user` services — so we explicitly prompt with a warning
+/// about the side effect rather than disabling silently. No-op if lingering
+/// is already off.
+pub async fn offer_disable() -> Result<()> {
+    if !is_enabled().await {
+        return Ok(());
+    }
+    let user = std::env::var("USER").unwrap_or_else(|_| "<your-user>".into());
+
+    println!();
+    println!("  systemd lingering is currently enabled for {user}.");
+    println!("  Disabling it will stop ALL of your --user services when you log out,");
+    println!("  not just ryra's. Leave it enabled if other user services rely on it.");
+    println!();
+    println!("    sudo loginctl disable-linger {user}");
+    println!();
+
+    if !super::is_interactive() {
+        eprintln!("  (non-interactive; leaving lingering enabled)");
+        return Ok(());
+    }
+
+    let run = match Confirm::new()
+        .with_prompt("  Disable lingering now?")
+        .default(false)
+        .interact()
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("  Warning: could not read confirmation ({e}); leaving enabled");
+            return Ok(());
+        }
+    };
+    if !run {
+        return Ok(());
+    }
+
+    match Command::new("sudo")
+        .args(["loginctl", "disable-linger", &user])
+        .status()
+        .await
+    {
+        Ok(s) if s.success() => println!("  Lingering disabled."),
+        Ok(s) => eprintln!("  sudo loginctl disable-linger exited with {s}"),
+        Err(e) => eprintln!("  Failed to run sudo: {e}"),
+    }
+
+    Ok(())
+}

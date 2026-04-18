@@ -124,19 +124,17 @@ pub fn build_context(
         // auth.internal_url — how containers reach the auth provider for OIDC
         // discovery and token exchange (server-to-server calls).
         //
-        // Uses the same URL as external_url (through caddy with HTTPS) because
+        // Equal to external_url: both go through Caddy with HTTPS because
         // authelia requires X-Forwarded-Proto/Host headers for OIDC discovery,
-        // which only caddy provides. Containers resolve the .localhost domain
-        // to caddy's IP via custom /etc/hosts entries injected by ExecStartPre
-        // scripts, and trust caddy's self-signed CA via mounted CA bundles.
-        let internal_url = if caddy_installed {
-            external_url.clone()
-        } else {
-            match auth.port() {
-                Some(port) => format!("http://{}:{port}", auth.provider_name()),
-                None => auth_localhost_url.clone(),
-            }
-        };
+        // which only Caddy provides. Services containers resolve the
+        // .localhost domain to Caddy's IP via the `<authelia>:alias=<domain>`
+        // podman network entry (see caddy::ensure_auth_provider_routed) and
+        // trust Caddy's self-signed CA via the mounted CA bundle.
+        //
+        // `--auth` requires Caddy (auth_bridge::build returns None otherwise,
+        // so the CA bundle and host-resolve helpers aren't generated and the
+        // service's OIDC flow won't work end-to-end without Caddy).
+        let internal_url = external_url.clone();
         ctx.insert("auth.url".into(), auth_localhost_url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());
         ctx.insert("auth.provider".into(), auth.provider_name().to_string());

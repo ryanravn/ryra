@@ -63,6 +63,24 @@ pub async fn run(
 
     let paths = ryra_core::config::ConfigPaths::resolve()?;
 
+    // Serialize concurrent `ryra add --auth` runs so two processes don't
+    // clobber each other's client entries when editing authelia's
+    // configuration.yml in-memory then writing it back. The lock is
+    // released when _auth_lock drops at end of this function.
+    let _auth_lock = if auth && !dry_run {
+        paths.ensure_dirs()?;
+        let lock_path = paths.config_dir.join(".authelia-oidc.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        file.lock()?;
+        Some(file)
+    } else {
+        None
+    };
+
     for service_input in services {
         let service_ref = ServiceRef::parse(service_input)?;
         let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
@@ -270,6 +288,7 @@ pub async fn run(
             service_ref.registry_name(),
             &repo_dir,
             prompt_ctx.clone(),
+            &super::is_port_in_use,
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 println!("{service} was partially installed — cleaning up before retry...");
@@ -287,6 +306,7 @@ pub async fn run(
                     service_ref.registry_name(),
                     &repo_dir,
                     prompt_ctx.clone(),
+                    &super::is_port_in_use,
                 )?
             }
             other => other?,

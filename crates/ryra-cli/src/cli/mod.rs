@@ -13,12 +13,31 @@ pub mod search;
 pub mod test;
 
 use std::io::IsTerminal;
+use std::net::TcpListener;
 
 use ryra_core::Step;
 
 /// Whether stdin is connected to a terminal (shared check).
 pub fn is_interactive() -> bool {
     std::io::stdin().is_terminal()
+}
+
+/// Check if a port is already bound on the host.
+///
+/// A port is considered in use if binding IPv4 fails. IPv6 is only checked
+/// when the system has a working IPv6 loopback — otherwise `bind(::1)` can
+/// fail even on a free port, making every port look occupied.
+///
+/// Lives in the CLI (not core) so that `ryra-core` planning stays free of
+/// real system-state probes: callers pass this as `&dyn Fn(u16) -> bool`.
+pub fn is_port_in_use(port: u16) -> bool {
+    if TcpListener::bind(("127.0.0.1", port)).is_err() {
+        return true;
+    }
+    if TcpListener::bind(("::1", 0u16)).is_ok() {
+        return TcpListener::bind(("::1", port)).is_err();
+    }
+    false
 }
 
 /// A system CA certificate to install or remove, with the distro-specific
@@ -123,28 +142,41 @@ pub fn remove_caddy_ca() {
 pub fn print_dry_run(steps: &[Step]) {
     let verbose = crate::verbose::is_enabled();
 
-    let file_steps: Vec<_> = steps
+    enum FileEntry<'a> {
+        Write(&'a ryra_core::generate::GeneratedFile),
+        Copy { src: &'a std::path::Path, dst: &'a std::path::Path },
+    }
+
+    let file_steps: Vec<FileEntry> = steps
         .iter()
         .filter_map(|s| match s {
-            Step::WriteFile(f) => Some(f),
+            Step::WriteFile(f) => Some(FileEntry::Write(f)),
+            Step::CopyFile { src, dst } => Some(FileEntry::Copy { src, dst }),
             _ => None,
         })
         .collect();
 
     let commands: Vec<_> = steps
         .iter()
-        .filter(|s| !matches!(s, Step::WriteFile(_)))
+        .filter(|s| !matches!(s, Step::WriteFile(_) | Step::CopyFile { .. }))
         .collect();
 
     if !file_steps.is_empty() {
         println!("Files to write:\n");
-        for file in &file_steps {
-            println!("  {}", file.path.display());
-            if verbose && !file.content.is_empty() {
-                for line in file.content.lines() {
-                    println!("    | {line}");
+        for entry in &file_steps {
+            match entry {
+                FileEntry::Write(file) => {
+                    println!("  {}", file.path.display());
+                    if verbose && !file.content.is_empty() {
+                        for line in file.content.lines() {
+                            println!("    | {line}");
+                        }
+                        println!();
+                    }
                 }
-                println!();
+                FileEntry::Copy { src, dst } => {
+                    println!("  {} (<- {})", dst.display(), src.display());
+                }
             }
         }
         if !verbose {

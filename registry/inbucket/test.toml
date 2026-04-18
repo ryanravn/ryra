@@ -1,0 +1,24 @@
+# inbucket tests — basic install + web UI probe.
+# Inbucket is the dev SMTP sink used by other services' --smtp=inbucket
+# tests; the SMTP side is covered by those. This file just asserts the
+# container starts and serves its web UI.
+
+[[tests]]
+name = "inbucket"
+[[tests.steps]]
+action = "add"
+service = "inbucket"
+[[tests.steps]]
+action = "wait"
+service = "inbucket"
+[[tests.steps]]
+action = "http"
+name = "web-ui-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+service = "inbucket"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "shell"
+name = "data-dir-created"
+run = "test -d $HOME/.local/share/ryra/inbucket"

@@ -6,6 +6,8 @@
 
 Ryra is a CLI for running self-hosted services on a single Linux box. Each `ryra add <service>` pulls a container image, writes a systemd quadlet, starts the service under rootless Podman, and — if you want it — wires up HTTPS via Caddy and SSO via Authelia. No daemon.
 
+Bring your own reverse proxy if you prefer: Cloudflare Tunnel, Tailscale Funnel, nginx — pass `--url https://…` and Ryra leaves routing alone.
+
 ## Install
 
 ```sh

@@ -28,6 +28,12 @@ pub struct ProcessedBundle {
     pub images: Vec<String>,
     /// Host directories that must exist before containers start (bind mount sources).
     pub bind_mount_dirs: Vec<std::path::PathBuf>,
+    /// Vendored files (src, dst) to copy raw from the registry into
+    /// service_home. Kept separate from `config_files` because the config
+    /// pipeline is UTF-8 only (template rendering) — DLLs, archives and
+    /// other binaries don't fit there. The `files/` subtree mirrors
+    /// service_home paths.
+    pub files: Vec<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 /// Scan processed `.container` files for `Image=` lines. Deduplicate.
@@ -268,13 +274,61 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
 
     let service_home = crate::service_home(params.service_name)?;
     let config_files = process_configs(params.service_dir, &service_home)?;
+    let files = collect_files(params.service_dir, &service_home)?;
 
     Ok(ProcessedBundle {
         quadlet_files,
         config_files,
         images,
         bind_mount_dirs,
+        files,
     })
+}
+
+/// Collect vendored files from `<service_dir>/files/` recursively. Returns
+/// (src, dst) pairs where `src` is the registry path and `dst` is the
+/// corresponding path under `service_home`. The CLI copies them with
+/// `std::fs::copy` at apply time (binary-safe, no UTF-8 assumption).
+pub fn collect_files(
+    service_dir: &Path,
+    service_home: &Path,
+) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf)>> {
+    let files_dir = service_dir.join("files");
+    if !files_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    collect_files_recursive(&files_dir, &files_dir, service_home, &mut out)?;
+    out.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(out)
+}
+
+fn collect_files_recursive(
+    base_dir: &Path,
+    current_dir: &Path,
+    service_home: &Path,
+    out: &mut Vec<(std::path::PathBuf, std::path::PathBuf)>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(current_dir).map_err(|source| Error::FileRead {
+        path: current_dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| Error::FileRead {
+            path: current_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_recursive(base_dir, &path, service_home, out)?;
+        } else if path.is_file() {
+            let relative = path
+                .strip_prefix(base_dir)
+                .map_err(|e| Error::Bundle(format!("failed to compute relative path: {e}")))?;
+            out.push((path.clone(), service_home.join(relative)));
+        }
+    }
+    Ok(())
 }
 
 /// Read files from `<service_dir>/configs/` recursively,
