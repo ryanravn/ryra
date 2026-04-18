@@ -10,7 +10,7 @@ Wants=twenty-worker.service
 After=twenty-postgres.service twenty-redis.service
 
 [Container]
-Image=twentycrm/twenty:latest
+Image=twentycrm/twenty:v1.23.1
 ContainerName=twenty
 Network=twenty.network
 PublishPort=${RYRA_PORT_HTTP}:3000

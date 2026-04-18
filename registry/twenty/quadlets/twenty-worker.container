@@ -6,7 +6,7 @@ Requires=twenty-postgres.service twenty-redis.service twenty.service
 After=twenty-postgres.service twenty-redis.service twenty.service
 
 [Container]
-Image=twentycrm/twenty:latest
+Image=twentycrm/twenty:v1.23.1
 ContainerName=twenty-worker
 Network=twenty.network
 Exec=yarn worker:prod

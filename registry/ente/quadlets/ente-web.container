@@ -6,7 +6,7 @@ Requires=ente.service
 After=ente.service
 
 [Container]
-Image=ghcr.io/ente-io/web:latest
+Image=ghcr.io/ente-io/web:b4d22996c85e8080b487db1475f98487b9b10840
 ContainerName=ente-web
 Network=ente.network
 PublishPort=${RYRA_PORT_PHOTOS}:3000

@@ -10,7 +10,7 @@ After=synapse-homeserver.service
 # nginx, which path-routes /_matrix and /_synapse traffic to the homeserver
 # over the internal podman network. ContainerName=synapse so ryra's Caddy
 # integration (which targets the service's name) hits this container.
-Image=docker.io/vectorim/element-web:latest
+Image=docker.io/vectorim/element-web:v1.12.15
 ContainerName=synapse
 Network=synapse.network
 PublishPort=${RYRA_PORT_HTTP}:8080

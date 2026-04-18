@@ -6,7 +6,7 @@ Requires=synapse-db.service
 After=synapse-db.service
 
 [Container]
-Image=docker.io/matrixdotorg/synapse:latest
+Image=docker.io/matrixdotorg/synapse:v1.151.0
 ContainerName=synapse-homeserver
 Network=synapse.network:alias=homeserver
 Volume=%h/.local/share/ryra/synapse/data:/data:Z,U
