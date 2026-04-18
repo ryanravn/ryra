@@ -2,9 +2,9 @@
 #
 # This file uses the new [[tests]] + [[tests.steps]] multi-test format.
 # Each test is a self-contained lifecycle run in its own VM. The
-# service-owning file is the default prefix for test names: `diff`
-# becomes `whoami-diff`, `remove` becomes `whoami-remove`. The first
-# test is named exactly "whoami" so `ryra test whoami` still works.
+# service-owning file is the default prefix for test names: `remove`
+# becomes `whoami-remove`. The first test is named exactly "whoami"
+# so `ryra test whoami` still works.
 
 # Basic install: add, wait, probe HTTP, assert data dir + env sourcing.
 [[tests]]
@@ -28,46 +28,6 @@ run = ". $HOME/.local/share/ryra/whoami/.env && curl -s http://127.0.0.1:$RYRA_P
 action = "shell"
 name = "data-dir-created"
 run = "test -d $HOME/.local/share/ryra/whoami"
-
-# `ryra diff` against the bundled registry: snapshot saved on add, clean
-# after add, shows an upstream change when we mutate the cached registry,
-# and snapshot is cleaned up on remove.
-[[tests]]
-name = "diff"
-[[tests.steps]]
-action = "add"
-service = "whoami"
-[[tests.steps]]
-action = "wait"
-service = "whoami"
-[[tests.steps]]
-action = "shell"
-name = "snapshot-saved"
-run = "test -f $HOME/.config/ryra/snapshots/whoami.toml"
-[[tests.steps]]
-action = "shell"
-name = "diff-no-changes"
-run = "ryra diff whoami 2>&1 | grep -q 'up to date'"
-[[tests.steps]]
-action = "shell"
-name = "simulate-upstream-change"
-run = """cat >> $HOME/.cache/ryra/bundled/whoami/service.toml <<'TOML'
-
-[[env]]
-name = "NEW_VAR"
-value = "hello"
-TOML"""
-[[tests.steps]]
-action = "shell"
-name = "diff-shows-change"
-run = "ryra diff whoami 2>&1 | grep -q 'env var added: NEW_VAR'"
-[[tests.steps]]
-action = "remove"
-service = "whoami"
-[[tests.steps]]
-action = "shell"
-name = "snapshot-removed"
-run = "test ! -f $HOME/.config/ryra/snapshots/whoami.toml"
 
 # Remove lifecycle: add, verify, remove, verify cleanup.
 [[tests]]

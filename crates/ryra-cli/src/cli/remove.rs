@@ -21,8 +21,7 @@ pub async fn run(
     // implied — orphans have nothing else to preserve.
     // `-a` expands to every installed service. With `--purge` it also
     // sweeps every orphan. `ryra reset` remains distinct — it
-    // additionally wipes ryra's own config, CAs, snapshots, registry
-    // caches.
+    // additionally wipes ryra's own config, CAs, and registry caches.
     let (targets, effective_purge) = if orphans {
         let names: Vec<String> = ryra_core::data::enumerate_all(&config)?
             .into_iter()

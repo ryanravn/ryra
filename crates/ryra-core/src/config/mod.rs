@@ -11,7 +11,6 @@ pub struct ConfigPaths {
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
     pub cache_dir: PathBuf,
-    pub snapshots_dir: PathBuf,
 }
 
 impl ConfigPaths {
@@ -25,12 +24,10 @@ impl ConfigPaths {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| home.join(".cache"))
             .join("ryra");
-        let snapshots_dir = config_dir.join("snapshots");
         Ok(Self {
             config_file: config_dir.join("ryra.toml"),
             cache_dir,
             config_dir,
-            snapshots_dir,
         })
     }
 
@@ -118,40 +115,3 @@ pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Save a snapshot of a service.toml at install time.
-pub fn save_snapshot(snapshots_dir: &Path, service_name: &str, content: &str) -> Result<()> {
-    ensure_dir(snapshots_dir)?;
-    let path = snapshots_dir.join(format!("{service_name}.toml"));
-    write_file(&path, content)
-}
-
-/// Load a previously saved service.toml snapshot.
-pub fn load_snapshot(snapshots_dir: &Path, service_name: &str) -> Result<String> {
-    let path = snapshots_dir.join(format!("{service_name}.toml"));
-    if !path.exists() {
-        return Err(Error::ConfigNotFound(path));
-    }
-    std::fs::read_to_string(&path).map_err(|source| Error::FileRead { path, source })
-}
-
-/// Remove a snapshot when a service is removed.
-pub fn remove_snapshot(snapshots_dir: &Path, service_name: &str) -> Result<()> {
-    let path = snapshots_dir.join(format!("{service_name}.toml"));
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|source| Error::FileWrite { path, source })?;
-    }
-    Ok(())
-}
-
-fn write_file(path: &Path, contents: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::DirCreate {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    std::fs::write(path, contents).map_err(|source| Error::FileWrite {
-        path: path.to_path_buf(),
-        source,
-    })
-}

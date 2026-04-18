@@ -3,7 +3,6 @@ pub mod authelia;
 pub mod caddy;
 pub mod config;
 pub mod data;
-pub mod diff;
 pub mod error;
 pub mod generate;
 pub mod registry;
@@ -860,17 +859,6 @@ pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
 
     config::save_config(&paths.config_file, &config)?;
 
-    // Save a snapshot of the service.toml for `ryra diff`
-    let service_toml = params
-        .repo_dir
-        .join(params.service_name)
-        .join("service.toml");
-    let content = std::fs::read_to_string(&service_toml).map_err(|source| Error::FileRead {
-        path: service_toml,
-        source,
-    })?;
-    config::save_snapshot(&paths.snapshots_dir, params.service_name, &content)?;
-
     Ok(())
 }
 
@@ -898,7 +886,6 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
 
     config.services.retain(|s| s.name != service_name);
     config::save_config(&paths.config_file, &config)?;
-    config::remove_snapshot(&paths.snapshots_dir, service_name)?;
 
     Ok(())
 }

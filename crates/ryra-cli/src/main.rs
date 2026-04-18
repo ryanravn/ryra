@@ -61,7 +61,7 @@ enum Command {
         )]
         services: Vec<String>,
         /// Remove every installed service (use `ryra reset` to also wipe ryra's
-        /// config + CA + snapshots)
+        /// config + CA)
         #[arg(long, short = 'a', conflicts_with = "orphans")]
         all: bool,
         /// Purge every orphan service's data (leftover from prior `ryra remove`).
@@ -101,11 +101,6 @@ enum Command {
     Registry {
         #[command(subcommand)]
         action: RegistryAction,
-    },
-    /// Show what changed in a service's registry definition since install
-    Diff {
-        /// Service name
-        service: String,
     },
     /// Run tests for a service
     Test {
@@ -231,7 +226,6 @@ async fn main() -> anyhow::Result<()> {
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
-        Command::Diff { ref service } => cli::diff::run(service).await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {
             ref query,
