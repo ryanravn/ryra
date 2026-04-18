@@ -35,9 +35,15 @@ fn smtp_no_tls(value: &str) -> String {
 }
 
 /// Render a template string with the given context variables.
+///
+/// Runs in strict mode: any `{{ foo.bar }}` that isn't in the context errors
+/// out instead of rendering as an empty string. Templates that knowingly
+/// reference optional context (e.g. `--url` or SMTP not configured) must
+/// wrap the reference with the `default` filter:
+/// `{{ service.domain | default('localhost') }}`.
 pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<String> {
     let mut env = Environment::new();
-    env.set_undefined_behavior(minijinja::UndefinedBehavior::Chainable);
+    env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
 
     // Register custom filters for service-specific derived values.
     // Templates use e.g. `{{ smtp.security | forgejo_protocol }}` instead of
@@ -140,11 +146,40 @@ mod tests {
 
     #[test]
     fn default_filter_on_missing_key() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let ctx = BTreeMap::new();
-        // service.domain is not in context — default filter should provide fallback
+        let mut ctx = BTreeMap::new();
+        // In real rendering the `service.*` namespace is always populated
+        // (service.name, service.port, service.url, …). Individual sub-keys
+        // like `service.domain` may still be missing when `--url` wasn't
+        // passed, and the `default` filter must handle that.
+        ctx.insert("service.name".into(), "whoami".into());
         let result = render("{{ service.domain | default('localhost') }}", &ctx)?;
         assert_eq!(result, "localhost");
         Ok(())
+    }
+
+    #[test]
+    fn strict_mode_rejects_undefined_top_level() {
+        let ctx = BTreeMap::new();
+        let err = render("{{ bogus_top_level }}", &ctx);
+        assert!(
+            err.is_err(),
+            "expected strict mode to error on an undefined top-level variable"
+        );
+    }
+
+    #[test]
+    fn strict_mode_rejects_typo_without_default() {
+        // A realistic typo: smtp.hoist instead of smtp.host. With SMTP
+        // configured, `smtp` exists as an object but `hoist` doesn't.
+        // Strict mode should surface this at render time rather than
+        // silently emitting an empty value.
+        let mut ctx = BTreeMap::new();
+        ctx.insert("smtp.host".into(), "mail.example.com".into());
+        let err = render("{{ smtp.hoist }}", &ctx);
+        assert!(
+            err.is_err(),
+            "expected strict mode to error on a typo'd attribute"
+        );
     }
 
     #[test]
