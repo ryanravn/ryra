@@ -51,9 +51,17 @@ pub fn build_context(
     ctx.entry("service.url".into()).or_insert(localhost_url);
 
     // admin.*
-    if let Some(email) = &config.admin_email {
-        ctx.insert("admin.email".into(), email.clone());
-    }
+    // Always set admin.email so strict-mode templates don't error when
+    // config.admin_email is None. Service definitions can still wrap with
+    // `| default(...)` for clarity, but the fallback is applied here first
+    // so the `admin` namespace is always present in the context.
+    ctx.insert(
+        "admin.email".into(),
+        config
+            .admin_email
+            .clone()
+            .unwrap_or_else(|| "admin@example.com".to_string()),
+    );
 
     // smtp.*
     if let Some(smtp) = &config.smtp {
