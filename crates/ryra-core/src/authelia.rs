@@ -293,6 +293,84 @@ pub fn register_oidc_client(
     Ok(steps)
 }
 
+/// Remove the OIDC client block registered for `service_name` from authelia's
+/// configuration.yml and restart authelia so it picks up the change.
+///
+/// Returns an empty Vec when there is nothing to do — authelia isn't installed,
+/// its config file is absent, or no block matching `service_name` exists.
+/// Authelia being uninstalled is fine: the config is gone with it.
+pub fn unregister_oidc_client(service_name: &str) -> crate::error::Result<Vec<Step>> {
+    let authelia_config_path = service_home(WellKnownService::Authelia.as_str())?
+        .join("config")
+        .join("configuration.yml");
+    if !authelia_config_path.exists() {
+        return Ok(Vec::new());
+    }
+    let yaml = std::fs::read_to_string(&authelia_config_path).map_err(|e| Error::FileRead {
+        path: authelia_config_path.clone(),
+        source: e,
+    })?;
+    let updated = remove_client_block(&yaml, service_name);
+    if updated == yaml {
+        return Ok(Vec::new());
+    }
+    Ok(vec![
+        Step::WriteFile(GeneratedFile {
+            path: authelia_config_path,
+            content: updated,
+        }),
+        Step::RestartService {
+            unit: WellKnownService::Authelia.to_string(),
+        },
+    ])
+}
+
+/// Remove the OIDC client block for `service_name` from an authelia YAML.
+///
+/// Client blocks are written by [`register_oidc_client`] with a fixed shape:
+/// a line `      - client_id: '...'` at indent 6, followed by sibling fields
+/// at indent 8 (including `client_name: '<service_name>'`) and list items at
+/// indent 10. A block ends at the next line with indent < 8 that isn't empty.
+fn remove_client_block(yaml: &str, service_name: &str) -> String {
+    let name_marker = format!("client_name: '{service_name}'");
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if !lines[i].starts_with("      - client_id:") {
+            kept.push(lines[i]);
+            i += 1;
+            continue;
+        }
+        let block_start = i;
+        let mut j = i + 1;
+        while j < lines.len() {
+            let line = lines[j];
+            if line.is_empty() {
+                j += 1;
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            if indent >= 8 {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        let block = &lines[block_start..j];
+        let matches = block.iter().any(|l| l.trim() == name_marker);
+        if !matches {
+            kept.extend_from_slice(block);
+        }
+        i = j;
+    }
+    let mut out = kept.join("\n");
+    if yaml.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Build AuthCredentials for finalize_add when authelia is installed.
 pub fn auth_config(allocated_ports: &[(String, u16)]) -> crate::error::Result<AuthCredentials> {
     let port = allocated_ports
@@ -306,4 +384,73 @@ pub fn auth_config(allocated_ports: &[(String, u16)]) -> crate::error::Result<Au
         })?;
     let url = format!("http://localhost:{port}");
     Ok(AuthCredentials::Authelia { url, port })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two_client_yaml() -> String {
+        // Matches the shape register_oidc_client writes: indent 6 for
+        // `- client_id`, indent 8 for sibling fields, indent 10 for list items.
+        [
+            "identity_providers:",
+            "  oidc:",
+            "    jwks:",
+            "      - key_id: 'main'",
+            "    clients:",
+            "      - client_id: 'uuid-forgejo'",
+            "        client_name: 'forgejo'",
+            "        client_secret: 'secret-forgejo'",
+            "        redirect_uris:",
+            "          - 'https://forgejo.example.com/callback'",
+            "        scopes:",
+            "          - 'openid'",
+            "        authorization_policy: 'one_factor'",
+            "      - client_id: 'uuid-immich'",
+            "        client_name: 'immich'",
+            "        client_secret: 'secret-immich'",
+            "        redirect_uris:",
+            "          - 'https://immich.example.com/callback'",
+            "        scopes:",
+            "          - 'openid'",
+            "        authorization_policy: 'one_factor'",
+            "",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn removes_matching_client_block() {
+        let yaml = two_client_yaml();
+        let out = remove_client_block(&yaml, "forgejo");
+        assert!(!out.contains("forgejo"));
+        assert!(out.contains("client_name: 'immich'"));
+        assert!(out.contains("uuid-immich"));
+    }
+
+    #[test]
+    fn preserves_surrounding_structure() {
+        let yaml = two_client_yaml();
+        let out = remove_client_block(&yaml, "forgejo");
+        assert!(out.starts_with("identity_providers:\n"));
+        assert!(out.contains("    clients:"));
+        assert!(out.contains("    jwks:"));
+        assert!(out.ends_with('\n'));
+    }
+
+    #[test]
+    fn no_match_is_a_noop() {
+        let yaml = two_client_yaml();
+        let out = remove_client_block(&yaml, "paperless");
+        assert_eq!(out, yaml);
+    }
+
+    #[test]
+    fn removes_only_matching_block_when_names_are_prefixes() {
+        // 'im' should not match 'immich' — we match on the full quoted name.
+        let yaml = two_client_yaml();
+        let out = remove_client_block(&yaml, "im");
+        assert_eq!(out, yaml);
+    }
 }

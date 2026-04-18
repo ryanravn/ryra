@@ -767,6 +767,41 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
         }
     }
 
+    // Clean up ryra-managed Caddy site block + OIDC client registration
+    // BEFORE the daemon reload, so the routing layers drop their stale
+    // pointers while the doomed containers are already stopped.
+    if !WellKnownService::Caddy.matches(service_name) && installed.url.is_some() {
+        let caddyfile_path = caddy::caddyfile_path()?;
+        if caddyfile_path.exists() {
+            let existing =
+                std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+                    path: caddyfile_path.clone(),
+                    source,
+                })?;
+            let updated = caddy::remove_route(&existing, service_name);
+            if updated != existing {
+                steps.push(Step::WriteFile(GeneratedFile {
+                    path: caddyfile_path,
+                    content: updated.clone(),
+                }));
+                // Skip reload if the Caddyfile is now empty — Caddy rejects
+                // empty configs and will fail the reload.
+                if !updated.trim().is_empty() {
+                    steps.push(Step::ReloadCaddy);
+                }
+            }
+        }
+    }
+
+    if !WellKnownService::Authelia.matches(service_name)
+        && matches!(
+            installed.auth_kind,
+            Some(registry::service_def::AuthKind::Oidc)
+        )
+    {
+        steps.extend(authelia::unregister_oidc_client(service_name)?);
+    }
+
     // Reload systemd after removing quadlet files
     steps.push(Step::DaemonReload);
 
