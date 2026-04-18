@@ -1,6 +1,7 @@
 use anyhow::Result;
 use dialoguer::Input;
 use ryra_core::Step;
+use ryra_core::config::schema::Config;
 use ryra_core::data::{ServiceData, ServiceStatus};
 
 use super::apply;
@@ -111,7 +112,7 @@ async fn remove_one(
         let result = ryra_core::remove_service(service, mode)?;
 
         if !skip_prompt {
-            prompt_installed(service, mode)?;
+            prompt_installed(config, service, mode)?;
         }
 
         if dry_run {
@@ -182,7 +183,7 @@ fn orphan_purge_steps(svc: &ServiceData) -> Vec<Step> {
     steps
 }
 
-fn prompt_installed(service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
+fn prompt_installed(config: &Config, service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
     if !super::is_interactive() {
         anyhow::bail!("use --yes (-y) to confirm removal in non-interactive mode");
     }
@@ -196,9 +197,23 @@ fn prompt_installed(service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
         }
         ryra_core::RemoveMode::Preserve => {
             println!("  - Delete config + .env at {}", home_dir.display());
-            println!(
-                "  - Keep data subdirs and podman volumes (run `ryra remove {service} --purge` later to delete)"
-            );
+            // Enumerate what's actually preserved rather than make a
+            // blanket claim. Services like twenty keep every byte in
+            // podman named volumes and leave the home dir empty after
+            // preserve-remove — the old copy told users "data
+            // preserved at <empty-dir>" and they'd wonder where it went.
+            let preserved = preserved_items(config, service);
+            if preserved.is_empty() {
+                println!("  - (nothing else to preserve — this service stores no data)");
+            } else {
+                println!("  - Preserve:");
+                for line in &preserved {
+                    println!("      {line}");
+                }
+                println!(
+                    "    (run `ryra remove {service} --purge` later to delete)"
+                );
+            }
         }
     }
     println!();
@@ -209,6 +224,25 @@ fn prompt_installed(service: &str, mode: ryra_core::RemoveMode) -> Result<()> {
         anyhow::bail!("cancelled");
     }
     Ok(())
+}
+
+/// Human-readable list of what `preserve`-mode removal will leave
+/// behind: classified data paths under the home dir plus any podman
+/// named volumes. Returns an empty vec for services that live entirely
+/// in their `.env`/config.
+fn preserved_items(config: &Config, service: &str) -> Vec<String> {
+    let Ok(Some(svc)) = ryra_core::data::enumerate_service(config, service) else {
+        return Vec::new();
+    };
+    let mut items: Vec<String> = svc
+        .data_paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    for v in &svc.volumes {
+        items.push(format!("volume:{}", v.name));
+    }
+    items
 }
 
 fn prompt_orphan(svc: &ServiceData) -> Result<()> {
@@ -268,11 +302,22 @@ fn print_installed_tail(service: &str, mode: ryra_core::RemoveMode) -> Result<()
             println!("\n{service} removed (purged).");
         }
         ryra_core::RemoveMode::Preserve => {
-            println!(
-                "\n{service} removed. Data preserved at {}.",
-                ryra_core::service_home(service)?.display()
-            );
-            println!("Run `ryra remove {service} --purge` to delete.");
+            // Reload config — finalize_remove has just dropped the entry,
+            // so enumerate_service now sees the service as an orphan and
+            // reports exactly what's still on disk.
+            let paths = ryra_core::config::ConfigPaths::resolve()?;
+            let config = ryra_core::config::load_or_default(&paths.config_file)?;
+            let items = preserved_items(&config, service);
+            println!();
+            if items.is_empty() {
+                println!("{service} removed. No data was preserved.");
+            } else {
+                println!("{service} removed. Preserved:");
+                for line in &items {
+                    println!("  {line}");
+                }
+                println!("Run `ryra remove {service} --purge` to delete.");
+            }
         }
     }
     Ok(())
