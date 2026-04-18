@@ -170,20 +170,28 @@ pub fn build_context(
             );
         }
 
-        // services.<name>.env.<VAR> — read from the service's .env file
-        let Ok(service_dir) = crate::service_home(name) else {
-            continue;
+        // services.<name>.env.<VAR> — read from the service's .env file.
+        // A missing .env is fine (service was just recorded, files not yet written);
+        // any other read error must propagate so we don't silently miss cross-service
+        // template references like {{services.postgres.env.POSTGRES_PASSWORD}}.
+        let env_file = crate::service_home(name)?.join(".env");
+        let content = match std::fs::read_to_string(&env_file) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(Error::FileRead {
+                    path: env_file,
+                    source,
+                });
+            }
         };
-        let env_file = service_dir.join(".env");
-        if let Ok(content) = std::fs::read_to_string(&env_file) {
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                if let Some((key, val)) = line.split_once('=') {
-                    ctx.insert(format!("services.{name}.env.{key}"), val.to_string());
-                }
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                ctx.insert(format!("services.{name}.env.{key}"), val.to_string());
             }
         }
     }
@@ -221,16 +229,13 @@ pub fn build_context(
         }
         if let (Some(claims), Some(signing_key_name)) = (&env.jwt_claims, &env.jwt_signing_key) {
             let signing_key_ref = format!("secret.{signing_key_name}");
-            let signing_key = match ctx.get(&signing_key_ref).cloned() {
-                Some(k) => k,
-                None => {
-                    eprintln!(
-                        "Warning: JWT signing key '{signing_key_name}' not found in context \
-                         — JWT will be signed with an empty key"
-                    );
-                    String::new()
-                }
-            };
+            let signing_key = ctx.get(&signing_key_ref).cloned().ok_or_else(|| {
+                Error::Template(format!(
+                    "JWT signing key '{signing_key_name}' not found in context — \
+                     the referenced secret must be declared by a non-JWT env var in \
+                     service.toml before the JWT env var that signs with it"
+                ))
+            })?;
             for secret_name in crate::generate::extract_secret_refs(&env.value) {
                 let key = format!("secret.{secret_name}");
                 ctx.entry(key)

@@ -179,11 +179,15 @@ fn render_refresh_ca_script(ryra_dir: &Path, service_data: &Path) -> String {
 }
 
 fn render_resolve_auth_host_script(service_data: &Path, host: &str) -> String {
+    // `timeout 5` guards against a wedged podman socket: this runs in
+    // ExecStartPre, and without the guard a hung podman blocks service
+    // startup indefinitely. On timeout we fall through to 127.0.0.1 —
+    // OIDC won't work, but the service comes up instead of hanging.
     format!(
         "#!/bin/bash\n\
          # Resolve caddy's current IP for .localhost auth domains\n\
          HOSTS=\"{service_data}/auth-hosts.txt\"\n\
-         CADDY_IP=$(podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
+         CADDY_IP=$(timeout 5 podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
          if [ -n \"$CADDY_IP\" ]; then\n\
            echo \"$CADDY_IP {host}\" > \"$HOSTS\"\n\
          else\n\

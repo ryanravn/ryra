@@ -39,6 +39,22 @@ pub fn atomic_write(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
         source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name"),
     })?;
 
+    // Refuse to clobber a symlink at `path`. The final `rename` would replace
+    // the link itself with our tempfile, silently destroying the user's link
+    // target. We only manage regular files — if a user has intentionally
+    // symlinked a ryra-managed config elsewhere, surface the conflict.
+    if let Ok(meta) = std::fs::symlink_metadata(path)
+        && meta.file_type().is_symlink()
+    {
+        return Err(Error::FileWrite {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to overwrite a symlink — resolve the symlink or remove it",
+            ),
+        });
+    }
+
     // .<name>.tmp.<pid> — dot-prefixed so it's not mistaken for user content
     // if something interrupts us mid-write.
     let mut tmp_name = std::ffi::OsString::from(".");
@@ -125,6 +141,23 @@ mod tests {
 
         let contents = std::fs::read_to_string(&path)?;
         assert_eq!(contents, "second\n");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn refuses_to_clobber_symlink() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("real.toml");
+        std::fs::write(&target, b"original")?;
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&target, &link)?;
+
+        let result = atomic_write(&link, b"new", 0o644);
+        assert!(result.is_err(), "expected error, got {result:?}");
+
+        // Target must be untouched — the whole point of the check.
+        assert_eq!(std::fs::read_to_string(&target)?, "original");
         Ok(())
     }
 

@@ -1,5 +1,16 @@
 # Ryra Development Guidelines
 
+## Core Principle: Fewer Features, Well Implemented
+
+Prefer a small, tight, obvious codebase over a large one full of knobs. Every feature, abstraction, error variant, config field, and Step variant is a long-term support burden — it needs docs, tests, migration paths, and has to keep working through every future refactor. Ship less; polish what you ship.
+
+Applied:
+- Fix the bug in front of you; don't surrounding-cleanup or "while I'm here" refactor.
+- Add the smallest thing that works end-to-end. No speculative flexibility, no "might need this later" parameters.
+- Prefer extending existing types over introducing parallel ones. Two enum variants < new enum. One new function < new module.
+- A symmetric code path in core (planning) is better than a new Step variant when the existing ones already express it (e.g., `Step::WriteFile` for Caddyfile edits — don't add `Step::EditCaddyfile`).
+- When in doubt, delete.
+
 ## Core Principle: Make Invalid State Unrepresentable
 
 Use enums and pattern matching everywhere instead of string comparisons, boolean flags, or if-chains. This applies at every layer:

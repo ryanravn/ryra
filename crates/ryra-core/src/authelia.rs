@@ -227,26 +227,35 @@ pub fn register_oidc_client(
         // port 8443). OIDC clients require the issuer URL to match exactly,
         // so services connect to the external URL (https://domain:8443)
         // which routes through Caddy's TLS termination to authelia.
+        //
+        // Caddy is installed, so caddy.container must exist — a missing or
+        // unreadable file here means something has gone wrong that we should
+        // surface, not swallow (OIDC discovery silently breaks otherwise).
         let caddy_quadlet = quadlet_dir.join("caddy.container");
-        if let Ok(content) = std::fs::read_to_string(&caddy_quadlet) {
-            let network_spec = format!("{authelia}:alias={domain}");
-            if !content.contains(&format!("alias={domain}")) {
-                let updated = inject_networks(&content, &[network_spec]);
-                steps.push(Step::WriteFile(GeneratedFile {
-                    path: caddy_quadlet,
-                    content: updated,
-                }));
-                need_caddy_restart = true;
-            }
+        let content = std::fs::read_to_string(&caddy_quadlet).map_err(|source| Error::FileRead {
+            path: caddy_quadlet.clone(),
+            source,
+        })?;
+        let network_spec = format!("{authelia}:alias={domain}");
+        if !content.contains(&format!("alias={domain}")) {
+            let updated = inject_networks(&content, &[network_spec]);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: caddy_quadlet,
+                content: updated,
+            }));
+            need_caddy_restart = true;
         }
 
         // 2. Add an authelia site block to the Caddyfile so Caddy
         //    terminates TLS and reverse-proxies to authelia. Without this,
         //    Caddy has no route for the auth domain and returns 404.
-        if let Ok(caddyfile_path) = crate::caddy::caddyfile_path()
-            && let Ok(caddyfile) = std::fs::read_to_string(&caddyfile_path)
-            && !caddyfile.contains(&format!("# ryra:{authelia}"))
-        {
+        let caddyfile_path = crate::caddy::caddyfile_path()?;
+        let caddyfile =
+            std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+                path: caddyfile_path.clone(),
+                source,
+            })?;
+        if !caddyfile.contains(&format!("# ryra:{authelia}")) {
             let block = crate::caddy::render_site_block(&crate::caddy::CaddySiteParams {
                 service_name: authelia.to_string(),
                 domain: domain.clone(),
