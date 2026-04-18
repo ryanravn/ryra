@@ -7,7 +7,7 @@ After=ente-postgres.service ente-minio.service
 Wants=ente-web.service
 
 [Container]
-Image=ghcr.io/ente-io/server:449284a6a119a2275928d21987453f88fbde9565
+Image=ghcr.io/ente-io/server:7be2c66fb69517eb1a2f67b0d94cc72817687df9
 ContainerName=ente-museum
 Network=ente.network:alias=museum
 PublishPort=${RYRA_PORT_HTTP}:8080
