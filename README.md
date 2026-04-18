@@ -13,19 +13,19 @@ ryra init
 ryra add whoami
 ```
 
-### With a domain and reverse proxy
+### With a public URL and reverse proxy
 
 ```
 ryra add caddy
-ryra add whoami --domain whoami.example.com
+ryra add whoami --url https://whoami.example.com
 ```
 
 ### With SSO authentication
 
 ```
 ryra add caddy
-AUTHELIA_ADMIN_PASSWORD=secret ryra add authelia --domain auth.example.com
-ryra add whoami --domain whoami.example.com --auth
+AUTHELIA_ADMIN_PASSWORD=secret ryra add authelia --url https://auth.example.com
+ryra add whoami --url https://whoami.example.com --auth
 ```
 
 The `--auth` flag enables authentication for the service:
@@ -37,7 +37,7 @@ The `--auth` flag enables authentication for the service:
 1. **`ryra init`** — creates `~/.config/ryra/ryra.toml`
 2. **`ryra add <service>`** — generates Podman quadlet files, .env, and starts the service via systemd
 3. **`ryra add caddy`** — installs Caddy as a reverse proxy (ports 8080/8443)
-4. **`--domain`** — adds a Caddy site block routing the domain to the service
+4. **`--url <public-url>`** — sets the service's public URL; if Caddy is installed, adds a site block routing the URL's hostname to the service. If you use your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale, etc.), this URL is still used to populate template variables like OIDC callback URLs — ryra won't touch the routing.
 5. **`--auth`** — registers an OIDC client with the auth provider and configures the service
 
 ### Service layout

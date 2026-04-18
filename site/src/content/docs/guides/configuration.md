@@ -11,10 +11,12 @@ Ryra uses Caddy as an optional reverse proxy with automatic HTTPS:
 
 ```bash
 ryra add caddy
-ryra add vaultwarden --domain vault.example.com
+ryra add vaultwarden --url https://vault.example.com
 ```
 
-When you add a service with `--domain`, Ryra configures a Caddy site block that routes traffic to the service. Caddy handles TLS automatically.
+When you add a service with `--url`, Ryra configures a Caddy site block that routes traffic from the URL's hostname to the service. Caddy handles TLS automatically.
+
+If you run your own reverse proxy (nginx, Traefik, Cloudflare Tunnel, Tailscale Funnel, etc.), pass `--url` with the public URL your setup exposes. Ryra uses it to populate template variables like OIDC callback URLs, email links, and `{{service.external_url}}` without installing Caddy or changing your routing.
 
 ## SMTP
 

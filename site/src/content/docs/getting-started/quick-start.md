@@ -50,5 +50,5 @@ This shows all services available in the registry that you can deploy.
 ## Next steps
 
 - [Configure reverse proxy, SMTP, and auth](/guides/configuration/) for production use
-- Add `--domain` to expose services through Caddy with automatic HTTPS
+- Add `--url https://service.example.com` to expose services through Caddy with automatic HTTPS
 - Add `--auth` to enable SSO authentication via Authelia

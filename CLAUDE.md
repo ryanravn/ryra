@@ -62,21 +62,25 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 
 ## Auth and Caddy Integration
 
-### Domain philosophy
+### URL philosophy
 
-Services run at `http://127.0.0.1:<port>` by default — no domain, no HTTPS, no `/etc/hosts` entries needed. The `--domain` flag is opt-in for when the user wants to expose a service through Caddy with a custom hostname.
+Services run at `http://127.0.0.1:<port>` by default — no domain, no HTTPS, no `/etc/hosts` entries needed. The `--url` flag is opt-in for when the user wants to tell ryra where the service will be publicly reachable — whether that's through Caddy, an external reverse proxy, a Cloudflare Tunnel, a Tailscale Funnel, or anything else.
 
-The only exception is **authelia**, which requires a domain because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a domain (defaults to `auth.localhost`). `.localhost` domains resolve to 127.0.0.1 automatically (RFC 6761) — no `/etc/hosts` entry needed.
+`--url` is modeled as a *fact about the deployment*, not a request to configure routing. Ryra always uses it to populate template variables (`{{service.external_url}}`, `{{service.domain}}`, `{{service.scheme}}`, OIDC callback URLs, email links). Caddy integration is a side-effect that kicks in *when Caddy is installed* — if the user runs their own reverse proxy, they simply don't install Caddy and ryra won't touch routing.
 
-This keeps the default experience frictionless (no sudo, no DNS, no certs) while still supporting custom domains for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding.
+The only exception is **authelia**, which requires a public URL because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a URL (defaults to `https://auth.localhost:<caddy_https_port>`). `.localhost` domains resolve to 127.0.0.1 automatically (RFC 6761) — no `/etc/hosts` entry needed.
 
-### How `--domain` works
+This keeps the default experience frictionless (no sudo, no DNS, no certs) while still supporting custom URLs for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding.
 
-When `ryra add <service> --domain foo.example.com` is called:
-1. The domain is passed to the template context as `{{service.domain}}`
-2. If Caddy is installed, a site block is added to the Caddyfile routing the domain to the service's port
+### How `--url` works
+
+When `ryra add <service> --url https://foo.example.com` is called:
+1. The URL is parsed; `{{service.external_url}}`, `{{service.domain}}` (hostname), and `{{service.scheme}}` are added to the template context
+2. If Caddy is installed, a site block is added to the Caddyfile routing `foo.example.com` to the service's port
 3. `caddy reload` applies the new route
 4. On `ryra remove`, the route is cleaned up (reload is skipped if the Caddyfile becomes empty)
+
+If Caddy is *not* installed, step 2-3 are skipped — ryra populates templates and leaves routing to whatever the user's external setup is.
 
 ### How `--auth` works
 
@@ -87,7 +91,7 @@ When `ryra add <service> --auth` is called:
 4. OIDC client registration is handled by `authelia.rs` (edits authelia's configuration.yml)
 5. Quadlet `ExecStartPost=` scripts handle runtime OIDC setup (API calls, config injection) after the container starts
 6. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
-7. Services work at `http://127.0.0.1:<port>` without `--domain` — the OIDC redirect goes through authelia (HTTPS) and back to the service (HTTP)
+7. Services work at `http://127.0.0.1:<port>` without `--url` — the OIDC redirect goes through authelia (HTTPS) and back to the service (HTTP)
 
 ### Pre-start and post-start scripts
 
@@ -161,10 +165,10 @@ Key points:
 
 ### OIDC lifecycle tests
 
-OIDC tests must install caddy and authelia before adding services with `--auth --domain`. The test steps are:
+OIDC tests must install caddy and authelia before adding services with `--auth --url`. The test steps are:
 1. `ryra add caddy` — reverse proxy
-2. `ryra add authelia --domain auth.test.local` — OIDC provider
-3. `ryra add <service> --auth --domain <service>.test.local` — service with OIDC
+2. `ryra add authelia --url https://auth.test.local` — OIDC provider
+3. `ryra add <service> --auth --url https://<service>.test.local` — service with OIDC
 4. Assertions verify HTTP responds and OIDC is configured
 
 ### Adding a new service

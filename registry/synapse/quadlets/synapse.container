@@ -22,7 +22,7 @@ PublishPort=${RYRA_PORT_HTTP}:8080
 # bare `$host` nginx variables, not `${VAR}`, so envsubst leaves them alone.
 Volume=%h/.local/share/ryra/synapse/configs/element-nginx.conf:/etc/nginx/templates/default.conf.template:ro,Z
 # Element's SPA loads /config.json on page load. Rendered by ExecStartPre
-# below since it needs the published port or the --domain URL.
+# below since it needs the published port or the --url value.
 Volume=%h/.local/share/ryra/synapse/configs/config.json:/app/config.json:ro,Z
 EnvironmentFile=%h/.local/share/ryra/synapse/.env
 HealthCmd=wget -qO- http://localhost:8080 >/dev/null || exit 1
