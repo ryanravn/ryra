@@ -143,6 +143,8 @@ This applies during development too — when a service fails after `ryra add`, c
 
 ## E2E Testing
 
+E2E coverage is scoped to flows that cross service boundaries — primarily SMTP delivery and OIDC login. Services without those integrations (e.g. Synapse, Vaultwarden when added without `--auth`) don't need a dedicated E2E test; a simple install assertion is enough.
+
 Key points:
 
 - Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
