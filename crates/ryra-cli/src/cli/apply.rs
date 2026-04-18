@@ -38,16 +38,8 @@ async fn execute(step: &Step) -> Result<()> {
             // - everything else        — conventional world-readable (0o644)
             // Using atomic write across the board so a crash mid-write can't
             // leave a half-written quadlet/config behind.
-            let name = file
-                .path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let ext = file
-                .path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
+            let name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let ext = file.path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let mode = if name == ".env" || name == "ryra.toml" {
                 0o600
             } else if ext == "sh" {
@@ -55,8 +47,12 @@ async fn execute(step: &Step) -> Result<()> {
             } else {
                 0o644
             };
-            ryra_core::system::atomic_write::atomic_write(&file.path, file.content.as_bytes(), mode)
-                .with_context(|| format!("failed to write {}", file.path.display()))?;
+            ryra_core::system::atomic_write::atomic_write(
+                &file.path,
+                file.content.as_bytes(),
+                mode,
+            )
+            .with_context(|| format!("failed to write {}", file.path.display()))?;
             Ok(())
         }
         Step::DaemonReload => run_cmd("systemctl", &["--user", "daemon-reload"]),

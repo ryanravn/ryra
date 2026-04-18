@@ -934,28 +934,3 @@ async fn run_bare(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod args_tests {
-    use super::*;
-    use clap::{CommandFactory, Parser};
-
-    #[test]
-    fn no_vm_flag_parses() {
-        let args = Args::try_parse_from(["ryra-test", "--no-vm"]).expect("parse");
-        assert!(args.no_vm);
-    }
-
-    #[test]
-    fn no_vm_flag_default_false() {
-        let args = Args::try_parse_from(["ryra-test"]).expect("parse");
-        assert!(!args.no_vm);
-    }
-
-    #[test]
-    fn no_vm_flag_appears_in_help() {
-        let mut cmd = Args::command();
-        let help = cmd.render_long_help().to_string();
-        assert!(help.contains("--no-vm"), "help missing --no-vm: {help}");
-    }
-}

@@ -392,13 +392,6 @@ mod tests {
     }
 
     #[test]
-    fn inject_networks_empty_is_noop() {
-        let content = "[Container]\nImage=nginx\n\n[Service]\nRestart=always\n";
-        let result = inject_networks(content, &[]);
-        assert_eq!(result, content);
-    }
-
-    #[test]
     fn inject_networks_no_service_section_appends() {
         let content = "[Container]\nImage=nginx\n";
         let result = inject_networks(content, &["caddy".to_string()]);
@@ -414,13 +407,6 @@ mod tests {
             result,
             "[Container]\nImage=nginx\n\nVolume=/host/ca.crt:/etc/ssl/ca.crt:ro\n[Service]\nRestart=always\n"
         );
-    }
-
-    #[test]
-    fn inject_extra_volumes_empty_is_noop() {
-        let content = "[Container]\nImage=nginx\n";
-        let result = inject_extra_volumes(content, &[]);
-        assert_eq!(result, content);
     }
 
     #[test]

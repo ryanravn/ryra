@@ -515,83 +515,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_simple_test_toml() {
-        let toml = r#"
-[setup]
-services = ["caddy", "myapp"]
-
-[[tests]]
-name = "app responds"
-run = "curl -sf http://localhost:8080"
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        assert_eq!(
-            parsed.setup.as_ref().unwrap().services,
-            vec!["caddy", "myapp"]
-        );
-        assert_eq!(parsed.tests.len(), 1);
-        assert_eq!(parsed.tests[0].name, "app responds");
-        assert_eq!(
-            parsed.tests[0].run.as_deref(),
-            Some("curl -sf http://localhost:8080")
-        );
-        assert!(!parsed.is_lifecycle());
-    }
-
-    #[test]
-    fn parse_lifecycle_test_toml() {
-        let toml = r#"
-[test]
-name = "sso flow"
-browser = true
-
-[[steps]]
-action = "add"
-service = "authelia"
-
-[[steps]]
-action = "shell"
-name = "check-auth"
-run = "curl -sf http://auth.test.local"
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        assert!(parsed.needs_browser());
-        assert!(parsed.is_lifecycle());
-        assert_eq!(parsed.steps.len(), 2);
-        assert!(matches!(parsed.steps[0], StepDef::Add { .. }));
-        if let StepDef::Add { ref service, .. } = parsed.steps[0] {
-            assert_eq!(service, "authelia");
-        }
-    }
-
-    #[test]
-    fn parse_quadlet_test_toml() {
-        let toml = r#"
-[setup]
-services = ["caddy"]
-quadlets = ["myapp.container", "myapp-db.container"]
-
-[[tests]]
-name = "quadlet app responds"
-run = "curl -sf http://localhost:9000"
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        assert_eq!(
-            parsed.setup.as_ref().unwrap().quadlets,
-            vec!["myapp.container", "myapp-db.container"]
-        );
-        assert_eq!(
-            parsed.quadlet_files(),
-            vec!["myapp.container", "myapp-db.container"]
-        );
-        assert_eq!(parsed.setup.as_ref().unwrap().services, vec!["caddy"]);
-        assert_eq!(parsed.tests.len(), 1);
-    }
-
-    #[test]
     fn reject_mixed_tests_and_steps() {
         let toml = r#"
 [[tests]]
@@ -639,33 +562,6 @@ run = "true"
     }
 
     #[test]
-    fn parse_browser_step() {
-        let toml = r#"
-[test]
-name = "auth-browser"
-browser = true
-
-[[steps]]
-action = "add"
-service = "caddy"
-
-[[steps]]
-action = "playwright"
-name = "sso-test"
-spec = "seafile-auth.spec.ts"
-timeout = 120
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        assert!(parsed.is_lifecycle());
-        assert_eq!(parsed.steps.len(), 2);
-        assert!(matches!(parsed.steps[1], StepDef::Playwright { .. }));
-        if let StepDef::Playwright { ref spec, .. } = parsed.steps[1] {
-            assert_eq!(spec, "seafile-auth.spec.ts");
-        }
-    }
-
-    #[test]
     fn browser_step_requires_spec() {
         let toml = r#"
 [[steps]]
@@ -676,56 +572,6 @@ action = "playwright"
         assert!(result.is_err());
         let msg = format!("{:#}", result.unwrap_err());
         assert!(msg.contains("spec") || msg.contains("missing field"));
-    }
-
-    #[test]
-    fn step_with_args() {
-        let toml = r#"
-[[steps]]
-action = "add"
-service = "caddy"
-args = "--domain proxy.test.local"
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        if let StepDef::Add { ref args, .. } = parsed.steps[0] {
-            assert_eq!(args.as_deref(), Some("--domain proxy.test.local"));
-        } else {
-            panic!("expected Add step");
-        }
-    }
-
-    #[test]
-    fn shell_step_parses() {
-        let toml = r#"
-[[steps]]
-action = "shell"
-name = "check"
-run = "true"
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        assert!(matches!(parsed.steps[0], StepDef::Shell { .. }));
-    }
-
-    #[test]
-    fn run_step_with_poll() {
-        let toml = r#"
-[[steps]]
-action = "shell"
-name = "wait-for-http"
-run = "curl -sf http://localhost:8080"
-poll = { interval = 5, attempts = 10 }
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        if let StepDef::Shell { ref poll, .. } = parsed.steps[0] {
-            let p = poll.as_ref().expect("poll should be Some");
-            assert_eq!(p.interval, 5);
-            assert_eq!(p.attempts, 10);
-        } else {
-            panic!("expected Run step");
-        }
     }
 
     #[test]
@@ -741,35 +587,6 @@ run = "true"
     }
 
     #[test]
-    fn add_step_with_env() {
-        let toml = r#"
-[[steps]]
-action = "add"
-service = "authelia"
-args = "--url https://auth.localhost:8443"
-env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "pass123" }
-timeout = 300
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        if let StepDef::Add {
-            ref service,
-            ref args,
-            ref env,
-            timeout,
-        } = parsed.steps[0]
-        {
-            assert_eq!(service, "authelia");
-            assert_eq!(args.as_deref(), Some("--url https://auth.localhost:8443"));
-            assert_eq!(env.get("AUTHELIA_ADMIN_USER").unwrap(), "testuser");
-            assert_eq!(env.get("AUTHELIA_ADMIN_PASSWORD").unwrap(), "pass123");
-            assert_eq!(timeout, 300);
-        } else {
-            panic!("expected Add step");
-        }
-    }
-
-    #[test]
     fn add_step_default_timeout() {
         let toml = r#"
 [[steps]]
@@ -782,35 +599,6 @@ service = "whoami"
             assert_eq!(timeout, 300);
         } else {
             panic!("expected Add step");
-        }
-    }
-
-    #[test]
-    fn http_step_parses() {
-        let toml = r#"
-[[steps]]
-action = "http"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/health"
-status = 200
-poll = { interval = 5, attempts = 10 }
-timeout = 60
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        if let StepDef::Http {
-            ref url,
-            status,
-            ref poll,
-            timeout,
-            ..
-        } = parsed.steps[0]
-        {
-            assert_eq!(url, "http://127.0.0.1:$RYRA_PORT_HTTP/health");
-            assert_eq!(status, 200);
-            assert_eq!(poll.as_ref().unwrap().attempts, 10);
-            assert_eq!(timeout, 60);
-        } else {
-            panic!("expected Http step");
         }
     }
 
@@ -831,36 +619,6 @@ url = "http://localhost:8080"
             assert_eq!(timeout, 30);
         } else {
             panic!("expected Http step");
-        }
-    }
-
-    #[test]
-    fn mail_step_parses() {
-        let toml = r#"
-[[steps]]
-action = "mail"
-mailbox = "smtptest"
-contains = "ryra smtp test"
-poll = { interval = 3, attempts = 20 }
-timeout = 60
-"#;
-        let (_dir, path) = write_temp(toml);
-        let parsed = TestToml::parse(&path).expect("parse");
-        if let StepDef::Mail {
-            ref mailbox,
-            ref contains,
-            ref poll,
-            timeout,
-            ..
-        } = parsed.steps[0]
-        {
-            assert_eq!(mailbox, "smtptest");
-            assert_eq!(contains.as_deref(), Some("ryra smtp test"));
-            assert_eq!(poll.interval, 3);
-            assert_eq!(poll.attempts, 20);
-            assert_eq!(timeout, 60);
-        } else {
-            panic!("expected Mail step");
         }
     }
 

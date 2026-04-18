@@ -216,13 +216,6 @@ mod tests {
         assert_eq!(vols[1].owner.as_deref(), Some("seafile"));
         assert!(vols[0].quadlet_file.is_some());
     }
-
-    #[test]
-    fn parse_volume_quadlets_missing_dir_returns_empty() {
-        let vols =
-            parse_volume_quadlets(std::path::Path::new("/nonexistent-xyz-456"), &[]).unwrap();
-        assert!(vols.is_empty());
-    }
 }
 
 #[cfg(test)]

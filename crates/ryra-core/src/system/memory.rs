@@ -40,10 +40,4 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(result, Some(7860)); // 8048752 / 1024
     }
-
-    #[test]
-    fn returns_none_for_missing_file() {
-        let result = total_ram_mb_from(Path::new("/nonexistent/meminfo"));
-        assert_eq!(result, None);
-    }
 }

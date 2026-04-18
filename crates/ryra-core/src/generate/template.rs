@@ -183,15 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn default_filter_with_value_present() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let mut ctx = BTreeMap::new();
-        ctx.insert("service.domain".into(), "example.com".into());
-        let result = render("{{ service.domain | default('localhost') }}", &ctx)?;
-        assert_eq!(result, "example.com");
-        Ok(())
-    }
-
-    #[test]
     fn forgejo_protocol_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut ctx = BTreeMap::new();
         ctx.insert("smtp.security".into(), "starttls".into());

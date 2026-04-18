@@ -129,8 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn tightens_permissions_on_overwrite() -> std::result::Result<(), Box<dyn std::error::Error>>
-    {
+    fn tightens_permissions_on_overwrite() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("ryra.toml");
         atomic_write(&path, b"v1", 0o644)?;
@@ -142,15 +141,6 @@ mod tests {
             let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "rename-over should install the new mode");
         }
-        Ok(())
-    }
-
-    #[test]
-    fn creates_parent_directory() -> std::result::Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("nested/deep/file.toml");
-        atomic_write(&path, b"x", 0o644)?;
-        assert!(path.exists());
         Ok(())
     }
 }

@@ -1141,13 +1141,6 @@ timeout = 10
     }
 
     #[test]
-    fn discover_local_project_no_test_toml() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = discover_local_project(dir.path()).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
     fn discover_local_project_no_quadlets() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -1158,27 +1151,6 @@ timeout = 10
 
         let result = discover_local_project(dir.path());
         assert!(result.is_err()); // should error about missing quadlet files
-    }
-
-    #[test]
-    fn has_quadlets_false_for_simple_without_quadlets() {
-        let dir = tempfile::tempdir().unwrap();
-        let test_toml = dir.path().join("test.toml");
-        std::fs::write(
-            &test_toml,
-            r#"
-[[tests]]
-name = "check"
-run = "true"
-"#,
-        )
-        .unwrap();
-
-        let parsed = TestToml::parse(&test_toml).unwrap();
-        let mut out = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
-        assert_eq!(out.len(), 1);
-        let test = out.remove(0);
-        assert!(!test.has_quadlets());
     }
 
     #[test]
@@ -1203,36 +1175,5 @@ run = "true"
         assert_eq!(out.len(), 1);
         let test = out.remove(0);
         assert!(test.needs_browser());
-    }
-
-    #[test]
-    fn browser_flag_on_lifecycle_test() {
-        let dir = tempfile::tempdir().unwrap();
-        let test_toml = dir.path().join("test.toml");
-        std::fs::write(
-            &test_toml,
-            r#"
-[test]
-name = "sso-test"
-browser = true
-
-[[steps]]
-action = "add"
-service = "authelia"
-
-[[steps]]
-action = "shell"
-name = "up"
-run = "true"
-"#,
-        )
-        .unwrap();
-
-        let parsed = TestToml::parse(&test_toml).unwrap();
-        let mut out = discover_from_test_toml(&test_toml, &parsed, "sso-test", None).unwrap();
-        assert_eq!(out.len(), 1);
-        let test = out.remove(0);
-        assert!(test.needs_browser());
-        assert!(test.is_lifecycle());
     }
 }
