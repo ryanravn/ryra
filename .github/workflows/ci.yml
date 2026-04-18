@@ -81,6 +81,24 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar czf "ryra-${VERSION}-${{ matrix.target }}.tar.gz" ryra
           mv "ryra-${VERSION}-${{ matrix.target }}.tar.gz" "$GITHUB_WORKSPACE/"
+          # install.sh fetches a stable versionless filename from the
+          # `latest` release so it doesn't need to discover the version
+          # out-of-band. Produce that alongside the versioned tarball.
+          cp "$GITHUB_WORKSPACE/ryra-${VERSION}-${{ matrix.target }}.tar.gz" \
+             "$GITHUB_WORKSPACE/ryra-${{ matrix.target }}.tar.gz"
+
+      - name: Sign tarballs
+        env:
+          APT_GPG_PRIVATE: ${{ secrets.APT_GPG_PRIVATE }}
+        run: |
+          echo "$APT_GPG_PRIVATE" | gpg --batch --import
+          VERSION=$(grep '^version' crates/ryra-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          gpg --batch --yes --detach-sign --armor \
+            --output "ryra-${VERSION}-${{ matrix.target }}.tar.gz.asc" \
+            "ryra-${VERSION}-${{ matrix.target }}.tar.gz"
+          # Versionless copy is byte-identical, so one signature covers both.
+          cp "ryra-${VERSION}-${{ matrix.target }}.tar.gz.asc" \
+             "ryra-${{ matrix.target }}.tar.gz.asc"
 
       - name: Build deb
         run: |
@@ -127,6 +145,9 @@ jobs:
           name: ryra-${{ matrix.target }}
           path: |
             ryra-*-${{ matrix.target }}.tar.gz
+            ryra-*-${{ matrix.target }}.tar.gz.asc
+            ryra-${{ matrix.target }}.tar.gz
+            ryra-${{ matrix.target }}.tar.gz.asc
             ryra_${{ matrix.deb_arch }}.deb
             ryra.${{ matrix.rpm_arch }}.rpm
             ryra-*-${{ matrix.rpm_arch }}.pkg.tar.zst
@@ -147,7 +168,7 @@ jobs:
           tag: latest
           name: Latest
           body: Built from the latest commit on main.
-          artifacts: "ryra-*.tar.gz,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
+          artifacts: "ryra-*.tar.gz,ryra-*.tar.gz.asc,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
           allowUpdates: true
           removeArtifacts: true
           prerelease: true
@@ -179,7 +200,7 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          artifacts: "ryra-*.tar.gz,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
+          artifacts: "ryra-*.tar.gz,ryra-*.tar.gz.asc,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
           makeLatest: true
 
   publish-repos:

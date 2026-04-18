@@ -100,12 +100,46 @@ EOF
 install_binary() {
     echo "Installing binary directly..."
 
+    skip_verify="${RYRA_SKIP_VERIFY:-}"
+    if [ -n "$skip_verify" ]; then
+        echo ""
+        echo "  !!  RYRA_SKIP_VERIFY is set — skipping GPG signature check.  !!"
+        echo "  !!  The downloaded binary will NOT be verified against the   !!"
+        echo "  !!  ryra release key. Only use this on trusted networks if   !!"
+        echo "  !!  gpg is genuinely unavailable (e.g. minimal containers).  !!"
+        echo ""
+    elif ! command -v gpg >/dev/null 2>&1; then
+        echo "Error: gpg is required to verify the release signature."
+        echo "Install it (e.g. \`apt install gnupg\`, \`apk add gnupg\`) and re-run."
+        echo ""
+        echo "If gpg is genuinely unavailable on this system, you can bypass"
+        echo "verification at your own risk by re-running with RYRA_SKIP_VERIFY=1."
+        exit 1
+    fi
+
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
 
     url="${BASE_URL}/ryra-${rust_target}.tar.gz"
     echo "Downloading ryra for ${arch}..."
     curl -fsSL -o "${tmp}/ryra.tar.gz" "$url"
+
+    if [ -z "$skip_verify" ]; then
+        curl -fsSL -o "${tmp}/ryra.tar.gz.asc" "${url}.asc"
+
+        echo "Verifying signature..."
+        export GNUPGHOME="${tmp}/gnupg"
+        mkdir -p "$GNUPGHOME"
+        chmod 700 "$GNUPGHOME"
+        curl -fsSL "${PAGES_URL}/gpg.key" | gpg --batch --import 2>/dev/null
+        if ! gpg --batch --verify "${tmp}/ryra.tar.gz.asc" "${tmp}/ryra.tar.gz" 2>/dev/null; then
+            echo "Error: signature verification failed. Refusing to install."
+            echo "The tarball at ${url} does not match the signature at ${url}.asc"
+            echo "signed with the key at ${PAGES_URL}/gpg.key. This could mean"
+            echo "a man-in-the-middle, a corrupted download, or a tampered release."
+            exit 1
+        fi
+    fi
 
     tar xzf "${tmp}/ryra.tar.gz" -C "${tmp}"
     sudo install -m 755 "${tmp}/ryra" /usr/local/bin/ryra

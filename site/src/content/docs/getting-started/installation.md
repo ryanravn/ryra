@@ -16,6 +16,10 @@ curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
 
 This adds the Ryra repo for your package manager and installs the `ryra` binary. Updates come through your normal system updates (`apt upgrade`, `dnf upgrade`, `pacman -Syu`).
 
+All install paths are cryptographically verified:
+- APT / DNF / Pacman — each verifies packages against the Ryra GPG key in their native way.
+- The raw-binary fallback (used on distros without a supported package manager) downloads the release tarball, fetches its detached signature, and runs `gpg --verify` against the same public key before installing. Requires `gpg` on the host; set `RYRA_SKIP_VERIFY=1` to bypass only if gpg is genuinely unavailable.
+
 ## Supported distributions
 
 | Distro | Package format | Package manager |
