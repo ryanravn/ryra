@@ -29,7 +29,12 @@ pub struct Event {
 impl Event {
     /// Event with no captured output — for wait/service-status checks that
     /// don't run a shell command.
-    pub fn bare(description: String, kind: EventKind, outcome: Outcome, duration: Duration) -> Self {
+    pub fn bare(
+        description: String,
+        kind: EventKind,
+        outcome: Outcome,
+        duration: Duration,
+    ) -> Self {
         Self {
             description,
             kind,

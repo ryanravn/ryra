@@ -10,13 +10,13 @@ use super::prompts;
 /// - `ryra config <service>`   → detail for that service (installed-or-not, URL, commands)
 pub async fn run(section: Option<&str>) -> Result<()> {
     match section {
-        None => return run_overview(),
-        Some("smtp") => return edit_smtp().await,
-        Some("auth") => return edit_auth().await,
+        None => run_overview(),
+        Some("smtp") => edit_smtp().await,
+        Some("auth") => edit_auth().await,
         // Anything else is treated as a service name. Services are never
         // named `smtp` / `auth` in the registry (those are reserved config
         // sections), so there's no ambiguity.
-        Some(name) => return show_service(name).await,
+        Some(name) => show_service(name).await,
     }
 }
 
@@ -94,7 +94,10 @@ async fn edit_auth() -> Result<()> {
     save(&paths, &config)
 }
 
-fn save(paths: &ryra_core::config::ConfigPaths, config: &ryra_core::config::schema::Config) -> Result<()> {
+fn save(
+    paths: &ryra_core::config::ConfigPaths,
+    config: &ryra_core::config::schema::Config,
+) -> Result<()> {
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, config)?;
     println!("Config saved to {}", paths.config_file.display());

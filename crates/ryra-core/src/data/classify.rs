@@ -5,11 +5,7 @@ use crate::error::{Error, Result};
 /// Names/paths of files and dirs under a service home dir that ryra
 /// generates and can regenerate on next `ryra add`. Everything NOT
 /// matching this list is treated as user data.
-pub const EPHEMERAL_CHILDREN: &[&str] = &[
-    ".env",
-    "configs",
-    "auth-hosts.txt",
-];
+pub const EPHEMERAL_CHILDREN: &[&str] = &[".env", "configs", "auth-hosts.txt"];
 
 /// Extensions on top-level home-dir files that are always ephemeral.
 pub const EPHEMERAL_EXTENSIONS: &[&str] = &["crt", "sh"];
@@ -37,9 +33,7 @@ pub fn classify_home_dir(home_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if EPHEMERAL_CHILDREN.iter().any(|e| *e == name_str)
-            || EPHEMERAL_EXTENSIONS.iter().any(|e| *e == ext)
-        {
+        if EPHEMERAL_CHILDREN.contains(&name_str.as_ref()) || EPHEMERAL_EXTENSIONS.contains(&ext) {
             ephemeral.push(path);
         } else {
             data.push(path);

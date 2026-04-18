@@ -235,7 +235,10 @@ mod tests {
     #[test]
     fn returns_none_when_auth_disabled() {
         let tmp = tempfile::tempdir().unwrap();
-        let cfg = config_with(vec![installed("authelia", Some("https://auth.localhost"))], None);
+        let cfg = config_with(
+            vec![installed("authelia", Some("https://auth.localhost"))],
+            None,
+        );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
             enable_auth: false,
@@ -397,12 +400,7 @@ mod tests {
         assert!(paths.contains(&service_data.join("refresh-ca-bundle.sh").as_path()));
         assert!(!paths.contains(&service_data.join("resolve-auth-host.sh").as_path()));
         assert!(!paths.contains(&service_data.join("auth-hosts.txt").as_path()));
-        assert!(
-            !bridge
-                .volumes
-                .iter()
-                .any(|v| v.contains("/etc/hosts"))
-        );
+        assert!(!bridge.volumes.iter().any(|v| v.contains("/etc/hosts")));
     }
 
     #[test]

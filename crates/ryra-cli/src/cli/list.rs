@@ -83,7 +83,12 @@ pub fn run(all: bool, long: bool) -> Result<()> {
 /// every row would read `installed` and add nothing. PORTS is always
 /// shown so users can see how to reach each service without a second
 /// command.
-fn print_short(svcs: &[&ServiceData], home: &str, show_status: bool, ports: &HashMap<String, String>) {
+fn print_short(
+    svcs: &[&ServiceData],
+    home: &str,
+    show_status: bool,
+    ports: &HashMap<String, String>,
+) {
     // Width the PORTS column to the longest value so paths still line up.
     // Minimum 5 so the header itself doesn't look cramped.
     let ports_w = svcs
@@ -152,7 +157,14 @@ fn print_long(
         ));
     }
     for svc in svcs {
-        lines.extend(format_service(svc, home, &vol_sizes, show_status, ports, ports_w));
+        lines.extend(format_service(
+            svc,
+            home,
+            &vol_sizes,
+            show_status,
+            ports,
+            ports_w,
+        ));
     }
     println!("{}", lines.join("\n"));
 }
@@ -161,9 +173,7 @@ fn print_long(
 /// `podman unshare du -sb` concurrently. Returns a map of
 /// `volume_name -> Some(bytes)` on success, `volume_name -> None` when
 /// the walk failed (volume missing, podman unavailable, subuid mismatch).
-fn prefetch_volume_sizes(
-    svcs: &[ServiceData],
-) -> std::collections::HashMap<String, Option<u64>> {
+fn prefetch_volume_sizes(svcs: &[ServiceData]) -> std::collections::HashMap<String, Option<u64>> {
     use ryra_core::data::volumes::volume_size_bytes;
     let mut names: Vec<String> = svcs
         .iter()
@@ -179,10 +189,7 @@ fn prefetch_volume_sizes(
                 s.spawn(move || (n.clone(), volume_size_bytes(&n)))
             })
             .collect();
-        handles
-            .into_iter()
-            .filter_map(|h| h.join().ok())
-            .collect()
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
     })
 }
 

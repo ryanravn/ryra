@@ -42,6 +42,7 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
 ///  1. **Service tests** — grouped under the owning service name
 ///     (derived from `registry/<svc>/test.toml`).
 ///  2. **Service-agnostic tests** — flat list from `registry/tests/*.toml`.
+///
 /// Each line shows the test name, step count, `[browser]` flag, and
 /// distinct step kinds so `playwright`/`shell`/`http` tell you what
 /// the test does at a glance.
@@ -259,7 +260,8 @@ fn newest_source_newer_than(binary: &Path) -> Result<Option<(PathBuf, std::time:
         bin_mtime: std::time::SystemTime,
         newest: &mut Option<(PathBuf, std::time::SystemTime)>,
     ) -> Result<()> {
-        for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))?
+        for entry in
+            std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -275,9 +277,7 @@ fn newest_source_newer_than(binary: &Path) -> Result<Option<(PathBuf, std::time:
                 walk(&path, bin_mtime, newest)?;
             } else if ft.is_file() && is_source(&path) {
                 let mtime = entry.metadata()?.modified()?;
-                if mtime > bin_mtime
-                    && newest.as_ref().is_none_or(|(_, t)| mtime > *t)
-                {
+                if mtime > bin_mtime && newest.as_ref().is_none_or(|(_, t)| mtime > *t) {
                     *newest = Some((path, mtime));
                 }
             }

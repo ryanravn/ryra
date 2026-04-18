@@ -124,7 +124,9 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
 /// service, consider a dedicated `enumerate_one` that skips unrelated
 /// name collection.
 pub fn enumerate_service(config: &Config, name: &str) -> Result<Option<ServiceData>> {
-    Ok(enumerate_all(config)?.into_iter().find(|s| s.service == name))
+    Ok(enumerate_all(config)?
+        .into_iter()
+        .find(|s| s.service == name))
 }
 
 /// Walk `path` recursively, summing file sizes. Does not follow symlinks.

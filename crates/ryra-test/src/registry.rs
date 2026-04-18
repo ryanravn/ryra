@@ -780,7 +780,11 @@ timeout = 10
 
         let parsed = TestToml::parse(&test_toml).unwrap();
         let mut out = discover_from_test_toml(&test_toml, &parsed, "whoami", None).unwrap();
-        assert_eq!(out.len(), 1, "legacy shell form produces a single Simple test");
+        assert_eq!(
+            out.len(),
+            1,
+            "legacy shell form produces a single Simple test"
+        );
         let test = out.remove(0);
 
         assert_eq!(test.name(), "whoami");
@@ -1014,7 +1018,10 @@ service = "whoami"
 
         let err = TestToml::parse(&test_toml).expect_err("must reject run+steps");
         let msg = format!("{err:#}");
-        assert!(msg.contains("exactly one of `run` or `steps`"), "got: {msg}");
+        assert!(
+            msg.contains("exactly one of `run` or `steps`"),
+            "got: {msg}"
+        );
     }
 
     #[test]

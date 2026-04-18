@@ -44,9 +44,7 @@ pub async fn run(
             .collect();
         if purge {
             for svc in ryra_core::data::enumerate_all(&config)? {
-                if matches!(svc.status, ServiceStatus::Orphan)
-                    && !names.contains(&svc.service)
-                {
+                if matches!(svc.status, ServiceStatus::Orphan) && !names.contains(&svc.service) {
                     names.push(svc.service);
                 }
             }
@@ -128,9 +126,8 @@ async fn remove_one(
     }
 
     // Orphan + --purge: purge its leftover data.
-    let svc = ryra_core::data::enumerate_service(config, service)?.ok_or_else(|| {
-        anyhow::anyhow!("no service or leftover data for '{service}'")
-    })?;
+    let svc = ryra_core::data::enumerate_service(config, service)?
+        .ok_or_else(|| anyhow::anyhow!("no service or leftover data for '{service}'"))?;
     let steps = orphan_purge_steps(&svc);
     if steps.is_empty() {
         println!("{service}: nothing to purge.");
@@ -162,7 +159,9 @@ fn orphan_purge_steps(svc: &ServiceData) -> Vec<Step> {
         steps.push(Step::RemoveDir(svc.home_dir.clone()));
     }
     for v in &svc.volumes {
-        steps.push(Step::RemoveVolume { name: v.name.clone() });
+        steps.push(Step::RemoveVolume {
+            name: v.name.clone(),
+        });
     }
     steps
 }

@@ -119,7 +119,13 @@ pub fn reconcile(quadlet_refs: Vec<VolumeRef>, podman_names: Vec<String>) -> Vec
 /// the volume doesn't exist or podman isn't available.
 pub fn mountpoint_of(volume_name: &str) -> Option<PathBuf> {
     let out = std::process::Command::new("podman")
-        .args(["volume", "inspect", volume_name, "--format", "{{.Mountpoint}}"])
+        .args([
+            "volume",
+            "inspect",
+            volume_name,
+            "--format",
+            "{{.Mountpoint}}",
+        ])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -236,7 +242,10 @@ mod tests_reconcile {
         ];
         let merged = reconcile(quadlet, podman);
         assert_eq!(merged.len(), 2);
-        let ghost = merged.iter().find(|r| r.name == "systemd-ghost-volume").unwrap();
+        let ghost = merged
+            .iter()
+            .find(|r| r.name == "systemd-ghost-volume")
+            .unwrap();
         assert!(ghost.quadlet_file.is_none());
         assert!(ghost.owner.is_none());
     }

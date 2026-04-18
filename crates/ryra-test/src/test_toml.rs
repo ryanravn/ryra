@@ -310,7 +310,10 @@ impl StepDef {
             } => {
                 let poll_s = match poll {
                     Some(p) => {
-                        format!("  poll={{interval={}s, attempts={}}}", p.interval, p.attempts)
+                        format!(
+                            "  poll={{interval={}s, attempts={}}}",
+                            p.interval, p.attempts
+                        )
                     }
                     None => String::new(),
                 };

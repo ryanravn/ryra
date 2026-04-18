@@ -23,9 +23,7 @@ pub async fn is_enabled() -> bool {
         .output()
         .await;
     match output {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim() == "yes"
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim() == "yes",
         _ => false,
     }
 }

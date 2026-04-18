@@ -725,10 +725,9 @@ pub async fn run_lifecycle_test(
                 // run_step_with_poll retries this until the mail lands.
                 let mailbox_esc = shell_escape(mailbox);
                 let contains_check = match contains {
-                    Some(c) => format!(
-                        " && echo \"$RYRA_BODY\" | grep -q -- '{}'",
-                        shell_escape(c),
-                    ),
+                    Some(c) => {
+                        format!(" && echo \"$RYRA_BODY\" | grep -q -- '{}'", shell_escape(c),)
+                    }
                     None => String::new(),
                 };
                 let cmd = format!(
@@ -969,7 +968,11 @@ async fn run_event_streaming(
 
     let (outcome, stdout, stderr) = match result {
         Ok(Ok(out)) => (Outcome::Passed, out.stdout, out.stderr),
-        Ok(Err(e)) => (Outcome::Failed(format!("{e:#}")), String::new(), String::new()),
+        Ok(Err(e)) => (
+            Outcome::Failed(format!("{e:#}")),
+            String::new(),
+            String::new(),
+        ),
         Err(_) => (
             Outcome::Failed(format!("timed out after {timeout_secs}s")),
             String::new(),
@@ -995,7 +998,11 @@ async fn run_event(vm: &dyn Executor, kind: EventKind, cmd: &str, timeout_secs: 
 
     let (outcome, stdout, stderr) = match result {
         Ok(Ok(out)) => (Outcome::Passed, out.stdout, out.stderr),
-        Ok(Err(e)) => (Outcome::Failed(format!("{e:#}")), String::new(), String::new()),
+        Ok(Err(e)) => (
+            Outcome::Failed(format!("{e:#}")),
+            String::new(),
+            String::new(),
+        ),
         Err(_) => (
             Outcome::Failed(format!("timed out after {timeout_secs}s")),
             String::new(),

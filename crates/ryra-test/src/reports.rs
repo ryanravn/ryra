@@ -97,7 +97,11 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
             Outcome::Failed(_) => "FAIL",
             Outcome::Skipped => "SKIP",
         };
-        println!("\n  {}: {status} ({:.1}s)", r.name, r.duration.as_secs_f64());
+        println!(
+            "\n  {}: {status} ({:.1}s)",
+            r.name,
+            r.duration.as_secs_f64()
+        );
         println!("    log:     cat {display}/{}/run.log", r.name);
         let playwright_index = dir.join(&r.name).join("playwright").join("index.html");
         if playwright_index.exists() {
