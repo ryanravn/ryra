@@ -95,15 +95,11 @@ enum Command {
         #[arg(long, short)]
         verbose: bool,
     },
-    /// View or edit global configuration
+    /// View or edit global configuration (no args = overview)
     Config {
-        /// Section to configure (smtp, auth)
+        /// A config section (`smtp`, `auth`) to edit, or a service name
+        /// to show details for. Omit to print the global overview.
         section: Option<String>,
-    },
-    /// Show global config, or details about a specific service
-    Status {
-        /// Service name (omit for global overview)
-        service: Option<String>,
     },
     /// List installed services
     List {
@@ -250,7 +246,6 @@ async fn main() -> anyhow::Result<()> {
             cli::reset::run(yes, dry_run).await?
         }
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
-        Command::Status { ref service } => cli::status::run(service.as_deref()).await?,
         Command::Diff { ref service } => cli::diff::run(service).await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {

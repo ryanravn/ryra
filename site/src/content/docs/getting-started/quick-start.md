@@ -28,7 +28,7 @@ Ryra will:
 ## 3. Check the status
 
 ```bash
-ryra status vaultwarden
+ryra config vaultwarden
 ```
 
 This shows the service's container state, exposed ports, and configuration.

@@ -10,7 +10,7 @@ By default, services bind to a dynamically allocated port on localhost. To make 
 When you run `ryra add <service>` without any flags, the service is only accessible on the host via `localhost:<port>`. Check the assigned port with:
 
 ```bash
-ryra status <service>
+ryra config <service>
 ```
 
 ## Domain access with Caddy

@@ -30,8 +30,8 @@ Provide your SMTP server, port, username, and password. Services that support em
 
 ```bash
 # Show full global config
-ryra status
+ryra config
 
 # Show config for a specific service
-ryra status vaultwarden
+ryra config vaultwarden
 ```
