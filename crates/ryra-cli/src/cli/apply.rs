@@ -32,21 +32,31 @@ async fn execute(step: &Step) -> Result<()> {
                 }
                 println!();
             }
-            if let Some(parent) = file.path.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create directory {}", parent.display()))?;
-            }
-            std::fs::write(&file.path, &file.content)
+            // Pick the permission mode by file kind:
+            // - `.env` / `ryra.toml`  — contain credentials, owner-only (0o600)
+            // - `.sh`                  — executable scripts (0o755)
+            // - everything else        — conventional world-readable (0o644)
+            // Using atomic write across the board so a crash mid-write can't
+            // leave a half-written quadlet/config behind.
+            let name = file
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let ext = file
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let mode = if name == ".env" || name == "ryra.toml" {
+                0o600
+            } else if ext == "sh" {
+                0o755
+            } else {
+                0o644
+            };
+            ryra_core::system::atomic_write::atomic_write(&file.path, file.content.as_bytes(), mode)
                 .with_context(|| format!("failed to write {}", file.path.display()))?;
-            // Preserve executable permission for script files
-            #[cfg(unix)]
-            if file.path.extension().map(|e| e == "sh").unwrap_or(false) {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&file.path, std::fs::Permissions::from_mode(0o755))
-                    .with_context(|| {
-                        format!("failed to set permissions on {}", file.path.display())
-                    })?;
-            }
             Ok(())
         }
         Step::DaemonReload => run_cmd("systemctl", &["--user", "daemon-reload"]),
