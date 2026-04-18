@@ -1,0 +1,160 @@
+[test]
+name = "external-proxy-oidc"
+ram = 1536
+
+# Prove ryra's --auth + --url templating works behind an operator-
+# supplied reverse proxy (nginx, Tailscale, Cloudflare Tunnel, …).
+# This variant exercises the OIDC pathway specifically, because that's
+# the most URL-sensitive part of the stack — issuer, callback, and
+# token endpoints all flow through the external hostname.
+#
+# Scope: config-time integration. Asserts that
+#   (a) authelia installs with --url when TLS is declared external,
+#   (b) authelia's OIDC discovery doc is reachable through nginx with
+#       the external issuer baked in,
+#   (c) vikunja's .env has the external URLs templated in its OIDC
+#       fields (no Caddy .localhost fallback leaking through).
+# Full browser login through the proxy is intentionally out of scope —
+# that additionally needs the nginx cert trusted inside service
+# containers, which is a separate feature (auth_bridge currently only
+# handles Caddy's self-signed CA).
+#
+# Service choice: vikunja — lightest OIDC-capable service (128 MB min).
+
+[[steps]]
+action = "shell"
+name = "install-nginx-and-cert"
+run = """
+set -e
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl
+elif command -v dnf >/dev/null 2>&1; then
+  sudo dnf install -y nginx openssl
+else
+  echo "no supported package manager (expected apt or dnf)" >&2
+  exit 1
+fi
+sudo systemctl stop nginx
+sudo mkdir -p /etc/nginx/certs
+sudo openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout /etc/nginx/certs/test.key \
+  -out /etc/nginx/certs/test.crt \
+  -days 2 -subj '/CN=test.local' \
+  -addext 'subjectAltName=DNS:auth.test.local,DNS:vikunja.test.local'
+echo '127.0.0.1 auth.test.local vikunja.test.local' | sudo tee -a /etc/hosts > /dev/null
+"""
+timeout = 180
+
+# Pre-seed ryra's config with tls=none. Without this, adding authelia
+# (which has `https = "required"`) bails in non-interactive mode
+# because no TLS provider is configured and Caddy isn't installed.
+# Setting tls=none says "I'll handle HTTPS myself" — exactly the
+# external-proxy story.
+[[steps]]
+action = "shell"
+name = "declare-external-tls"
+run = """
+set -e
+mkdir -p $HOME/.config/ryra
+cat > $HOME/.config/ryra/ryra.toml <<'EOF'
+[tls]
+provider = "none"
+EOF
+"""
+timeout = 5
+
+[[steps]]
+action = "add"
+service = "authelia"
+args = "--url https://auth.test.local"
+env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "authelia"
+
+[[steps]]
+action = "add"
+service = "vikunja"
+args = "--auth --url https://vikunja.test.local"
+timeout = 180
+
+[[steps]]
+action = "wait"
+service = "vikunja"
+
+[[steps]]
+action = "shell"
+name = "caddy-never-installed"
+# Belt-and-braces: confirm the external-proxy code path actually ran.
+run = "! ryra list | grep -q caddy"
+
+[[steps]]
+action = "shell"
+name = "configure-nginx"
+run = """
+set -e
+AUTH_PORT=$(grep '^RYRA_PORT' $HOME/.local/share/ryra/authelia/.env | head -1 | cut -d= -f2)
+VIK_PORT=$(grep '^RYRA_PORT_HTTP' $HOME/.local/share/ryra/vikunja/.env | cut -d= -f2)
+sudo tee /etc/nginx/conf.d/ryra-test.conf > /dev/null <<EOF
+server {
+    listen 443 ssl;
+    server_name auth.test.local;
+    ssl_certificate /etc/nginx/certs/test.crt;
+    ssl_certificate_key /etc/nginx/certs/test.key;
+    location / { proxy_pass http://127.0.0.1:${AUTH_PORT}; proxy_set_header Host \\$host; }
+}
+server {
+    listen 443 ssl;
+    server_name vikunja.test.local;
+    ssl_certificate /etc/nginx/certs/test.crt;
+    ssl_certificate_key /etc/nginx/certs/test.key;
+    location / { proxy_pass http://127.0.0.1:${VIK_PORT}; proxy_set_header Host \\$host; }
+}
+EOF
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl start nginx
+"""
+timeout = 30
+
+[[steps]]
+action = "shell"
+name = "oidc-discovery-via-nginx"
+# Self-signed cert, so -k. The discovery doc is the single clearest
+# proof that ryra templated --url into authelia and that nginx is
+# routing it through.
+run = """
+set -e
+DISC=$(curl -skf https://auth.test.local/.well-known/openid-configuration)
+echo "$DISC" | grep -q '"issuer":"https://auth.test.local"'
+echo "$DISC" | grep -q '"authorization_endpoint":"https://auth.test.local/'
+echo "$DISC" | grep -q '"token_endpoint":"https://auth.test.local/'
+"""
+timeout = 30
+
+[[steps]]
+action = "shell"
+name = "vikunja-env-has-external-urls"
+# Prove ryra templated both --url (the service's own) and the auth
+# provider's external URL into vikunja's .env — no Caddy .localhost
+# fallback leaking through.
+run = """
+set -e
+ENV=$HOME/.local/share/ryra/vikunja/.env
+grep -q 'https://auth.test.local' $ENV
+grep -q 'https://vikunja.test.local' $ENV
+"""
+timeout = 5
+
+[[steps]]
+action = "shell"
+name = "vikunja-responds-via-nginx"
+run = """
+set -e
+CODE=$(curl -sko /dev/null -w '%{http_code}' https://vikunja.test.local/)
+[ "$CODE" = "200" ] || [ "$CODE" = "302" ]
+"""
+timeout = 30

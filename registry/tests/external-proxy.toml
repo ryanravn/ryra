@@ -1,0 +1,82 @@
+[test]
+name = "external-proxy"
+ram = 1024
+
+# The whole point of this test is to prove ryra works behind *any*
+# reverse proxy, not just Caddy. We deliberately install nginx and
+# never `ryra add caddy` — when Caddy isn't installed, ryra templates
+# --url into env vars / OIDC / email links and emits
+# UrlWithoutReverseProxy, leaving routing entirely to the operator.
+
+[[steps]]
+action = "shell"
+name = "install-nginx"
+run = """
+set -e
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx
+elif command -v dnf >/dev/null 2>&1; then
+  sudo dnf install -y nginx
+else
+  echo "no supported package manager (expected apt or dnf)" >&2
+  exit 1
+fi
+sudo systemctl stop nginx
+"""
+timeout = 180
+
+[[steps]]
+action = "add"
+service = "whoami"
+args = "--url http://whoami.test.local"
+
+[[steps]]
+action = "wait"
+service = "whoami"
+
+[[steps]]
+action = "shell"
+name = "url-without-caddy-warning"
+# Confirm we actually exercised the no-reverse-proxy branch, not a
+# silently-installed Caddy hiding in the config.
+run = "! ryra list | grep -q caddy"
+
+[[steps]]
+action = "shell"
+name = "configure-nginx"
+run = """
+set -e
+PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/whoami/.env | cut -d= -f2)
+sudo tee /etc/nginx/conf.d/whoami.conf > /dev/null <<EOF
+server {
+    listen 80;
+    server_name whoami.test.local;
+    location / {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_set_header Host \\$host;
+    }
+}
+EOF
+# Debian/Ubuntu ship a default site that would intercept port 80.
+sudo rm -f /etc/nginx/sites-enabled/default
+echo "127.0.0.1 whoami.test.local" | sudo tee -a /etc/hosts > /dev/null
+sudo nginx -t
+sudo systemctl start nginx
+"""
+timeout = 30
+
+[[steps]]
+action = "shell"
+name = "routes-through-nginx"
+# If nginx is forwarding correctly, whoami echoes the request — its
+# body includes the Host header the client used. Two assertions in
+# one: the hostname resolves + nginx proxies + whoami receives the
+# right Host.
+run = """
+set -e
+RESP=$(curl -sf http://whoami.test.local/)
+echo "$RESP" | grep -q Hostname
+echo "$RESP" | grep -q "Host: whoami.test.local"
+"""
+timeout = 15
