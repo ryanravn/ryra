@@ -51,15 +51,16 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
 
     // Use pre-built context if provided (preserves secrets from the prompt phase),
     // otherwise generate a fresh one.
-    let ctx = params.pre_built_ctx.unwrap_or_else(|| {
-        context::build_context(
+    let ctx = match params.pre_built_ctx {
+        Some(ctx) => ctx,
+        None => context::build_context(
             params.config,
             params.service_def,
             params.host_port,
             params.auth_kind,
             params.url,
-        )
-    });
+        )?,
+    };
     let rendered_env = render_env_vars(
         params.service_def,
         &ctx,

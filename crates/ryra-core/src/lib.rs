@@ -192,6 +192,15 @@ pub enum Warning {
         assigned_port: u16,
         reason: String,
     },
+    /// `--url` was passed but no bundled reverse proxy (Caddy) is installed.
+    /// Ryra still templates the URL into env vars and OIDC config, but routing
+    /// is the user's responsibility (nginx, Cloudflare Tunnel, Tailscale Funnel,
+    /// external load balancer, etc.).
+    UrlWithoutReverseProxy {
+        service_name: String,
+        url: String,
+        host_port: u16,
+    },
 }
 
 // --- Result types ---
@@ -593,36 +602,51 @@ pub fn add_service(
     // 9. Add Caddy route for services with a URL when Caddy is installed.
     // This creates a reverse proxy from the service's domain to its container port.
     if let Some(url) = url
-        && caddy_installed
         && !WellKnownService::Caddy.matches(service_name)
     {
-        let parsed = url::Url::parse(url)
-            .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
-        let domain = parsed.host_str().unwrap_or(url);
-        let container_port = reg_service
-            .def
-            .ports
-            .first()
-            .map(|p| p.container_port)
-            .unwrap_or(80);
-        let block = caddy::render_site_block(&caddy::CaddySiteParams {
-            service_name: service_name.to_string(),
-            domain: domain.to_string(),
-            container_port,
-            https_port: caddy_https_port(&config),
-        });
-        let caddyfile_path = caddy::caddyfile_path()?;
-        let existing =
-            std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
-                path: caddyfile_path.clone(),
-                source,
+        if caddy_installed {
+            let parsed = url::Url::parse(url)
+                .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
+            let domain = parsed.host_str().ok_or_else(|| {
+                Error::Template(format!(
+                    "service URL '{url}' has no host — Caddy needs a hostname to route to"
+                ))
             })?;
-        let updated = caddy::add_route(&existing, service_name, &block);
-        steps.push(Step::WriteFile(GeneratedFile {
-            path: caddyfile_path,
-            content: updated,
-        }));
-        steps.push(Step::ReloadCaddy);
+            let container_port = reg_service
+                .def
+                .ports
+                .first()
+                .map(|p| p.container_port)
+                .unwrap_or(80);
+            let block = caddy::render_site_block(&caddy::CaddySiteParams {
+                service_name: service_name.to_string(),
+                domain: domain.to_string(),
+                container_port,
+                https_port: caddy_https_port(&config),
+            });
+            let caddyfile_path = caddy::caddyfile_path()?;
+            let existing =
+                std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+                    path: caddyfile_path.clone(),
+                    source,
+                })?;
+            let updated = caddy::add_route(&existing, service_name, &block);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: caddyfile_path,
+                content: updated,
+            }));
+            steps.push(Step::ReloadCaddy);
+        } else if let Some(primary) = host_port {
+            // --url was passed but no bundled reverse proxy is installed.
+            // Templating and OIDC still work, but the user is responsible for
+            // routing <url> → 127.0.0.1:<primary> via nginx / Cloudflare Tunnel
+            // / Tailscale Funnel / etc.
+            warnings.push(Warning::UrlWithoutReverseProxy {
+                service_name: service_name.to_string(),
+                url: url.to_string(),
+                host_port: primary,
+            });
+        }
     }
 
     // 10. Reload and start via systemd

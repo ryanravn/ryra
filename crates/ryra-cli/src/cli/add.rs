@@ -207,7 +207,7 @@ pub async fn run(
                 None,
                 auth_kind.as_ref(),
                 url,
-            );
+            )?;
             prompt_ctx = Some(default_ctx.clone());
 
             println!("\nConfigure {service}:");
@@ -293,26 +293,41 @@ pub async fn run(
         };
 
         // Show warnings and confirm
-        // Show port reassignment notes
+        // Show port reassignment notes + reverse-proxy hints (both informational).
         for warning in &result.warnings {
-            if let Warning::PortReassigned {
-                port_name,
-                original_port,
-                assigned_port,
-                reason,
-                ..
-            } = warning
-            {
-                // Privileged ports are just informational — nothing the user can do
-                // in rootless podman. "In use" ports are actionable — the user might
-                // want to stop whatever is occupying the port.
-                if *original_port < 1024 {
-                    println!("  {port_name} port {original_port} → {assigned_port} ({reason})");
-                } else {
+            match warning {
+                Warning::PortReassigned {
+                    port_name,
+                    original_port,
+                    assigned_port,
+                    reason,
+                    ..
+                } => {
+                    // Privileged ports are just informational — nothing the user can do
+                    // in rootless podman. "In use" ports are actionable — the user might
+                    // want to stop whatever is occupying the port.
+                    if *original_port < 1024 {
+                        println!("  {port_name} port {original_port} → {assigned_port} ({reason})");
+                    } else {
+                        println!(
+                            "  WARNING: {port_name} port {original_port} → {assigned_port} ({reason})"
+                        );
+                    }
+                }
+                Warning::UrlWithoutReverseProxy {
+                    service_name,
+                    url,
+                    host_port,
+                } => {
                     println!(
-                        "  WARNING: {port_name} port {original_port} → {assigned_port} ({reason})"
+                        "  NOTE: --url was set for {service_name} but no bundled reverse proxy \
+                         (Caddy) is installed. Ryra will template {url} into the service but \
+                         won't configure routing — point your own reverse proxy (nginx, \
+                         Cloudflare Tunnel, Tailscale Funnel, etc.) at 127.0.0.1:{host_port}, \
+                         or run `ryra add caddy` to let ryra handle it."
                     );
                 }
+                Warning::RamBelowMinimum { .. } | Warning::RamBelowRecommended { .. } => {}
             }
         }
 
@@ -323,6 +338,7 @@ pub async fn run(
             .filter(|w| match w {
                 Warning::RamBelowMinimum { .. } | Warning::RamBelowRecommended { .. } => true,
                 Warning::PortReassigned { original_port, .. } => *original_port >= 1024,
+                Warning::UrlWithoutReverseProxy { .. } => false,
             })
             .collect();
 
@@ -350,7 +366,7 @@ pub async fn run(
                          but this system has {available_mb} MB — performance may be degraded"
                         );
                     }
-                    Warning::PortReassigned { .. } => {} // already printed above
+                    Warning::PortReassigned { .. } | Warning::UrlWithoutReverseProxy { .. } => {}
                 }
             }
             println!();

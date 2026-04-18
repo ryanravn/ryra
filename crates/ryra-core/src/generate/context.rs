@@ -1,18 +1,23 @@
 use std::collections::BTreeMap;
 
 use crate::config::schema::Config;
+use crate::error::{Error, Result};
 use crate::registry::service_def::{AuthKind, EnvFormat, ServiceDef};
 use crate::system::secret;
 
 /// Build the template context for rendering env var values.
 /// Secrets are generated fresh using each env var's format + length.
+///
+/// Returns an error if any provided URL (service `--url` or the stored
+/// auth-provider URL) fails to parse or is missing a host — template
+/// rendering downstream depends on those being well-formed.
 pub fn build_context(
     config: &Config,
     service_def: &ServiceDef,
     host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
     url: Option<&str>,
-) -> BTreeMap<String, String> {
+) -> Result<BTreeMap<String, String>> {
     let mut ctx = BTreeMap::new();
 
     // service.*
@@ -28,17 +33,13 @@ pub fn build_context(
     };
     ctx.insert("service.url".into(), localhost_url.clone());
     if let Some(url) = url {
-        // Parse the URL to extract scheme and hostname
-        if let Ok(parsed) = url::Url::parse(url) {
-            ctx.insert(
-                "service.domain".into(),
-                parsed.host_str().unwrap_or(url).to_string(),
-            );
-            ctx.insert("service.scheme".into(), parsed.scheme().to_string());
-        } else {
-            // Fallback for non-standard URLs: use as-is
-            ctx.insert("service.scheme".into(), "https".into());
-        }
+        let parsed = url::Url::parse(url)
+            .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
+        let host = parsed.host_str().ok_or_else(|| {
+            Error::Template(format!("service URL '{url}' has no host"))
+        })?;
+        ctx.insert("service.domain".into(), host.to_string());
+        ctx.insert("service.scheme".into(), parsed.scheme().to_string());
         // service.external_url — browser-accessible URL as provided by the user.
         ctx.insert("service.external_url".into(), url.to_string());
     } else {
@@ -111,11 +112,12 @@ pub fn build_context(
             .unwrap_or_else(|| auth_localhost_url.clone());
         if caddy_installed {
             let port = crate::caddy_https_port(config);
-            let has_port = url::Url::parse(&external_url)
-                .ok()
-                .and_then(|u| u.port())
-                .is_some();
-            if !has_port {
+            let parsed = url::Url::parse(&external_url).map_err(|e| {
+                Error::Template(format!(
+                    "invalid auth provider URL '{external_url}': {e}"
+                ))
+            })?;
+            if parsed.port().is_none() {
                 external_url = format!("{external_url}:{port}");
             }
         }
@@ -249,5 +251,5 @@ pub fn build_context(
         }
     }
 
-    ctx
+    Ok(ctx)
 }
