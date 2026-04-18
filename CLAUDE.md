@@ -70,6 +70,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - Service data goes to `~/.local/share/ryra/<name>/`
 - `service_home()` and `quadlet_dir()` return `Result<PathBuf>` — they error if `$HOME` is unset rather than silently falling back to `/tmp`
 - Warns if running as root
+- Registry contributors: read `docs/registry/conventions.md` before adding or modifying a service. It covers the pre/post-hook decision rule, the auth-is-additive idiom, the "runnable without ryra" invariant, and canonical health-check values.
 
 ## Auth and Caddy Integration
 
