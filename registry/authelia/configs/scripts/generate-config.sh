@@ -12,10 +12,18 @@ elif echo "$DOMAIN" | grep -q '\..*\.'; then
 else
   COOKIE_DOMAIN="$DOMAIN"
 fi
-if [ "$DOMAIN" != "localhost" ] && systemctl --user is-active caddy.service >/dev/null 2>&1; then
+if [ "$DOMAIN" = "localhost" ]; then
+  # No real hostname — fall back to the cookie-scope address.
+  AUTHELIA_URL="https://$COOKIE_DOMAIN"
+elif systemctl --user is-active caddy.service >/dev/null 2>&1; then
   AUTHELIA_URL="https://$DOMAIN:8443"
 else
-  AUTHELIA_URL="https://$COOKIE_DOMAIN"
+  # External reverse proxy (nginx, Tailscale Funnel, …) terminates TLS
+  # on standard 443. The previous revision used $COOKIE_DOMAIN here,
+  # which broke multi-label domains: `auth.test.local` would become
+  # `https://test.local`, and authelia rejects requests whose Host
+  # doesn't match any configured authelia_url.
+  AUTHELIA_URL="https://$DOMAIN"
 fi
 
 # Use SMTP notifier when configured, otherwise fall back to filesystem

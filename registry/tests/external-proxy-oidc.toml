@@ -27,6 +27,14 @@ name = "install-nginx-and-cert"
 run = """
 set -e
 if command -v apt-get >/dev/null 2>&1; then
+  # Debian cloud images run unattended-upgrades at first boot; it
+  # holds the dpkg frontend lock for up to a minute. Stop it, then
+  # wait for any in-flight dpkg call to finish before invoking apt.
+  sudo systemctl stop unattended-upgrades.service 2>/dev/null || true
+  for _ in $(seq 1 60); do
+    sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break
+    sleep 2
+  done
   sudo apt-get update -qq
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl
 elif command -v dnf >/dev/null 2>&1; then
@@ -75,6 +83,18 @@ timeout = 300
 action = "wait"
 service = "authelia"
 
+# `wait` only checks that the systemd unit is active — the container
+# may still be booting. Poll authelia's health endpoint directly on
+# its loopback port until it actually answers; otherwise the nginx
+# curl below races authelia's startup.
+[[steps]]
+action = "http"
+name = "authelia-ready"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+service = "authelia"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+
 [[steps]]
 action = "add"
 service = "vikunja"
@@ -84,6 +104,14 @@ timeout = 180
 [[steps]]
 action = "wait"
 service = "vikunja"
+
+[[steps]]
+action = "http"
+name = "vikunja-ready"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/"
+service = "vikunja"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
 
 [[steps]]
 action = "shell"
@@ -99,19 +127,35 @@ set -e
 AUTH_PORT=$(grep '^RYRA_PORT' $HOME/.local/share/ryra/authelia/.env | head -1 | cut -d= -f2)
 VIK_PORT=$(grep '^RYRA_PORT_HTTP' $HOME/.local/share/ryra/vikunja/.env | cut -d= -f2)
 sudo tee /etc/nginx/conf.d/ryra-test.conf > /dev/null <<EOF
+# Authelia (and most OIDC providers) require X-Forwarded-Proto so it
+# can build correct issuer/authorize/token URLs for discovery. Without
+# these headers authelia returns 500 on /.well-known/openid-configuration.
+# Caddy sets them automatically; nginx needs the explicit declarations.
 server {
     listen 443 ssl;
     server_name auth.test.local;
     ssl_certificate /etc/nginx/certs/test.crt;
     ssl_certificate_key /etc/nginx/certs/test.key;
-    location / { proxy_pass http://127.0.0.1:${AUTH_PORT}; proxy_set_header Host \\$host; }
+    location / {
+        proxy_pass http://127.0.0.1:${AUTH_PORT};
+        proxy_set_header Host \\$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \\$host;
+        proxy_set_header X-Forwarded-For \\$remote_addr;
+    }
 }
 server {
     listen 443 ssl;
     server_name vikunja.test.local;
     ssl_certificate /etc/nginx/certs/test.crt;
     ssl_certificate_key /etc/nginx/certs/test.key;
-    location / { proxy_pass http://127.0.0.1:${VIK_PORT}; proxy_set_header Host \\$host; }
+    location / {
+        proxy_pass http://127.0.0.1:${VIK_PORT};
+        proxy_set_header Host \\$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \\$host;
+        proxy_set_header X-Forwarded-For \\$remote_addr;
+    }
 }
 EOF
 sudo rm -f /etc/nginx/sites-enabled/default
