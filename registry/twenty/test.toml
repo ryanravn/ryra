@@ -1,4 +1,8 @@
-# twenty tests — basic install + SMTP (onboarding invite) + OIDC browser.
+# twenty tests — basic install + SMTP (onboarding invite).
+#
+# Twenty's OIDC/SSO is enterprise-gated upstream (see service.toml) and
+# can't be end-to-end tested without a signed twenty.com license, so
+# there's no oidc test here.
 
 [[tests]]
 name = "twenty"
@@ -73,116 +77,3 @@ mailbox = "smtptest"
 contains = "Twenty"
 poll = { interval = 2, attempts = 45 }
 timeout = 120
-
-# OIDC browser flow — registers the OIDC provider through Twenty's
-# GraphQL API, then runs the Playwright spec.
-[[tests]]
-name = "oidc"
-browser = true
-[[tests.steps]]
-action = "add"
-service = "caddy"
-[[tests.steps]]
-action = "wait"
-service = "caddy"
-[[tests.steps]]
-action = "add"
-service = "authelia"
-args = "--url https://auth.localhost:8443"
-env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
-timeout = 300
-[[tests.steps]]
-action = "wait"
-service = "authelia"
-[[tests.steps]]
-action = "add"
-service = "twenty"
-args = "--auth"
-env = { RYRA_ADMIN_PASSWORD = "AdminPassword123", ENTERPRISE_KEY = "test" }
-timeout = 600
-[[tests.steps]]
-action = "wait"
-service = "twenty"
-[[tests.steps]]
-action = "http"
-name = "twenty-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
-service = "twenty"
-poll = { interval = 5, attempts = 60 }
-timeout = 300
-[[tests.steps]]
-action = "shell"
-name = "oidc-registered"
-run = '''
-TWENTY_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/twenty/.env | cut -d= -f2)
-TWENTY_URL="http://127.0.0.1:${TWENTY_PORT}"
-GQL="${TWENTY_URL}/metadata"
-
-eval "$(grep -E '^OIDC_|^RYRA_ADMIN' $HOME/.local/share/ryra/twenty/.env)"
-ADMIN_EMAIL="${RYRA_ADMIN_EMAIL:-admin@example.com}"
-
-jval() {
-  python3 -c "
-import sys, json, functools
-try:
-    d = json.load(sys.stdin)
-    print(functools.reduce(lambda o, k: o[int(k)] if k.isdigit() else o[k], sys.argv[1].split('.'), d))
-except Exception:
-    pass
-" "$1" 2>/dev/null
-}
-
-gql() {
-  local query="$1"; shift
-  local token="${1:-}"
-  local escaped
-  escaped=$(printf '%s' "$query" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-  local body="{\"query\": ${escaped}}"
-  if [ -n "$token" ]; then
-    curl -s -X POST "$GQL" -H "Content-Type: application/json" -H "Authorization: Bearer $token" -d "$body"
-  else
-    curl -s -X POST "$GQL" -H "Content-Type: application/json" -d "$body"
-  fi
-}
-
-for i in $(seq 1 60); do
-  curl -sf -X POST "$GQL" -H "Content-Type: application/json" -d '{"query":"{ __typename }"}' >/dev/null 2>&1 && break
-  sleep 2
-done
-
-RESULT=$(gql "mutation { signIn(email: \"${ADMIN_EMAIL}\", password: \"${RYRA_ADMIN_PASSWORD}\") { tokens { accessOrWorkspaceAgnosticToken { token } } availableWorkspaces { availableWorkspacesForSignIn { loginToken } } } }")
-AGNOSTIC=$(echo "$RESULT" | jval "data.signIn.tokens.accessOrWorkspaceAgnosticToken.token")
-LOGIN=$(echo "$RESULT" | jval "data.signIn.availableWorkspaces.availableWorkspacesForSignIn.0.loginToken")
-
-if [ -z "$AGNOSTIC" ]; then
-  RESULT=$(gql "mutation { signUp(email: \"${ADMIN_EMAIL}\", password: \"${RYRA_ADMIN_PASSWORD}\") { tokens { accessOrWorkspaceAgnosticToken { token } } } }")
-  AGNOSTIC=$(echo "$RESULT" | jval "data.signUp.tokens.accessOrWorkspaceAgnosticToken.token")
-fi
-
-if [ -z "$LOGIN" ] && [ -n "$AGNOSTIC" ]; then
-  RESULT=$(gql "mutation { signUpInNewWorkspace { loginToken { token } } }" "$AGNOSTIC")
-  LOGIN=$(echo "$RESULT" | jval "data.signUpInNewWorkspace.loginToken.token")
-fi
-
-[ -z "$LOGIN" ] && { echo "Failed to get login token"; exit 1; }
-
-ACCESS=$(gql "mutation { getAuthTokensFromLoginToken(loginToken: \"${LOGIN}\", origin: \"${TWENTY_URL}\") { tokens { accessOrWorkspaceAgnosticToken { token } } } }" | jval "data.getAuthTokensFromLoginToken.tokens.accessOrWorkspaceAgnosticToken.token")
-[ -z "$ACCESS" ] && { echo "Failed to get access token"; exit 1; }
-
-RESULT=$(gql "mutation { createOIDCIdentityProvider(input: { name: \"Authelia\", issuer: \"${OIDC_ISSUER_URL}\", clientID: \"${OIDC_CLIENT_ID}\", clientSecret: \"${OIDC_CLIENT_SECRET}\" }) { id status } }" "$ACCESS")
-echo "$RESULT" | grep -q '"id"' && { echo "OIDC registered"; exit 0; }
-echo "$RESULT" | grep -qi 'already\|exist' && { echo "OIDC already registered"; exit 0; }
-echo "OIDC registration failed: $RESULT"
-exit 1
-'''
-timeout = 120
-[[tests.steps]]
-action = "http"
-name = "authelia-via-caddy"
-url = "https://auth.localhost:8443"
-[[tests.steps]]
-action = "playwright"
-name = "playwright-auth-flow"
-spec = "twenty-auth.spec.ts"
-timeout = 120
-env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

@@ -29,7 +29,6 @@ Restart=always
 RestartSec=5
 TimeoutStartSec=600
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do podman exec twenty-postgres pg_isready -U ${POSTGRES_USER:-twenty} && exit 0; sleep 2; done; exit 1'
-ExecStartPost=/bin/bash %h/.local/share/ryra/twenty/configs/scripts/register-oidc.sh
 
 [Install]
 WantedBy=default.target

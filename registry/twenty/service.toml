@@ -68,17 +68,18 @@ value = "{{secret.admin_password}}"
 kind = "prompted"
 prompt = "Admin password"
 
-# Enterprise key for SSO support (optional — leave empty to skip SSO)
-[[env]]
-name = "ENTERPRISE_KEY"
-value = ""
-kind = "prompted"
-prompt = "Enterprise key (required for SSO, leave empty to skip)"
+# Twenty's OIDC/SSO integration is gated behind their enterprise
+# license (see packages/twenty-server/.../enterprise-plan.service.ts).
+# The legacy unsigned `ENTERPRISE_KEY=<anything>` fallback was removed
+# in v1.23.0, and the EnterpriseFeaturesEnabledGuard's error handler
+# crashes GraphQL contexts ("Cannot read properties of undefined
+# (reading 'headers')" from guard-redirect.service.ts) even on
+# v1.22.x. Until upstream fixes the guard or offers a self-host SSO
+# path, ryra doesn't advertise `auth = ["oidc"]` for twenty — pair
+# twenty with Caddy forward-auth if you need SSO in front of it.
 
 [integrations]
-auth = ["oidc"]
-token_auth_method = "client_secret_basic"
-oidc_callbacks = ["/auth/oidc/callback"]
+auth = []
 smtp = true
 
 [mappings.smtp]
@@ -94,9 +95,3 @@ EMAIL_SMTP_NO_TLS = "{{ smtp.security | smtp_no_tls }}"
 # providers and shows up oddly in test sinks. Use the configured sender.
 EMAIL_FROM_ADDRESS = "{{smtp.from}}"
 EMAIL_FROM_NAME = "Twenty"
-
-[mappings.auth]
-OIDC_CLIENT_ID = "{{auth.client_id}}"
-OIDC_CLIENT_SECRET = "{{auth.client_secret}}"
-OIDC_ISSUER_URL = "{{auth.internal_url}}"
-OIDC_EXTERNAL_URL = "{{auth.external_url}}"
