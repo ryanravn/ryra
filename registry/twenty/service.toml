@@ -54,30 +54,6 @@ value = "production"
 name = "STORAGE_TYPE"
 value = "local"
 
-# --- Admin account (used for initial setup and OIDC registration) ---
-
-[[env]]
-name = "RYRA_ADMIN_EMAIL"
-value = "admin@example.com"
-kind = "prompted"
-prompt = "Admin email"
-
-[[env]]
-name = "RYRA_ADMIN_PASSWORD"
-value = "{{secret.admin_password}}"
-kind = "prompted"
-prompt = "Admin password"
-
-# Twenty's OIDC/SSO integration is gated behind their enterprise
-# license (see packages/twenty-server/.../enterprise-plan.service.ts).
-# The legacy unsigned `ENTERPRISE_KEY=<anything>` fallback was removed
-# in v1.23.0, and the EnterpriseFeaturesEnabledGuard's error handler
-# crashes GraphQL contexts ("Cannot read properties of undefined
-# (reading 'headers')" from guard-redirect.service.ts) even on
-# v1.22.x. Until upstream fixes the guard or offers a self-host SSO
-# path, ryra doesn't advertise `auth = ["oidc"]` for twenty — pair
-# twenty with Caddy forward-auth if you need SSO in front of it.
-
 [integrations]
 auth = []
 smtp = true

@@ -1,8 +1,4 @@
 # twenty tests — basic install + SMTP (onboarding invite).
-#
-# Twenty's OIDC/SSO is enterprise-gated upstream (see service.toml) and
-# can't be end-to-end tested without a signed twenty.com license, so
-# there's no oidc test here.
 
 [[tests]]
 name = "twenty"
