@@ -1,91 +1,83 @@
 # Ryra
 
-[ryra.dev](https://ryra.dev) | [Docs](https://ryra.dev/docs)
+[ryra.dev](https://ryra.dev) · [Docs](https://ryra.dev/docs) · [Install](#install)
 
-A tool to deploy self-hosted services on Linux using rootless Podman and systemd. Built-in VM testing gives AI agents fast feedback loops for building infrastructure and deploying apps.
+**Self-host Supabase, Immich, Forgejo, Jellyfin, Vaultwarden and a dozen more — one command per service.**
 
-Each service gets container isolation via rootless Podman and systemd lifecycle management. Caddy handles reverse proxying with automatic HTTPS and optional SSO authentication via Authelia.
+Ryra is a CLI for running self-hosted services on a single Linux box. Each `ryra add <service>` pulls a container image, writes a systemd quadlet, starts the service under rootless Podman, and — if you want it — wires up HTTPS via Caddy and SSO via Authelia. No daemon.
+
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
+```
+
+Works on Debian, Ubuntu, Fedora, and Arch and any other Linux system with Systemd and Podman.
 
 ## Quick start
 
-```
-ryra init
-ryra add whoami
-```
-
-### With a public URL and reverse proxy
-
-```
-ryra add caddy
-ryra add whoami --url https://whoami.example.com
+```sh
+ryra add openclaw
 ```
 
-### With SSO authentication
+Ryra pulls the image, prompts for any API keys or passwords the service needs, generates a systemd quadlet, and starts the container under rootless Podman. `ryra list` shows what's running.
 
-```
-ryra add caddy
-AUTHELIA_ADMIN_PASSWORD=secret ryra add authelia --url https://auth.example.com
-ryra add whoami --url https://whoami.example.com --auth
-```
+## What you can run
 
-The `--auth` flag enables authentication for the service:
-- Services with native OIDC support (immich, seafile) get OIDC configured automatically via post-start hooks
-- Other services get Caddy forward auth — Authelia handles login before requests reach the service
+| | | |
+|-|-|-|
+| **Supabase** — backend-as-a-service | **OpenClaw** — AI assistant gateway | **Immich** — photos |
+| **Forgejo** — git forge | **Jellyfin** — media server | **Vaultwarden** — password vault |
+| **Open WebUI** — LLM frontend | **Synapse** — Matrix chat | **Paperless-ngx** — docs |
+| **Seafile** — file sync | **Vikunja** — tasks | **Uptime Kuma** — monitoring |
+| **DocuSeal** — e-signatures | **Ente** — E2E photos | **Twenty** — CRM |
+| **Postgres** — database | **Caddy** — reverse proxy | **Authelia** — SSO/OIDC |
+| **Inbucket** — dev SMTP | | |
+
+Run `ryra search` to browse the full list with install status.
+
+## Design
+
+- Containers run under your user with rootless Podman. Ryra is a stateless CLI — no background process.
+- systemd owns the lifecycle via Podman quadlets. `systemctl --user` and `journalctl --user` work as normal.
+- Service data lives in `~/.local/share/ryra/<name>/`. `ryra remove` preserves it by default; `--purge` wipes it.
+- The registry is plain TOML in `registry/`, one directory per service. Fork, edit, contribute back — no plugin system.
+- Caddy and Authelia are services themselves, added the same way as anything else, only needed if you want HTTPS / SSO.
+- E2E tests run in ephemeral QEMU VMs — fresh Debian or Fedora install, SSH in, run `ryra add`, assert.
 
 ## How it works
 
-1. **`ryra init`** — creates `~/.config/ryra/ryra.toml`
-2. **`ryra add <service>`** — generates Podman quadlet files, .env, and starts the service via systemd
-3. **`ryra add caddy`** — installs Caddy as a reverse proxy (ports 8080/8443)
-4. **`--url <public-url>`** — sets the service's public URL; if Caddy is installed, adds a site block routing the URL's hostname to the service. If you use your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale, etc.), this URL is still used to populate template variables like OIDC callback URLs — ryra won't touch the routing.
-5. **`--auth`** — registers an OIDC client with the auth provider and configures the service
+1. **`ryra init`** writes `~/.config/ryra/ryra.toml` and checks that `loginctl linger` is on for your user (so services survive logout).
+2. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, generates a quadlet at `~/.config/containers/systemd/<service>.container`, writes a `.env` with any secrets, and asks systemd to start it.
+3. **`--url <public-url>`** records where the service will be reachable. If Caddy is installed, Ryra also adds a site block routing that hostname to the container. If you run your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale Funnel, …), Ryra leaves the routing alone and just uses the URL to populate OIDC callbacks and email links.
+4. **`--auth`** registers an OIDC client with the auth provider and either (a) injects credentials into the service's native OIDC config, or (b) puts Authelia's forward-auth in front of the service via Caddy.
 
-### Service layout
+### Where things live
 
-- Quadlet files: `~/.config/containers/systemd/`
-- Service data: `~/.local/share/ryra/<name>/`
-- Caddy config: `~/.local/share/ryra/caddy/config/Caddyfile`
-- Service config: `~/.local/share/ryra/<name>/.env`
+| Path | What |
+|---|---|
+| `~/.config/ryra/ryra.toml` | Ryra's own config |
+| `~/.config/containers/systemd/<svc>.container` | Generated quadlet |
+| `~/.local/share/ryra/<svc>/` | Service data + `.env` |
+| `~/.local/share/ryra/caddy/config/Caddyfile` | Routing config |
 
-### Template variables
+## Managing services
 
-Service definitions in `registry/<name>/service.toml` use template variables in env values:
+```sh
+ryra list                        # installed services + orphans
+ryra remove seafile              # stop + deregister, keep data
+ryra remove seafile --purge      # also wipe the data dir and volumes
+ryra remove -a                   # remove everything, preserve data
+ryra reset                       # full teardown, including Ryra's own config
+```
 
-- `{{service.name}}`, `{{service.port}}`, `{{service.url}}`, `{{service.domain}}`
-- `{{smtp.host}}`, `{{smtp.port}}`, `{{smtp.username}}`, `{{smtp.password}}`, `{{smtp.from}}`
-- `{{auth.url}}`, `{{auth.internal_url}}`, `{{auth.issuer}}`, `{{auth.client_id}}`, `{{auth.client_secret}}`
-- `{{services.<name>.port.<port_name>}}`, `{{services.<name>.env.<VAR>}}`
-- `{{secret.<name>}}` — auto-generated secrets
-
-## Managing data
-
-`ryra list` shows every service ryra knows about — installed services
-plus "orphans" (removed services whose data still lives on disk).
-Each row includes the size, home-dir path, and podman volumes.
-
-Removing a service keeps its data by default:
-
-    ryra remove seafile           # stops + deregisters; keeps data + volumes
-    ryra remove seafile --purge   # stops + deregisters + wipes everything
-
-`--purge` also works on orphans to clean up leftover data:
-
-    ryra list                     # shows seafile as `orphan` after a soft remove
-    ryra remove seafile --purge   # wipes the leftover home dir + volumes
-
-Bulk:
-
-    ryra remove -a                # preserve data for every installed service
-    ryra remove -a --purge        # wipe every service + every orphan's data
-
-`ryra reset` additionally wipes ryra's own config, the Caddy CA from the
-system trust store, snapshots, and registry caches.
+An "orphan" is a service you removed whose data is still on disk. `ryra list` shows them alongside installed services; `ryra remove <name> --purge` cleans them up.
 
 ## Development
 
-Requires Rust (stable).
+Requires Rust stable.
 
-```
+```sh
 cargo build
 cargo run -- init
 cargo run -- add whoami
@@ -93,16 +85,18 @@ cargo run -- add whoami
 
 ### E2E tests
 
-Tests run in ephemeral QEMU VMs. Requires KVM and QEMU packages (see `CLAUDE.md`).
+Tests run in ephemeral QEMU VMs — each test gets a fresh Linux install. Requires KVM and QEMU.
 
+```sh
+cargo run -- test                    # every test
+cargo run -- test immich             # name filter
+cargo run -- test list -v            # list tests with step detail
+cargo run -- test --parallel=3       # 3 VMs in parallel
+cargo run -- test --keep-alive       # boot once, SSH in to poke around
 ```
-cargo run -- test                    # run all tests
-cargo run -- test whoami             # run tests matching "whoami"
-cargo run -- test list               # list available tests (add -v for full step details)
-cargo run -- test --parallel=3       # run 3 VMs concurrently
-cargo run -- test --keep-alive       # boot a VM for interactive debugging
-```
+
+See `CLAUDE.md` for architectural conventions and `docs/` for deep-dives.
 
 ## License
 
-AGPL-3.0
+AGPL-3.0-or-later. See [LICENCE.md](LICENCE.md).
