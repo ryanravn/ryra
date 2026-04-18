@@ -54,6 +54,13 @@ pub async fn run(dry_run: bool) -> Result<()> {
         false => {
             println!("Setting up...");
             apply::execute_all(&result.steps).await?;
+
+            // Offer to enable lingering before the success banner — the
+            // answer determines whether services survive logout, so the
+            // sudo prompt goes in the flow while the user is paying
+            // attention rather than buried after the "done" message.
+            super::linger::offer_enable().await?;
+
             let config_path = ryra_core::config::ConfigPaths::resolve()
                 .map(|p| p.config_file.display().to_string())
                 .unwrap_or_else(|_| "~/.config/ryra/ryra.toml".into());
@@ -61,11 +68,6 @@ pub async fn run(dry_run: bool) -> Result<()> {
             println!("ryra initialized!");
             println!("  Config: {config_path}");
             println!("  Run `ryra search` to browse available services.");
-
-            // Warn the user if systemd lingering is off — rootless services
-            // would otherwise silently die on logout. Do this after the
-            // success banner so the warning is the last thing on screen.
-            super::linger::warn_if_disabled().await?;
         }
     }
 

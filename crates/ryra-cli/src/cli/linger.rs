@@ -8,6 +8,7 @@
 //! until the user's SSH session closes, then silently everything stops.
 
 use anyhow::Result;
+use dialoguer::Confirm;
 use tokio::process::Command;
 
 /// Returns `true` if the current user has lingering enabled. Returns `false`
@@ -29,9 +30,8 @@ pub async fn is_enabled() -> bool {
 }
 
 /// Print a warning (with the fix command) when lingering is off. Services
-/// added by `ryra` won't survive a logout/reboot without this — so call
-/// this anywhere the user is about to lean on services running in the
-/// background (init, add).
+/// added by `ryra` won't survive a logout/reboot without this — use this
+/// from call sites where prompting would be too noisy (e.g. every `ryra add`).
 pub async fn warn_if_disabled() -> Result<()> {
     if is_enabled().await {
         return Ok(());
@@ -44,5 +44,55 @@ pub async fn warn_if_disabled() -> Result<()> {
            sudo loginctl enable-linger {user}"
     );
     eprintln!();
+    Ok(())
+}
+
+/// Offer to run `sudo loginctl enable-linger <user>` interactively. Mirrors
+/// the cert-setup prompt in `cli/add.rs`: print exactly what will run,
+/// confirm, then execute sudo directly (no shell). Falls back to the
+/// warning when stdin isn't a TTY.
+pub async fn offer_enable() -> Result<()> {
+    if is_enabled().await {
+        return Ok(());
+    }
+    let user = std::env::var("USER").unwrap_or_else(|_| "<your-user>".into());
+
+    println!();
+    println!("  systemd lingering is not enabled for {user}. Without it, services");
+    println!("  added by ryra stop when you log out. To enable it:");
+    println!();
+    println!("    sudo loginctl enable-linger {user}");
+    println!();
+
+    if !super::is_interactive() {
+        eprintln!("  (non-interactive; run the command above when convenient)");
+        return Ok(());
+    }
+
+    let run = match Confirm::new()
+        .with_prompt("  Run this now?")
+        .default(true)
+        .interact()
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("  Warning: could not read confirmation ({e}); skipping");
+            return Ok(());
+        }
+    };
+    if !run {
+        return Ok(());
+    }
+
+    match Command::new("sudo")
+        .args(["loginctl", "enable-linger", &user])
+        .status()
+        .await
+    {
+        Ok(s) if s.success() => println!("  Lingering enabled."),
+        Ok(s) => eprintln!("  sudo loginctl enable-linger exited with {s}"),
+        Err(e) => eprintln!("  Failed to run sudo: {e}"),
+    }
+
     Ok(())
 }
