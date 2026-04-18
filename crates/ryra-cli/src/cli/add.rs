@@ -47,6 +47,14 @@ pub async fn run(
 
     let interactive = super::is_interactive();
 
+    // "First add" = no ryra config on disk yet. Latch the answer before any
+    // side-effect creates the file — we use this at the end to decide between
+    // offering to enable lingering (ceremonial, worth the interaction) and
+    // just warning (quieter, for every subsequent add).
+    let first_run = !ryra_core::config::ConfigPaths::resolve()?
+        .config_file
+        .exists();
+
     // Auto-install authelia for --auth
     if !dry_run {
         ensure_dependencies(auth, interactive).await?;
@@ -418,7 +426,19 @@ pub async fn run(
                 url: result.url.as_deref(),
             })?;
 
-            println!("Setting up {service}...");
+            // Preview what's about to happen — the user sees "pulls / writes /
+            // starts" before the steps run. If --url wasn't set, fall back to
+            // the primary loopback address so the line always ends with a URL.
+            let url_display = result.url.clone().or_else(|| {
+                result
+                    .allocated_ports
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("http"))
+                    .or_else(|| result.allocated_ports.first())
+                    .map(|(_, p)| format!("http://127.0.0.1:{p}"))
+            });
+            super::print_plan_header(&result.steps, service, url_display.as_deref());
+
             if let Err(e) = apply::execute_all(&result.steps).await {
                 eprintln!("\nError during setup: {e}");
                 eprintln!("Cleaning up partial installation...");
@@ -509,10 +529,15 @@ pub async fn run(
 
     // Remind the user about lingering — if they reboot or log out without
     // it, every service we just wrote a quadlet for will silently stop.
-    // Only warn in non-dry-run; a plan shouldn't produce system-state
-    // warnings.
+    // On the very first `ryra add`, offer to enable it inline (the user's
+    // paying attention). On later adds, just warn so we're not noisy.
+    // Skip in dry-run; a plan shouldn't produce system-state prompts.
     if !dry_run {
-        super::linger::warn_if_disabled().await?;
+        if first_run {
+            super::linger::offer_enable().await?;
+        } else {
+            super::linger::warn_if_disabled().await?;
+        }
     }
 
     Ok(())

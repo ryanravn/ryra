@@ -210,10 +210,6 @@ pub enum Warning {
 
 // --- Result types ---
 
-pub struct InitResult {
-    pub steps: Vec<Step>,
-}
-
 pub struct AddResult {
     pub steps: Vec<Step>,
     pub warnings: Vec<Warning>,
@@ -257,35 +253,6 @@ pub fn service_ref_from_installed(installed: &InstalledService) -> registry::res
             service: installed.name.clone(),
         }
     }
-}
-
-/// Initialize a new ryra project.
-pub async fn init(config: Config) -> Result<InitResult> {
-    let paths = ConfigPaths::resolve()?;
-    paths.ensure_dirs()?;
-
-    // Extract bundled registry to cache
-    registry::bundled::ensure_bundled(&paths.cache_dir)?;
-
-    // Preserve installed services from existing config
-    let mut config = config;
-    if let Ok(existing) = config::load_or_default(&paths.config_file)
-        && !existing.services.is_empty()
-    {
-        config.services = existing.services;
-    }
-
-    // Write config — stamp the current version
-    config.version = Some(config::VERSION.to_string());
-    let config_content = toml::to_string_pretty(&config)
-        .map_err(|e| Error::Template(format!("failed to serialize config: {e}")))?;
-
-    let steps = vec![Step::WriteFile(GeneratedFile {
-        path: paths.config_file.clone(),
-        content: config_content,
-    })];
-
-    Ok(InitResult { steps })
 }
 
 /// Determine which extra podman networks a service should join.

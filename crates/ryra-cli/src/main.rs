@@ -16,15 +16,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    // -- Linux-only commands (require systemd, podman) --
-    /// Initialize ryra on this host (optional — `ryra add` works without it)
-    Init {
-        /// Show what would happen without making changes
+    /// Search available services in a registry
+    Search {
+        /// Filter by name or description
+        query: Option<String>,
+        /// Search a specific custom registry
         #[arg(long)]
-        dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
+        registry: Option<String>,
     },
     /// Add and start a service
     Add {
@@ -83,24 +81,6 @@ enum Command {
         #[arg(long)]
         purge: bool,
     },
-    /// Tear down all services, containers, and config
-    Reset {
-        /// Skip confirmation prompt
-        #[arg(long, short = 'y')]
-        yes: bool,
-        /// Show what would happen without making changes
-        #[arg(long)]
-        dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
-    },
-    /// View or edit global configuration (no args = overview)
-    Config {
-        /// A config section (`smtp`, `auth`) to edit, or a service name
-        /// to show details for. Omit to print the global overview.
-        section: Option<String>,
-    },
     /// List installed services
     List {
         /// Also show orphan services (removed but data still on disk)
@@ -111,19 +91,21 @@ enum Command {
         #[arg(long, short = 'l')]
         long: bool,
     },
-    // -- Read-only / VM-based commands --
+    /// View or edit global configuration (no args = overview)
+    Config {
+        /// A config section (`smtp`, `auth`) to edit, or a service name
+        /// to show details for. Omit to print the global overview.
+        section: Option<String>,
+    },
+    /// Manage custom registries
+    Registry {
+        #[command(subcommand)]
+        action: RegistryAction,
+    },
     /// Show what changed in a service's registry definition since install
     Diff {
         /// Service name
         service: String,
-    },
-    /// Search available services in a registry
-    Search {
-        /// Filter by name or description
-        query: Option<String>,
-        /// Search a specific custom registry
-        #[arg(long)]
-        registry: Option<String>,
     },
     /// Run tests for a service
     Test {
@@ -166,10 +148,17 @@ enum Command {
         #[command(subcommand)]
         action: Option<TestAction>,
     },
-    /// Manage custom registries
-    Registry {
-        #[command(subcommand)]
-        action: RegistryAction,
+    /// Tear down all services, containers, and config
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Show file contents as they are written
+        #[arg(long, short)]
+        verbose: bool,
     },
 }
 
@@ -213,10 +202,6 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Init { dry_run, verbose } => {
-            crate::verbose::set(verbose);
-            cli::init::run(dry_run).await?
-        }
         Command::Add {
             ref services,
             ref url,

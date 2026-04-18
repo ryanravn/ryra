@@ -48,7 +48,6 @@ impl Event {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
-    Init,
     Step,
     Assertion,
 }
@@ -104,7 +103,6 @@ impl fmt::Display for ScenarioResult {
                 Outcome::Skipped => "skip",
             };
             let kind_label = match event.kind {
-                EventKind::Init => "init",
                 EventKind::Step => "step",
                 EventKind::Assertion => "assert",
             };

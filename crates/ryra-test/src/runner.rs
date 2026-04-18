@@ -18,7 +18,8 @@ fn print_event_result(prefix: &str, event: &Event) {
 
 /// Execute a simple (non-lifecycle) test suite inside a VM.
 ///
-/// 1. Runs `ryra init` and deploys registry services with `ryra add`
+/// 1. Deploys registry services with `ryra add` (no explicit init —
+///    `ryra add` bootstraps config on its first run)
 /// 2. Waits for declared ports
 /// 3. If quadlets are present, copies them to systemd dir, reloads, starts them
 /// 4. Sources `.env` files
@@ -41,17 +42,6 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
             };
         }
     };
-
-    // Init
-    if !services.is_empty() || !quadlets.is_empty() {
-        println!("[{name}]   ryra init...");
-        let init_event = run_event(vm, EventKind::Init, "ryra init", 30).await;
-        print_event_result(name, &init_event);
-        if init_event.outcome.is_fail() {
-            failed = true;
-        }
-        events.push(init_event);
-    }
 
     // Collect env overrides from all tests — these may include values for
     // required env vars that `ryra add` needs to succeed non-interactively.
@@ -498,17 +488,6 @@ pub async fn run_lifecycle_test(
         format!("[{name}] ")
     };
     let stream_prefix = if single_test { "" } else { name };
-
-    // Init first (all lifecycle tests start with ryra init)
-    if !retest {
-        println!("{p}  ryra init...");
-        let init_event = run_event(vm, EventKind::Init, "ryra init", 30).await;
-        print_event_result(&p, &init_event);
-        if init_event.outcome.is_fail() {
-            failed = true;
-        }
-        events.push(init_event);
-    }
 
     for step in steps {
         // In retest mode, skip setup steps and only run test/assertion steps.

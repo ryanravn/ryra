@@ -30,7 +30,7 @@ All install paths are cryptographically verified:
 
 ## Prerequisites
 
-Ryra installs its own dependencies (`podman`, `systemd-container`, etc.) when you run `ryra init` or `ryra add`. Your server needs:
+Ryra installs its own dependencies (`podman`, `systemd-container`, etc.) when you run `ryra add`. Your server needs:
 
 - A supported Linux distribution (see above)
 - `sudo` access

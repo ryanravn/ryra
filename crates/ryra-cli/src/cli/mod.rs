@@ -2,7 +2,6 @@ pub mod add;
 pub mod apply;
 pub mod config_cmd;
 pub mod diff;
-pub mod init;
 pub mod linger;
 pub mod list;
 pub mod prompts;
@@ -136,6 +135,55 @@ pub fn remove_caddy_ca() {
             }
         }
     }
+}
+
+/// Collapse a `$HOME` prefix to `~/...` for friendlier paths.
+fn tildify(path: &std::path::Path) -> String {
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(stripped) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", stripped.display());
+    }
+    path.display().to_string()
+}
+
+/// Compact preamble for `ryra add`: three arrows — pulls, writes, starts.
+/// Executed steps follow beneath; verbose adds detail to the same flow.
+pub fn print_plan_header(steps: &[Step], service: &str, primary_url: Option<&str>) {
+    use std::collections::BTreeSet;
+
+    // Deduplicated image pulls — multi-container services need every image
+    // listed so the user knows what's coming down the wire.
+    let images: BTreeSet<&str> = steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::PullImage { image } => Some(image.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    // Primary quadlet: `<service>.container`. Sidecars/env/configs are
+    // implied — listing them defeats the point of a compact header.
+    let quadlet_name = format!("{service}.container");
+    let primary_quadlet = steps.iter().find_map(|s| match s {
+        Step::WriteFile(f) => {
+            let name = f.path.file_name().and_then(|n| n.to_str())?;
+            (name == quadlet_name).then_some(f.path.as_path())
+        }
+        _ => None,
+    });
+
+    for image in &images {
+        println!("→ pulls {image}");
+    }
+    if let Some(p) = primary_quadlet {
+        println!("→ writes {}", tildify(p));
+    }
+    match primary_url {
+        Some(url) => println!("→ starts {service} on {url}"),
+        None => println!("→ starts {service}"),
+    }
+    println!();
 }
 
 /// Print a dry-run summary: files to write, then commands to run.

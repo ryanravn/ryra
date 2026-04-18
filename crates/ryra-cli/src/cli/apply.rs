@@ -25,12 +25,14 @@ pub async fn execute_all(steps: &[Step]) -> Result<()> {
 async fn execute(step: &Step) -> Result<()> {
     match step {
         Step::WriteFile(file) => {
-            println!("  Writing {}", file.path.display());
-            if crate::verbose::is_enabled() && !file.content.is_empty() {
-                for line in file.content.lines() {
-                    println!("    | {line}");
+            if crate::verbose::is_enabled() {
+                println!("  Writing {}", file.path.display());
+                if !file.content.is_empty() {
+                    for line in file.content.lines() {
+                        println!("    | {line}");
+                    }
+                    println!();
                 }
-                println!();
             }
             // Pick the permission mode by file kind:
             // - `.env` / `ryra.toml`  — contain credentials, owner-only (0o600)
@@ -122,7 +124,9 @@ async fn execute(step: &Step) -> Result<()> {
                 .map(|s| s.success())
                 .unwrap_or(false);
             if exists_local {
-                println!("  {image} already available, skipping pull");
+                if crate::verbose::is_enabled() {
+                    println!("  {image} already available, skipping pull");
+                }
                 return Ok(());
             }
             // Check additional image stores via podman images.
@@ -141,10 +145,14 @@ async fn execute(step: &Step) -> Result<()> {
                 })
                 .unwrap_or(false);
             if in_additional {
-                println!("  {image} available in image store, skipping pull");
+                if crate::verbose::is_enabled() {
+                    println!("  {image} available in image store, skipping pull");
+                }
                 return Ok(());
             }
-            println!("  Pulling {image}...");
+            if crate::verbose::is_enabled() {
+                println!("  Pulling {image}...");
+            }
             run_cmd("podman", &["pull", image])
         }
         Step::RemoveFile(path) => std::fs::remove_file(path)
@@ -196,7 +204,9 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::CopyFile { src, dst } => {
-            println!("  Copying {} -> {}", src.display(), dst.display());
+            if crate::verbose::is_enabled() {
+                println!("  Copying {} -> {}", src.display(), dst.display());
+            }
             if let Some(parent) = dst.parent() {
                 std::fs::create_dir_all(parent).with_context(|| {
                     format!("failed to create parent dir {}", parent.display())
@@ -213,7 +223,9 @@ async fn execute(step: &Step) -> Result<()> {
 /// Run a command with explicit program and args (no shell interpretation).
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     let display = format!("{program} {}", args.join(" "));
-    println!("  $ {display}");
+    if crate::verbose::is_enabled() {
+        println!("  $ {display}");
+    }
     let status = Command::new(program)
         .args(args)
         .status()

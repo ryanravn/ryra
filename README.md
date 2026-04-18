@@ -28,13 +28,13 @@ Ryra pulls the image, prompts for any API keys or passwords the service needs, g
 
 | | | |
 |-|-|-|
-| **Supabase** — backend-as-a-service | **OpenClaw** — AI assistant gateway | **Immich** — photos |
-| **Forgejo** — git forge | **Jellyfin** — media server | **Vaultwarden** — password vault |
-| **Open WebUI** — LLM frontend | **Synapse** — Matrix chat | **Paperless-ngx** — docs |
-| **Seafile** — file sync | **Vikunja** — tasks | **Uptime Kuma** — monitoring |
-| **DocuSeal** — e-signatures | **Ente** — E2E photos | **Twenty** — CRM |
-| **Postgres** — database | **Caddy** — reverse proxy | **Authelia** — SSO/OIDC |
-| **Inbucket** — dev SMTP | | |
+| **OpenClaw** — AI assistant gateway | **Open WebUI** — LLM frontend | **Supabase** — backend-as-a-service |
+| **Immich** — photos | **Uptime Kuma** — monitoring | **Caddy** — reverse proxy |
+| **Vaultwarden** — password vault | **Jellyfin** — media server | **Twenty** — CRM |
+| **Paperless-ngx** — docs | **Authelia** — SSO/OIDC | **Ente** — E2E photos |
+| **Postgres** — database | **Seafile** — file sync | **DocuSeal** — e-signatures |
+| **Synapse** — Matrix chat | **Vikunja** — tasks | **Inbucket** — dev SMTP |
+| **Forgejo** — git forge | | |
 
 Run `ryra search` to browse the full list with install status.
 
@@ -49,10 +49,9 @@ Run `ryra search` to browse the full list with install status.
 
 ## How it works
 
-1. **`ryra init`** writes `~/.config/ryra/ryra.toml` and checks that `loginctl linger` is on for your user (so services survive logout).
-2. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, generates a quadlet at `~/.config/containers/systemd/<service>.container`, writes a `.env` with any secrets, and asks systemd to start it.
-3. **`--url <public-url>`** records where the service will be reachable. If Caddy is installed, Ryra also adds a site block routing that hostname to the container. If you run your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale Funnel, …), Ryra leaves the routing alone and just uses the URL to populate OIDC callbacks and email links.
-4. **`--auth`** registers an OIDC client with the auth provider and either (a) injects credentials into the service's native OIDC config, or (b) puts Authelia's forward-auth in front of the service via Caddy.
+1. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, generates a quadlet at `~/.config/containers/systemd/<service>.container`, writes a `.env` with any secrets, and asks systemd to start it. The first `ryra add` also creates `~/.config/ryra/ryra.toml` and offers to enable `loginctl linger` so services survive logout.
+2. **`--url <public-url>`** records where the service will be reachable. If Caddy is installed, Ryra also adds a site block routing that hostname to the container. If you run your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale Funnel, …), Ryra leaves the routing alone and just uses the URL to populate OIDC callbacks and email links.
+3. **`--auth`** registers an OIDC client with the auth provider and either (a) injects credentials into the service's native OIDC config, or (b) puts Authelia's forward-auth in front of the service via Caddy.
 
 ### Where things live
 
@@ -81,7 +80,6 @@ Requires Rust stable.
 
 ```sh
 cargo build
-cargo run -- init
 cargo run -- add whoami
 ```
 
