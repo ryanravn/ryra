@@ -37,7 +37,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
         apply::execute_all(&result.steps).await?;
         ryra_core::finalize_reset()?;
         remove_caddy_ca();
-        super::linger::offer_disable().await?;
+        super::linger::note_if_enabled().await;
         println!("\nryra has been fully reset.");
     }
 
