@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=mariadb:10.11
+Image=docker.io/library/mariadb:10.11
 ContainerName=seafile-mariadb
 Network=seafile.network:alias=mariadb
 Volume=seafile-db-data.volume:/var/lib/mysql:U

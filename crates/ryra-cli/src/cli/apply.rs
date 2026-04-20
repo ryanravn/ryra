@@ -130,9 +130,9 @@ async fn execute(step: &Step) -> Result<()> {
                 return Ok(());
             }
             // Check additional image stores via podman images.
-            // Match both the exact name and docker.io/ expanded forms since
-            // quadlets use short names (e.g. "caddy:2-alpine") but podman
-            // stores them with the full registry prefix.
+            // Quadlets use fully qualified names (e.g. "docker.io/library/caddy:2-alpine"),
+            // but older caches may still hold short-name entries — check both forms
+            // so existing stores continue to hit.
             let in_additional = Command::new("podman")
                 .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
                 .output()

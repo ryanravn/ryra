@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=authelia/authelia:4.39
+Image=docker.io/authelia/authelia:4.39
 ContainerName=authelia
 Network=authelia.network
 PublishPort=${RYRA_PORT_HTTP}:9091

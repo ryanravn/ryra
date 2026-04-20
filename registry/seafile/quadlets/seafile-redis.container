@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=redis:7-alpine
+Image=docker.io/library/redis:7-alpine
 ContainerName=seafile-redis
 Network=seafile.network:alias=redis
 HealthCmd=redis-cli ping | grep PONG

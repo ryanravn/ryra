@@ -5,7 +5,7 @@ StartLimitBurst=3
 
 [Container]
 ContainerName=whoami
-Image=traefik/whoami:v1.11.0
+Image=docker.io/traefik/whoami:v1.11.0
 PublishPort=${RYRA_PORT_HTTP}:80
 Pull=missing
 EnvironmentFile=%h/.local/share/ryra/whoami/.env

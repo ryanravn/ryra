@@ -5,7 +5,7 @@ StartLimitBurst=3
 
 [Container]
 ContainerName=paperless-ngx-redis
-Image=redis:7-alpine
+Image=docker.io/library/redis:7-alpine
 Network=paperless-ngx.network:alias=redis
 HealthCmd=redis-cli ping | grep PONG
 HealthStartPeriod=20s

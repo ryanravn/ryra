@@ -49,18 +49,23 @@ pub struct EnvOutput {
 pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
     let name = &params.service_def.service.name;
 
-    // Use pre-built context if provided (preserves secrets from the prompt phase),
-    // otherwise generate a fresh one.
-    let ctx = match params.pre_built_ctx {
-        Some(ctx) => ctx,
-        None => context::build_context(
-            params.config,
-            params.service_def,
-            params.host_port,
-            params.auth_kind,
-            params.url,
-        )?,
-    };
+    // Always build a fresh context with the now-known host_port. Overlay
+    // secret.* and auth.* entries from the pre-built context so randomly
+    // generated values the user saw during prompts stay stable.
+    let mut ctx = context::build_context(
+        params.config,
+        params.service_def,
+        params.host_port,
+        params.auth_kind,
+        params.url,
+    )?;
+    if let Some(prebuilt) = params.pre_built_ctx {
+        for (key, value) in prebuilt {
+            if key.starts_with("secret.") || key.starts_with("auth.") {
+                ctx.insert(key, value);
+            }
+        }
+    }
     let rendered_env = render_env_vars(
         params.service_def,
         &ctx,
@@ -196,4 +201,110 @@ pub fn extract_secret_refs(value: &str) -> Vec<String> {
         }
     }
     secrets
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::schema::Config;
+    use crate::registry::service_def::{
+        EnvKind, EnvVar, PortDef, ServiceDef, ServiceMeta,
+    };
+
+    fn minimal_service_def() -> ServiceDef {
+        ServiceDef {
+            service: ServiceMeta {
+                name: "demo".into(),
+                description: "demo".into(),
+                url: None,
+                kind: Default::default(),
+                architecture: vec![],
+                https: Default::default(),
+            },
+            requirements: None,
+            ports: vec![PortDef {
+                name: "http".into(),
+                container_port: 80,
+                host_port: None,
+                protocol: Default::default(),
+            }],
+            env: vec![
+                EnvVar {
+                    name: "HOSTPORT".into(),
+                    value: "{{service.port}}".into(),
+                    kind: EnvKind::Default,
+                    prompt: None,
+                    format: Default::default(),
+                    length: None,
+                    jwt_claims: None,
+                    jwt_signing_key: None,
+                },
+                EnvVar {
+                    name: "ADMIN_PASSWORD".into(),
+                    value: "{{secret.admin}}".into(),
+                    kind: EnvKind::Default,
+                    prompt: None,
+                    format: Default::default(),
+                    length: Some(16),
+                    jwt_claims: None,
+                    jwt_signing_key: None,
+                },
+            ],
+            requires: vec![],
+            mappings: Default::default(),
+            integrations: Default::default(),
+        }
+    }
+
+    /// Regression: when the interactive CLI builds `pre_built_ctx` with
+    /// `host_port: None` (the real port isn't allocated yet), `generate_env`
+    /// must still produce a valid env file with the real `service.port`.
+    /// Previously the pre-built ctx was reused wholesale, so any env value
+    /// referencing `{{service.port}}` (e.g., seafile) failed strict-mode
+    /// rendering with "undefined value".
+    #[test]
+    fn generate_env_rebuilds_port_when_prebuilt_ctx_lacks_it() {
+        let def = minimal_service_def();
+        let config = Config::default();
+        // Build the pre-built ctx as the interactive prompt phase does:
+        // host_port is None, so `service.port` is absent from the ctx.
+        let prebuilt = context::build_context(&config, &def, None, None, None)
+            .expect("build_context with host_port=None should succeed");
+        assert!(!prebuilt.contains_key("service.port"));
+        let admin_secret = prebuilt
+            .get("secret.admin")
+            .expect("secret.admin should have been generated in the prompt phase")
+            .clone();
+
+        // Now run generate_env with the real allocated host_port.
+        let resolved = vec![("http".to_string(), 10002u16)];
+        let output = generate_env(GenerateEnvParams {
+            config: &config,
+            service_def: &def,
+            auth_kind: None,
+            host_port: Some(10002),
+            resolved_ports: &resolved,
+            env_overrides: &BTreeMap::new(),
+            url: None,
+            extra_env: BTreeMap::new(),
+            pre_built_ctx: Some(prebuilt),
+        })
+        .expect("generate_env must succeed with the real host_port");
+
+        // The resulting .env must carry the allocated port, and the randomly
+        // generated secret from the prompt phase must be preserved verbatim.
+        assert!(
+            output.env_file.content.contains("HOSTPORT=10002"),
+            ".env missing real port: {}",
+            output.env_file.content,
+        );
+        assert!(
+            output
+                .env_file
+                .content
+                .contains(&format!("ADMIN_PASSWORD={admin_secret}")),
+            "prompt-phase secret not preserved in .env: {}",
+            output.env_file.content,
+        );
+    }
 }

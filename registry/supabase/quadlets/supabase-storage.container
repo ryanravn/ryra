@@ -7,7 +7,7 @@ After=supabase-db.service supabase-rest.service supabase-imgproxy.service
 
 [Container]
 ContainerName=supabase-storage
-Image=supabase/storage-api:v1.48.26
+Image=docker.io/supabase/storage-api:v1.48.26
 Network=supabase.network:alias=storage
 Environment=PORT=5000
 Pull=missing

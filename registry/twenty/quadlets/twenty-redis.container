@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=redis:7-alpine
+Image=docker.io/library/redis:7-alpine
 ContainerName=twenty-redis
 Network=twenty.network:alias=redis
 Exec=redis-server --maxmemory-policy noeviction

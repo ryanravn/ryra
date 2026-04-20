@@ -4,7 +4,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Container]
-Image=minio/minio:RELEASE.2025-09-07T16-13-09Z
+Image=docker.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
 ContainerName=ente-minio
 Network=ente.network:alias=minio
 Volume=ente-minio-data.volume:/data:U

@@ -7,7 +7,7 @@ After=supabase-db.service
 
 [Container]
 ContainerName=supabase-rest
-Image=postgrest/postgrest:v14.8
+Image=docker.io/postgrest/postgrest:v14.8
 Network=supabase.network:alias=rest
 Exec=postgrest
 Pull=missing

@@ -1009,9 +1009,9 @@ pub async fn ensure_image_cached(image: &str) -> Result<()> {
 
 /// Check if an image exists in the shared store.
 ///
-/// Tries multiple name variants because quadlets use short names
-/// (e.g. "caddy:2-alpine") but podman stores images with the full
-/// registry prefix (e.g. "docker.io/library/caddy:2-alpine").
+/// Quadlets use fully qualified names (e.g. "docker.io/library/caddy:2-alpine"),
+/// but older caches may hold short-name entries — try both forms so existing
+/// shared stores keep hitting.
 async fn image_exists_in_store(store_dir: &Path, image: &str) -> bool {
     let short = strip_docker_io(image);
     let expanded_library = format!("docker.io/library/{short}");
