@@ -293,6 +293,7 @@ pub fn add_service(
     url: Option<&str>,
     auth_kind: Option<registry::service_def::AuthKind>,
     enable_auth: bool,
+    enable_smtp: bool,
     env_overrides: &BTreeMap<String, String>,
     registry_name: &str,
     repo_dir: &Path,
@@ -439,7 +440,8 @@ pub fn add_service(
         None => (Vec::new(), BTreeMap::new(), Vec::new(), Vec::new()),
     };
 
-    let has_smtp = reg_service.def.integrations.smtp
+    let has_smtp = enable_smtp
+        && reg_service.def.integrations.smtp
         && !reg_service.def.mappings.smtp.is_empty()
         && config.smtp.is_some();
     let extra_networks = resolve_extra_networks(
@@ -461,6 +463,7 @@ pub fn add_service(
         url,
         extra_env,
         pre_built_ctx,
+        enable_smtp: has_smtp,
     })?;
 
     let podman_args: Vec<String> = Vec::new();

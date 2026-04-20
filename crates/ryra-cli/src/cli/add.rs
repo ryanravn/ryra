@@ -140,67 +140,84 @@ pub async fn run(
             url
         };
 
-        // SMTP — prompt if service supports it and not yet configured
-        if reg_service.def.integrations.smtp
-            && !reg_service.def.mappings.smtp.is_empty()
-            && !dry_run
-            && interactive
-            && config.smtp.is_none()
-        {
-            match prompts::prompt_smtp()? {
-                prompts::SmtpSetupChoice::Custom(smtp) => {
-                    config.smtp = Some(smtp);
-                    paths.ensure_dirs()?;
-                    ryra_core::config::save_config(&paths.config_file, &config)?;
-                    println!(
-                        "  SMTP configured. Saved to {}\n",
-                        paths.config_file.display()
-                    );
-                }
-                prompts::SmtpSetupChoice::Inbucket => {
-                    let inbucket_installed = config
-                        .services
-                        .iter()
-                        .any(|s| WellKnownService::Inbucket.matches(&s.name));
-                    if !inbucket_installed {
-                        println!("\nInstalling inbucket...\n");
-                        Box::pin(run(
-                            &[WellKnownService::Inbucket.to_string()],
-                            None,
-                            false,
-                            None,
-                            false,
-                            true,
-                        ))
-                        .await?;
-                        // Reload — inbucket install modified config on disk
-                        config = ryra_core::config::load_or_default(&paths.config_file)?;
+        // SMTP — decide whether to wire this specific service into email.
+        //   * Global SMTP already configured → Confirm default yes (reuse it).
+        //   * No global SMTP yet → show Skip/Custom/Inbucket select, default Skip.
+        //   * Non-interactive → opt in iff SMTP is already configured globally.
+        let service_supports_smtp =
+            reg_service.def.integrations.smtp && !reg_service.def.mappings.smtp.is_empty();
+        let enable_smtp: bool = if !service_supports_smtp || dry_run {
+            false
+        } else if interactive {
+            if config.smtp.is_some() {
+                Confirm::new()
+                    .with_prompt("Use SMTP for this service?")
+                    .default(true)
+                    .interact()?
+            } else {
+                match prompts::prompt_smtp()? {
+                    prompts::SmtpSetupChoice::Custom(smtp) => {
+                        config.smtp = Some(smtp);
+                        paths.ensure_dirs()?;
+                        ryra_core::config::save_config(&paths.config_file, &config)?;
+                        println!(
+                            "  SMTP configured. Saved to {}\n",
+                            paths.config_file.display()
+                        );
+                        true
                     }
-                    // Use container name for SMTP host — services on the
-                    // caddy network can reach inbucket directly. The host
-                    // port isn't reachable from --no-hosts containers.
-                    config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
-                        host: "inbucket".to_string(),
-                        port: INBUCKET_SMTP_PORT, // inbucket's internal container port
-                        username: String::new(),
-                        password: String::new(),
-                        from: "noreply@example.com".to_string(),
-                        security: ryra_core::config::schema::SmtpSecurity::Off,
-                    });
-                    paths.ensure_dirs()?;
-                    ryra_core::config::save_config(&paths.config_file, &config)?;
-                    println!(
-                        "  SMTP configured (inbucket). Saved to {}\n",
-                        paths.config_file.display()
-                    );
+                    prompts::SmtpSetupChoice::Inbucket => {
+                        let inbucket_installed = config
+                            .services
+                            .iter()
+                            .any(|s| WellKnownService::Inbucket.matches(&s.name));
+                        if !inbucket_installed {
+                            println!("\nInstalling inbucket...\n");
+                            Box::pin(run(
+                                &[WellKnownService::Inbucket.to_string()],
+                                None,
+                                false,
+                                None,
+                                false,
+                                true,
+                            ))
+                            .await?;
+                            // Reload — inbucket install modified config on disk
+                            config = ryra_core::config::load_or_default(&paths.config_file)?;
+                        }
+                        // Use container name for SMTP host — services on the
+                        // caddy network can reach inbucket directly. The host
+                        // port isn't reachable from --no-hosts containers.
+                        config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
+                            host: "inbucket".to_string(),
+                            port: INBUCKET_SMTP_PORT, // inbucket's internal container port
+                            username: String::new(),
+                            password: String::new(),
+                            from: "noreply@example.com".to_string(),
+                            security: ryra_core::config::schema::SmtpSecurity::Off,
+                        });
+                        paths.ensure_dirs()?;
+                        ryra_core::config::save_config(&paths.config_file, &config)?;
+                        println!(
+                            "  SMTP configured (inbucket). Saved to {}\n",
+                            paths.config_file.display()
+                        );
+                        true
+                    }
+                    prompts::SmtpSetupChoice::Skip => false,
                 }
-                prompts::SmtpSetupChoice::Skip => {}
             }
-        }
+        } else {
+            config.smtp.is_some()
+        };
 
         // Auth — determined by --auth flag or interactive prompt
-        let auth_kind: Option<AuthKind> =
-            resolve_auth_kind(auth, interactive, &reg_service.def.integrations.auth)?;
+        let auth_kind: Option<AuthKind> = resolve_auth_kind(
+            auth,
+            interactive,
+            &reg_service.def.integrations.auth,
+            config.auth.is_some(),
+        )?;
 
         // If the user chose auth but no provider is configured, install one
         if auth_kind.is_some() && config.auth.is_none() {
@@ -233,6 +250,7 @@ pub async fn run(
                 None,
                 auth_kind.as_ref(),
                 url,
+                enable_smtp,
             )?;
             prompt_ctx = Some(default_ctx.clone());
 
@@ -292,6 +310,7 @@ pub async fn run(
             url,
             auth_kind.clone(),
             auth || auth_kind.is_some(),
+            enable_smtp,
             &env_overrides,
             service_ref.registry_name(),
             &repo_dir,
@@ -310,6 +329,7 @@ pub async fn run(
                     url,
                     auth_kind.clone(),
                     auth || auth_kind.is_some(),
+                    enable_smtp,
                     &env_overrides,
                     service_ref.registry_name(),
                     &repo_dir,
@@ -543,39 +563,18 @@ pub async fn run(
     Ok(())
 }
 
-/// Ensure hostnames resolve and CA is trusted for domain-based services.
-/// Collects all needed operations and runs them with user confirmation.
-/// All external commands use explicit args (no shell interpolation).
+/// Register Caddy's CA with every rootless trust store we can reach, and
+/// print (but never run) hints for the stores that need sudo — /etc/hosts
+/// for non-.localhost domains, and the system trust bundle for
+/// curl/wget/Firefox-on-p11-kit users.
+///
+/// The rootless work covers Chromium-family browsers (via the user's
+/// `~/.pki/nssdb`) and every Firefox profile with a `cert9.db`. That's the
+/// mkcert pattern and enough for ~95% of browser traffic on Linux.
 fn setup_host_access(domains: &[&str]) {
-    use std::process::{Command, Stdio};
+    use std::process::Command;
 
-    let mut sudo_needed = false;
-
-    // --- Detect what needs to be done ---
-
-    // 1. Check /etc/hosts for missing domains
-    let hosts = match std::fs::read_to_string("/etc/hosts") {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("  Warning: could not read /etc/hosts: {e}");
-            return;
-        }
-    };
-    let missing_hosts: Vec<&str> = domains
-        .iter()
-        .filter(|d| {
-            !hosts.lines().any(|l| {
-                let l = l.trim();
-                !l.starts_with('#') && l.split_whitespace().any(|w| w == **d)
-            })
-        })
-        .copied()
-        .collect();
-    if !missing_hosts.is_empty() {
-        sudo_needed = true;
-    }
-
-    // 2. Check system CA trust — find the right target for this distro
+    // --- CA source: whatever Caddy's first start wrote out ---
     let ca_source = ryra_core::service_home("caddy")
         .map(|h| h.parent().map(|p| p.join("caddy-root-ca.crt")))
         .unwrap_or_else(|e| {
@@ -583,152 +582,153 @@ fn setup_host_access(domains: &[&str]) {
             None
         })
         .filter(|p| p.exists());
+
+    // certutil (from `nss-tools` / `libnss3-tools`) drives every rootless
+    // trust step below. If it's missing, skip them all and point the user
+    // at the package — otherwise each certutil call would fail with a
+    // confusing `No such file or directory` warning.
+    let have_certutil = Command::new("certutil")
+        .arg("-V")
+        .output()
+        .is_ok();
+    if !have_certutil {
+        println!();
+        println!(
+            "  Note: `certutil` is not installed, so ryra can't register the Caddy CA"
+        );
+        println!("  with Chromium or Firefox automatically. To enable rootless trust:");
+        println!("    Fedora/RHEL:   sudo dnf install nss-tools");
+        println!("    Debian/Ubuntu: sudo apt install libnss3-tools");
+        println!("    Arch:          sudo pacman -S nss");
+        println!("  Then re-run `ryra add caddy` (or click through the browser warning).");
+    }
+
+    // --- Rootless: user NSS DB (Chromium, Edge, Brave, Opera, Vivaldi) ---
+    if have_certutil
+        && let (Some(nssdb_path), Some(ca)) = (super::nssdb_dir(), ca_source.as_ref())
+    {
+        if !nssdb_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&nssdb_path) {
+                eprintln!(
+                    "  Warning: could not create {}: {e}",
+                    nssdb_path.display()
+                );
+            } else {
+                let init = Command::new("certutil")
+                    .args([
+                        "-N",
+                        "-d",
+                        &format!("sql:{}", nssdb_path.display()),
+                        "--empty-password",
+                    ])
+                    .status();
+                match init {
+                    Ok(s) if s.success() => {}
+                    _ => eprintln!(
+                        "  Warning: could not initialize NSS DB at {}",
+                        nssdb_path.display()
+                    ),
+                }
+            }
+        }
+        if nssdb_path.exists() {
+            add_ca_to_nssdb(&format!("sql:{}", nssdb_path.display()), ca, "Chromium family");
+        }
+    }
+
+    // --- Rootless: every Firefox profile we can find ---
+    if have_certutil && let Some(ca) = ca_source.as_ref() {
+        for profile in super::firefox_profile_dirs() {
+            add_ca_to_nssdb(
+                &format!("sql:{}", profile.display()),
+                ca,
+                &format!("Firefox profile {}", profile.display()),
+            );
+        }
+    }
+
+    // --- Sudo hints (printed only; ryra never runs them) ---
+    let hosts_content = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+    let missing_hosts: Vec<&str> = domains
+        .iter()
+        .filter(|d| {
+            !hosts_content.lines().any(|l| {
+                let l = l.trim();
+                !l.starts_with('#') && l.split_whitespace().any(|w| w == **d)
+            })
+        })
+        .copied()
+        .collect();
+
     let ca_target = super::CA_TARGETS.iter().find(|t| {
         let dir = std::path::Path::new(t.cert_path)
             .parent()
             .unwrap_or(std::path::Path::new("/"));
         dir.is_dir()
     });
-    let need_ca = ca_source.is_some()
+    let need_system_ca = ca_source.is_some()
         && ca_target.is_some()
         && !super::CA_TARGETS
             .iter()
             .any(|t| std::path::Path::new(t.cert_path).exists());
-    if need_ca {
-        sudo_needed = true;
-    }
 
-    // 3. Browser NSS trust (no sudo needed — handled separately)
-    let nssdb = std::env::var("HOME")
-        .ok()
-        .map(|h| std::path::PathBuf::from(h).join(".pki/nssdb"))
-        .filter(|p| p.exists());
-    if let Some(ref nssdb_path) = nssdb {
-        let nss_arg = format!("sql:{}", nssdb_path.display());
-        let already_in_nss = match Command::new("certutil")
-            .args(["-d", &nss_arg, "-L", "-n", "ryra-caddy-ca"])
-            .output()
-        {
-            Ok(o) => o.status.success(),
-            Err(e) => {
-                eprintln!("  Warning: could not check browser trust store: {e}");
-                false
-            }
-        };
-        if !already_in_nss && let Some(ref ca) = ca_source {
-            let status = Command::new("certutil")
-                .args([
-                    "-d",
-                    &nss_arg,
-                    "-A",
-                    "-t",
-                    "C,,",
-                    "-n",
-                    "ryra-caddy-ca",
-                    "-i",
-                    &ca.display().to_string(),
-                ])
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    println!("  Caddy CA added to browser trust store.");
-                }
-                _ => {
-                    eprintln!("  Warning: could not add Caddy CA to browser trust store.");
-                }
-            }
-        }
-    }
-
-    if !sudo_needed {
+    if missing_hosts.is_empty() && !need_system_ca {
         return;
     }
 
-    // --- Display what will be done ---
     println!();
-    println!("  Domain setup (one-time, requires sudo):");
+    println!("  Optional (requires sudo) — run yourself if you need these:");
     if !missing_hosts.is_empty() {
         println!(
-            "    sudo tee -a /etc/hosts  (add: {})",
+            "    echo '127.0.0.1 {}' | sudo tee -a /etc/hosts",
             missing_hosts.join(" ")
         );
     }
-    if let (true, Some(target)) = (need_ca, ca_target) {
+    if let (true, Some(ca), Some(target)) = (need_system_ca, ca_source.as_ref(), ca_target) {
         println!(
-            "    sudo cp <caddy-ca> {} && sudo {}",
-            target.cert_path, target.update_cmd
+            "    sudo cp {} {} && sudo {}",
+            ca.display(),
+            target.cert_path,
+            target.update_cmd,
+        );
+        println!(
+            "    (lets curl/wget and Firefox with p11-kit trust the Caddy CA too)"
         );
     }
-
-    // --- Confirm ---
-    let interactive = super::is_interactive();
-    if interactive {
-        let run = match Confirm::new()
-            .with_prompt("  Run these commands now?")
-            .default(true)
-            .interact()
-        {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("  Warning: could not read confirmation ({e}), skipping domain setup");
-                return;
-            }
-        };
-        if !run {
-            println!();
-            return;
-        }
-    }
-
-    // --- Execute (no shell interpolation) ---
-    if !missing_hosts.is_empty() {
-        let entry = format!("127.0.0.1 {}\n", missing_hosts.join(" "));
-        match Command::new("sudo")
-            .args(["tee", "-a", "/etc/hosts"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    use std::io::Write;
-                    if let Err(e) = stdin.write_all(entry.as_bytes()) {
-                        eprintln!("  Failed to write to /etc/hosts: {e}");
-                    }
-                }
-                match child.wait() {
-                    Ok(s) if s.success() => {}
-                    _ => eprintln!("  Failed to update /etc/hosts"),
-                }
-            }
-            Err(e) => eprintln!("  Failed to run sudo: {e}"),
-        }
-    }
-
-    if let (true, Some(ca), Some(target)) = (need_ca, ca_source.as_ref(), ca_target) {
-        let cp_ok = match Command::new("sudo")
-            .args(["cp", &ca.display().to_string(), target.cert_path])
-            .status()
-        {
-            Ok(s) => s.success(),
-            Err(e) => {
-                eprintln!("  Failed to install CA certificate: {e}");
-                false
-            }
-        };
-        if cp_ok {
-            match Command::new("sudo").arg(target.update_cmd).status() {
-                Ok(s) if s.success() => {}
-                Ok(s) => eprintln!("  Warning: {} exited with {s}", target.update_cmd),
-                Err(e) => eprintln!("  Warning: failed to run {}: {e}", target.update_cmd),
-            }
-        } else {
-            eprintln!("  Failed to install CA certificate");
-        }
-    }
-
-    println!("  Done.");
     println!();
+}
+
+/// Try to add the Caddy CA to an NSS DB at `nss_arg` (e.g. `sql:~/.pki/nssdb`
+/// or `sql:<firefox-profile-dir>`). No-op if it's already there. The `context`
+/// is included in any warning so the user can tell which store failed.
+fn add_ca_to_nssdb(nss_arg: &str, ca: &std::path::Path, context: &str) {
+    use std::process::Command;
+    let present = Command::new("certutil")
+        .args(["-d", nss_arg, "-L", "-n", super::CADDY_CA_NICKNAME])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if present {
+        return;
+    }
+    let status = Command::new("certutil")
+        .args([
+            "-d",
+            nss_arg,
+            "-A",
+            "-t",
+            "C,,",
+            "-n",
+            super::CADDY_CA_NICKNAME,
+            "-i",
+            &ca.display().to_string(),
+        ])
+        .status();
+    match status {
+        Ok(s) if s.success() => println!("  Caddy CA added to {context}."),
+        Ok(s) => eprintln!("  Warning: certutil exited with {s} for {context}"),
+        Err(e) => eprintln!("  Warning: could not run certutil for {context}: {e}"),
+    }
 }
 
 /// Ensure TLS is configured when a service needs HTTPS.
@@ -1090,10 +1090,15 @@ async fn ensure_auth_for_add(
 }
 
 /// Determine which auth kind to use based on CLI flags and service capabilities.
+///
+/// The prompt's default tracks whether an auth provider is already configured
+/// globally: first install → default no (don't push users into auth setup);
+/// after Authelia is up → default yes (reuse it by habit).
 fn resolve_auth_kind(
     auth_flag: bool,
     interactive: bool,
     supported: &[AuthKind],
+    auth_configured: bool,
 ) -> Result<Option<AuthKind>> {
     // --auth flag: use the first supported auth kind (core validates further)
     if auth_flag {
@@ -1110,7 +1115,7 @@ fn resolve_auth_kind(
         let kind = &supported[0];
         let enable = Confirm::new()
             .with_prompt(format!("Enable {kind} auth?"))
-            .default(true)
+            .default(auth_configured)
             .interact()?;
         return Ok(if enable { Some(kind.clone()) } else { None });
     }
@@ -1122,7 +1127,7 @@ fn resolve_auth_kind(
     let selection = dialoguer::Select::new()
         .with_prompt("Auth mode")
         .items(&items)
-        .default(1)
+        .default(if auth_configured { 1 } else { 0 })
         .interact()?;
     Ok(if selection == 0 {
         None

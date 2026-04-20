@@ -17,6 +17,7 @@ pub fn build_context(
     host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
     url: Option<&str>,
+    enable_smtp: bool,
 ) -> Result<BTreeMap<String, String>> {
     let mut ctx = BTreeMap::new();
 
@@ -64,8 +65,12 @@ pub fn build_context(
             .unwrap_or_else(|| "admin@example.com".to_string()),
     );
 
-    // smtp.*
-    if let Some(smtp) = &config.smtp {
+    // smtp.* — only populated when the caller opted this service into SMTP.
+    // Without smtp.host in the context, render_env_vars skips the service's
+    // [mappings.smtp] block entirely, so the service comes up without email.
+    if enable_smtp
+        && let Some(smtp) = &config.smtp
+    {
         ctx.insert("smtp.host".into(), smtp.host.clone());
         ctx.insert("smtp.port".into(), smtp.port.to_string());
         ctx.insert("smtp.username".into(), smtp.username.clone());

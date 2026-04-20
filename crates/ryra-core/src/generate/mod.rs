@@ -36,6 +36,11 @@ pub struct GenerateEnvParams<'a> {
     /// ensures the values shown during interactive prompts match what gets
     /// written to the .env file.
     pub pre_built_ctx: Option<BTreeMap<String, String>>,
+    /// Whether this service should use the globally configured SMTP. When
+    /// false, smtp.* is left out of the context and [mappings.smtp] is skipped
+    /// — lets the user opt a single service out of email without clearing the
+    /// global SMTP config.
+    pub enable_smtp: bool,
 }
 
 /// Result of generating env for a service.
@@ -58,6 +63,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         params.host_port,
         params.auth_kind,
         params.url,
+        params.enable_smtp,
     )?;
     if let Some(prebuilt) = params.pre_built_ctx {
         for (key, value) in prebuilt {
@@ -268,7 +274,7 @@ mod tests {
         let config = Config::default();
         // Build the pre-built ctx as the interactive prompt phase does:
         // host_port is None, so `service.port` is absent from the ctx.
-        let prebuilt = context::build_context(&config, &def, None, None, None)
+        let prebuilt = context::build_context(&config, &def, None, None, None, false)
             .expect("build_context with host_port=None should succeed");
         assert!(!prebuilt.contains_key("service.port"));
         let admin_secret = prebuilt
@@ -288,6 +294,7 @@ mod tests {
             url: None,
             extra_env: BTreeMap::new(),
             pre_built_ctx: Some(prebuilt),
+            enable_smtp: false,
         })
         .expect("generate_env must succeed with the real host_port");
 
