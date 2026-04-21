@@ -1,5 +1,0 @@
-[Unit]
-Description=Jellyfin network
-
-[Network]
-NetworkName=jellyfin

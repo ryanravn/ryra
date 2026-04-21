@@ -1,4 +1,0 @@
-[Unit]
-Description=Postgres data
-
-[Volume]

@@ -26,7 +26,7 @@ enum Command {
     },
     /// Add and start a service
     Add {
-        /// Service name(s) from registry (e.g., "jellyfin" or "acme/jellyfin")
+        /// Service name(s) from registry (e.g., "forgejo" or "acme/forgejo")
         #[arg(required = true, num_args = 1..)]
         services: Vec<String>,
         /// Public URL for this service (e.g., https://docs.example.com)

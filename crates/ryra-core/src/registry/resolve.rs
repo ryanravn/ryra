@@ -6,22 +6,22 @@ use crate::registry;
 
 /// A reference to a service in a registry.
 ///
-/// - `Bundled("jellyfin")` — refers to a service in the embedded bundled registry
-/// - `Custom { registry: "acme", service: "jellyfin" }` — refers to a service in a named custom registry
+/// - `Bundled("forgejo")` — refers to a service in the embedded bundled registry
+/// - `Custom { registry: "acme", service: "forgejo" }` — refers to a service in a named custom registry
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceRef {
-    /// A service from the embedded bundled registry. E.g., `jellyfin`.
+    /// A service from the embedded bundled registry. E.g., `forgejo`.
     Bundled(String),
-    /// A service from a named custom registry. E.g., `acme/jellyfin`.
+    /// A service from a named custom registry. E.g., `acme/forgejo`.
     Custom { registry: String, service: String },
 }
 
 impl ServiceRef {
     /// Parse a service reference from a string.
     ///
-    /// - `"jellyfin"` → `Bundled("jellyfin")`
-    /// - `"acme/jellyfin"` → `Custom { registry: "acme", service: "jellyfin" }`
-    /// - `""`, `"/jellyfin"`, `"acme/"`, `"acme/sub/jellyfin"` → error
+    /// - `"forgejo"` → `Bundled("forgejo")`
+    /// - `"acme/forgejo"` → `Custom { registry: "acme", service: "forgejo" }`
+    /// - `""`, `"/forgejo"`, `"acme/"`, `"acme/sub/forgejo"` → error
     pub fn parse(input: &str) -> Result<Self> {
         let parts: Vec<&str> = input.split('/').collect();
         match parts.as_slice() {
@@ -122,23 +122,23 @@ mod tests {
 
     #[test]
     fn parse_bundled_service() {
-        let r = ServiceRef::parse("jellyfin").expect("should parse");
-        assert_eq!(r, ServiceRef::Bundled("jellyfin".to_string()));
-        assert_eq!(r.service_name(), "jellyfin");
+        let r = ServiceRef::parse("forgejo").expect("should parse");
+        assert_eq!(r, ServiceRef::Bundled("forgejo".to_string()));
+        assert_eq!(r.service_name(), "forgejo");
         assert_eq!(r.registry_name(), "bundled");
     }
 
     #[test]
     fn parse_custom_service() {
-        let r = ServiceRef::parse("acme/jellyfin").expect("should parse");
+        let r = ServiceRef::parse("acme/forgejo").expect("should parse");
         assert_eq!(
             r,
             ServiceRef::Custom {
                 registry: "acme".to_string(),
-                service: "jellyfin".to_string(),
+                service: "forgejo".to_string(),
             }
         );
-        assert_eq!(r.service_name(), "jellyfin");
+        assert_eq!(r.service_name(), "forgejo");
         assert_eq!(r.registry_name(), "acme");
     }
 
@@ -154,11 +154,11 @@ mod tests {
 
     #[test]
     fn parse_empty_parts_fails() {
-        let err = ServiceRef::parse("/jellyfin").expect_err("leading slash should fail");
+        let err = ServiceRef::parse("/forgejo").expect_err("leading slash should fail");
         let msg = err.to_string();
         assert!(
             msg.contains("empty"),
-            "expected 'empty' in error for '/jellyfin', got: {msg}"
+            "expected 'empty' in error for '/forgejo', got: {msg}"
         );
 
         let err = ServiceRef::parse("acme/").expect_err("trailing slash should fail");
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn parse_too_many_slashes_fails() {
-        let err = ServiceRef::parse("acme/sub/jellyfin").expect_err("too many slashes should fail");
+        let err = ServiceRef::parse("acme/sub/forgejo").expect_err("too many slashes should fail");
         let msg = err.to_string();
         assert!(
             msg.contains("invalid"),
