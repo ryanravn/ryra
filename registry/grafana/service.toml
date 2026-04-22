@@ -1,0 +1,60 @@
+[service]
+name = "grafana"
+description = "Grafana - dashboards and visualization for Prometheus metrics"
+url = "https://grafana.com/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 256
+recommended = 512
+
+[[ports]]
+name = "http"
+container_port = 3000
+
+# --- Grafana env vars ---
+# Grafana reads GF_<SECTION>_<KEY> as config overrides.
+
+[[env]]
+name = "GF_SERVER_ROOT_URL"
+value = "{{service.external_url | default('http://localhost:{{service.port}}')}}"
+
+[[env]]
+name = "GF_SECURITY_ADMIN_USER"
+value = "admin"
+kind = "prompted"
+prompt = "Admin username"
+
+[[env]]
+name = "GF_SECURITY_ADMIN_PASSWORD"
+value = ""
+kind = "required"
+prompt = "Admin password"
+
+[[env]]
+name = "GF_USERS_ALLOW_SIGN_UP"
+value = "false"
+
+# Native OIDC auth, wired via [mappings.auth] below.
+[[env]]
+name = "GF_AUTH_GENERIC_OAUTH_ENABLED"
+value = "false"
+
+[integrations]
+auth = ["oidc"]
+oidc_callbacks = ["/login/generic_oauth"]
+smtp = false
+# Grafana exposes /metrics on its main http port.
+prometheus = true
+
+[mappings.auth]
+GF_AUTH_GENERIC_OAUTH_ENABLED = "true"
+GF_AUTH_GENERIC_OAUTH_NAME = "SSO"
+GF_AUTH_GENERIC_OAUTH_CLIENT_ID = "{{auth.client_id}}"
+GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
+GF_AUTH_GENERIC_OAUTH_SCOPES = "openid email profile groups"
+GF_AUTH_GENERIC_OAUTH_AUTH_URL = "{{auth.external_url}}/api/oidc/authorization"
+GF_AUTH_GENERIC_OAUTH_TOKEN_URL = "{{auth.external_url}}/api/oidc/token"
+GF_AUTH_GENERIC_OAUTH_API_URL = "{{auth.external_url}}/api/oidc/userinfo"
+GF_AUTH_GENERIC_OAUTH_USE_PKCE = "true"
+GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP = "true"

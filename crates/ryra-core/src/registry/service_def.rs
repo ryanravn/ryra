@@ -260,6 +260,11 @@ pub struct IntegrationFlags {
     pub oidc_callbacks: Vec<String>,
     #[serde(default = "default_true")]
     pub smtp: bool,
+    /// `true` means this service exposes Prometheus-format metrics at
+    /// `/metrics` on its primary (first `[[ports]]`) port. Picked up by
+    /// the prometheus service (if installed) via shared podman network.
+    #[serde(default)]
+    pub prometheus: bool,
 }
 
 impl Default for IntegrationFlags {
@@ -269,6 +274,7 @@ impl Default for IntegrationFlags {
             token_auth_method: TokenAuthMethod::default(),
             oidc_callbacks: vec![],
             smtp: true,
+            prometheus: false,
         }
     }
 }

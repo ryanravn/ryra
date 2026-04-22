@@ -1,0 +1,59 @@
+# prometheus tests — install, confirm readiness, scrape targets update.
+
+[[tests]]
+name = "prometheus"
+[[tests.steps]]
+action = "add"
+service = "prometheus"
+[[tests.steps]]
+action = "wait"
+service = "prometheus"
+[[tests.steps]]
+action = "http"
+name = "ready"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/-/ready"
+service = "prometheus"
+poll = { interval = 2, attempts = 30 }
+timeout = 90
+[[tests.steps]]
+action = "shell"
+name = "targets-dir-created"
+run = "test -d $HOME/.local/share/ryra/prometheus/targets"
+
+# Install prometheus + grafana, then verify prometheus is actually
+# collecting data — not just that the target is configured.
+#
+# /api/v1/query?query=up returns one sample per scraped target.
+# A `"service":"grafana"` entry in the response proves:
+#   - file_sd picked up the target JSON file
+#   - shared podman network routed `grafana:3000`
+#   - grafana's /metrics responded with valid Prometheus format
+#   - prometheus parsed + stored the sample
+[[tests]]
+name = "scrape-grafana"
+ram = 1024
+[[tests.steps]]
+action = "add"
+service = "prometheus"
+[[tests.steps]]
+action = "wait"
+service = "prometheus"
+[[tests.steps]]
+action = "add"
+service = "grafana"
+env = { GF_SECURITY_ADMIN_PASSWORD = "grafana-test-123" }
+[[tests.steps]]
+action = "wait"
+service = "grafana"
+[[tests.steps]]
+action = "http"
+name = "prometheus-has-grafana-samples"
+# grafana_build_info only appears in prometheus's TSDB if /metrics on
+# grafana:3000 was successfully scraped (parsed as prometheus format).
+# `up{service="grafana"}` would be satisfied by a failing scrape too;
+# this metric guarantees end-to-end data collection.
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/query?query=grafana_build_info"
+service = "prometheus"
+contains = "\"service\":\"grafana\""
+poll = { interval = 3, attempts = 30 }
+timeout = 120

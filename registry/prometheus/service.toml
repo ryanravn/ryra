@@ -1,0 +1,22 @@
+[service]
+name = "prometheus"
+description = "Prometheus - time-series metrics database, scrapes and stores /metrics endpoints"
+url = "https://prometheus.io/"
+architecture = ["amd64", "arm64"]
+kind = "infrastructure"
+
+[requirements.ram]
+min = 256
+recommended = 512
+
+[[ports]]
+name = "http"
+container_port = 9090
+
+[integrations]
+auth = []
+smtp = false
+# Prometheus scrapes itself — this flag ensures it's listed under `ryra search`
+# with a `prometheus` capability. Its own target is set via a static_config
+# in prometheus.yml, not the file_sd path.
+prometheus = true

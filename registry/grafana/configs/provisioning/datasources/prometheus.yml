@@ -1,0 +1,12 @@
+# Auto-provisioned Prometheus datasource. Grafana reads this on startup;
+# no UI clicks required. `prometheus:9090` resolves via the shared
+# `prometheus.network` that grafana joins when both are installed.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

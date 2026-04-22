@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  # Other ryra services drop a JSON target file into /etc/prometheus/targets/
+  # on install and remove it on uninstall. Prometheus's file_sd picks up
+  # changes automatically — no reload needed.
+  - job_name: ryra
+    file_sd_configs:
+      - files:
+          - /etc/prometheus/targets/*.json
+        refresh_interval: 30s

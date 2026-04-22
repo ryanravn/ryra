@@ -64,10 +64,17 @@ value = "true"
 name = "FORGEJO__security__INSTALL_LOCK"
 value = "true"
 
+# Expose /metrics on the main HTTP port for Prometheus scrape.
+# Forgejo serves these under the same listener as the web UI.
+[[env]]
+name = "FORGEJO__metrics__ENABLED"
+value = "true"
+
 [integrations]
 auth = ["oidc"]
 oidc_callbacks = ["/user/oauth2/Authelia/callback"]
 smtp = true
+prometheus = true
 
 [mappings.auth]
 FORGEJO__openid__ENABLE_OPENID_SIGNIN = "true"
