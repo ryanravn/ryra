@@ -254,13 +254,135 @@ pub fn service_ref_from_installed(installed: &InstalledService) -> registry::res
     }
 }
 
+/// When a shared-network provider (caddy or inbucket) is installed, patch
+/// already-installed services' primary quadlets to include `Network=<svc>.network`
+/// if they should reach the new provider. Emits `WriteFile` + `DaemonReload`
+/// + `RestartService` per patched service.
+///
+/// Scope is intentionally narrow: it only adds the network that the newly
+/// installed provider owns. The install-time networking policy for each
+/// patched service's OTHER networks is unchanged.
+fn retroactive_network_joins(
+    new_service: &str,
+    config: &config::schema::Config,
+    quadlet_path: &std::path::Path,
+) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let is_caddy = WellKnownService::Caddy.matches(new_service);
+    let is_inbucket = WellKnownService::Inbucket.matches(new_service);
+    if !is_caddy && !is_inbucket {
+        return steps;
+    }
+
+    for svc in &config.services {
+        if !svc.installed {
+            continue;
+        }
+        if WellKnownService::Caddy.matches(&svc.name)
+            || WellKnownService::Inbucket.matches(&svc.name)
+        {
+            // Providers don't need to join themselves.
+            continue;
+        }
+        let (network_name, should_join) = if is_caddy {
+            // caddy: URL-having services want reverse proxy routing.
+            ("caddy".to_string(), svc.url.is_some())
+        } else {
+            // inbucket: any already-installed service whose .env points
+            // SMTP at the "inbucket" hostname needs to reach it.
+            ("inbucket".to_string(), service_uses_inbucket(&svc.name))
+        };
+        if !should_join {
+            continue;
+        }
+        // Multi-container services (e.g. zammad with a separate railsserver
+        // that actually sends mail) need the network on every component
+        // container. Patch each `.container` file belonging to this service
+        // and restart each unit so podman recreates the container with the
+        // new network. Restarting only the primary unit doesn't cascade to
+        // subunits — their containers would keep running on the old network.
+        let all_service_names: Vec<&str> =
+            config.services.iter().map(|s| s.name.as_str()).collect();
+        let marker = format!("Network={network_name}.network");
+        let mut units_to_restart: Vec<String> = Vec::new();
+        let Ok(entries) = std::fs::read_dir(quadlet_path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) if n.ends_with(".container") => n.to_string(),
+                _ => continue,
+            };
+            if !quadlet_belongs_to(&name, &svc.name, &all_service_names) {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if content.contains(&marker) {
+                continue;
+            }
+            let updated = generate::bundle::inject_networks(&content, &[network_name.clone()]);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path,
+                content: updated,
+            }));
+            // Unit name is the .container filename minus extension; systemd's
+            // generator turns `foo-bar.container` into `foo-bar.service`.
+            let unit = name.trim_end_matches(".container").to_string();
+            units_to_restart.push(unit);
+        }
+        if !units_to_restart.is_empty() {
+            steps.push(Step::DaemonReload);
+            for unit in units_to_restart {
+                steps.push(Step::RestartService { unit });
+            }
+        }
+    }
+    steps
+}
+
+/// Heuristic: does this service's `.env` point SMTP at the inbucket container?
+/// Matches any line whose value is `inbucket` or `inbucket:<port>` — covers
+/// the common shape `SOMETHING_SMTP_HOST=inbucket` and variants like
+/// `FORGEJO__mailer__SMTP_ADDR=inbucket`.
+fn service_uses_inbucket(service_name: &str) -> bool {
+    let env_path = match service_home(service_name) {
+        Ok(h) => h.join(".env"),
+        Err(_) => return false,
+    };
+    let content = match std::fs::read_to_string(&env_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    content.lines().any(|line| {
+        let Some((_, value)) = line.split_once('=') else {
+            return false;
+        };
+        let v = value.trim();
+        v == "inbucket" || v.starts_with("inbucket:")
+    })
+}
+
 /// Determine which extra podman networks a service should join.
-/// Services with auth join authelia's network for OIDC communication.
+///
+/// Three providers own a shared network:
+/// - `authelia.network` — services with `--auth` join so they can reach the
+///   OIDC provider by container DNS.
+/// - `inbucket.network` — services with SMTP configured join so they can
+///   reach `inbucket:2500` without requiring caddy to be installed.
+/// - `caddy.network` — URL-having services join for reverse-proxy routing;
+///   auth-enabled services join so OIDC discovery goes through caddy's TLS;
+///   inbucket itself joins so its web UI can be reverse-proxied when a URL
+///   is supplied.
 fn resolve_extra_networks(
     service_name: &str,
     enable_auth: bool,
     authelia_installed: bool,
     caddy_installed: bool,
+    inbucket_installed: bool,
     has_url: bool,
     has_smtp: bool,
 ) -> Vec<String> {
@@ -268,12 +390,16 @@ fn resolve_extra_networks(
     if enable_auth && authelia_installed && !WellKnownService::Authelia.matches(service_name) {
         networks.push(WellKnownService::Authelia.to_string());
     }
-    // Services join Caddy's network when they need to reach containers
-    // on that network: URL-based services for reverse proxy, auth services
-    // to reach the OIDC provider via caddy's TLS, inbucket itself,
-    // and SMTP-using services to reach inbucket by container name.
+    // SMTP-using services reach inbucket via its own network — no caddy
+    // dependency. This is symmetric with how auth services reach authelia.
+    let joins_inbucket = has_smtp
+        && inbucket_installed
+        && !WellKnownService::Inbucket.matches(service_name);
+    if joins_inbucket {
+        networks.push(WellKnownService::Inbucket.to_string());
+    }
     let joins_caddy =
-        (has_url || has_smtp || enable_auth || WellKnownService::Inbucket.matches(service_name))
+        (has_url || enable_auth || WellKnownService::Inbucket.matches(service_name))
             && caddy_installed
             && !WellKnownService::Caddy.matches(service_name);
     if joins_caddy && !networks.contains(&WellKnownService::Caddy.to_string()) {
@@ -424,6 +550,10 @@ pub fn add_service(
         .services
         .iter()
         .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+    let inbucket_installed = config
+        .services
+        .iter()
+        .any(|s| WellKnownService::Inbucket.matches(&s.name) && s.installed);
 
     // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
     // auth provider's .localhost domain). Pure — all filesystem writes are
@@ -449,6 +579,7 @@ pub fn add_service(
         enable_auth,
         authelia_installed,
         caddy_installed,
+        inbucket_installed,
         url.is_some(),
         has_smtp,
     );
@@ -631,6 +762,17 @@ pub fn add_service(
             });
         }
     }
+
+    // 9b. When a shared-network provider (caddy or inbucket) is being
+    // installed, retroactively patch services that were installed before it
+    // so they can reach the new provider by container DNS. resolve_extra_networks
+    // only decides at install time; without this step, services installed
+    // earlier remain isolated.
+    steps.extend(retroactive_network_joins(
+        service_name,
+        &config,
+        &quadlet_path,
+    ));
 
     // 10. Reload and start via systemd
     steps.push(Step::DaemonReload);
@@ -1154,33 +1296,59 @@ mod tests {
 
     #[test]
     fn networks_empty_when_no_auth() {
-        let nets = resolve_extra_networks("whoami", false, false, false, false, false);
+        let nets = resolve_extra_networks("whoami", false, false, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_empty_when_auth_but_no_authelia() {
-        let nets = resolve_extra_networks("forgejo", true, false, false, false, false);
+        let nets = resolve_extra_networks("forgejo", true, false, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_authelia_when_auth_enabled() {
-        let nets = resolve_extra_networks("forgejo", true, true, false, false, false);
+        let nets = resolve_extra_networks("forgejo", true, true, false, false, false, false);
         assert_eq!(nets, vec!["authelia"]);
     }
 
     #[test]
     fn networks_auth_with_caddy_includes_both() {
-        let nets = resolve_extra_networks("forgejo", true, true, true, false, false);
+        let nets = resolve_extra_networks("forgejo", true, true, true, false, false, false);
         assert!(nets.contains(&"authelia".to_string()));
         assert!(nets.contains(&"caddy".to_string()));
     }
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks("authelia", true, true, false, false, false);
+        let nets = resolve_extra_networks("authelia", true, true, false, false, false, false);
         assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn networks_smtp_joins_inbucket_without_caddy() {
+        // Reaching inbucket for SMTP must NOT require caddy.
+        // (enable_auth=false, authelia_installed=false, caddy_installed=false,
+        //  inbucket_installed=true, has_url=false, has_smtp=true)
+        let nets =
+            resolve_extra_networks("forgejo", false, false, false, true, false, true);
+        assert_eq!(nets, vec!["inbucket"]);
+    }
+
+    #[test]
+    fn networks_smtp_skips_inbucket_when_it_is_self() {
+        // inbucket itself shouldn't join its own network as an "extra".
+        let nets =
+            resolve_extra_networks("inbucket", false, false, false, true, false, true);
+        assert!(!nets.contains(&"inbucket".to_string()));
+    }
+
+    #[test]
+    fn networks_smtp_skips_inbucket_when_not_installed() {
+        // inbucket isn't installed yet → can't join its network.
+        let nets =
+            resolve_extra_networks("forgejo", false, false, false, false, false, true);
+        assert!(!nets.contains(&"inbucket".to_string()));
     }
 
     #[test]

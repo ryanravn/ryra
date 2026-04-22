@@ -1,0 +1,24 @@
+[Unit]
+Description=Zammad scheduler
+Requires=zammad-init.service zammad-railsserver.service
+After=zammad-init.service zammad-railsserver.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=ghcr.io/zammad/zammad:7.0.1-0019
+ContainerName=zammad-scheduler
+Network=zammad.network
+Volume=zammad-storage.volume:/opt/zammad/storage:U
+Exec=zammad-scheduler
+Pull=missing
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,4 @@
+[Unit]
+Description=Zammad Elasticsearch data
+
+[Volume]

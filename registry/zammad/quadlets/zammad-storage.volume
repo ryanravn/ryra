@@ -1,0 +1,4 @@
+[Unit]
+Description=Zammad shared storage (attachments, exports)
+
+[Volume]

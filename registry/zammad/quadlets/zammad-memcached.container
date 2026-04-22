@@ -1,0 +1,24 @@
+[Unit]
+Description=Zammad Memcached
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=docker.io/library/memcached:1.6.41-alpine
+ContainerName=zammad-memcached
+Network=zammad.network:alias=memcached
+Exec=memcached -m 256M
+HealthCmd=echo stats | nc -w 1 localhost 11211 | grep -q STAT
+HealthStartPeriod=5s
+HealthInterval=10s
+HealthRetries=5
+HealthTimeout=3s
+Pull=missing
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

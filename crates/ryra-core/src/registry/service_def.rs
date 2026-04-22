@@ -231,6 +231,9 @@ pub enum TokenAuthMethod {
     #[default]
     ClientSecretPost,
     ClientSecretBasic,
+    /// PKCE public client — no client_secret sent. Used by apps like Zammad
+    /// that only support the public-client + PKCE OIDC flow.
+    None,
 }
 
 impl TokenAuthMethod {
@@ -238,6 +241,7 @@ impl TokenAuthMethod {
         match self {
             TokenAuthMethod::ClientSecretPost => "client_secret_post",
             TokenAuthMethod::ClientSecretBasic => "client_secret_basic",
+            TokenAuthMethod::None => "none",
         }
     }
 }

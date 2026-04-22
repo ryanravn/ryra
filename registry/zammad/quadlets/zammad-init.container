@@ -1,0 +1,25 @@
+[Unit]
+Description=Zammad init (migrations, bootstrap)
+Requires=zammad-postgres.service
+After=zammad-postgres.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=ghcr.io/zammad/zammad:7.0.1-0019
+ContainerName=zammad-init
+Network=zammad.network
+Volume=zammad-storage.volume:/opt/zammad/storage:U
+Exec=zammad-init
+User=0:0
+Pull=missing
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,154 @@
+[service]
+name = "zammad"
+description = "Zammad - open-source helpdesk and ticketing system with native OIDC"
+url = "https://docs.zammad.org/"
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 4096
+# Rails + Elasticsearch (Xms1g) + Postgres + Redis + memcached + nginx
+# stack. Elasticsearch alone wants ~1.5GB heap+overhead; the Rails workers
+# (web + scheduler + websocket + init) stack another 1.5-2GB. Give it
+# headroom or the VM gets OOM-killed on first boot.
+recommended = 6144
+
+[[ports]]
+name = "http"
+container_port = 8080
+
+# --- Postgres (shared with zammad-postgres sidecar) ---
+
+[[env]]
+name = "POSTGRES_DB"
+value = "zammad_production"
+
+[[env]]
+name = "POSTGRES_USER"
+value = "zammad"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+# --- Zammad runtime env (all containers share this .env via EnvironmentFile) ---
+
+[[env]]
+name = "POSTGRESQL_DB"
+value = "zammad_production"
+
+[[env]]
+name = "POSTGRESQL_HOST"
+value = "postgres"
+
+[[env]]
+name = "POSTGRESQL_USER"
+value = "zammad"
+
+[[env]]
+name = "POSTGRESQL_PASS"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "POSTGRESQL_PORT"
+value = "5432"
+
+[[env]]
+name = "POSTGRESQL_OPTIONS"
+value = "?pool=50"
+
+[[env]]
+name = "REDIS_URL"
+value = "redis://redis:6379"
+
+[[env]]
+name = "MEMCACHE_SERVERS"
+value = "memcached:11211"
+
+[[env]]
+name = "ELASTICSEARCH_ENABLED"
+value = "true"
+
+[[env]]
+name = "ELASTICSEARCH_SCHEMA"
+value = "http"
+
+[[env]]
+name = "ELASTICSEARCH_HOST"
+value = "elasticsearch"
+
+[[env]]
+name = "ELASTICSEARCH_PORT"
+value = "9200"
+
+[[env]]
+name = "NGINX_PORT"
+value = "8080"
+
+[[env]]
+name = "NGINX_SERVER_SCHEME"
+value = "{{service.scheme | default('http')}}"
+
+[[env]]
+name = "NGINX_SERVER_NAME"
+value = "{{service.domain | default('_')}}"
+
+[[env]]
+name = "ZAMMAD_FQDN"
+value = "{{ service.domain | default('127.0.0.1:' ~ service.port) }}"
+
+[[env]]
+name = "ZAMMAD_HTTP_TYPE"
+value = "{{service.scheme | default('http')}}"
+
+[[env]]
+name = "ZAMMAD_WEB_CONCURRENCY"
+value = "2"
+
+# Skip the first-run web wizard: seed the admin user and organization via
+# Zammad's AUTOWIZARD_JSON mechanism. The init container imports this the
+# first time the DB is empty and is a no-op on subsequent boots. Matching
+# admin.email with the auth provider's admin email lets OIDC auto-link by
+# email on first SSO login.
+[[env]]
+name = "ZAMMAD_ADMIN_PASSWORD"
+value = "{{secret.admin_password}}"
+
+# AUTOWIZARD_RELATIVE_PATH steers the entrypoint's base64-decoded JSON into
+# the shared `zammad-storage` volume (mounted at /opt/zammad/storage in all
+# containers). Without this, the init container writes to container-local
+# tmp/ and the railsserver can't read it → AutoWizard.enabled? returns false.
+[[env]]
+name = "AUTOWIZARD_RELATIVE_PATH"
+value = "storage/auto_wizard.json"
+
+[[env]]
+name = "AUTOWIZARD_JSON"
+value = '''{{ ('{"TextModuleLocale":{"Locale":"en-us"},"Users":[{"login":"' ~ admin.email ~ '","firstname":"Admin","lastname":"User","email":"' ~ admin.email ~ '","organization":"Example","password":"' ~ secret.admin_password ~ '","roles":["Admin","Agent"]}],"Organizations":[{"name":"Example"}]}') | b64encode }}'''
+
+[integrations]
+auth = ["oidc"]
+# Zammad 7.x OIDC is PKCE-only (public client) — its strategy never puts
+# client_secret into client_options (see oidc_database.rb). Authelia must
+# therefore register us as a public client with require_pkce.
+token_auth_method = "none"
+oidc_callbacks = ["/auth/openid_connect/callback"]
+smtp = true
+
+# OIDC lives in Zammad's Setting table, not env vars. These envs are
+# consumed by configs/scripts/configure-oidc.sh which sets the Settings
+# via `rails runner` after the railsserver container is up.
+[mappings.auth]
+OAUTH_CLIENT_ID = "{{auth.client_id}}"
+OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
+OAUTH_ISSUER_URL = "{{auth.issuer}}"
+OAUTH_REDIRECT_URL = "{{service.external_url}}/auth/openid_connect/callback"
+
+# SMTP also lives in Settings. configs/scripts/configure-smtp.sh handles
+# it the same way after the railsserver is up.
+[mappings.smtp]
+SMTP_HOST = "{{smtp.host}}"
+SMTP_PORT = "{{smtp.port}}"
+SMTP_USER = "{{smtp.username}}"
+SMTP_PASS = "{{smtp.password}}"
+SMTP_FROM = "{{smtp.from}}"
+SMTP_SECURITY = "{{smtp.security}}"

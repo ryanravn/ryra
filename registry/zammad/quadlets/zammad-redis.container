@@ -1,0 +1,24 @@
+[Unit]
+Description=Zammad Redis
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=docker.io/library/redis:8.6.2-alpine
+ContainerName=zammad-redis
+Network=zammad.network:alias=redis
+Volume=zammad-redis-data.volume:/data:U
+HealthCmd=redis-cli ping | grep -q PONG
+HealthStartPeriod=5s
+HealthInterval=10s
+HealthRetries=5
+HealthTimeout=3s
+Pull=missing
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

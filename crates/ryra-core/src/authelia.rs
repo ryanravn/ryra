@@ -134,9 +134,20 @@ pub fn register_oidc_client(
         .map(|u| format!("\n          - '{u}'"))
         .collect();
     let token_auth_method = service_def.integrations.token_auth_method.as_str();
-    let client_block = format!(
-        "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        token_endpoint_auth_method: '{token_auth_method}'\n        redirect_uris:{redirect_uris_yaml}\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n          - 'groups'\n        authorization_policy: 'one_factor'"
-    );
+    let client_block = if matches!(
+        service_def.integrations.token_auth_method,
+        crate::registry::service_def::TokenAuthMethod::None
+    ) {
+        // Public PKCE client — no client_secret, require_pkce enforced.
+        // Authelia rejects client_secret on public clients so we must omit it.
+        format!(
+            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        public: true\n        token_endpoint_auth_method: 'none'\n        require_pkce: true\n        pkce_challenge_method: 'S256'\n        redirect_uris:{redirect_uris_yaml}\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n          - 'groups'\n        authorization_policy: 'one_factor'"
+        )
+    } else {
+        format!(
+            "\n      - client_id: '{client_id}'\n        client_name: '{service_name}'\n        client_secret: '{client_secret}'\n        token_endpoint_auth_method: '{token_auth_method}'\n        redirect_uris:{redirect_uris_yaml}\n        scopes:\n          - 'openid'\n          - 'email'\n          - 'profile'\n          - 'groups'\n        authorization_policy: 'one_factor'"
+        )
+    };
 
     if !yaml.contains("identity_providers:") {
         yaml.push_str(&format!(
@@ -300,6 +311,53 @@ fn remove_client_block(yaml: &str, service_name: &str) -> String {
     if yaml.ends_with('\n') && !out.ends_with('\n') {
         out.push('\n');
     }
+    // If removing this client left no `- client_id:` lines at all, strip the
+    // whole `identity_providers:` block too. Authelia 4.39 rejects an OIDC
+    // provider section with an empty `clients:` list on startup, so leaving
+    // the skeleton behind would wedge the service on next restart.
+    if !out.lines().any(|l| l.starts_with("      - client_id:")) {
+        out = strip_identity_providers_block(&out);
+    }
+    out
+}
+
+/// Remove the `identity_providers:` top-level block and everything under it,
+/// leaving surrounding content intact. Used when the last OIDC client is
+/// unregistered — authelia won't accept an empty clients list.
+fn strip_identity_providers_block(yaml: &str) -> String {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim_start().starts_with("identity_providers:")
+            && !lines[i].starts_with(' ')
+            && !lines[i].starts_with('\t')
+        {
+            // Skip this line and every subsequent indented line until the
+            // next top-level key or EOF.
+            i += 1;
+            while i < lines.len() {
+                let l = lines[i];
+                if l.is_empty() || l.starts_with(' ') || l.starts_with('\t') {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
+        kept.push(lines[i]);
+        i += 1;
+    }
+    // Trim trailing empty lines (leftover whitespace from the stripped block)
+    // but keep exactly one trailing newline to match the input convention.
+    while kept.last().is_some_and(|l| l.is_empty()) {
+        kept.pop();
+    }
+    let mut out = kept.join("\n");
+    if yaml.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
     out
 }
 
@@ -384,5 +442,47 @@ mod tests {
         let yaml = two_client_yaml();
         let out = remove_client_block(&yaml, "im");
         assert_eq!(out, yaml);
+    }
+
+    fn single_client_yaml() -> String {
+        [
+            "notifier:",
+            "  smtp:",
+            "    address: 'smtp://inbucket:2500'",
+            "access_control:",
+            "  default_policy: 'one_factor'",
+            "",
+            "identity_providers:",
+            "  oidc:",
+            "    jwks:",
+            "      - key_id: 'main'",
+            "    clients:",
+            "      - client_id: 'uuid-zammad'",
+            "        client_name: 'zammad'",
+            "        public: true",
+            "        redirect_uris:",
+            "          - 'http://127.0.0.1:10000/callback'",
+            "        scopes:",
+            "          - 'openid'",
+            "        authorization_policy: 'one_factor'",
+            "",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn strips_identity_providers_block_when_last_client_is_removed() {
+        // Regression: authelia 4.39 rejects an OIDC provider section with an
+        // empty `clients:` list. Removing the last client must also strip the
+        // whole identity_providers block.
+        let yaml = single_client_yaml();
+        let out = remove_client_block(&yaml, "zammad");
+        assert!(!out.contains("identity_providers"));
+        assert!(!out.contains("zammad"));
+        assert!(!out.contains("clients:"));
+        // Surrounding config must survive.
+        assert!(out.contains("notifier:"));
+        assert!(out.contains("access_control:"));
+        assert!(out.ends_with('\n'));
     }
 }

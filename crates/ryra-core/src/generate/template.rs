@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use minijinja::{Environment, Value};
 
 use crate::error::{Error, Result};
@@ -56,6 +57,11 @@ pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<
     });
     env.add_filter("smtp_no_tls", |value: &str| -> String {
         smtp_no_tls(value)
+    });
+    // Standard-base64 encode a string. Used by services (e.g. Zammad) whose
+    // entrypoints expect a base64-encoded JSON payload as an env var.
+    env.add_filter("b64encode", |value: &str| -> String {
+        base64::engine::general_purpose::STANDARD.encode(value.as_bytes())
     });
 
     env.add_template("tpl", template_str)

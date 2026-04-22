@@ -1,0 +1,33 @@
+[Unit]
+Description=Zammad nginx (web entry point)
+Requires=zammad-railsserver.service zammad-websocket.service
+After=zammad-railsserver.service zammad-websocket.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=ghcr.io/zammad/zammad:7.0.1-0019
+ContainerName=zammad
+Network=zammad.network
+PublishPort=${RYRA_PORT_HTTP}:8080
+Volume=zammad-storage.volume:/opt/zammad/storage:U
+Exec=zammad-nginx
+HealthCmd=curl -sf http://localhost:8080/ || exit 1
+HealthStartPeriod=60s
+HealthInterval=30s
+HealthRetries=5
+HealthTimeout=5s
+Pull=missing
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=600
+ExecStartPost=/bin/bash %h/.local/share/ryra/zammad/configs/scripts/run-autowizard.sh
+ExecStartPost=/bin/bash %h/.local/share/ryra/zammad/configs/scripts/configure-oidc.sh
+ExecStartPost=/bin/bash %h/.local/share/ryra/zammad/configs/scripts/configure-smtp.sh
+
+[Install]
+WantedBy=default.target

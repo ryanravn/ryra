@@ -1,0 +1,29 @@
+[Unit]
+Description=Zammad Rails application server
+Requires=zammad-init.service zammad-postgres.service zammad-redis.service zammad-memcached.service zammad-elasticsearch.service
+After=zammad-init.service zammad-postgres.service zammad-redis.service zammad-memcached.service zammad-elasticsearch.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=ghcr.io/zammad/zammad:7.0.1-0019
+ContainerName=zammad-railsserver
+Network=zammad.network:alias=railsserver
+Volume=zammad-storage.volume:/opt/zammad/storage:U
+Exec=zammad-railsserver
+HealthCmd=curl -sf http://localhost:3000/api/v1/monitoring/health_check?token=zammad || exit 1
+HealthStartPeriod=120s
+HealthInterval=30s
+HealthRetries=10
+HealthTimeout=5s
+Pull=missing
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/zammad/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

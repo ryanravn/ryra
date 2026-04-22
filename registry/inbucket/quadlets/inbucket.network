@@ -1,0 +1,5 @@
+[Unit]
+Description=Inbucket network
+
+[Network]
+NetworkName=inbucket

@@ -98,6 +98,49 @@ pub async fn run(
         // modified it on disk (e.g., installing caddy or authelia).
         let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
 
+        // Orphan-data check: `ryra remove <svc>` (preserve mode) drops the
+        // service from config but leaves named volumes and data dirs on disk.
+        // A fresh `ryra add` would silently inherit them — surprising when
+        // the user wants a clean state. Surface it here so they choose.
+        if !dry_run
+            && !config
+                .services
+                .iter()
+                .any(|s| s.name == service)
+            && let Some(orphan) = ryra_core::data::enumerate_service(&config, service)?
+            && orphan.status == ryra_core::data::ServiceStatus::Orphan
+            && (!orphan.volumes.is_empty() || !orphan.data_paths.is_empty())
+        {
+            println!(
+                "\n  '{service}' has data from a previous install (orphaned on disk):"
+            );
+            for v in &orphan.volumes {
+                println!("    volume: {}", v.name);
+            }
+            for p in &orphan.data_paths {
+                println!("    data:   {}", p.display());
+            }
+            println!(
+                "\n  Proceeding will reuse this data (podman reuses named volumes by name)."
+            );
+            if interactive && !yes {
+                let proceed = Confirm::new()
+                    .with_prompt(format!("Continue adding {service} with existing data?"))
+                    .default(true)
+                    .interact()?;
+                if !proceed {
+                    println!("\nCancelled. To purge and start clean:");
+                    println!("  ryra remove {service} --purge");
+                    println!("  ryra add {service}");
+                    return Ok(());
+                }
+            } else {
+                println!(
+                    "  (use --yes to auto-accept, or run `ryra remove {service} --purge` first to start clean)"
+                );
+            }
+        }
+
         // Look up the service definition
         let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
 
@@ -318,6 +361,33 @@ pub async fn run(
             &super::is_port_in_use,
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
+                // Two cases land here: a previous `ryra add` crashed mid-way,
+                // or the user ran `ryra remove <svc>` without --purge and now
+                // wants to re-add. Both leave preserved volumes/home-dir on
+                // disk. Reusing them in-place isn't a supported path yet, so
+                // the recovery is purge + reinstall — but don't do that
+                // silently: data loss deserves a confirmation.
+                if interactive && !yes {
+                    println!(
+                        "\n  '{service}' has preserved data from a previous install."
+                    );
+                    println!(
+                        "  Reinstalling will delete the named volume(s) and service dir."
+                    );
+                    println!("  Inspect with: ryra data ls\n");
+                    let proceed = Confirm::new()
+                        .with_prompt(format!(
+                            "Purge existing data and reinstall {service}?"
+                        ))
+                        .default(false)
+                        .interact()?;
+                    if !proceed {
+                        println!("\nCancelled. To purge and reinstall later:");
+                        println!("  ryra remove {service} --purge");
+                        println!("  ryra add {service}");
+                        return Ok(());
+                    }
+                }
                 println!("{service} was partially installed — cleaning up before retry...");
                 let remove_result =
                     ryra_core::remove_service(service, ryra_core::RemoveMode::Purge)?;

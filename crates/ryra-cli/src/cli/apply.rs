@@ -1,4 +1,7 @@
+use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 
@@ -62,13 +65,19 @@ async fn execute(step: &Step) -> Result<()> {
             // Retry once on failure — the first start after daemon-reload can
             // fail on some podman versions due to a race in the quadlet
             // generator's dependency resolution.
-            match run_cmd("systemctl", &["--user", "start", unit]) {
-                Ok(()) => Ok(()),
-                Err(_first_err) => {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    run_cmd("systemctl", &["--user", "start", unit])
+            //
+            // Services with heavy ExecStartPost (zammad autowizard, etc.) can
+            // block `systemctl start` for a minute or more. Print an elapsed
+            // counter on stderr so the user sees we're alive.
+            with_spinner("starting", unit, || {
+                match run_cmd("systemctl", &["--user", "start", unit]) {
+                    Ok(()) => Ok(()),
+                    Err(_first_err) => {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        run_cmd("systemctl", &["--user", "start", unit])
+                    }
                 }
-            }
+            })
         }
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped)
@@ -79,7 +88,9 @@ async fn execute(step: &Step) -> Result<()> {
             }
             Ok(())
         }
-        Step::RestartService { unit } => run_cmd("systemctl", &["--user", "restart", unit]),
+        Step::RestartService { unit } => with_spinner("restarting", unit, || {
+            run_cmd("systemctl", &["--user", "restart", unit])
+        }),
         Step::ReloadCaddy => {
             println!("  Reloading Caddy config...");
             // Wait for Caddy container to be running before reload
@@ -218,6 +229,174 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Run `f` with a stderr status line that starts after a 2s grace period.
+///
+/// The label rotates between:
+///   `{verb} {unit}: activating {subunit}… {elapsed}s`
+/// when a dependency is mid-start, and
+///   `{verb} {unit}: running ExecStartPost… {elapsed}s`
+/// when the unit itself is active but a post-start script is still running.
+/// Falls back to `{verb} {unit}… {elapsed}s` when systemctl is quiet.
+///
+/// This keeps systemd-blocking operations legible instead of opaque — the
+/// user sees which subunit is currently running (e.g. `zammad-elasticsearch`)
+/// rather than a bare elapsed counter.
+fn with_spinner<T>(verb: &str, unit: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = Arc::clone(&done);
+    let verb_owned = verb.to_string();
+    let unit_owned = unit.to_string();
+    let handle = std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        // 2s grace period — fast operations (most of them) stay quiet.
+        for _ in 0..20 {
+            if done_clone.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        // Family pattern for glob matches: `zammad.service` → `zammad*`.
+        // Covers sidecars like `zammad-postgres.service`.
+        let family_glob = format!(
+            "{}*",
+            unit_owned.trim_end_matches(".service")
+        );
+        let mut last_detail = String::new();
+        while !done_clone.load(Ordering::Relaxed) {
+            let secs = start.elapsed().as_secs();
+            let detail = describe_wait(&unit_owned, &family_glob).unwrap_or_default();
+            // Clear the line fully before redrawing — detail changes size.
+            if detail != last_detail {
+                eprint!("\r\x1b[2K");
+                last_detail = detail.clone();
+            }
+            if detail.is_empty() {
+                eprint!("\r  {verb_owned} {unit_owned}… {secs}s  ");
+            } else {
+                eprint!("\r  {verb_owned} {unit_owned}: {detail} ({secs}s)  ");
+            }
+            let _ = std::io::stderr().flush();
+            std::thread::sleep(std::time::Duration::from_millis(1_000));
+        }
+    });
+    let result = f();
+    done.store(true, Ordering::Relaxed);
+    let _ = handle.join();
+    // Erase the status line.
+    eprint!("\r\x1b[2K");
+    let _ = std::io::stderr().flush();
+    result
+}
+
+/// Tail the journal for `family_glob` and return the most recent line
+/// matching one of our script-progress prefixes (`autowizard:`, `oidc:`,
+/// `smtp:`, etc.). Filters out the firehose of Rails/podman info logs so the
+/// spinner stays legible.
+fn last_script_progress(family_glob: &str) -> Option<String> {
+    let output = Command::new("journalctl")
+        .args([
+            "--user",
+            "-u",
+            family_glob,
+            "-n",
+            "50",
+            "--no-pager",
+            "-o",
+            "cat",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    // Walk lines in reverse; first match wins. Recognise lines whose first
+    // token is a known progress-tag followed by `:`.
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let (tag, _) = trimmed.split_once(':')?;
+        let tag = tag.trim();
+        // Known progress prefixes emitted by registry service scripts plus
+        // a couple of systemd standards. Keep this list short and explicit.
+        const TAGS: &[&str] = &[
+            "autowizard",
+            "oidc",
+            "smtp",
+            "Starting",
+            "Started",
+            "Stopping",
+            "Stopped",
+        ];
+        if TAGS.iter().any(|t| t == &tag) {
+            let out = trimmed.to_string();
+            return Some(if out.len() > 80 {
+                format!("{}…", &out[..79])
+            } else {
+                out
+            });
+        }
+    }
+    None
+}
+
+/// Produce a short description of what we're currently waiting on for `unit`.
+/// Returns `None` when the spinner should just show the verb + elapsed time.
+fn describe_wait(unit: &str, family_glob: &str) -> Option<String> {
+    // First: any subunit in the family currently `activating`?
+    let output = Command::new("systemctl")
+        .args([
+            "--user",
+            "list-units",
+            family_glob,
+            "--state=activating",
+            "--no-legend",
+            "--no-pager",
+            "--all",
+            "--plain",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let activating: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|u| u.ends_with(".service"))
+        .collect();
+
+    // The target unit is in `activating` as long as ExecStartPost scripts are
+    // still running. If the ONLY activating unit is the target itself, we're
+    // past deps and running our post-start hooks — tail the journal for the
+    // last meaningful progress line so the user can see what the scripts say.
+    if activating.len() == 1 && activating[0] == unit {
+        if let Some(line) = last_script_progress(family_glob) {
+            return Some(format!("post-start · {line}"));
+        }
+        return Some("running post-start scripts".to_string());
+    }
+    // Otherwise report the non-target subunit(s) that are still starting.
+    let others: Vec<&str> = activating.iter().copied().filter(|u| *u != unit).collect();
+    if !others.is_empty() {
+        let list = others
+            .iter()
+            .take(3)
+            .map(|u| u.trim_end_matches(".service"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = others.len().saturating_sub(3);
+        if more > 0 {
+            return Some(format!("activating {list} (+{more} more)"));
+        }
+        return Some(format!("activating {list}"));
+    }
+    None
 }
 
 /// Run a command with explicit program and args (no shell interpretation).
