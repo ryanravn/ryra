@@ -36,9 +36,9 @@ pub fn build_context(
     if let Some(url) = url {
         let parsed = url::Url::parse(url)
             .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
-        let host = parsed.host_str().ok_or_else(|| {
-            Error::Template(format!("service URL '{url}' has no host"))
-        })?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| Error::Template(format!("service URL '{url}' has no host")))?;
         ctx.insert("service.domain".into(), host.to_string());
         ctx.insert("service.scheme".into(), parsed.scheme().to_string());
         // service.external_url — browser-accessible URL as provided by the user.
@@ -68,9 +68,7 @@ pub fn build_context(
     // smtp.* — only populated when the caller opted this service into SMTP.
     // Without smtp.host in the context, render_env_vars skips the service's
     // [mappings.smtp] block entirely, so the service comes up without email.
-    if enable_smtp
-        && let Some(smtp) = &config.smtp
-    {
+    if enable_smtp && let Some(smtp) = &config.smtp {
         ctx.insert("smtp.host".into(), smtp.host.clone());
         ctx.insert("smtp.port".into(), smtp.port.to_string());
         ctx.insert("smtp.username".into(), smtp.username.clone());
@@ -118,9 +116,7 @@ pub fn build_context(
         if caddy_installed {
             let port = crate::caddy_https_port(config);
             let parsed = url::Url::parse(&external_url).map_err(|e| {
-                Error::Template(format!(
-                    "invalid auth provider URL '{external_url}': {e}"
-                ))
+                Error::Template(format!("invalid auth provider URL '{external_url}': {e}"))
             })?;
             if parsed.port().is_none() {
                 external_url = format!("{external_url}:{port}");

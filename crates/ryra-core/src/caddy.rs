@@ -11,11 +11,9 @@ use crate::{Step, WellKnownService};
 /// Lives inside the caddy service's data dir so the existing volume mount
 /// (`%h/config` -> `/etc/caddy/`) picks it up automatically.
 pub fn caddyfile_path() -> Result<PathBuf> {
-    Ok(
-        crate::service_home(WellKnownService::Caddy.as_str())?
-            .join("config")
-            .join("Caddyfile"),
-    )
+    Ok(crate::service_home(WellKnownService::Caddy.as_str())?
+        .join("config")
+        .join("Caddyfile"))
 }
 
 /// Ensure Caddy is set up to route requests for the auth provider.
@@ -64,11 +62,10 @@ pub fn ensure_auth_provider_routed(
     }
 
     let caddyfile_path = caddyfile_path()?;
-    let caddyfile =
-        std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
-            path: caddyfile_path.clone(),
-            source,
-        })?;
+    let caddyfile = std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+        path: caddyfile_path.clone(),
+        source,
+    })?;
     if !caddyfile.contains(&format!("# ryra:{auth_service}")) {
         let block = render_site_block(&CaddySiteParams {
             service_name: auth_service.to_string(),

@@ -114,4 +114,3 @@ pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     crate::system::atomic_write::atomic_write(path, contents.as_bytes(), 0o600)?;
     Ok(())
 }
-

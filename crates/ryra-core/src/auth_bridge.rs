@@ -359,7 +359,10 @@ mod tests {
 
     fn build_forgejo_bridge(service_data: &Path, authelia_url: Option<&str>) -> Result<AuthBridge> {
         let cfg = config_with(
-            vec![installed("authelia", authelia_url), installed("caddy", None)],
+            vec![
+                installed("authelia", authelia_url),
+                installed("caddy", None),
+            ],
             None,
         );
         build(&AuthBridgeParams {

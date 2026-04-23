@@ -83,7 +83,12 @@ fn print_short(
     by_name: &HashMap<&str, &InstalledService>,
     active: &HashSet<String>,
 ) {
-    let name_w = svcs.iter().map(|s| s.service.len()).max().unwrap_or(7).max(7);
+    let name_w = svcs
+        .iter()
+        .map(|s| s.service.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
     println!("{:<name_w$} {:<8}  URL", "SERVICE", "STATUS");
     for svc in svcs {
         let installed = by_name.get(svc.service.as_str()).copied();
@@ -103,7 +108,12 @@ fn print_long(
     let owned: Vec<ServiceData> = svcs.iter().map(|s| (*s).clone()).collect();
     let vol_sizes = prefetch_volume_sizes(&owned);
 
-    let name_w = svcs.iter().map(|s| s.service.len()).max().unwrap_or(7).max(7);
+    let name_w = svcs
+        .iter()
+        .map(|s| s.service.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
     // URL width — cap at 45 so a long --url doesn't push SIZE/STORAGE
     // off the screen; overly long URLs just wrap softly.
     let url_w = svcs
