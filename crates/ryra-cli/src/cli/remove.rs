@@ -1,6 +1,5 @@
 use anyhow::Result;
 use dialoguer::Input;
-use ryra_core::Step;
 use ryra_core::config::schema::Config;
 use ryra_core::data::{ServiceData, ServiceStatus};
 
@@ -156,7 +155,7 @@ async fn remove_one(
     // Orphan + --purge: purge its leftover data.
     let svc = ryra_core::data::enumerate_service(config, service)?
         .ok_or_else(|| anyhow::anyhow!("no service or leftover data for '{service}'"))?;
-    let steps = orphan_purge_steps(&svc);
+    let steps = ryra_core::orphan_purge_steps(&svc);
     if steps.is_empty() {
         println!("{service}: nothing to purge.");
         return Ok(());
@@ -172,26 +171,6 @@ async fn remove_one(
         println!("\n{service} purged.");
     }
     Ok(())
-}
-
-fn orphan_purge_steps(svc: &ServiceData) -> Vec<Step> {
-    let mut steps = Vec::new();
-    for path in &svc.data_paths {
-        if path.is_dir() {
-            steps.push(Step::RemoveDir(path.clone()));
-        } else {
-            steps.push(Step::RemoveFile(path.clone()));
-        }
-    }
-    if svc.home_dir.exists() {
-        steps.push(Step::RemoveDir(svc.home_dir.clone()));
-    }
-    for v in &svc.volumes {
-        steps.push(Step::RemoveVolume {
-            name: v.name.clone(),
-        });
-    }
-    steps
 }
 
 fn prompt_installed(
@@ -223,9 +202,7 @@ fn prompt_installed(
                 for line in preserved {
                     println!("      {line}");
                 }
-                println!(
-                    "    (run `ryra remove {service} --purge` later to delete)"
-                );
+                println!("    (run `ryra remove {service} --purge` later to delete)");
             }
         }
     }

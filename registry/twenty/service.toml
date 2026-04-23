@@ -54,6 +54,47 @@ value = "production"
 name = "STORAGE_TYPE"
 value = "local"
 
+# --- Optional group: Google SSO + Gmail/Calendar sync ---
+# Twenty needs the full bundle of client_id/secret/callback URLs together;
+# enabling this group (interactively or via --enable google_oauth) writes
+# every member into .env, disabling it leaves all seven out.
+
+[[env_group]]
+name = "google_oauth"
+prompt = "Enable Google SSO + Gmail/Calendar sync?"
+
+[[env_group.env]]
+name = "AUTH_GOOGLE_CLIENT_ID"
+value = ""
+kind = "required"
+prompt = "Google OAuth client ID"
+
+[[env_group.env]]
+name = "AUTH_GOOGLE_CLIENT_SECRET"
+value = ""
+kind = "required"
+prompt = "Google OAuth client secret"
+
+[[env_group.env]]
+name = "AUTH_GOOGLE_CALLBACK_URL"
+value = "{{service.external_url}}/auth/google/redirect"
+
+[[env_group.env]]
+name = "AUTH_GOOGLE_APIS_CALLBACK_URL"
+value = "{{service.external_url}}/auth/google-apis/get-access-token"
+
+[[env_group.env]]
+name = "AUTH_GOOGLE_ENABLED"
+value = "true"
+
+[[env_group.env]]
+name = "MESSAGING_PROVIDER_GMAIL_ENABLED"
+value = "true"
+
+[[env_group.env]]
+name = "CALENDAR_PROVIDER_GOOGLE_ENABLED"
+value = "true"
+
 [integrations]
 auth = []
 smtp = true

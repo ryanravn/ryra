@@ -1,5 +1,4 @@
 mod cli;
-pub mod verbose;
 
 use clap::{Parser, Subcommand};
 
@@ -41,15 +40,17 @@ enum Command {
         /// at it. Skipped if SMTP is already configured.
         #[arg(long, value_enum)]
         smtp: Option<cli::add::SmtpProvider>,
+        /// Enable a named `[[env_group]]` bundle on the service (repeatable).
+        /// Required members of enabled groups are read from the process env
+        /// in non-interactive mode, or prompted for interactively.
+        #[arg(long = "enable", value_name = "GROUP")]
+        enable: Vec<String>,
         /// Skip confirmation prompts (including untrusted registry warnings)
         #[arg(long, short = 'y')]
         yes: bool,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
     },
     /// Remove a service
     Remove {
@@ -151,9 +152,6 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
-        /// Show file contents as they are written
-        #[arg(long, short)]
-        verbose: bool,
     },
 }
 
@@ -202,13 +200,10 @@ async fn main() -> anyhow::Result<()> {
             ref url,
             auth,
             smtp,
+            ref enable,
             yes,
             dry_run,
-            verbose,
-        } => {
-            crate::verbose::set(verbose);
-            cli::add::run(services, url.as_deref(), auth, smtp, dry_run, yes).await?
-        }
+        } => cli::add::run(services, url.as_deref(), auth, smtp, enable, dry_run, yes).await?,
         Command::Remove {
             ref services,
             all,
@@ -217,14 +212,7 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
             purge,
         } => cli::remove::run(services, all, orphans, yes, dry_run, purge).await?,
-        Command::Reset {
-            yes,
-            dry_run,
-            verbose,
-        } => {
-            crate::verbose::set(verbose);
-            cli::reset::run(yes, dry_run).await?
-        }
+        Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {

@@ -35,7 +35,9 @@ pub enum Error {
     #[error("service {0} is not installed")]
     ServiceNotInstalled(String),
 
-    #[error("service {0} is partially installed (previous add failed)")]
+    #[error(
+        "service {0} has leftover state from a prior install (incomplete install or preserved remove)"
+    )]
     ServiceIncomplete(String),
 
     #[error("{service} requires the following services to be installed first: {}", missing.join(", "))]
@@ -78,6 +80,13 @@ pub enum Error {
 
     #[error("{0}")]
     UnsupportedArchitecture(String),
+
+    #[error("service '{service}' has no env_group named '{group}'{hint}")]
+    UnknownEnvGroup {
+        service: String,
+        group: String,
+        hint: String,
+    },
 
     #[error("could not determine home directory: set $HOME")]
     HomeDirNotFound,

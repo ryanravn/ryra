@@ -349,7 +349,8 @@ fn retroactive_network_joins(
             if content.contains(&marker) {
                 continue;
             }
-            let updated = generate::bundle::inject_networks(&content, &[network_name.clone()]);
+            let updated =
+                generate::bundle::inject_networks(&content, std::slice::from_ref(&network_name));
             steps.push(Step::WriteFile(GeneratedFile {
                 path,
                 content: updated,
@@ -420,9 +421,8 @@ fn resolve_extra_networks(
     }
     // SMTP-using services reach inbucket via its own network — no caddy
     // dependency. This is symmetric with how auth services reach authelia.
-    let joins_inbucket = has_smtp
-        && inbucket_installed
-        && !WellKnownService::Inbucket.matches(service_name);
+    let joins_inbucket =
+        has_smtp && inbucket_installed && !WellKnownService::Inbucket.matches(service_name);
     if joins_inbucket {
         networks.push(WellKnownService::Inbucket.to_string());
     }
@@ -434,10 +434,9 @@ fn resolve_extra_networks(
     if joins_prometheus {
         networks.push(WellKnownService::Prometheus.to_string());
     }
-    let joins_caddy =
-        (has_url || enable_auth || WellKnownService::Inbucket.matches(service_name))
-            && caddy_installed
-            && !WellKnownService::Caddy.matches(service_name);
+    let joins_caddy = (has_url || enable_auth || WellKnownService::Inbucket.matches(service_name))
+        && caddy_installed
+        && !WellKnownService::Caddy.matches(service_name);
     if joins_caddy && !networks.contains(&WellKnownService::Caddy.to_string()) {
         networks.push(WellKnownService::Caddy.to_string());
     }
@@ -457,6 +456,7 @@ pub fn add_service(
     enable_auth: bool,
     enable_smtp: bool,
     env_overrides: &BTreeMap<String, String>,
+    enabled_groups: &std::collections::BTreeSet<String>,
     registry_name: &str,
     repo_dir: &Path,
     pre_built_ctx: Option<BTreeMap<String, String>>,
@@ -471,6 +471,17 @@ pub fn add_service(
         }
         // installed: false — the CLI should clean up via remove_service +
         // finalize_remove before calling add_service again.
+        return Err(Error::ServiceIncomplete(service_name.to_string()));
+    }
+
+    // No config entry, but preserved volumes or a lingering home dir from
+    // `ryra remove <svc>` (default Preserve mode) would make the fresh .env's
+    // generated secrets disagree with what's already baked into the volume —
+    // postgres writes POSTGRES_PASSWORD into pgdata on first init and then
+    // skips reinit, so a new password in .env just restart-loops on auth
+    // failures. Surface the same way as an incomplete install; the CLI's
+    // existing purge-and-retry recovery handles it.
+    if data::enumerate_service(&config, service_name)?.is_some() {
         return Err(Error::ServiceIncomplete(service_name.to_string()));
     }
 
@@ -507,6 +518,30 @@ pub fn add_service(
         && !WellKnownService::Authelia.matches(service_name)
     {
         return Err(Error::NoOidcSupport(service_name.to_string()));
+    }
+
+    // Every `--enable <group>` must match a group defined on this service.
+    // Surfacing unknown group names here (vs. silently ignoring them) means
+    // a typo fails fast instead of producing a half-configured service.
+    for g in enabled_groups {
+        if !reg_service.def.env_groups.iter().any(|eg| &eg.name == g) {
+            let known: Vec<String> = reg_service
+                .def
+                .env_groups
+                .iter()
+                .map(|eg| eg.name.clone())
+                .collect();
+            let hint = if known.is_empty() {
+                " (service defines no env_groups)".to_string()
+            } else {
+                format!(" (known: {})", known.join(", "))
+            };
+            return Err(Error::UnknownEnvGroup {
+                service: service_name.to_string(),
+                group: g.clone(),
+                hint,
+            });
+        }
     }
 
     // Resolve a host port for every entry in [[ports]]. Each port gets its
@@ -637,6 +672,7 @@ pub fn add_service(
         extra_env,
         pre_built_ctx,
         enable_smtp: has_smtp,
+        enabled_groups,
     })?;
 
     let podman_args: Vec<String> = Vec::new();
@@ -1105,6 +1141,30 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Steps to purge leftover data/volumes for an orphan service — one with
+/// data on disk but no config entry (e.g., after `ryra remove <svc>` in
+/// default Preserve mode). Unlike `remove_service`, this doesn't require
+/// the service to be in `ryra.toml`.
+pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
+    let mut steps = Vec::new();
+    for path in &svc.data_paths {
+        if path.is_dir() {
+            steps.push(Step::RemoveDir(path.clone()));
+        } else {
+            steps.push(Step::RemoveFile(path.clone()));
+        }
+    }
+    if svc.home_dir.exists() {
+        steps.push(Step::RemoveDir(svc.home_dir.clone()));
+    }
+    for v in &svc.volumes {
+        steps.push(Step::RemoveVolume {
+            name: v.name.clone(),
+        });
+    }
+    steps
+}
+
 /// Reset ryra: tear down all services, infrastructure, and config.
 pub fn reset() -> Result<ResetResult> {
     let paths = ConfigPaths::resolve()?;
@@ -1446,7 +1506,15 @@ mod tests {
     #[test]
     fn networks_prometheus_skipped_for_prometheus_itself() {
         let nets = resolve_extra_networks(
-            "prometheus", false, false, false, false, true, false, false, true,
+            "prometheus",
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            true,
         );
         assert!(!nets.contains(&"prometheus".to_string()));
     }

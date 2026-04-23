@@ -1,12 +1,12 @@
 pub mod bundle;
 pub mod context;
 pub mod template;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
-use crate::registry::service_def::{AuthKind, EnvVar, ServiceDef};
+use crate::registry::service_def::{AuthKind, EnvKind, EnvVar, ServiceDef};
 
 #[derive(Debug)]
 pub struct GeneratedFile {
@@ -41,6 +41,9 @@ pub struct GenerateEnvParams<'a> {
     /// — lets the user opt a single service out of email without clearing the
     /// global SMTP config.
     pub enable_smtp: bool,
+    /// Names of `[[env_group]]` entries the user toggled on. Members of
+    /// groups not listed here are fully omitted from the generated `.env`.
+    pub enabled_groups: &'a BTreeSet<String>,
 }
 
 /// Result of generating env for a service.
@@ -77,6 +80,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         &ctx,
         params.env_overrides,
         params.auth_kind,
+        params.enabled_groups,
     )?;
 
     // Build .env file content
@@ -131,27 +135,24 @@ fn render_env_vars(
     ctx: &BTreeMap<String, String>,
     env_overrides: &BTreeMap<String, String>,
     auth_kind: Option<&AuthKind>,
+    enabled_groups: &BTreeSet<String>,
 ) -> Result<Vec<EnvVar>> {
     let mut rendered: Vec<EnvVar> = service_def
         .env
         .iter()
-        .map(|env| {
-            let value = match env_overrides.get(&env.name) {
-                Some(override_value) => override_value.clone(),
-                None => template::render(&env.value, ctx)?,
-            };
-            Ok(EnvVar {
-                name: env.name.clone(),
-                value,
-                kind: Default::default(),
-                prompt: None,
-                format: Default::default(),
-                length: None,
-                jwt_claims: None,
-                jwt_signing_key: None,
-            })
-        })
+        .map(|env| render_one(env, env_overrides, ctx, None))
         .collect::<Result<Vec<_>>>()?;
+
+    // Append members of every enabled `[[env_group]]`. Groups not toggled
+    // on are fully omitted — no partial state possible.
+    for group in &service_def.env_groups {
+        if !enabled_groups.contains(&group.name) {
+            continue;
+        }
+        for env in &group.env {
+            rendered.push(render_one(env, env_overrides, ctx, Some(&group.name))?);
+        }
+    }
 
     if service_def.integrations.smtp && ctx.contains_key("smtp.host") {
         for (env_name, value_template) in &service_def.mappings.smtp {
@@ -194,6 +195,41 @@ fn render_env_vars(
     Ok(rendered)
 }
 
+/// Render a single `EnvVar` — apply an override if present, otherwise run
+/// the template. Required group members without an override are a hard
+/// error so the service never starts with half of a group configured.
+fn render_one(
+    env: &EnvVar,
+    env_overrides: &BTreeMap<String, String>,
+    ctx: &BTreeMap<String, String>,
+    group: Option<&str>,
+) -> Result<EnvVar> {
+    let value = match env_overrides.get(&env.name) {
+        Some(override_value) => override_value.clone(),
+        None => {
+            if let Some(group_name) = group
+                && env.kind == EnvKind::Required
+            {
+                return Err(Error::Template(format!(
+                    "required env var '{}' in group '{}' has no value — provide it via the interactive prompt or process env",
+                    env.name, group_name
+                )));
+            }
+            template::render(&env.value, ctx)?
+        }
+    };
+    Ok(EnvVar {
+        name: env.name.clone(),
+        value,
+        kind: Default::default(),
+        prompt: None,
+        format: Default::default(),
+        length: None,
+        jwt_claims: None,
+        jwt_signing_key: None,
+    })
+}
+
 pub fn extract_secret_refs(value: &str) -> Vec<String> {
     let mut secrets = Vec::new();
     let mut rest = value;
@@ -214,7 +250,7 @@ mod tests {
     use super::*;
     use crate::config::schema::Config;
     use crate::registry::service_def::{
-        EnvKind, EnvVar, PortDef, ServiceDef, ServiceMeta,
+        EnvGroup, EnvKind, EnvVar, PortDef, ServiceDef, ServiceMeta,
     };
 
     fn minimal_service_def() -> ServiceDef {
@@ -256,10 +292,118 @@ mod tests {
                     jwt_signing_key: None,
                 },
             ],
+            env_groups: vec![],
             requires: vec![],
             mappings: Default::default(),
             integrations: Default::default(),
         }
+    }
+
+    fn plain_env(name: &str, value: &str, kind: EnvKind) -> EnvVar {
+        EnvVar {
+            name: name.into(),
+            value: value.into(),
+            kind,
+            prompt: None,
+            format: Default::default(),
+            length: None,
+            jwt_claims: None,
+            jwt_signing_key: None,
+        }
+    }
+
+    fn def_with_oauth_group() -> ServiceDef {
+        let mut def = minimal_service_def();
+        def.env_groups.push(EnvGroup {
+            name: "google_oauth".into(),
+            prompt: "Enable Google?".into(),
+            env: vec![
+                plain_env("CLIENT_ID", "", EnvKind::Required),
+                plain_env("CLIENT_SECRET", "", EnvKind::Required),
+                plain_env("CALLBACK_URL", "https://demo/cb", EnvKind::Default),
+                plain_env("OAUTH_ENABLED", "true", EnvKind::Default),
+            ],
+        });
+        def
+    }
+
+    fn gen_with_group(
+        def: &ServiceDef,
+        enabled_groups: &BTreeSet<String>,
+        overrides: &BTreeMap<String, String>,
+    ) -> Result<String> {
+        let config = Config::default();
+        let resolved = vec![("http".to_string(), 10002u16)];
+        let output = generate_env(GenerateEnvParams {
+            config: &config,
+            service_def: def,
+            auth_kind: None,
+            host_port: Some(10002),
+            resolved_ports: &resolved,
+            env_overrides: overrides,
+            url: None,
+            extra_env: BTreeMap::new(),
+            pre_built_ctx: None,
+            enable_smtp: false,
+            enabled_groups,
+        })?;
+        Ok(output.env_file.content)
+    }
+
+    #[test]
+    fn env_group_disabled_writes_no_members() {
+        let def = def_with_oauth_group();
+        let no_groups = BTreeSet::new();
+        let content = gen_with_group(&def, &no_groups, &BTreeMap::new())
+            .expect("generate_env should succeed with no groups enabled");
+        for name in [
+            "CLIENT_ID",
+            "CLIENT_SECRET",
+            "CALLBACK_URL",
+            "OAUTH_ENABLED",
+        ] {
+            assert!(
+                !content.contains(&format!("{name}=")),
+                "disabled group member '{name}' leaked into .env: {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_group_enabled_writes_all_members() {
+        let def = def_with_oauth_group();
+        let mut enabled = BTreeSet::new();
+        enabled.insert("google_oauth".to_string());
+        let mut overrides = BTreeMap::new();
+        overrides.insert("CLIENT_ID".into(), "my-client".into());
+        overrides.insert("CLIENT_SECRET".into(), "my-secret".into());
+        let content = gen_with_group(&def, &enabled, &overrides)
+            .expect("generate_env should succeed with the group enabled + overrides supplied");
+        assert!(content.contains("CLIENT_ID=my-client"), "{content}");
+        assert!(content.contains("CLIENT_SECRET=my-secret"), "{content}");
+        assert!(
+            content.contains("CALLBACK_URL=https://demo/cb"),
+            "{content}"
+        );
+        assert!(content.contains("OAUTH_ENABLED=true"), "{content}");
+    }
+
+    #[test]
+    fn env_group_enabled_required_member_without_override_errors() {
+        let def = def_with_oauth_group();
+        let mut enabled = BTreeSet::new();
+        enabled.insert("google_oauth".to_string());
+        // Intentionally leave CLIENT_SECRET out — required members with no
+        // value must fail loudly, never produce an empty .env entry.
+        let mut overrides = BTreeMap::new();
+        overrides.insert("CLIENT_ID".into(), "my-client".into());
+        let err = gen_with_group(&def, &enabled, &overrides)
+            .expect_err("required member missing must surface as an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("CLIENT_SECRET") && msg.contains("google_oauth"),
+            "error should name the missing member + group: {msg}"
+        );
     }
 
     /// Regression: when the interactive CLI builds `pre_built_ctx` with
@@ -284,6 +428,7 @@ mod tests {
 
         // Now run generate_env with the real allocated host_port.
         let resolved = vec![("http".to_string(), 10002u16)];
+        let no_groups = BTreeSet::new();
         let output = generate_env(GenerateEnvParams {
             config: &config,
             service_def: &def,
@@ -295,6 +440,7 @@ mod tests {
             extra_env: BTreeMap::new(),
             pre_built_ctx: Some(prebuilt),
             enable_smtp: false,
+            enabled_groups: &no_groups,
         })
         .expect("generate_env must succeed with the real host_port");
 

@@ -221,11 +221,12 @@ pub fn print_plan_header(steps: &[Step], service: &str, primary_url: Option<&str
 
 /// Print a dry-run summary: files to write, then commands to run.
 pub fn print_dry_run(steps: &[Step]) {
-    let verbose = crate::verbose::is_enabled();
-
     enum FileEntry<'a> {
         Write(&'a ryra_core::generate::GeneratedFile),
-        Copy { src: &'a std::path::Path, dst: &'a std::path::Path },
+        Copy {
+            src: &'a std::path::Path,
+            dst: &'a std::path::Path,
+        },
     }
 
     let file_steps: Vec<FileEntry> = steps
@@ -248,21 +249,13 @@ pub fn print_dry_run(steps: &[Step]) {
             match entry {
                 FileEntry::Write(file) => {
                     println!("  {}", file.path.display());
-                    if verbose && !file.content.is_empty() {
-                        for line in file.content.lines() {
-                            println!("    | {line}");
-                        }
-                        println!();
-                    }
                 }
                 FileEntry::Copy { src, dst } => {
                     println!("  {} (<- {})", dst.display(), src.display());
                 }
             }
         }
-        if !verbose {
-            println!();
-        }
+        println!();
     }
 
     if !commands.is_empty() {

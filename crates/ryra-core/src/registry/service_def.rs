@@ -12,6 +12,11 @@ pub struct ServiceDef {
     pub ports: Vec<PortDef>,
     #[serde(default)]
     pub env: Vec<EnvVar>,
+    /// Optional, user-toggled bundles of env vars. A group is either fully
+    /// enabled (every member lands in `.env`) or fully disabled (none do) —
+    /// makes "client_id without client_secret" unrepresentable.
+    #[serde(default, rename = "env_group")]
+    pub env_groups: Vec<EnvGroup>,
     #[serde(default)]
     pub requires: Vec<ServiceRequirement>,
     #[serde(default)]
@@ -191,6 +196,24 @@ pub struct EnvVar {
     pub jwt_signing_key: Option<std::string::String>,
 }
 
+/// A user-toggled bundle of env vars. Enabling the group writes every
+/// member into `.env`; disabling it writes none of them.
+///
+/// Members reuse the full [`EnvVar`] shape — `kind = "default"` members are
+/// auto-included with their rendered template when the group is on,
+/// `prompted` members get shown with a default, `required` members must be
+/// supplied (interactively or via process env).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvGroup {
+    /// Identifier used by the `--enable <name>` CLI flag. Lowercase
+    /// snake_case by convention.
+    pub name: String,
+    /// Yes/no question shown during `ryra add` to toggle the group.
+    pub prompt: String,
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
+}
+
 /// A service that must already be installed on the system before this one.
 ///
 /// References separately-installed ryra services whose env vars
@@ -337,49 +360,59 @@ impl ServiceDef {
             }
         }
 
-        let mut seen_envs = std::collections::HashSet::new();
+        // Every env var name (top-level + every group member) must be unique
+        // across the whole service — podman's .env is a flat keyspace so two
+        // FOO= lines would be ambiguous.
+        let mut seen_envs: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for e in &self.env {
             if !seen_envs.insert(&e.name) {
                 errors.push(format!("duplicate env var name '{}'", e.name));
             }
         }
-
-        // --- Env var name format ---
-        // Must be a valid shell variable name: starts with letter or _, contains only [A-Za-z0-9_]
-
-        for e in &self.env {
-            if e.name.is_empty() {
-                errors.push("env var has empty name".to_string());
-            } else if !e
-                .name
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            {
-                errors.push(format!(
-                    "env var '{}' must start with a letter or _",
-                    e.name
-                ));
-            } else if !e
-                .name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                errors.push(format!(
-                    "env var '{}' contains invalid characters — must match [A-Za-z0-9_]",
-                    e.name
-                ));
+        for g in &self.env_groups {
+            for e in &g.env {
+                if !seen_envs.insert(&e.name) {
+                    errors.push(format!(
+                        "env var '{}' in group '{}' collides with another env var",
+                        e.name, g.name
+                    ));
+                }
             }
         }
 
-        // --- Env kind consistency ---
+        // --- Env var name format + kind consistency ---
 
         for e in &self.env {
-            if e.kind == EnvKind::Required && e.value.contains("{{secret.") {
+            check_env_var(e, None, &mut errors);
+        }
+
+        // --- Env group names + members ---
+
+        let mut seen_groups = std::collections::HashSet::new();
+        for g in &self.env_groups {
+            if !seen_groups.insert(&g.name) {
+                errors.push(format!("duplicate env_group name '{}'", g.name));
+            }
+            if g.name.is_empty() {
+                errors.push("env_group has empty name".to_string());
+            } else if !g
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
                 errors.push(format!(
-                    "env var '{}' is kind=required but has a secret template default — use kind=prompted or kind=default",
-                    e.name
+                    "env_group '{}' must be lowercase snake_case ([a-z0-9_])",
+                    g.name
                 ));
+            }
+            if g.prompt.is_empty() {
+                errors.push(format!("env_group '{}' has empty prompt", g.name));
+            }
+            if g.env.is_empty() {
+                errors.push(format!("env_group '{}' has no env vars", g.name));
+            }
+            for e in &g.env {
+                check_env_var(e, Some(&g.name), &mut errors);
             }
         }
 
@@ -400,6 +433,45 @@ impl ServiceDef {
         } else {
             Err(format!("{name}: {}", errors.join("; ")))
         }
+    }
+}
+
+/// Shared name-format + kind-consistency check for a single `EnvVar`, used
+/// for both top-level `[[env]]` entries and `[[env_group.env]]` members.
+/// `group` is `Some(group_name)` for member vars — it's used to make error
+/// messages locate the offending declaration.
+fn check_env_var(e: &EnvVar, group: Option<&str>, errors: &mut Vec<String>) {
+    let where_ = match group {
+        Some(g) => format!(" in group '{g}'"),
+        None => String::new(),
+    };
+    if e.name.is_empty() {
+        errors.push(format!("env var has empty name{where_}"));
+    } else if !e
+        .name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    {
+        errors.push(format!(
+            "env var '{}'{where_} must start with a letter or _",
+            e.name
+        ));
+    } else if !e
+        .name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        errors.push(format!(
+            "env var '{}'{where_} contains invalid characters — must match [A-Za-z0-9_]",
+            e.name
+        ));
+    }
+    if e.kind == EnvKind::Required && e.value.contains("{{secret.") {
+        errors.push(format!(
+            "env var '{}'{where_} is kind=required but has a secret template default — use kind=prompted or kind=default",
+            e.name
+        ));
     }
 }
 

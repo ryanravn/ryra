@@ -118,15 +118,57 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
     Ok(out)
 }
 
-/// Look up a single service. Calls `enumerate_all` and filters —
-/// O(n) in the number of services with full filesystem + podman
-/// walks. Fine for the CLI, but if a hot path ever wants just one
-/// service, consider a dedicated `enumerate_one` that skips unrelated
-/// name collection.
+/// Look up a single service. Queries the filesystem + podman directly for
+/// the given name rather than walking every service via `enumerate_all`.
+///
+/// This matters for true orphans: after `ryra remove <svc>` in Preserve
+/// mode the config entry is gone AND the home dir is often deleted (empty
+/// once .env is wiped), so `enumerate_all`'s owner inference has no
+/// `known_services` hint to match `systemd-<svc>-data` against and those
+/// volumes end up unattributed. Looking up by name dodges that because
+/// the name itself seeds the owner match.
 pub fn enumerate_service(config: &Config, name: &str) -> Result<Option<ServiceData>> {
-    Ok(enumerate_all(config)?
+    let home_root = crate::service_data_root()?;
+    let quadlet = crate::quadlet_dir()?;
+    let home_dir = home_root.join(name);
+    let known = [name.to_string()];
+
+    let quadlet_vols = volumes::parse_volume_quadlets(&quadlet, &known)?;
+    let podman_vols = volumes::list_podman_volumes();
+    let mut all_vols = volumes::reconcile(quadlet_vols, podman_vols);
+    for vr in &mut all_vols {
+        if vr.owner.is_none() {
+            let stem = vr.name.strip_prefix("systemd-").unwrap_or(&vr.name);
+            vr.owner = volumes::match_owner(stem, &known);
+        }
+    }
+    let svc_vols: Vec<volumes::VolumeRef> = all_vols
         .into_iter()
-        .find(|s| s.service == name))
+        .filter(|v| v.owner.as_deref() == Some(name))
+        .collect();
+
+    let data_paths = if home_dir.exists() {
+        classify::classify_home_dir(&home_dir)?.0
+    } else {
+        Vec::new()
+    };
+
+    if !home_dir.exists() && svc_vols.is_empty() {
+        return Ok(None);
+    }
+
+    let status = match config.services.iter().find(|s| s.name == name) {
+        Some(s) if s.installed => ServiceStatus::Installed,
+        _ => ServiceStatus::Orphan,
+    };
+
+    Ok(Some(ServiceData {
+        service: name.to_string(),
+        status,
+        home_dir,
+        data_paths,
+        volumes: svc_vols,
+    }))
 }
 
 /// Walk `path` recursively, summing file sizes. Does not follow symlinks.

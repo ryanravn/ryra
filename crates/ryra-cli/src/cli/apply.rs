@@ -9,18 +9,16 @@ use ryra_core::Step;
 
 /// Execute a list of steps, stopping on first failure.
 pub async fn execute_all(steps: &[Step]) -> Result<()> {
-    let verbose = crate::verbose::is_enabled();
     for step in steps {
         let start = std::time::Instant::now();
         execute(step).await?;
-        if verbose {
-            let elapsed = start.elapsed();
-            if elapsed.as_millis() > 500 {
-                println!("    ({:.1}s)", elapsed.as_secs_f64());
-            }
+        // Surface slow steps so the user sees where the time went. Anything
+        // under ~0.5s is fast enough that the extra line is just noise.
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 500 {
+            println!("    ({:.1}s)", elapsed.as_secs_f64());
         }
     }
-
     Ok(())
 }
 
@@ -28,15 +26,6 @@ pub async fn execute_all(steps: &[Step]) -> Result<()> {
 async fn execute(step: &Step) -> Result<()> {
     match step {
         Step::WriteFile(file) => {
-            if crate::verbose::is_enabled() {
-                println!("  Writing {}", file.path.display());
-                if !file.content.is_empty() {
-                    for line in file.content.lines() {
-                        println!("    | {line}");
-                    }
-                    println!();
-                }
-            }
             // Pick the permission mode by file kind:
             // - `.env` / `ryra.toml`  — contain credentials, owner-only (0o600)
             // - `.sh`                  — executable scripts (0o755)
@@ -80,13 +69,12 @@ async fn execute(step: &Step) -> Result<()> {
             })
         }
         Step::StopService { unit } => {
-            // Stop failures are non-fatal (service may already be stopped)
-            if let Err(e) = run_cmd("systemctl", &["--user", "stop", unit])
-                && crate::verbose::is_enabled()
-            {
-                eprintln!("  Note: stopping {unit} failed (may already be stopped): {e}");
-            }
-            Ok(())
+            // Stop failures are non-fatal (service may already be stopped).
+            // The spinner only kicks in after 2s, so quick stops stay silent.
+            with_simple_spinner(&format!("stopping {unit}"), || {
+                let _ = run_cmd("systemctl", &["--user", "stop", unit]);
+                Ok(())
+            })
         }
         Step::RestartService { unit } => with_spinner("restarting", unit, || {
             run_cmd("systemctl", &["--user", "restart", unit])
@@ -135,9 +123,6 @@ async fn execute(step: &Step) -> Result<()> {
                 .map(|s| s.success())
                 .unwrap_or(false);
             if exists_local {
-                if crate::verbose::is_enabled() {
-                    println!("  {image} already available, skipping pull");
-                }
                 return Ok(());
             }
             // Check additional image stores via podman images.
@@ -156,14 +141,12 @@ async fn execute(step: &Step) -> Result<()> {
                 })
                 .unwrap_or(false);
             if in_additional {
-                if crate::verbose::is_enabled() {
-                    println!("  {image} available in image store, skipping pull");
-                }
                 return Ok(());
             }
-            if crate::verbose::is_enabled() {
-                println!("  Pulling {image}...");
-            }
+            // Let podman's native progress bars flow through — we don't wrap
+            // this in a spinner because podman already streams a per-layer
+            // progress display that's better than anything we'd fake.
+            println!("  Pulling {image}...");
             run_cmd("podman", &["pull", image])
         }
         Step::RemoveFile(path) => std::fs::remove_file(path)
@@ -177,51 +160,50 @@ async fn execute(step: &Step) -> Result<()> {
             // std::fs on any podman failure (e.g. plain-user-owned paths
             // like ~/.config/ryra) so non-podman dirs still work.
             let path_str = path.display().to_string();
-            let unshare = Command::new("podman")
-                .args(["unshare", "rm", "-rf", "--", &path_str])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            match unshare {
-                Ok(status) if status.success() => Ok(()),
-                _ => std::fs::remove_dir_all(path)
-                    .with_context(|| format!("failed to remove directory {}", path.display())),
-            }
+            with_simple_spinner(&format!("removing {}", path.display()), || {
+                let unshare = Command::new("podman")
+                    .args(["unshare", "rm", "-rf", "--", &path_str])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                match unshare {
+                    Ok(status) if status.success() => Ok(()),
+                    _ => std::fs::remove_dir_all(path)
+                        .with_context(|| format!("failed to remove directory {}", path.display())),
+                }
+            })
         }
         Step::RemoveVolume { name } => {
             // Volume removal is best-effort — the volume may not exist if the
             // container never started, or podman may need the container gone first.
-            let status = Command::new("podman")
-                .args(["volume", "rm", name])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-            if crate::verbose::is_enabled() && !status.map(|s| s.success()).unwrap_or(false) {
-                eprintln!("  Note: volume {name} not removed (may not exist)");
-            }
-            Ok(())
+            with_simple_spinner(&format!("removing volume {name}"), || {
+                let _ = Command::new("podman")
+                    .args(["volume", "rm", name])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                Ok(())
+            })
         }
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
         Step::WaitForFile { path, timeout_secs } => {
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_secs(*timeout_secs as u64);
-            while !path.exists() {
-                if std::time::Instant::now() > deadline {
-                    anyhow::bail!("timed out waiting for {}", path.display());
+            with_simple_spinner(&format!("waiting for {}", path.display()), || {
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_secs(*timeout_secs as u64);
+                while !path.exists() {
+                    if std::time::Instant::now() > deadline {
+                        anyhow::bail!("timed out waiting for {}", path.display());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-            Ok(())
+                Ok(())
+            })
         }
         Step::CopyFile { src, dst } => {
-            if crate::verbose::is_enabled() {
-                println!("  Copying {} -> {}", src.display(), dst.display());
-            }
             if let Some(parent) = dst.parent() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!("failed to create parent dir {}", parent.display())
-                })?;
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create parent dir {}", parent.display()))?;
             }
             std::fs::copy(src, dst).with_context(|| {
                 format!("failed to copy {} -> {}", src.display(), dst.display())
@@ -244,10 +226,41 @@ async fn execute(step: &Step) -> Result<()> {
 /// user sees which subunit is currently running (e.g. `zammad-elasticsearch`)
 /// rather than a bare elapsed counter.
 fn with_spinner<T>(verb: &str, unit: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    // Family pattern for glob matches: `zammad.service` → `zammad*`.
+    // Covers sidecars like `zammad-postgres.service`.
+    let unit_owned = unit.to_string();
+    let verb_owned = verb.to_string();
+    let family_glob = format!("{}*", unit_owned.trim_end_matches(".service"));
+    status_spinner(
+        move || {
+            let detail = describe_wait(&unit_owned, &family_glob).unwrap_or_default();
+            if detail.is_empty() {
+                format!("  {verb_owned} {unit_owned}…")
+            } else {
+                format!("  {verb_owned} {unit_owned}: {detail}")
+            }
+        },
+        f,
+    )
+}
+
+/// Spinner for one-off waits (stop, remove, file-poll) that aren't tied to a
+/// systemd unit. Same 2s grace + stderr line + elapsed counter as
+/// `with_spinner`, without the journalctl / systemctl inspection.
+fn with_simple_spinner<T>(msg: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let msg_owned = msg.to_string();
+    status_spinner(move || format!("  {msg_owned}…"), f)
+}
+
+/// Core spinner loop. After a 2s grace period, redraws `label()` on stderr
+/// every second with an elapsed counter appended. Clears the line on exit.
+/// Fast operations stay silent.
+fn status_spinner<T>(
+    label: impl Fn() -> String + Send + 'static,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = Arc::clone(&done);
-    let verb_owned = verb.to_string();
-    let unit_owned = unit.to_string();
     let handle = std::thread::spawn(move || {
         let start = std::time::Instant::now();
         // 2s grace period — fast operations (most of them) stay quiet.
@@ -257,26 +270,16 @@ fn with_spinner<T>(verb: &str, unit: &str, f: impl FnOnce() -> Result<T>) -> Res
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        // Family pattern for glob matches: `zammad.service` → `zammad*`.
-        // Covers sidecars like `zammad-postgres.service`.
-        let family_glob = format!(
-            "{}*",
-            unit_owned.trim_end_matches(".service")
-        );
-        let mut last_detail = String::new();
+        let mut last_label = String::new();
         while !done_clone.load(Ordering::Relaxed) {
             let secs = start.elapsed().as_secs();
-            let detail = describe_wait(&unit_owned, &family_glob).unwrap_or_default();
-            // Clear the line fully before redrawing — detail changes size.
-            if detail != last_detail {
+            let current = label();
+            // Clear the line fully before redrawing — label width changes.
+            if current != last_label {
                 eprint!("\r\x1b[2K");
-                last_detail = detail.clone();
+                last_label = current.clone();
             }
-            if detail.is_empty() {
-                eprint!("\r  {verb_owned} {unit_owned}… {secs}s  ");
-            } else {
-                eprint!("\r  {verb_owned} {unit_owned}: {detail} ({secs}s)  ");
-            }
+            eprint!("\r{current} ({secs}s)  ");
             let _ = std::io::stderr().flush();
             std::thread::sleep(std::time::Duration::from_millis(1_000));
         }
@@ -284,7 +287,6 @@ fn with_spinner<T>(verb: &str, unit: &str, f: impl FnOnce() -> Result<T>) -> Res
     let result = f();
     done.store(true, Ordering::Relaxed);
     let _ = handle.join();
-    // Erase the status line.
     eprint!("\r\x1b[2K");
     let _ = std::io::stderr().flush();
     result
@@ -402,9 +404,6 @@ fn describe_wait(unit: &str, family_glob: &str) -> Option<String> {
 /// Run a command with explicit program and args (no shell interpretation).
 fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
     let display = format!("{program} {}", args.join(" "));
-    if crate::verbose::is_enabled() {
-        println!("  $ {display}");
-    }
     let status = Command::new(program)
         .args(args)
         .status()

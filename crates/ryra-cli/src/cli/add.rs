@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
@@ -38,11 +38,15 @@ pub async fn run(
     url: Option<&str>,
     auth: bool,
     smtp: Option<SmtpProvider>,
+    enable: &[String],
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
     if url.is_some() && services.len() > 1 {
         bail!("--url can only be used when adding a single service");
+    }
+    if !enable.is_empty() && services.len() > 1 {
+        bail!("--enable can only be used when adding a single service");
     }
 
     let interactive = super::is_interactive();
@@ -103,26 +107,19 @@ pub async fn run(
         // A fresh `ryra add` would silently inherit them — surprising when
         // the user wants a clean state. Surface it here so they choose.
         if !dry_run
-            && !config
-                .services
-                .iter()
-                .any(|s| s.name == service)
+            && !config.services.iter().any(|s| s.name == service)
             && let Some(orphan) = ryra_core::data::enumerate_service(&config, service)?
             && orphan.status == ryra_core::data::ServiceStatus::Orphan
             && (!orphan.volumes.is_empty() || !orphan.data_paths.is_empty())
         {
-            println!(
-                "\n  '{service}' has data from a previous install (orphaned on disk):"
-            );
+            println!("\n  '{service}' has data from a previous install (orphaned on disk):");
             for v in &orphan.volumes {
                 println!("    volume: {}", v.name);
             }
             for p in &orphan.data_paths {
                 println!("    data:   {}", p.display());
             }
-            println!(
-                "\n  Proceeding will reuse this data (podman reuses named volumes by name)."
-            );
+            println!("\n  Proceeding will reuse this data (podman reuses named volumes by name).");
             if interactive && !yes {
                 let proceed = Confirm::new()
                     .with_prompt(format!("Continue adding {service} with existing data?"))
@@ -221,6 +218,7 @@ pub async fn run(
                                 None,
                                 false,
                                 None,
+                                &[],
                                 false,
                                 true,
                             ))
@@ -276,14 +274,39 @@ pub async fn run(
 
         let mut env_overrides = BTreeMap::new();
         let mut prompt_ctx: Option<BTreeMap<String, String>> = None;
-        let promptable: Vec<_> = reg_service
+
+        // Validate every --enable name up front — fail fast on typos rather
+        // than silently ignoring unknown groups.
+        let known_group_names: BTreeSet<&str> = reg_service
+            .def
+            .env_groups
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect();
+        for g in enable {
+            if !known_group_names.contains(g.as_str()) {
+                let hint = if known_group_names.is_empty() {
+                    format!("service '{service}' defines no env_groups")
+                } else {
+                    let known: Vec<&str> = known_group_names.iter().copied().collect();
+                    format!(
+                        "service '{service}' has no env_group '{g}' (known: {})",
+                        known.join(", ")
+                    )
+                };
+                bail!("{hint}");
+            }
+        }
+        let mut enabled_groups: BTreeSet<String> = enable.iter().cloned().collect();
+
+        let has_promptable_top = reg_service
             .def
             .env
             .iter()
-            .filter(|e| matches!(e.kind, EnvKind::Prompted | EnvKind::Required))
-            .collect();
+            .any(|e| matches!(e.kind, EnvKind::Prompted | EnvKind::Required));
+        let has_groups = !reg_service.def.env_groups.is_empty();
 
-        if !promptable.is_empty() && interactive {
+        if (has_promptable_top || has_groups) && interactive {
             // Resolve template variables in defaults so prompts show real values.
             // This context is reused by add_service so the secrets the user saw
             // during prompts match what gets written to .env.
@@ -298,45 +321,59 @@ pub async fn run(
             prompt_ctx = Some(default_ctx.clone());
 
             println!("\nConfigure {service}:");
-            for env in &promptable {
-                let prompt_text = env.prompt.as_deref().unwrap_or(&env.name);
-                let is_required = env.kind == EnvKind::Required;
 
-                if is_required {
-                    // Required: must provide a value, no default
-                    let value: String = Input::new()
-                        .with_prompt(format!("  {prompt_text} (required)"))
-                        .interact_text()?;
-                    env_overrides.insert(env.name.clone(), value);
-                } else {
-                    // Resolve template in default value
-                    let resolved_default =
-                        ryra_core::generate::template::render(&env.value, &default_ctx)
-                            .unwrap_or_else(|_| env.value.clone());
-                    let value: String = Input::new()
-                        .with_prompt(format!("  {prompt_text}"))
-                        .default(resolved_default.clone())
-                        .interact_text()?;
-                    // Always save for secret-templated values — re-rendering
-                    // would generate a different random secret.
-                    if value != resolved_default {
-                        env_overrides.insert(env.name.clone(), value);
-                    } else if env.value.contains("{{secret.") {
-                        env_overrides.insert(env.name.clone(), resolved_default);
+            // Interactive group toggles — ask y/N for each group, then prompt
+            // its required/prompted members if the user opted in. Groups
+            // passed via --enable are treated as already on (no re-prompt).
+            for group in &reg_service.def.env_groups {
+                if !enabled_groups.contains(&group.name) {
+                    let enabled = Confirm::new()
+                        .with_prompt(format!("  {}", group.prompt))
+                        .default(false)
+                        .interact()?;
+                    if !enabled {
+                        continue;
                     }
+                    enabled_groups.insert(group.name.clone());
                 }
+                for env in &group.env {
+                    if !matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
+                        continue;
+                    }
+                    prompt_env(env, &default_ctx, &mut env_overrides)?;
+                }
+            }
+
+            // Top-level prompted/required envs.
+            for env in &reg_service.def.env {
+                if !matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
+                    continue;
+                }
+                prompt_env(env, &default_ctx, &mut env_overrides)?;
             }
             println!();
         } else if !interactive {
             // Non-interactive: read env vars from the process environment.
             // Required vars must be set; prompted vars use their default but
-            // can be overridden via the environment.
+            // can be overridden via the environment. Members of groups that
+            // aren't `--enable`d are ignored entirely — they won't be written
+            // to `.env`, so missing them is not an error.
             let mut missing_required = Vec::new();
-            for env in &promptable {
-                if let Ok(val) = std::env::var(&env.name) {
-                    env_overrides.insert(env.name.clone(), val);
-                } else if env.kind == EnvKind::Required {
-                    missing_required.push(env.name.as_str());
+            for env in &reg_service.def.env {
+                if !matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
+                    continue;
+                }
+                collect_non_interactive(env, &mut env_overrides, &mut missing_required);
+            }
+            for group in &reg_service.def.env_groups {
+                if !enabled_groups.contains(&group.name) {
+                    continue;
+                }
+                for env in &group.env {
+                    if !matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
+                        continue;
+                    }
+                    collect_non_interactive(env, &mut env_overrides, &mut missing_required);
                 }
             }
             if !missing_required.is_empty() {
@@ -355,30 +392,27 @@ pub async fn run(
             auth || auth_kind.is_some(),
             enable_smtp,
             &env_overrides,
+            &enabled_groups,
             service_ref.registry_name(),
             &repo_dir,
             prompt_ctx.clone(),
             &super::is_port_in_use,
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
-                // Two cases land here: a previous `ryra add` crashed mid-way,
-                // or the user ran `ryra remove <svc>` without --purge and now
-                // wants to re-add. Both leave preserved volumes/home-dir on
-                // disk. Reusing them in-place isn't a supported path yet, so
-                // the recovery is purge + reinstall — but don't do that
-                // silently: data loss deserves a confirmation.
+                // Two cases land here: a previous `ryra add` crashed mid-way
+                // (config entry with installed=false), or the user ran
+                // `ryra remove <svc>` without --purge and now wants to
+                // re-add (no config entry but volumes/home-dir survive).
+                // Both produce credential mismatches if we just regenerate
+                // secrets on top of existing volumes — recover by purging
+                // + reinstalling, but don't do that silently: data loss
+                // deserves a confirmation.
                 if interactive && !yes {
-                    println!(
-                        "\n  '{service}' has preserved data from a previous install."
-                    );
-                    println!(
-                        "  Reinstalling will delete the named volume(s) and service dir."
-                    );
+                    println!("\n  '{service}' has preserved data from a previous install.");
+                    println!("  Reinstalling will delete the named volume(s) and service dir.");
                     println!("  Inspect with: ryra data ls\n");
                     let proceed = Confirm::new()
-                        .with_prompt(format!(
-                            "Purge existing data and reinstall {service}?"
-                        ))
+                        .with_prompt(format!("Purge existing data and reinstall {service}?"))
                         .default(false)
                         .interact()?;
                     if !proceed {
@@ -388,11 +422,27 @@ pub async fn run(
                         return Ok(());
                     }
                 }
-                println!("{service} was partially installed — cleaning up before retry...");
-                let remove_result =
-                    ryra_core::remove_service(service, ryra_core::RemoveMode::Purge)?;
-                apply::execute_all(&remove_result.steps).await?;
-                ryra_core::finalize_remove(service)?;
+                println!("{service} has leftover state — cleaning up before retry...");
+
+                // `remove_service` requires a config entry, so only use it
+                // for the partial-install case. For the orphan case the
+                // config entry is gone; fall back to `orphan_purge_steps`.
+                let cleanup_cfg = ryra_core::config::load_or_default(&paths.config_file)?;
+                if cleanup_cfg.services.iter().any(|s| s.name == service) {
+                    let remove_result =
+                        ryra_core::remove_service(service, ryra_core::RemoveMode::Purge)?;
+                    apply::execute_all(&remove_result.steps).await?;
+                    ryra_core::finalize_remove(service)?;
+                } else {
+                    let svc_data = ryra_core::data::enumerate_service(&cleanup_cfg, service)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "internal: ServiceIncomplete for '{service}' but no state found"
+                            )
+                        })?;
+                    let steps = ryra_core::orphan_purge_steps(&svc_data);
+                    apply::execute_all(&steps).await?;
+                }
                 // Retry now that the partial state is gone
                 ryra_core::add_service(
                     service,
@@ -401,6 +451,7 @@ pub async fn run(
                     auth || auth_kind.is_some(),
                     enable_smtp,
                     &env_overrides,
+                    &enabled_groups,
                     service_ref.registry_name(),
                     &repo_dir,
                     prompt_ctx.clone(),
@@ -633,6 +684,55 @@ pub async fn run(
     Ok(())
 }
 
+/// Prompt for a single `prompted`/`required` env var during interactive add.
+/// Shared between top-level `[[env]]` and group members so both follow the
+/// same default-resolution + override-capture rules.
+fn prompt_env(
+    env: &ryra_core::registry::service_def::EnvVar,
+    default_ctx: &BTreeMap<String, String>,
+    env_overrides: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    use ryra_core::registry::service_def::EnvKind;
+    let prompt_text = env.prompt.as_deref().unwrap_or(&env.name);
+    if env.kind == EnvKind::Required {
+        let value: String = Input::new()
+            .with_prompt(format!("    {prompt_text} (required)"))
+            .interact_text()?;
+        env_overrides.insert(env.name.clone(), value);
+    } else {
+        let resolved_default = ryra_core::generate::template::render(&env.value, default_ctx)
+            .unwrap_or_else(|_| env.value.clone());
+        let value: String = Input::new()
+            .with_prompt(format!("    {prompt_text}"))
+            .default(resolved_default.clone())
+            .interact_text()?;
+        // Always save for secret-templated values — re-rendering would
+        // generate a different random secret.
+        if value != resolved_default {
+            env_overrides.insert(env.name.clone(), value);
+        } else if env.value.contains("{{secret.") {
+            env_overrides.insert(env.name.clone(), resolved_default);
+        }
+    }
+    Ok(())
+}
+
+/// Pull a single env var's value from the process environment for
+/// non-interactive add. `Required` vars go on the `missing` list if absent
+/// so the caller can bail with a single consolidated error.
+fn collect_non_interactive<'a>(
+    env: &'a ryra_core::registry::service_def::EnvVar,
+    env_overrides: &mut BTreeMap<String, String>,
+    missing: &mut Vec<&'a str>,
+) {
+    use ryra_core::registry::service_def::EnvKind;
+    if let Ok(val) = std::env::var(&env.name) {
+        env_overrides.insert(env.name.clone(), val);
+    } else if env.kind == EnvKind::Required {
+        missing.push(env.name.as_str());
+    }
+}
+
 /// Register Caddy's CA with every rootless trust store we can reach, and
 /// print (but never run) hints for the stores that need sudo — /etc/hosts
 /// for non-.localhost domains, and the system trust bundle for
@@ -657,15 +757,10 @@ fn setup_host_access(domains: &[&str]) {
     // trust step below. If it's missing, skip them all and point the user
     // at the package — otherwise each certutil call would fail with a
     // confusing `No such file or directory` warning.
-    let have_certutil = Command::new("certutil")
-        .arg("-V")
-        .output()
-        .is_ok();
+    let have_certutil = Command::new("certutil").arg("-V").output().is_ok();
     if !have_certutil {
         println!();
-        println!(
-            "  Note: `certutil` is not installed, so ryra can't register the Caddy CA"
-        );
+        println!("  Note: `certutil` is not installed, so ryra can't register the Caddy CA");
         println!("  with Chromium or Firefox automatically. To enable rootless trust:");
         println!("    Fedora/RHEL:   sudo dnf install nss-tools");
         println!("    Debian/Ubuntu: sudo apt install libnss3-tools");
@@ -674,15 +769,11 @@ fn setup_host_access(domains: &[&str]) {
     }
 
     // --- Rootless: user NSS DB (Chromium, Edge, Brave, Opera, Vivaldi) ---
-    if have_certutil
-        && let (Some(nssdb_path), Some(ca)) = (super::nssdb_dir(), ca_source.as_ref())
+    if have_certutil && let (Some(nssdb_path), Some(ca)) = (super::nssdb_dir(), ca_source.as_ref())
     {
         if !nssdb_path.exists() {
             if let Err(e) = std::fs::create_dir_all(&nssdb_path) {
-                eprintln!(
-                    "  Warning: could not create {}: {e}",
-                    nssdb_path.display()
-                );
+                eprintln!("  Warning: could not create {}: {e}", nssdb_path.display());
             } else {
                 let init = Command::new("certutil")
                     .args([
@@ -702,7 +793,11 @@ fn setup_host_access(domains: &[&str]) {
             }
         }
         if nssdb_path.exists() {
-            add_ca_to_nssdb(&format!("sql:{}", nssdb_path.display()), ca, "Chromium family");
+            add_ca_to_nssdb(
+                &format!("sql:{}", nssdb_path.display()),
+                ca,
+                "Chromium family",
+            );
         }
     }
 
@@ -761,9 +856,7 @@ fn setup_host_access(domains: &[&str]) {
             target.cert_path,
             target.update_cmd,
         );
-        println!(
-            "    (lets curl/wget and Firefox with p11-kit trust the Caddy CA too)"
-        );
+        println!("    (lets curl/wget and Firefox with p11-kit trust the Caddy CA too)");
     }
     println!();
 }
@@ -824,6 +917,7 @@ async fn ensure_tls_configured(
                         None,
                         false,
                         None,
+                        &[],
                         false,
                         true,
                     ))
@@ -888,6 +982,7 @@ async fn ensure_tls_configured(
                     None,
                     false,
                     None,
+                    &[],
                     false,
                     true,
                 ))
@@ -959,6 +1054,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
                     None,
                     false,
                     None,
+                    &[],
                     false,
                     true,
                 ))
@@ -1022,6 +1118,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             None,
             false,
             None,
+            &[],
             false,
             true,
         ))
@@ -1048,6 +1145,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             Some(&authelia_url),
             false,
             None,
+            &[],
             false,
             true,
         ))
@@ -1063,6 +1161,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             Some(&authelia_url),
             false,
             None,
+            &[],
             false,
             true,
         ))
@@ -1121,6 +1220,7 @@ async fn ensure_auth_for_add(
                     None,
                     false,
                     None,
+                    &[],
                     dry_run,
                     true,
                 ))
@@ -1135,6 +1235,7 @@ async fn ensure_auth_for_add(
                 Some(&authelia_url),
                 false,
                 None,
+                &[],
                 dry_run,
                 true,
             ))
