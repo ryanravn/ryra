@@ -1,0 +1,29 @@
+[Unit]
+Description=Nextcloud background job cron
+StartLimitIntervalSec=60
+StartLimitBurst=3
+Requires=nextcloud.service
+After=nextcloud.service
+
+[Container]
+Image=docker.io/library/nextcloud:31-apache
+ContainerName=nextcloud-cron
+Network=nextcloud.network
+Volume=nextcloud-app.volume:/var/www/html:U
+Volume=%h/.local/share/ryra/nextcloud/data:/var/www/html/data:Z
+Exec=/cron.sh
+Pull=missing
+EnvironmentFile=%h/.local/share/ryra/nextcloud/.env
+HealthCmd=pgrep -f cron.sh > /dev/null || exit 1
+HealthStartPeriod=30s
+HealthInterval=60s
+HealthRetries=3
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/nextcloud/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

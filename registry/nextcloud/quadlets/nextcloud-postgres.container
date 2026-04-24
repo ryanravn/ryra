@@ -1,0 +1,25 @@
+[Unit]
+Description=Nextcloud PostgreSQL database
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Container]
+Image=docker.io/library/postgres:17-alpine
+ContainerName=nextcloud-postgres
+Network=nextcloud.network:alias=postgres
+Volume=nextcloud-db-data.volume:/var/lib/postgresql/data:U
+Pull=missing
+EnvironmentFile=%h/.local/share/ryra/nextcloud/.env
+HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1
+HealthStartPeriod=10s
+HealthInterval=10s
+HealthRetries=5
+
+[Service]
+EnvironmentFile=%h/.local/share/ryra/nextcloud/.env
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,110 @@
+[service]
+name = "nextcloud"
+description = "Nextcloud - self-hosted file sync, calendar, contacts, collaboration"
+url = "https://nextcloud.com/"
+architecture = ["amd64", "arm64"]
+https = "auth"
+
+[requirements.ram]
+min = 1024
+recommended = 2048
+
+[[ports]]
+name = "http"
+container_port = 80
+
+# --- Postgres env vars (shared via .env with the postgres sidecar) ---
+
+[[env]]
+name = "POSTGRES_DB"
+value = "nextcloud"
+
+[[env]]
+name = "POSTGRES_USER"
+value = "nextcloud"
+
+[[env]]
+name = "POSTGRES_PASSWORD"
+value = "{{secret.db_password}}"
+
+[[env]]
+name = "POSTGRES_HOST"
+value = "postgres"
+
+# --- Redis env vars ---
+
+[[env]]
+name = "REDIS_HOST"
+value = "redis"
+
+# --- Admin bootstrap ---
+# Set on first run only; subsequent changes need `occ user:resetpassword`.
+# NEXTCLOUD_ADMIN_PASSWORD is exposed as a prompted env so users can override
+# the generated default via `NEXTCLOUD_ADMIN_PASSWORD=… ryra add nextcloud`.
+
+[[env]]
+name = "NEXTCLOUD_ADMIN_USER"
+value = "admin"
+
+[[env]]
+name = "NEXTCLOUD_ADMIN_PASSWORD"
+value = "{{secret.admin_password}}"
+kind = "prompted"
+prompt = "Admin password"
+
+# --- Trusted domains / reverse-proxy awareness ---
+# Nextcloud's docker entrypoint skips OVERWRITE* vars when they're empty,
+# so "" is safe when --url wasn't passed.
+
+[[env]]
+name = "NEXTCLOUD_TRUSTED_DOMAINS"
+value = "localhost 127.0.0.1 {{service.domain | default('localhost')}}"
+
+# OVERWRITEHOST must include the port when the URL uses a non-default
+# one (e.g. Caddy on 8443). Nextcloud has no OVERWRITEPORT — the port
+# travels in OVERWRITEHOST. Without it, user_oidc sends a redirect_uri
+# like `https://nextcloud.internal/...` which fails Authelia's strict
+# `redirect_uris` match against `https://nextcloud.internal:8443/...`.
+[[env]]
+name = "OVERWRITEHOST"
+value = "{{service.external_authority | default('')}}"
+
+[[env]]
+name = "OVERWRITEPROTOCOL"
+value = "{{service.scheme | default('http')}}"
+
+[[env]]
+name = "OVERWRITECLIURL"
+value = "{{service.external_url | default('')}}"
+
+# Accept X-Forwarded-* headers from any container on a podman network.
+# RFC1918 ranges cover caddy / authelia / other sidecars regardless of
+# which podman subnet they land on.
+[[env]]
+name = "TRUSTED_PROXIES"
+value = "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+
+[integrations]
+auth = ["oidc"]
+oidc_callbacks = ["/apps/user_oidc/code"]
+smtp = true
+
+# OIDC is configured via `occ user_oidc:provider` in configure-oidc.sh —
+# the OAUTH_* vars below are read by that script, not by Nextcloud itself.
+[mappings.auth]
+OAUTH_CLIENT_ID = "{{auth.client_id}}"
+OAUTH_CLIENT_SECRET = "{{auth.client_secret}}"
+OAUTH_ISSUER_URL = "{{auth.issuer}}"
+
+# SMTP is configured via `occ config:system:set` in configure-smtp.sh rather
+# than Nextcloud's first-install env vars (SMTP_HOST, MAIL_FROM_ADDRESS, …)
+# so re-running `ryra add --smtp=<provider>` after the initial install
+# continues to apply. The smtp.from field is split on "@" by the script to
+# populate mail_from_address + mail_domain.
+[mappings.smtp]
+SMTP_HOST = "{{smtp.host}}"
+SMTP_PORT = "{{smtp.port}}"
+SMTP_SECURITY = "{{smtp.security}}"
+SMTP_USERNAME = "{{smtp.username}}"
+SMTP_PASSWORD = "{{smtp.password}}"
+SMTP_FROM = "{{smtp.from}}"
