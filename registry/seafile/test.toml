@@ -18,7 +18,7 @@ service = "caddy"
 [[tests.steps]]
 action = "add"
 service = "seafile"
-args = "--smtp=inbucket --url https://seafile.localhost:8443"
+args = "--smtp=inbucket --url https://seafile.internal:8443"
 env = { INIT_SEAFILE_ADMIN_EMAIL = "smtptest@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "Testing-Smtp-123!" }
 timeout = 900
 [[tests.steps]]
@@ -27,7 +27,7 @@ service = "seafile"
 [[tests.steps]]
 action = "http"
 name = "seafile-responds"
-url = "https://seafile.localhost:8443"
+url = "https://seafile.internal:8443"
 service = "seafile"
 poll = { interval = 3, attempts = 60 }
 timeout = 240
@@ -74,7 +74,7 @@ service = "caddy"
 [[tests.steps]]
 action = "add"
 service = "authelia"
-args = "--url https://auth.localhost:8443"
+args = "--url https://auth.internal:8443"
 env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 [[tests.steps]]
@@ -83,7 +83,7 @@ service = "authelia"
 [[tests.steps]]
 action = "add"
 service = "seafile"
-args = "--auth --url https://seafile.localhost:8443"
+args = "--auth --url https://seafile.internal:8443"
 env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 [[tests.steps]]
@@ -92,7 +92,7 @@ service = "seafile"
 [[tests.steps]]
 action = "http"
 name = "seafile-http-ready"
-url = "https://seafile.localhost:8443"
+url = "https://seafile.internal:8443"
 poll = { interval = 5, attempts = 60 }
 timeout = 360
 [[tests.steps]]
@@ -100,4 +100,4 @@ action = "playwright"
 name = "playwright-sso"
 spec = "seafile-auth.spec.ts"
 timeout = 120
-env = { SEAFILE_DOMAIN = "seafile.localhost:8443", AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }
+env = { SEAFILE_DOMAIN = "seafile.internal:8443", AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123" }

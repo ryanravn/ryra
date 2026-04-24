@@ -3,7 +3,7 @@ name = "seafile"
 description = "Seafile - file sync and share server"
 url = "https://www.seafile.com/"
 architecture = ["amd64", "arm64"]
-https = "required"
+https = "always"
 
 [requirements.ram]
 min = 1024

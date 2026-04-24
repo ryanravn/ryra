@@ -66,7 +66,7 @@ pub fn parse_volume_quadlets(
 
 /// Return the longest known service name that is a prefix of `stem`
 /// (matching full tokens split by `-`). Handles cases like
-/// `seafile-db-data` (owned by `seafile`, not `seafile-db`).
+/// `nextcloud-db-data` (owned by `nextcloud`, not `nextcloud-db`).
 pub fn match_owner(stem: &str, known_services: &[String]) -> Option<String> {
     known_services
         .iter()
@@ -171,11 +171,14 @@ mod tests {
 
     #[test]
     fn match_owner_exact_and_prefix() {
-        let known = vec!["seafile".into(), "ente".into(), "caddy".into()];
-        assert_eq!(match_owner("seafile", &known).as_deref(), Some("seafile"));
+        let known = vec!["nextcloud".into(), "ente".into(), "caddy".into()];
         assert_eq!(
-            match_owner("seafile-db-data", &known).as_deref(),
-            Some("seafile")
+            match_owner("nextcloud", &known).as_deref(),
+            Some("nextcloud")
+        );
+        assert_eq!(
+            match_owner("nextcloud-db-data", &known).as_deref(),
+            Some("nextcloud")
         );
         assert_eq!(
             match_owner("ente-minio-data", &known).as_deref(),
@@ -186,10 +189,10 @@ mod tests {
 
     #[test]
     fn match_owner_longest_wins() {
-        let known = vec!["seafile".into(), "seafile-db".into()];
+        let known = vec!["nextcloud".into(), "nextcloud-db".into()];
         assert_eq!(
-            match_owner("seafile-db-data", &known).as_deref(),
-            Some("seafile-db")
+            match_owner("nextcloud-db-data", &known).as_deref(),
+            Some("nextcloud-db")
         );
     }
 
@@ -203,17 +206,17 @@ mod tests {
     #[test]
     fn parse_volume_quadlets_reads_volume_files() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("seafile-db-data.volume"), "[Volume]").unwrap();
+        fs::write(dir.path().join("nextcloud-db-data.volume"), "[Volume]").unwrap();
         fs::write(dir.path().join("ente-minio-data.volume"), "[Volume]").unwrap();
-        fs::write(dir.path().join("seafile.container"), "[Container]").unwrap(); // ignored
+        fs::write(dir.path().join("nextcloud.container"), "[Container]").unwrap(); // ignored
 
-        let known = vec!["seafile".into(), "ente".into()];
+        let known = vec!["nextcloud".into(), "ente".into()];
         let vols = parse_volume_quadlets(dir.path(), &known).unwrap();
         assert_eq!(vols.len(), 2);
         assert_eq!(vols[0].name, "systemd-ente-minio-data");
         assert_eq!(vols[0].owner.as_deref(), Some("ente"));
-        assert_eq!(vols[1].name, "systemd-seafile-db-data");
-        assert_eq!(vols[1].owner.as_deref(), Some("seafile"));
+        assert_eq!(vols[1].name, "systemd-nextcloud-db-data");
+        assert_eq!(vols[1].owner.as_deref(), Some("nextcloud"));
         assert!(vols[0].quadlet_file.is_some());
     }
 }
@@ -225,13 +228,13 @@ mod tests_reconcile {
     #[test]
     fn reconcile_adds_podman_only_volumes() {
         let quadlet = vec![VolumeRef {
-            name: "systemd-seafile-db-data".into(),
-            quadlet_file: Some("/fake/seafile-db-data.volume".into()),
-            owner: Some("seafile".into()),
+            name: "systemd-nextcloud-db-data".into(),
+            quadlet_file: Some("/fake/nextcloud-db-data.volume".into()),
+            owner: Some("nextcloud".into()),
         }];
         let podman = vec![
-            "systemd-seafile-db-data".to_string(), // already known
-            "systemd-ghost-volume".to_string(),    // unknown
+            "systemd-nextcloud-db-data".to_string(), // already known
+            "systemd-ghost-volume".to_string(),      // unknown
         ];
         let merged = reconcile(quadlet, podman);
         assert_eq!(merged.len(), 2);

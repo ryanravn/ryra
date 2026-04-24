@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-const TWENTY_URL = process.env.TWENTY_URL || "https://twenty.localhost:8443";
+const TWENTY_URL = process.env.TWENTY_URL || "https://twenty.internal:8443";
 const INVITE_EMAIL = process.env.INVITE_EMAIL || "smtptest@example.com";
 
 /**

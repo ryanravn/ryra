@@ -3,8 +3,9 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-const GRAFANA_PORT = process.env.RYRA_PORT_HTTP || "3000";
-const GRAFANA_URL = `http://127.0.0.1:${GRAFANA_PORT}`;
+// With `--auth` + auto-HTTPS promotion, grafana lives behind Caddy at
+// https://grafana.internal:<caddy_https_port> (default 8443).
+const GRAFANA_URL = process.env.GRAFANA_URL || "https://grafana.internal:8443";
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
@@ -56,20 +57,20 @@ test("full OIDC login through Authelia creates a Grafana session", async ({
   await expect(ssoLink).toBeVisible({ timeout: 30_000 });
   await ssoLink.click();
 
-  // 3. Redirect to Authelia (via the auth.localhost domain routed by Caddy).
+  // 3. Redirect to Authelia (via the auth.internal domain routed by Caddy).
   await page.waitForURL(
-    (url) => url.hostname === "auth.localhost",
+    (url) => url.hostname === "auth.internal",
     { timeout: 15_000 },
   );
 
   // 4. Fill Authelia credentials.
   await loginToAuthelia(page);
 
-  // 5. Should land back on Grafana authenticated. Wait for any 127.0.0.1
+  // 5. Should land back on Grafana authenticated. Wait for any grafana.internal
   //    URL that isn't the /login/generic_oauth callback path.
   await page.waitForURL(
     (url) =>
-      url.hostname === "127.0.0.1" &&
+      url.hostname === "grafana.internal" &&
       !url.pathname.startsWith("/login/generic_oauth"),
     { timeout: 30_000 },
   );

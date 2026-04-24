@@ -13,7 +13,7 @@ ram = 1536
 #   (b) authelia's OIDC discovery doc is reachable through nginx with
 #       the external issuer baked in,
 #   (c) vikunja's .env has the external URLs templated in its OIDC
-#       fields (no Caddy .localhost fallback leaking through).
+#       fields (no Caddy .internal fallback leaking through).
 # Full browser login through the proxy is intentionally out of scope —
 # that additionally needs the nginx cert trusted inside service
 # containers, which is a separate feature (auth_bridge currently only
@@ -183,7 +183,7 @@ timeout = 30
 action = "shell"
 name = "vikunja-env-has-external-urls"
 # Prove ryra templated both --url (the service's own) and the auth
-# provider's external URL into vikunja's .env — no Caddy .localhost
+# provider's external URL into vikunja's .env — no Caddy .internal
 # fallback leaking through.
 run = """
 set -e

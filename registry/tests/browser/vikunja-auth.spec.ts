@@ -3,8 +3,9 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-const VIKUNJA_PORT = process.env.RYRA_PORT_HTTP || process.env.VIKUNJA_PORT || "3456";
-const VIKUNJA_URL = `http://127.0.0.1:${VIKUNJA_PORT}`;
+// With `--auth` + auto-HTTPS promotion, vikunja lives behind Caddy at
+// https://vikunja.internal:<caddy_https_port> (default 8443).
+const VIKUNJA_URL = process.env.VIKUNJA_URL || "https://vikunja.internal:8443";
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
@@ -57,21 +58,21 @@ test("full OIDC login through Authelia creates a session", async ({ browser }) =
     await ssoButton.first().click();
     try {
       await page.waitForURL(
-        (url) => url.hostname === "auth.localhost",
+        (url) => url.hostname === "auth.internal",
         { timeout: 1_500 },
       );
       break;
     } catch {
-      if (attempt === 7) throw new Error("SSO click never redirected to auth.localhost");
+      if (attempt === 7) throw new Error("SSO click never redirected to auth.internal");
     }
   }
 
   // 4. Login at Authelia
   await loginToAuthelia(page);
 
-  // 5. Should redirect back to Vikunja (localhost), now authenticated
+  // 5. Should redirect back to Vikunja (now authenticated)
   await page.waitForURL(
-    (url) => url.hostname === "127.0.0.1" && !url.pathname.startsWith("/auth/openid"),
+    (url) => url.hostname === "vikunja.internal" && !url.pathname.startsWith("/auth/openid"),
     { timeout: 15_000 },
   );
 

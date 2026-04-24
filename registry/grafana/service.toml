@@ -3,6 +3,7 @@ name = "grafana"
 description = "Grafana - dashboards and visualization for Prometheus metrics"
 url = "https://grafana.com/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 256

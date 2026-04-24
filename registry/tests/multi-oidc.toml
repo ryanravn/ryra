@@ -15,7 +15,7 @@ service = "caddy"
 [[steps]]
 action = "add"
 service = "authelia"
-args = "--url https://auth.localhost:8443"
+args = "--url https://auth.internal:8443"
 env = { AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 
@@ -23,17 +23,17 @@ timeout = 300
 action = "wait"
 service = "authelia"
 
-# Install seafile with OIDC
+# Install nextcloud with OIDC
 [[steps]]
 action = "add"
-service = "seafile"
+service = "nextcloud"
 args = "--auth"
-env = { INIT_SEAFILE_ADMIN_EMAIL = "admin@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "testpassword123" }
+env = { NEXTCLOUD_ADMIN_PASSWORD = "testpassword123" }
 timeout = 900
 
 [[steps]]
 action = "wait"
-service = "seafile"
+service = "nextcloud"
 
 # Install immich with OIDC
 [[steps]]
@@ -47,20 +47,25 @@ timeout = 900
 action = "wait"
 service = "immich"
 
-# Verify seafile responds
+# Verify nextcloud responds
 [[steps]]
 action = "http"
-name = "seafile-http-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
-service = "seafile"
-poll = { interval = 5, attempts = 60 }
-timeout = 360
+name = "nextcloud-http-responds"
+url = "http://127.0.0.1:$RYRA_PORT_HTTP/status.php"
+service = "nextcloud"
+poll = { interval = 5, attempts = 80 }
+timeout = 480
 
-# Verify seafile OIDC configured
+# Verify nextcloud OIDC configured (user_oidc provider registered via occ)
 [[steps]]
 action = "shell"
-name = "seafile-oauth-configured"
-run = "test -f $HOME/.local/share/ryra/seafile/shared/seafile/conf/seahub_settings_oauth.py && grep -q OAUTH_CLIENT_ID $HOME/.local/share/ryra/seafile/shared/seafile/conf/seahub_settings_oauth.py"
+name = "nextcloud-oidc-configured"
+run = """for i in $(seq 1 60); do
+  podman exec -u www-data nextcloud php occ user_oidc:provider 2>/dev/null | grep -qi 'authelia' && exit 0
+  sleep 5
+done
+exit 1"""
+timeout = 320
 
 # Verify immich responds
 [[steps]]
@@ -101,4 +106,4 @@ service = "immich"
 
 [[steps]]
 action = "remove"
-service = "seafile"
+service = "nextcloud"

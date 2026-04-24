@@ -410,8 +410,8 @@ mod tests {
     /// `host_port: None` (the real port isn't allocated yet), `generate_env`
     /// must still produce a valid env file with the real `service.port`.
     /// Previously the pre-built ctx was reused wholesale, so any env value
-    /// referencing `{{service.port}}` (e.g., seafile) failed strict-mode
-    /// rendering with "undefined value".
+    /// referencing `{{service.port}}` failed strict-mode rendering with
+    /// "undefined value".
     #[test]
     fn generate_env_rebuilds_port_when_prebuilt_ctx_lacks_it() {
         let def = minimal_service_def();

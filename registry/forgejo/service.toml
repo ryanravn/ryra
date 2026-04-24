@@ -3,6 +3,7 @@ name = "forgejo"
 description = "Forgejo - self-hosted Git forge"
 url = "https://forgejo.org/docs/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 256

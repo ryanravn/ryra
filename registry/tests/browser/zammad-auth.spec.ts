@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-const ZAMMAD_PORT = process.env.RYRA_PORT_HTTP || process.env.ZAMMAD_PORT || "8080";
-const ZAMMAD_URL = `http://127.0.0.1:${ZAMMAD_PORT}`;
+// With `--auth` + auto-HTTPS promotion, zammad lives behind Caddy at
+// https://zammad.internal:<caddy_https_port> (default 8443).
+const ZAMMAD_URL = process.env.ZAMMAD_URL || "https://zammad.internal:8443";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
@@ -57,7 +58,7 @@ test("full OIDC login through Authelia creates a Zammad session", async ({ brows
   const sso = page.locator("button.auth-provider--openid-connect");
   await expect(sso).toBeVisible({ timeout: 15_000 });
   await Promise.all([
-    page.waitForURL((url) => url.hostname === "auth.localhost", { timeout: 30_000 }),
+    page.waitForURL((url) => url.hostname === "auth.internal", { timeout: 30_000 }),
     sso.click(),
   ]);
   await loginToAuthelia(page);
@@ -68,7 +69,7 @@ test("full OIDC login through Authelia creates a Zammad session", async ({ brows
   //    customers — either is fine, both indicate an authenticated session).
   await page.waitForURL(
     (url) =>
-      url.hostname === "127.0.0.1" &&
+      url.hostname === "zammad.internal" &&
       !url.searchParams.has("code") &&
       !url.hash.includes("login") &&
       !url.hash.includes("getting_started"),

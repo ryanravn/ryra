@@ -1,7 +1,10 @@
 import { test, expect } from "@playwright/test";
 
-const FORGEJO_PORT = process.env.FORGEJO_PORT || "3000";
-const FORGEJO_URL = `http://127.0.0.1:${FORGEJO_PORT}`;
+// With `--auth` + auto-HTTPS promotion, ryra exposes the service behind
+// Caddy at https://<svc>.internal:<caddy_https_port> (default 8443).
+// Direct `http://127.0.0.1:<port>` still works for liveness checks but
+// OIDC flows must go through the HTTPS hostname so redirect URIs match.
+const FORGEJO_URL = process.env.FORGEJO_URL || "https://forgejo.internal:8443";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
@@ -38,7 +41,9 @@ async function loginToAuthelia(page: import("@playwright/test").Page) {
   }
 }
 
-test("clicking SSO button initiates OIDC flow", async ({ page }) => {
+test("clicking SSO button initiates OIDC flow", async ({ browser }) => {
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  const page = await context.newPage();
   await page.goto(`${FORGEJO_URL}/user/login`);
   const autheliaLink = page.locator('a[href*="/user/oauth2/Authelia"]');
   await autheliaLink.click();
@@ -46,12 +51,13 @@ test("clicking SSO button initiates OIDC flow", async ({ page }) => {
   await page.waitForTimeout(3_000);
   const url = page.url();
   expect(url).not.toContain("/user/login");
+  await context.close();
 });
 
 test("full OIDC login through Authelia creates a forgejo session", async ({
   browser,
 }) => {
-  // Authelia uses HTTPS (self-signed cert), so ignore HTTPS errors.
+  // Both forgejo and authelia are behind Caddy with self-signed certs.
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
@@ -66,7 +72,10 @@ test("full OIDC login through Authelia creates a forgejo session", async ({
 
   // 3. Should be redirected back to forgejo, now authenticated
   await page.waitForURL(
-    (url) => url.hostname === "127.0.0.1" && !url.pathname.startsWith("/api/oidc"),
+    (url) =>
+      url.hostname === "forgejo.internal" &&
+      !url.pathname.startsWith("/api/oidc") &&
+      !url.pathname.startsWith("/user/oauth2"),
     { timeout: 15_000 },
   );
 

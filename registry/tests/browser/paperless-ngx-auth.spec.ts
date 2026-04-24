@@ -3,8 +3,9 @@ import { test, expect } from "@playwright/test";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
-const PAPERLESS_PORT = process.env.PAPERLESS_PORT || "8000";
-const PAPERLESS_URL = `http://127.0.0.1:${PAPERLESS_PORT}`;
+// With `--auth` + auto-HTTPS promotion, paperless-ngx lives behind Caddy at
+// https://paperless-ngx.internal:<caddy_https_port> (default 8443).
+const PAPERLESS_URL = process.env.PAPERLESS_URL || "https://paperless-ngx.internal:8443";
 
 /** Fill in Authelia's login form and submit. */
 async function loginToAuthelia(page: import("@playwright/test").Page) {
@@ -52,16 +53,16 @@ test("full OIDC login through Authelia creates a session", async ({ browser }) =
 
   // 3. Should redirect to Authelia
   await page.waitForURL(
-    (url) => url.hostname === "auth.localhost",
+    (url) => url.hostname === "auth.internal",
     { timeout: 15_000 },
   );
 
   // 4. Login at Authelia
   await loginToAuthelia(page);
 
-  // 5. Should redirect back to Paperless-ngx (localhost — signup page or dashboard)
+  // 5. Should redirect back to Paperless-ngx (signup page or dashboard)
   await page.waitForURL(
-    (url) => url.hostname === "127.0.0.1" && !url.pathname.includes("/login/callback/"),
+    (url) => url.hostname === "paperless-ngx.internal" && !url.pathname.includes("/login/callback/"),
     { timeout: 15_000 },
   );
 

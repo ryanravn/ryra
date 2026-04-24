@@ -777,8 +777,10 @@ async fn run_step_with_poll(
             }
         }
         Some(poll_cfg) => {
-            // Retry loop
+            // Retry loop. Print a progress tick every few attempts so long
+            // polls (e.g. 80 × 3s = 4min) don't look like the runner hung.
             let mut last_err = String::new();
+            let tick_every = (poll_cfg.attempts / 10).max(1);
             for attempt in 1..=poll_cfg.attempts {
                 let timeout = Duration::from_secs(timeout_secs);
                 let result = tokio::time::timeout(timeout, vm.exec(cmd)).await;
@@ -803,6 +805,21 @@ async fn run_step_with_poll(
                 }
 
                 if attempt < poll_cfg.attempts {
+                    if attempt == 1 || attempt % tick_every == 0 {
+                        let line = last_err.lines().next().unwrap_or("").trim();
+                        let snippet: String = line.chars().take(80).collect();
+                        if stream_prefix.is_empty() {
+                            println!(
+                                "    retrying ({attempt}/{}): {snippet}",
+                                poll_cfg.attempts
+                            );
+                        } else {
+                            println!(
+                                "[{stream_prefix}]     retrying ({attempt}/{}): {snippet}",
+                                poll_cfg.attempts
+                            );
+                        }
+                    }
                     tokio::time::sleep(Duration::from_secs(poll_cfg.interval)).await;
                 }
             }

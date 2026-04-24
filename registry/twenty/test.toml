@@ -46,7 +46,7 @@ service = "caddy"
 [[tests.steps]]
 action = "add"
 service = "twenty"
-args = "--smtp=inbucket --url https://twenty.localhost:8443"
+args = "--smtp=inbucket --url https://twenty.internal:8443"
 timeout = 900
 [[tests.steps]]
 action = "wait"
@@ -54,7 +54,7 @@ service = "twenty"
 [[tests.steps]]
 action = "http"
 name = "twenty-responds"
-url = "https://twenty.localhost:8443/healthz"
+url = "https://twenty.internal:8443/healthz"
 service = "twenty"
 # Twenty's worker + server initial boot + DB migrations can take 2-3min
 # on a cold VM. Match the non-smtp variant's poll budget.
@@ -65,7 +65,7 @@ action = "playwright"
 name = "onboarding-invite-flow"
 spec = "twenty-smtp.spec.ts"
 timeout = 180
-env = { TWENTY_URL = "https://twenty.localhost:8443", INVITE_EMAIL = "smtptest@example.com" }
+env = { TWENTY_URL = "https://twenty.internal:8443", INVITE_EMAIL = "smtptest@example.com" }
 [[tests.steps]]
 action = "mail"
 name = "mail-delivered-to-inbucket"

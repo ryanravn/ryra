@@ -3,6 +3,7 @@ name = "open-webui"
 description = "Open WebUI - self-hosted AI chat interface (supports Ollama, OpenAI, and more)"
 url = "https://docs.openwebui.com/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 512

@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-const IMMICH_PORT = process.env.RYRA_PORT_HTTP || process.env.IMMICH_PORT || "2283";
-const IMMICH_URL = `http://127.0.0.1:${IMMICH_PORT}`;
+// With `--auth` + auto-HTTPS promotion, immich lives behind Caddy at
+// https://immich.internal:<caddy_https_port> (default 8443).
+const IMMICH_URL = process.env.IMMICH_URL || "https://immich.internal:8443";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
@@ -50,7 +51,7 @@ test("full OIDC login through Authelia creates an immich session", async ({
 
   // 3. Should redirect to Authelia — fill in credentials
   await page.waitForURL(
-    (url) => url.hostname === "auth.localhost",
+    (url) => url.hostname === "auth.internal",
     { timeout: 15_000 },
   );
   await loginToAuthelia(page);
@@ -61,7 +62,7 @@ test("full OIDC login through Authelia creates an immich session", async ({
   // The OIDC token exchange (Immich → Authelia) can be slow in VMs.
   await page.waitForURL(
     (url) =>
-      url.hostname === "127.0.0.1" &&
+      url.hostname === "immich.internal" &&
       !url.searchParams.has("code") &&
       url.pathname !== "/auth/login",
     { timeout: 30_000 },

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-const SYNAPSE_URL = process.env.SYNAPSE_URL || "https://chat.localhost:8443";
+const SYNAPSE_URL = process.env.SYNAPSE_URL || "https://chat.internal:8443";
 const AUTHELIA_USER = process.env.AUTHELIA_USER || "testuser";
 const AUTHELIA_PASSWORD = process.env.AUTHELIA_PASSWORD || "testpassword123";
 
@@ -46,7 +46,7 @@ test("full OIDC login through Authelia creates a Matrix session", async ({
 
   // 2. Authelia login + consent.
   await page.waitForURL(
-    (url) => url.hostname === "auth.localhost",
+    (url) => url.hostname === "auth.internal",
     { timeout: 15_000 },
   );
   await loginToAuthelia(page);
@@ -59,7 +59,7 @@ test("full OIDC login through Authelia creates a Matrix session", async ({
 
   // 4. Element should land on its home screen, logged in as testuser.
   await page.waitForURL(
-    (url) => url.hostname === "chat.localhost" && url.hash.startsWith("#/home"),
+    (url) => url.hostname === "chat.internal" && url.hash.startsWith("#/home"),
     { timeout: 15_000 },
   );
   await expect(page.getByRole("heading", { name: /welcome testuser/i }))

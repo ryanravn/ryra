@@ -742,6 +742,7 @@ dependencies = [
  "ryra-test",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]

@@ -30,10 +30,10 @@ fi
 # If caddy container is running, add auth domain to hosts
 CADDY_IP=$(podman inspect caddy --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}')
 if [ -n "$CADDY_IP" ]; then
-  # Find .localhost domains in service .env files and map them to caddy
+  # Find .internal domains in service .env files and map them to caddy
   for f in "$HOME"/.local/share/ryra/*/.env; do
     [ -f "$f" ] || continue
-    sed -n 's|.*://\([^:/]*\.localhost\).*|\1|p' "$f" 2>/dev/null
+    sed -n 's|.*://\([^:/]*\.internal\).*|\1|p' "$f" 2>/dev/null
   done | sort -u | while read -r domain; do
     [ -n "$domain" ] && echo "$CADDY_IP $domain" >> "$HOSTS"
   done

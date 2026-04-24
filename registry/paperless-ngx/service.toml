@@ -3,6 +3,7 @@ name = "paperless-ngx"
 description = "Paperless-ngx - document management with OCR, auto-tagging, and full-text search"
 url = "https://docs.paperless-ngx.com/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 512

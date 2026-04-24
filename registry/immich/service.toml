@@ -3,6 +3,7 @@ name = "immich"
 description = "Immich - self-hosted photo & video management"
 url = "https://immich.app/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 1024

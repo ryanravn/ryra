@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
 
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
@@ -152,34 +153,6 @@ pub async fn run(
             warn_untrusted_service(&reg_service.service_dir, service, interactive)?;
         }
 
-        // TLS — prompt if service requires HTTPS or user passed an https:// URL.
-        // When Caddy is the TLS provider and no --url was given, auto-generate
-        // a .localhost domain so HTTPS works out of the box.
-        let needs_https = reg_service.def.service.https == HttpsRequirement::Required
-            || url.is_some_and(|u| u.starts_with("https://"));
-        if needs_https && !dry_run {
-            ensure_tls_configured(&config, &paths, interactive).await?;
-            // Reload — ensure_tls_configured may have installed caddy
-            config = ryra_core::config::load_or_default(&paths.config_file)?;
-        }
-        let auto_url: Option<String>;
-        let url: Option<&str> = if needs_https && url.is_none() {
-            if matches!(config.tls, Some(TlsConfig::Caddy)) {
-                let caddy_https_port = config
-                    .services
-                    .iter()
-                    .find(|s| WellKnownService::Caddy.matches(&s.name))
-                    .and_then(|s| s.ports.get("https").copied())
-                    .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
-                auto_url = Some(format!("https://{service}.localhost:{caddy_https_port}"));
-                auto_url.as_deref()
-            } else {
-                url
-            }
-        } else {
-            url
-        };
-
         // SMTP — decide whether to wire this specific service into email.
         //   * Global SMTP already configured → Confirm default yes (reuse it).
         //   * No global SMTP yet → show Skip/Custom/Inbucket select, default Skip.
@@ -268,6 +241,42 @@ pub async fn run(
             // Reload — ensure_auth_for_add may have installed authelia
             config = ryra_core::config::load_or_default(&paths.config_file)?;
         }
+
+        // TLS — prompt if HTTPS is needed.
+        //
+        // Must run after resolve_auth_kind: an interactive "Enable oidc auth?"
+        // yes has the same HTTPS implications as `--auth`, so we evaluate
+        // needs_https against the final auth decision, not the raw CLI flag.
+        //
+        // When Caddy is the TLS provider and no --url was given, auto-generate
+        // an `.internal` domain so HTTPS works out of the box.
+        let needs_https = needs_https(
+            reg_service.def.service.https.clone(),
+            auth_kind.is_some(),
+            url,
+        );
+        if needs_https && !dry_run {
+            ensure_tls_configured(&config, &paths, interactive).await?;
+            // Reload — ensure_tls_configured may have installed caddy
+            config = ryra_core::config::load_or_default(&paths.config_file)?;
+        }
+        let auto_url: Option<String>;
+        let url: Option<&str> = if needs_https && url.is_none() {
+            if matches!(config.tls, Some(TlsConfig::Caddy)) {
+                let caddy_https_port = config
+                    .services
+                    .iter()
+                    .find(|s| WellKnownService::Caddy.matches(&s.name))
+                    .and_then(|s| s.ports.get("https").copied())
+                    .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
+                auto_url = Some(format!("https://{service}.internal:{caddy_https_port}"));
+                auto_url.as_deref()
+            } else {
+                url
+            }
+        } else {
+            url
+        };
 
         // Prompt for env vars based on their kind
         use ryra_core::registry::service_def::EnvKind;
@@ -607,11 +616,12 @@ pub async fn run(
 
             ryra_core::mark_installed(service)?;
 
-            // Trust Caddy's self-signed CA if this service uses HTTPS via Caddy
-            if result.url.is_some() {
+            // Trust Caddy's self-signed CA, and register the service's
+            // hostname in /etc/hosts for browser access.
+            if let Some(service_url) = result.url.as_deref() {
                 let config = ryra_core::config::load_or_default(&paths.config_file)?;
                 if matches!(config.tls, Some(TlsConfig::Caddy)) {
-                    setup_host_access(&[]);
+                    setup_host_access(&[service_url]);
                 }
             }
 
@@ -734,9 +744,10 @@ fn collect_non_interactive<'a>(
 }
 
 /// Register Caddy's CA with every rootless trust store we can reach, and
-/// print (but never run) hints for the stores that need sudo — /etc/hosts
-/// for non-.localhost domains, and the system trust bundle for
-/// curl/wget/Firefox-on-p11-kit users.
+/// print (but never run) hints for the stores that need sudo — `/etc/hosts`
+/// for any hostname the user's resolver can't reach (including
+/// `*.internal`, which unlike `*.localhost` does not auto-resolve), and
+/// the system trust bundle for curl/wget/Firefox-on-p11-kit users.
 ///
 /// The rootless work covers Chromium-family browsers (via the user's
 /// `~/.pki/nssdb`) and every Firefox profile with a `cert9.db`. That's the
@@ -812,18 +823,77 @@ fn setup_host_access(domains: &[&str]) {
         }
     }
 
-    // --- Sudo hints (printed only; ryra never runs them) ---
-    let hosts_content = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
-    let missing_hosts: Vec<&str> = domains
+    // --- /etc/hosts: write via sudo -n if available, else print hint ---
+    //
+    // `.internal` doesn't auto-resolve; ryra-managed services need a
+    // `127.0.0.1 <host>` entry. We try `sudo -n` (non-interactive) first
+    // so CI/test VMs with passwordless sudo get it transparently, and
+    // fall back to a printed hint for interactive users whose sudo
+    // requires a password.
+    let hostnames: Vec<String> = domains
         .iter()
-        .filter(|d| {
+        .filter_map(|d| url::Url::parse(d).ok().and_then(|u| u.host_str().map(String::from)))
+        .collect();
+    let hosts_content = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+    let mut missing_hosts: Vec<&str> = hostnames
+        .iter()
+        .filter(|h| {
             !hosts_content.lines().any(|l| {
                 let l = l.trim();
-                !l.starts_with('#') && l.split_whitespace().any(|w| w == **d)
+                !l.starts_with('#') && l.split_whitespace().any(|w| w == h.as_str())
             })
         })
-        .copied()
+        .map(String::as_str)
         .collect();
+
+    if !missing_hosts.is_empty() {
+        let line = format!("127.0.0.1 {}", missing_hosts.join(" "));
+        // First, try non-interactive sudo — works on CI/test VMs with
+        // passwordless sudo and is silent otherwise. If that fails AND
+        // stderr is a TTY, escalate to interactive sudo so the user can
+        // punch in their password. In headless contexts (stderr not a
+        // TTY, e.g. `ryra test --no-vm` capturing output) we skip the
+        // interactive prompt and just surface a loud warning below.
+        let cmd = format!("echo '{line}' >> /etc/hosts");
+        let sudo_n = Command::new("sudo")
+            .args(["-n", "sh", "-c", &cmd])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let wrote = if sudo_n {
+            true
+        } else if std::io::stderr().is_terminal() {
+            eprintln!(
+                "  Adding {} to /etc/hosts (sudo required):",
+                missing_hosts.join(", ")
+            );
+            Command::new("sudo")
+                .args(["sh", "-c", &cmd])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if wrote {
+            println!("  Added {} to /etc/hosts (via sudo).", missing_hosts.join(", "));
+            missing_hosts.clear();
+        } else {
+            // Emit a loud warning to stderr so it survives stdout capture
+            // in test harnesses. Without this entry, the service's URL
+            // won't resolve and subsequent health probes will silently
+            // spin until they hit the polling limit.
+            eprintln!();
+            eprintln!(
+                "  WARN: {} not in /etc/hosts — the service URL won't resolve.",
+                missing_hosts.join(", ")
+            );
+            eprintln!(
+                "        Run:  echo '{line}' | sudo tee -a /etc/hosts"
+            );
+            eprintln!();
+        }
+    }
 
     let ca_target = super::CA_TARGETS.iter().find(|t| {
         let dir = std::path::Path::new(t.cert_path)
@@ -1137,7 +1207,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
         // Prompt for authelia's URL
         let authelia_url: String = Input::new()
             .with_prompt("URL for Authelia")
-            .default("https://auth.localhost".to_string())
+            .default("https://auth.internal".to_string())
             .interact_text()?;
         println!("\nInstalling authelia...\n");
         Box::pin(run(
@@ -1154,7 +1224,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
     } else {
         // Non-interactive: need AUTHELIA_URL in env
         let authelia_url =
-            std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.localhost".to_string());
+            std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.internal".to_string());
         println!("\nInstalling authelia...\n");
         Box::pin(run(
             &[WellKnownService::Authelia.to_string()],
@@ -1201,11 +1271,11 @@ async fn ensure_auth_for_add(
             let authelia_url: String = if super::is_interactive() {
                 Input::new()
                     .with_prompt("URL for Authelia")
-                    .default("https://auth.localhost".to_string())
+                    .default("https://auth.internal".to_string())
                     .interact_text()?
             } else {
                 std::env::var("AUTHELIA_URL")
-                    .unwrap_or_else(|_| "https://auth.localhost".to_string())
+                    .unwrap_or_else(|_| "https://auth.internal".to_string())
             };
             // Caddy is needed when TLS provider is caddy.
             let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
@@ -1425,4 +1495,74 @@ fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -
         paths.config_file.display()
     );
     Ok(true)
+}
+
+/// Decide whether this `ryra add` invocation must be promoted to HTTPS.
+///
+/// HTTPS is required when any of these hold:
+///   1. The service declares `https = "always"` (e.g. authelia, vaultwarden).
+///   2. The service declares `https = "auth"` AND the user chose OIDC auth
+///      (via `--auth` or the interactive prompt). This is for services whose
+///      OIDC stack refuses plain HTTP even on loopback (e.g. Nextcloud's
+///      user_oidc won't render the SSO button over HTTP). Most OIDC-capable
+///      services don't need this — RFC 8252 permits HTTP loopback callbacks.
+///   3. The user passed an `https://…` URL explicitly.
+fn needs_https(
+    https_requirement: HttpsRequirement,
+    auth_requested: bool,
+    url: Option<&str>,
+) -> bool {
+    matches!(https_requirement, HttpsRequirement::Always)
+        || (matches!(https_requirement, HttpsRequirement::Auth) && auth_requested)
+        || url.is_some_and(|u| u.starts_with("https://"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn never_service_stays_http() {
+        assert!(!needs_https(HttpsRequirement::Never, false, None));
+        // Even with --auth, a service that didn't opt into HTTPS stays HTTP.
+        // This is the RFC 8252 loopback case: http://127.0.0.1 is a valid
+        // OIDC redirect_uri and most services (forgejo, grafana, etc.) work
+        // fine that way.
+        assert!(!needs_https(HttpsRequirement::Never, true, None));
+        // Explicit http:// URL also stays HTTP.
+        assert!(!needs_https(
+            HttpsRequirement::Never,
+            true,
+            Some("http://foo.example.com"),
+        ));
+    }
+
+    #[test]
+    fn always_service_always_promotes() {
+        assert!(needs_https(HttpsRequirement::Always, false, None));
+        assert!(needs_https(
+            HttpsRequirement::Always,
+            false,
+            Some("http://foo.example.com"),
+        ));
+    }
+
+    #[test]
+    fn auth_service_promotes_only_with_auth() {
+        // The regression this guards: `ryra add nextcloud --auth` without
+        // --url used to quietly install over HTTP and the SSO button never
+        // rendered (user_oidc refuses to show it without HTTPS).
+        assert!(needs_https(HttpsRequirement::Auth, true, None));
+        // Without --auth, even an `https = "auth"` service stays HTTP.
+        assert!(!needs_https(HttpsRequirement::Auth, false, None));
+    }
+
+    #[test]
+    fn explicit_https_url_promotes() {
+        assert!(needs_https(
+            HttpsRequirement::Never,
+            false,
+            Some("https://foo.example.com"),
+        ));
+    }
 }

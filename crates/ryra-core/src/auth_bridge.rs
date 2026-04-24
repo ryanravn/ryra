@@ -131,12 +131,12 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     }));
     exec_start_pre.push(format!("-/bin/bash {}", refresh_ca_script.display()));
 
-    // --- resolve-auth-host.sh: dynamic /etc/hosts for .localhost auth domain ---
+    // --- resolve-auth-host.sh: dynamic /etc/hosts for auth domain ---
     //
-    // RFC 6761 pins .localhost to 127.0.0.1 inside containers, so the auth
-    // provider's .localhost hostname can't resolve to caddy's container IP via
-    // DNS. We write a small hosts file at service-start time with caddy's
-    // current IP, and bind-mount it over /etc/hosts.
+    // The auth provider's hostname (typically an ICANN `.internal` address)
+    // isn't resolvable via normal DNS, so we write a small hosts file at
+    // service-start time mapping it to caddy's current container IP and
+    // bind-mount that over /etc/hosts.
     if let Some(auth_url) = authelia.url.as_deref()
         && let Ok(parsed) = url::Url::parse(auth_url)
         && let Some(host) = parsed.host_str()
@@ -185,7 +185,7 @@ fn render_resolve_auth_host_script(service_data: &Path, host: &str) -> String {
     // OIDC won't work, but the service comes up instead of hanging.
     format!(
         "#!/bin/bash\n\
-         # Resolve caddy's current IP for .localhost auth domains\n\
+         # Resolve caddy's current IP for the auth domain\n\
          HOSTS=\"{service_data}/auth-hosts.txt\"\n\
          CADDY_IP=$(timeout 5 podman inspect caddy --format '{{{{range .NetworkSettings.Networks}}}}{{{{.IPAddress}}}} {{{{end}}}}' 2>/dev/null | awk '{{print $1}}')\n\
          if [ -n \"$CADDY_IP\" ]; then\n\
@@ -242,7 +242,7 @@ mod tests {
     fn returns_none_when_auth_disabled() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let cfg = config_with(
-            vec![installed("authelia", Some("https://auth.localhost"))],
+            vec![installed("authelia", Some("https://auth.internal"))],
             None,
         );
         let out = build(&AuthBridgeParams {
@@ -273,7 +273,7 @@ mod tests {
     fn returns_none_when_caddy_not_installed() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let cfg = config_with(
-            vec![installed("authelia", Some("https://auth.localhost"))],
+            vec![installed("authelia", Some("https://auth.internal"))],
             None,
         );
         let out = build(&AuthBridgeParams {
@@ -291,7 +291,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let cfg = config_with(
             vec![
-                installed("authelia", Some("https://auth.localhost")),
+                installed("authelia", Some("https://auth.internal")),
                 installed("caddy", None),
             ],
             None,
@@ -311,7 +311,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let cfg = config_with(
             vec![
-                installed("authelia", Some("https://auth.localhost")),
+                installed("authelia", Some("https://auth.internal")),
                 installed("caddy", None),
             ],
             None,
@@ -336,7 +336,7 @@ mod tests {
 
         let cfg = config_with(
             vec![
-                installed("authelia", Some("https://auth.localhost")),
+                installed("authelia", Some("https://auth.internal")),
                 installed("caddy", None),
             ],
             None,
@@ -382,7 +382,7 @@ mod tests {
     fn emits_expected_write_file_steps() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.localhost"))?;
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.internal"))?;
 
         let paths = write_paths(&bridge);
         assert!(paths.contains(&service_data.join("ca-bundle.crt").as_path()));
@@ -411,7 +411,7 @@ mod tests {
     fn emits_ca_trust_volume_and_env() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.localhost"))?;
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.internal"))?;
 
         let bundle_mount = format!(
             "{}:/etc/ssl/certs/ca-certificates.crt:ro,z",
@@ -455,7 +455,7 @@ mod tests {
     fn exec_start_pre_references_emitted_scripts() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.localhost"))?;
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.internal"))?;
 
         let refresh = format!(
             "-/bin/bash {}",

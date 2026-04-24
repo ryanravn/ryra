@@ -66,8 +66,8 @@ Run `ryra search` to browse the full list with install status.
 
 ```sh
 ryra list                        # installed services + orphans
-ryra remove seafile              # stop + deregister, keep data
-ryra remove seafile --purge      # also wipe the data dir and volumes
+ryra remove nextcloud            # stop + deregister, keep data
+ryra remove nextcloud --purge    # also wipe the data dir and volumes
 ryra remove -a                   # remove everything, preserve data
 ryra reset                       # full teardown, including Ryra's own config
 ```

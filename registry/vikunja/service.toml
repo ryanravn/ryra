@@ -3,6 +3,7 @@ name = "vikunja"
 description = "Vikunja - task management with lists, kanban boards, and calendars"
 url = "https://vikunja.io/docs/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 128

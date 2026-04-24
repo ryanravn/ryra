@@ -41,6 +41,15 @@ pub fn build_context(
             .ok_or_else(|| Error::Template(format!("service URL '{url}' has no host")))?;
         ctx.insert("service.domain".into(), host.to_string());
         ctx.insert("service.scheme".into(), parsed.scheme().to_string());
+        // service.external_authority — `host` or `host:port`, matching what
+        // appears in the URL. Services like Nextcloud whose Host-header
+        // overrides don't carry the port need this so generated redirect
+        // URIs retain `:8443` and match authelia's registered values.
+        let authority = match parsed.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        };
+        ctx.insert("service.external_authority".into(), authority);
         // service.external_url — browser-accessible URL as provided by the user.
         ctx.insert("service.external_url".into(), url.to_string());
     } else {
@@ -97,7 +106,7 @@ pub fn build_context(
 
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
-        let auth_localhost_url = auth.url().to_string();
+        let auth_base_url = auth.url().to_string();
         let caddy_installed = config
             .services
             .iter()
@@ -112,7 +121,7 @@ pub fn build_context(
             .find(|s| s.name == auth.provider_name())
             .and_then(|s| s.url.as_ref())
             .cloned()
-            .unwrap_or_else(|| auth_localhost_url.clone());
+            .unwrap_or_else(|| auth_base_url.clone());
         if caddy_installed {
             let port = crate::caddy_https_port(config);
             let parsed = url::Url::parse(&external_url).map_err(|e| {
@@ -127,16 +136,16 @@ pub fn build_context(
         //
         // Equal to external_url: both go through Caddy with HTTPS because
         // authelia requires X-Forwarded-Proto/Host headers for OIDC discovery,
-        // which only Caddy provides. Services containers resolve the
-        // .localhost domain to Caddy's IP via the `<authelia>:alias=<domain>`
-        // podman network entry (see caddy::ensure_auth_provider_routed) and
-        // trust Caddy's self-signed CA via the mounted CA bundle.
+        // which only Caddy provides. Service containers resolve the auth
+        // domain to Caddy's IP via the `<authelia>:alias=<domain>` podman
+        // network entry (see caddy::ensure_auth_provider_routed) and trust
+        // Caddy's self-signed CA via the mounted CA bundle.
         //
         // `--auth` requires Caddy (auth_bridge::build returns None otherwise,
         // so the CA bundle and host-resolve helpers aren't generated and the
         // service's OIDC flow won't work end-to-end without Caddy).
         let internal_url = external_url.clone();
-        ctx.insert("auth.url".into(), auth_localhost_url.clone());
+        ctx.insert("auth.url".into(), auth_base_url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());
         ctx.insert("auth.provider".into(), auth.provider_name().to_string());
         ctx.insert("auth.external_url".into(), external_url.clone());
@@ -144,7 +153,7 @@ pub fn build_context(
         // OIDC issuer URL — must match authelia's discovery response.
         let issuer = match auth {
             crate::config::schema::AuthCredentials::Authelia { .. } => external_url.clone(),
-            crate::config::schema::AuthCredentials::External { .. } => auth_localhost_url.clone(),
+            crate::config::schema::AuthCredentials::External { .. } => auth_base_url.clone(),
         };
         ctx.insert("auth.issuer".into(), issuer);
         ctx.insert(

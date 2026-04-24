@@ -15,9 +15,15 @@ use std::net::TcpListener;
 
 use ryra_core::Step;
 
-/// Whether stdin is connected to a terminal (shared check).
+/// Whether we can safely run interactive dialoguer prompts.
+///
+/// Both stdin AND stdout must be TTYs: stdin because we need to read the
+/// user's response, stdout because dialoguer writes the prompt there and
+/// errors with "not a terminal" if it isn't one. Checking only stdin
+/// misses the `ryra add | tee` / test-runner case where stdout is
+/// captured but stdin happens to be inherited from the parent shell.
 pub fn is_interactive() -> bool {
-    std::io::stdin().is_terminal()
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 /// Check if a port is already bound on the host.

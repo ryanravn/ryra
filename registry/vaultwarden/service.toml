@@ -3,7 +3,7 @@ name = "vaultwarden"
 description = "Vaultwarden - lightweight Bitwarden-compatible server"
 url = "https://github.com/dani-garcia/vaultwarden/wiki"
 architecture = ["amd64", "arm64"]
-https = "required"
+https = "always"
 
 [requirements.ram]
 min = 128

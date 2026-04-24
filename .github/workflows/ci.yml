@@ -73,57 +73,57 @@ jobs:
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }} -p ryra-cli
+        run: cargo build --release --target ${{ matrix.target }} -p kabin-cli
 
       - name: Package tarball
         run: |
-          VERSION=$(grep '^version' crates/ryra-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          VERSION=$(grep '^version' crates/kabin-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           cd target/${{ matrix.target }}/release
-          tar czf "ryra-${VERSION}-${{ matrix.target }}.tar.gz" ryra
-          mv "ryra-${VERSION}-${{ matrix.target }}.tar.gz" "$GITHUB_WORKSPACE/"
+          tar czf "kabin-${VERSION}-${{ matrix.target }}.tar.gz" kabin
+          mv "kabin-${VERSION}-${{ matrix.target }}.tar.gz" "$GITHUB_WORKSPACE/"
           # install.sh fetches a stable versionless filename from the
           # `latest` release so it doesn't need to discover the version
           # out-of-band. Produce that alongside the versioned tarball.
-          cp "$GITHUB_WORKSPACE/ryra-${VERSION}-${{ matrix.target }}.tar.gz" \
-             "$GITHUB_WORKSPACE/ryra-${{ matrix.target }}.tar.gz"
+          cp "$GITHUB_WORKSPACE/kabin-${VERSION}-${{ matrix.target }}.tar.gz" \
+             "$GITHUB_WORKSPACE/kabin-${{ matrix.target }}.tar.gz"
 
       - name: Sign tarballs
         env:
           APT_GPG_PRIVATE: ${{ secrets.APT_GPG_PRIVATE }}
         run: |
           echo "$APT_GPG_PRIVATE" | gpg --batch --import
-          VERSION=$(grep '^version' crates/ryra-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          VERSION=$(grep '^version' crates/kabin-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           gpg --batch --yes --detach-sign --armor \
-            --output "ryra-${VERSION}-${{ matrix.target }}.tar.gz.asc" \
-            "ryra-${VERSION}-${{ matrix.target }}.tar.gz"
+            --output "kabin-${VERSION}-${{ matrix.target }}.tar.gz.asc" \
+            "kabin-${VERSION}-${{ matrix.target }}.tar.gz"
           # Versionless copy is byte-identical, so one signature covers both.
-          cp "ryra-${VERSION}-${{ matrix.target }}.tar.gz.asc" \
-             "ryra-${{ matrix.target }}.tar.gz.asc"
+          cp "kabin-${VERSION}-${{ matrix.target }}.tar.gz.asc" \
+             "kabin-${{ matrix.target }}.tar.gz.asc"
 
       - name: Build deb
         run: |
-          cargo deb -p ryra-cli --no-build --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/debian/*.deb ./ryra_${{ matrix.deb_arch }}.deb
+          cargo deb -p kabin-cli --no-build --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/debian/*.deb ./kabin_${{ matrix.deb_arch }}.deb
 
       - name: Build rpm
         run: |
-          cargo generate-rpm -p crates/ryra-cli --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/generate-rpm/*.rpm ./ryra.${{ matrix.rpm_arch }}.rpm
+          cargo generate-rpm -p crates/kabin-cli --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/generate-rpm/*.rpm ./kabin.${{ matrix.rpm_arch }}.rpm
 
       - name: Build pacman package
         run: |
-          VERSION=$(grep '^version' crates/ryra-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          VERSION=$(grep '^version' crates/kabin-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           ARCH="${{ matrix.rpm_arch }}"
-          BINARY="target/${{ matrix.target }}/release/ryra"
+          BINARY="target/${{ matrix.target }}/release/kabin"
 
           mkdir -p pkgroot/usr/bin
-          cp "$BINARY" pkgroot/usr/bin/ryra
+          cp "$BINARY" pkgroot/usr/bin/kabin
 
           cat > pkgroot/.PKGINFO <<EOF
-          pkgname = ryra
+          pkgname = kabin
           pkgver = ${VERSION}-1
           pkgdesc = A tool to test and deploy self-hosted services
-          url = https://ryra.dev
+          url = https://kabin.dev
           builddate = $(date +%s)
           packager = GitHub Actions
           size = $(stat -c%s "$BINARY")
@@ -136,21 +136,21 @@ jobs:
           LANG=C bsdtar -czf .MTREE --format=mtree \
             --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' \
             .PKGINFO usr/
-          LANG=C bsdtar -cf "../ryra-${VERSION}-1-${ARCH}.pkg.tar.zst" --zstd \
+          LANG=C bsdtar -cf "../kabin-${VERSION}-1-${ARCH}.pkg.tar.zst" --zstd \
             .MTREE .PKGINFO usr/
           cd ..
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ryra-${{ matrix.target }}
+          name: kabin-${{ matrix.target }}
           path: |
-            ryra-*-${{ matrix.target }}.tar.gz
-            ryra-*-${{ matrix.target }}.tar.gz.asc
-            ryra-${{ matrix.target }}.tar.gz
-            ryra-${{ matrix.target }}.tar.gz.asc
-            ryra_${{ matrix.deb_arch }}.deb
-            ryra.${{ matrix.rpm_arch }}.rpm
-            ryra-*-${{ matrix.rpm_arch }}.pkg.tar.zst
+            kabin-*-${{ matrix.target }}.tar.gz
+            kabin-*-${{ matrix.target }}.tar.gz.asc
+            kabin-${{ matrix.target }}.tar.gz
+            kabin-${{ matrix.target }}.tar.gz.asc
+            kabin_${{ matrix.deb_arch }}.deb
+            kabin.${{ matrix.rpm_arch }}.rpm
+            kabin-*-${{ matrix.rpm_arch }}.pkg.tar.zst
 
   release-latest:
     needs: [build-linux]
@@ -168,7 +168,7 @@ jobs:
           tag: latest
           name: Latest
           body: Built from the latest commit on main.
-          artifacts: "ryra-*.tar.gz,ryra-*.tar.gz.asc,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
+          artifacts: "kabin-*.tar.gz,kabin-*.tar.gz.asc,kabin_*.deb,kabin.*.rpm,kabin-*.pkg.tar.zst"
           allowUpdates: true
           removeArtifacts: true
           prerelease: true
@@ -186,7 +186,7 @@ jobs:
       - name: Verify tag matches Cargo.toml version
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          CARGO_VER=$(grep '^version' crates/ryra-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          CARGO_VER=$(grep '^version' crates/kabin-cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           if [ "$TAG" != "$CARGO_VER" ]; then
             echo "::error::Tag v${TAG} does not match Cargo.toml version ${CARGO_VER}"
             exit 1
@@ -200,7 +200,7 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          artifacts: "ryra-*.tar.gz,ryra-*.tar.gz.asc,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
+          artifacts: "kabin-*.tar.gz,kabin-*.tar.gz.asc,kabin_*.deb,kabin.*.rpm,kabin-*.pkg.tar.zst"
           makeLatest: true
 
   publish-repos:
@@ -244,8 +244,8 @@ jobs:
             gh-pages/deb/dists/stable/main/binary-amd64 \
             gh-pages/deb/dists/stable/main/binary-arm64
 
-          cp artifacts/ryra_amd64.deb gh-pages/deb/pool/
-          cp artifacts/ryra_arm64.deb gh-pages/deb/pool/
+          cp artifacts/kabin_amd64.deb gh-pages/deb/pool/
+          cp artifacts/kabin_arm64.deb gh-pages/deb/pool/
 
           cd gh-pages/deb
 
@@ -257,8 +257,8 @@ jobs:
 
           cd dists/stable
           cat > Release <<EOF
-          Origin: ryra
-          Label: ryra
+          Origin: kabin
+          Label: kabin
           Suite: stable
           Codename: stable
           Architectures: amd64 arm64
@@ -273,8 +273,8 @@ jobs:
         run: |
           mkdir -p gh-pages/rpm/x86_64 gh-pages/rpm/aarch64
 
-          cp artifacts/ryra.x86_64.rpm gh-pages/rpm/x86_64/
-          cp artifacts/ryra.aarch64.rpm gh-pages/rpm/aarch64/
+          cp artifacts/kabin.x86_64.rpm gh-pages/rpm/x86_64/
+          cp artifacts/kabin.aarch64.rpm gh-pages/rpm/aarch64/
 
           createrepo_c gh-pages/rpm/x86_64
           createrepo_c gh-pages/rpm/aarch64
@@ -286,13 +286,13 @@ jobs:
         run: |
           mkdir -p gh-pages/pacman/x86_64 gh-pages/pacman/aarch64
 
-          cp artifacts/ryra-*-x86_64.pkg.tar.zst gh-pages/pacman/x86_64/
-          cp artifacts/ryra-*-aarch64.pkg.tar.zst gh-pages/pacman/aarch64/
+          cp artifacts/kabin-*-x86_64.pkg.tar.zst gh-pages/pacman/x86_64/
+          cp artifacts/kabin-*-aarch64.pkg.tar.zst gh-pages/pacman/aarch64/
 
           docker run --rm -v "$PWD/gh-pages/pacman:/repo" archlinux:latest bash -c '
             pacman -Sy --noconfirm
-            repo-add /repo/x86_64/ryra.db.tar.gz /repo/x86_64/*.pkg.tar.zst
-            repo-add /repo/aarch64/ryra.db.tar.gz /repo/aarch64/*.pkg.tar.zst
+            repo-add /repo/x86_64/kabin.db.tar.gz /repo/x86_64/*.pkg.tar.zst
+            repo-add /repo/aarch64/kabin.db.tar.gz /repo/aarch64/*.pkg.tar.zst
           '
 
       - name: Export public key

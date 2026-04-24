@@ -631,7 +631,7 @@ pub fn add_service(
         .any(|s| WellKnownService::Prometheus.matches(&s.name) && s.installed);
 
     // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
-    // auth provider's .localhost domain). Pure — all filesystem writes are
+    // auth provider's domain). Pure — all filesystem writes are
     // emitted as Step::WriteFile below, not performed here.
     let auth_bridge = auth_bridge::build(&auth_bridge::AuthBridgeParams {
         service_name,
@@ -769,7 +769,7 @@ pub fn add_service(
 
     // 7. Auth-bridge artifacts (CA bundle, refresh script, host-resolve script,
     // placeholder /etc/hosts) — needed before container starts for TLS trust
-    // and .localhost auth-domain resolution.
+    // and auth-domain resolution.
     steps.extend(auth_bridge_steps);
 
     // 8. Register OIDC client with the auth provider BEFORE starting the service.

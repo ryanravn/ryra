@@ -74,7 +74,7 @@ service = "caddy"
 [[tests.steps]]
 action = "add"
 service = "authelia"
-args = "--url https://auth.localhost:8443"
+args = "--url https://auth.internal:8443"
 env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 [[tests.steps]]

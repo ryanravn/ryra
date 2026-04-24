@@ -80,9 +80,9 @@ Services run at `http://127.0.0.1:<port>` by default — no domain, no HTTPS, no
 
 `--url` is modeled as a *fact about the deployment*, not a request to configure routing. Ryra always uses it to populate template variables (`{{service.external_url}}`, `{{service.domain}}`, `{{service.scheme}}`, OIDC callback URLs, email links). Caddy integration is a side-effect that kicks in *when Caddy is installed* — if the user runs their own reverse proxy, they simply don't install Caddy and ryra won't touch routing.
 
-The only exception is **authelia**, which requires a public URL because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a URL (defaults to `https://auth.localhost:<caddy_https_port>`). `.localhost` domains resolve to 127.0.0.1 automatically (RFC 6761) — no `/etc/hosts` entry needed.
+The only exception is **authelia**, which requires a public URL because its OIDC implementation enforces HTTPS for `authelia_url`. When `--auth` is used, authelia auto-installs with a URL (defaults to `https://auth.internal:<caddy_https_port>`). `.internal` is the ICANN-designated TLD (2024) for private networks — unlike `.localhost` it doesn't auto-resolve, so ryra writes `/etc/hosts` entries mapping `*.internal` → 127.0.0.1 during auto-HTTPS promotion (requires sudo once).
 
-This keeps the default experience frictionless (no sudo, no DNS, no certs) while still supporting custom URLs for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding.
+This keeps the default experience frictionless (no custom DNS, no public certs) while still supporting custom URLs for production use via Caddy, Tailscale, Cloudflare tunnels, or port forwarding. The one-time `/etc/hosts` edit is the price we pay for a hostname that works cleanly inside containers (Debian-patched libcurl forces `*.localhost` → 127.0.0.1, which broke server-to-server OIDC discovery for PHP-based services like Nextcloud).
 
 ### How `--url` works
 

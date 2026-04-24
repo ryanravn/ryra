@@ -36,7 +36,7 @@ name = "homeserver-yaml-rendered"
 run = "test -f $HOME/.local/share/ryra/synapse/data/homeserver.yaml"
 timeout = 10
 
-# OIDC browser flow — Element loads via Caddy on chat.localhost, Synapse
+# OIDC browser flow — Element loads via Caddy on chat.internal, Synapse
 # advertises OIDC in its login flows.
 [[tests]]
 name = "oidc"
@@ -50,7 +50,7 @@ service = "caddy"
 [[tests.steps]]
 action = "add"
 service = "authelia"
-args = "--url https://auth.localhost:8443"
+args = "--url https://auth.internal:8443"
 env = { AUTHELIA_ADMIN_USER = "testuser", AUTHELIA_ADMIN_PASSWORD = "testpassword123" }
 timeout = 300
 [[tests.steps]]
@@ -59,7 +59,7 @@ service = "authelia"
 [[tests.steps]]
 action = "add"
 service = "synapse"
-args = "--auth --url https://chat.localhost:8443"
+args = "--auth --url https://chat.internal:8443"
 timeout = 600
 [[tests.steps]]
 action = "wait"
@@ -67,7 +67,7 @@ service = "synapse"
 [[tests.steps]]
 action = "http"
 name = "element-responds"
-url = "https://chat.localhost:8443"
+url = "https://chat.internal:8443"
 service = "synapse"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
@@ -75,11 +75,11 @@ timeout = 90
 action = "shell"
 name = "oidc-advertised"
 run = """for i in $(seq 1 45); do
-  curl -skL https://chat.localhost:8443/_matrix/client/v3/login 2>/dev/null | grep -q 'oidc-authelia' && exit 0
+  curl -skL https://chat.internal:8443/_matrix/client/v3/login 2>/dev/null | grep -q 'oidc-authelia' && exit 0
   sleep 2
 done
 echo "OIDC not advertised after 90s"
-curl -skL https://chat.localhost:8443/_matrix/client/v3/login || true
+curl -skL https://chat.internal:8443/_matrix/client/v3/login || true
 exit 1"""
 timeout = 120
 [[tests.steps]]
@@ -87,4 +87,4 @@ action = "playwright"
 name = "playwright-auth-flow"
 spec = "synapse-auth.spec.ts"
 timeout = 180
-env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123", SYNAPSE_URL = "https://chat.localhost:8443" }
+env = { AUTHELIA_USER = "testuser", AUTHELIA_PASSWORD = "testpassword123", SYNAPSE_URL = "https://chat.internal:8443" }

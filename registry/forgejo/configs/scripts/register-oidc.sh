@@ -7,12 +7,12 @@ for i in $(seq 1 120); do
   sleep 5
 done
 
-# The OIDC discovery URL (e.g. https://auth.localhost:8443/...) must be
+# The OIDC discovery URL (e.g. https://auth.internal:8443/...) must be
 # reachable from inside the forgejo container with valid TLS.
 #
 # Two issues to fix:
-# 1. .localhost always resolves to 127.0.0.1 (RFC 6761/glibc) — inject
-#    the auth domain → caddy IP mapping into the container's /etc/hosts.
+# 1. `.internal` isn't a real DNS zone — inject the auth domain → caddy
+#    IP mapping into the container's /etc/hosts.
 # 2. Caddy uses a self-signed CA — inject the CA cert so the Forgejo CLI
 #    trusts it during OIDC discovery.
 AUTH_HOST=$(echo "$OIDC_DISCOVERY_URL" | sed 's|https\?://||; s|[:/].*||')

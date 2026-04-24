@@ -3,6 +3,7 @@ name = "synapse"
 description = "Matrix homeserver (Synapse) + Element web client"
 url = "https://element-hq.github.io/synapse/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 1024

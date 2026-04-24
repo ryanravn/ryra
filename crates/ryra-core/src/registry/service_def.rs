@@ -97,12 +97,25 @@ impl std::fmt::Display for Arch {
 }
 
 /// Whether this service requires HTTPS to function.
+///
+/// Declarative, per-service. No magic derivation from other fields — a
+/// service that needs HTTPS must say so explicitly.
+///
+/// - `Never` (default): HTTP is fine. Per RFC 8252 loopback redirect URIs
+///   (`http://127.0.0.1`, `http://localhost`) are valid OIDC callbacks, so
+///   most services work over plain HTTP even with `--auth`.
+/// - `Auth`: HTTPS required when `--auth` is used. For services whose OIDC
+///   implementation rejects plain-HTTP even on loopback (e.g. nextcloud's
+///   `user_oidc` refuses to render the SSO button over HTTP).
+/// - `Always`: HTTPS required regardless of flags. For services that
+///   refuse HTTP outright (e.g. authelia, vaultwarden).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum HttpsRequirement {
     #[default]
-    None,
-    Required,
+    Never,
+    Auth,
+    Always,
 }
 
 /// Whether a port uses TCP or UDP.

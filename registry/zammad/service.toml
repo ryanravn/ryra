@@ -3,6 +3,7 @@ name = "zammad"
 description = "Zammad - open-source helpdesk and ticketing system with native OIDC"
 url = "https://docs.zammad.org/"
 architecture = ["amd64", "arm64"]
+https = "auth"
 
 [requirements.ram]
 min = 4096
