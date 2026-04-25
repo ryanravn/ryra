@@ -61,6 +61,14 @@ prompt = "Admin email"
 name = "RYRA_DOMAIN"
 value = "{{ service.domain | default('localhost') }}"
 
+# Full external URL with port — used by generate-config.sh as the
+# `authelia_url` in configuration.yml. Set to service.external_url so
+# whatever the user picked (--url, --tailscale, Caddy auto) flows through
+# verbatim. The script falls back to reconstructing if this is empty.
+[[env]]
+name = "RYRA_AUTHELIA_URL"
+value = "{{ service.external_url | default('') }}"
+
 # Port for Caddy forward auth
 [[env]]
 name = "RYRA_AUTH_PORT"

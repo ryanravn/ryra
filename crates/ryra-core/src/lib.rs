@@ -161,6 +161,15 @@ pub enum Step {
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
     CopyFile { src: PathBuf, dst: PathBuf },
+    /// Configure `tailscale serve` to terminate TLS on `https_port` and
+    /// proxy to a local service on `target_port`. Persistent across reboots
+    /// (tailscaled stores the serve config). Requires sudo — execution
+    /// follows the `setup_host_access` pattern: try `sudo -n`, fall back
+    /// to printing the command for the user to run.
+    ///
+    /// `tailscale serve` only binds 443 / 8443 / 10000 for HTTPS, so
+    /// `https_port` must be one of those.
+    TailscaleServe { https_port: u16, target_port: u16 },
 }
 
 impl Step {
@@ -185,6 +194,12 @@ impl Step {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
+            Step::TailscaleServe {
+                https_port,
+                target_port,
+            } => format!(
+                "sudo tailscale serve --bg --https={https_port} http://127.0.0.1:{target_port}"
+            ),
         }
     }
 }
@@ -1099,6 +1114,8 @@ pub struct RecordPendingParams<'a> {
     pub repo_dir: &'a Path,
     /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
     pub url: Option<&'a str>,
+    /// `tailscale serve --https=<port>` allocation when `--tailscale` was used.
+    pub tailscale_port: Option<u16>,
 }
 
 /// Record a service as pending installation (installed: false).
@@ -1117,12 +1134,13 @@ pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
         ports,
         auth_kind: params.auth_kind,
         url: params.url.map(|u| u.to_string()),
+        tailscale_port: params.tailscale_port,
         installed: false,
     });
 
     // Auto-configure [auth] when an auth provider is installed
     if WellKnownService::Authelia.matches(params.service_name) {
-        config.auth = Some(authelia::auth_config(params.allocated_ports)?);
+        config.auth = Some(authelia::auth_config(params.allocated_ports, params.url)?);
     }
 
     config::save_config(&paths.config_file, &config)?;
@@ -1153,6 +1171,18 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     let mut config = config::load_or_default(&paths.config_file)?;
 
     config.services.retain(|s| s.name != service_name);
+
+    // If we just removed the auth provider, drop the cached `[auth]` block
+    // too — otherwise a later `ryra add <svc> --auth` thinks auth is still
+    // configured and skips the auto-install path, then bombs out trying to
+    // register an OIDC client against a non-existent authelia config file.
+    if WellKnownService::Authelia.matches(service_name)
+        && let Some(auth) = &config.auth
+        && auth.provider_name() == "authelia"
+    {
+        config.auth = None;
+    }
+
     config::save_config(&paths.config_file, &config)?;
 
     Ok(())
@@ -1225,6 +1255,15 @@ pub fn reset() -> Result<ResetResult> {
             }
             if name.ends_with(".volume") {
                 let vol = name.trim_end_matches(".volume").to_string();
+                // Quadlet auto-generates `<vol>-volume.service` for each
+                // `.volume` file. Stopping it before we remove the file
+                // makes systemd unload the unit on the upcoming
+                // daemon-reload — without this, leftover oneshot units
+                // sit in "loaded: not-found, active (exited)" forever
+                // until logout.
+                steps.push(Step::StopService {
+                    unit: format!("{vol}-volume"),
+                });
                 volume_names.push(format!("systemd-{vol}"));
             }
             steps.push(Step::RemoveFile(entry.path()));
@@ -1449,6 +1488,21 @@ mod tests {
         assert!(!is_tailscale_url("https://ts.net"));
         assert!(!is_tailscale_url("https://evil-ts.net.example.com"));
         assert!(!is_tailscale_url("not a url"));
+    }
+
+    #[test]
+    fn tailscale_serve_step_renders_canonical_command() {
+        // The shell rendering matters because it's what dry-run shows the
+        // user, and it has to be a real, runnable `tailscale serve` invocation
+        // — the apply path uses the same args.
+        let s = Step::TailscaleServe {
+            https_port: 8443,
+            target_port: 9091,
+        };
+        assert_eq!(
+            s.to_command(),
+            "sudo tailscale serve --bg --https=8443 http://127.0.0.1:9091"
+        );
     }
 
     // resolve_extra_networks positional args:

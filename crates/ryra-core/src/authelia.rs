@@ -362,7 +362,18 @@ fn strip_identity_providers_block(yaml: &str) -> String {
 }
 
 /// Build AuthCredentials for finalize_add when authelia is installed.
-pub fn auth_config(allocated_ports: &[(String, u16)]) -> crate::error::Result<AuthCredentials> {
+///
+/// `installed_url` is the URL authelia is actually reachable at — the
+/// browser-visible one passed via `--url`/`--tailscale`, or `None` for
+/// localhost-only deployments. It's what gets templated into every other
+/// service's OIDC config as the issuer/discovery URL, so it MUST match
+/// what authelia advertises (mismatched issuer URLs make OIDC token
+/// validation fail). Falls back to `http://localhost:<port>` only when
+/// no public URL was set.
+pub fn auth_config(
+    allocated_ports: &[(String, u16)],
+    installed_url: Option<&str>,
+) -> crate::error::Result<AuthCredentials> {
     let port = allocated_ports
         .iter()
         .find(|(name, _)| name == "http")
@@ -372,7 +383,9 @@ pub fn auth_config(allocated_ports: &[(String, u16)]) -> crate::error::Result<Au
                 "authelia has no 'http' port allocated — cannot configure auth".into(),
             )
         })?;
-    let url = format!("http://localhost:{port}");
+    let url = installed_url
+        .map(String::from)
+        .unwrap_or_else(|| format!("http://localhost:{port}"));
     Ok(AuthCredentials::Authelia { url, port })
 }
 

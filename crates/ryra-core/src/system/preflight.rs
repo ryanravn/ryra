@@ -6,6 +6,9 @@
 use std::fmt;
 use std::fs;
 
+use crate::config::schema::Config;
+use crate::system::tailscale;
+
 /// Minimum subuid/subgid range required for rootless podman to map common
 /// container UIDs/GIDs (e.g. nginx user 101, postgres 999, shadow group 42).
 /// 65536 is the standard allocation size shipped by adduser/usermod.
@@ -19,6 +22,14 @@ pub enum PreflightError {
     SubidNotConfigured { user: String, missing_files: Vec<&'static str> },
     /// Range is too small — common on Debian where adduser doesn't auto-allocate.
     SubidRangeTooSmall { user: String, current: u32, minimum: u32 },
+    /// `--tailscale` was used (or "Tailscale" picked in the prompt) but
+    /// the `tailscale` CLI isn't on PATH. Without it ryra can't read the
+    /// node's MagicDNS name or wire `tailscale serve` for HTTPS termination.
+    TailscaleCliMissing,
+    /// CLI is present but `tailscale status --json` doesn't return a
+    /// `*.ts.net` DNSName for this node — usually means `tailscale up`
+    /// hasn't been run.
+    TailscaleNotLoggedIn,
 }
 
 impl fmt::Display for PreflightError {
@@ -48,13 +59,51 @@ impl fmt::Display for PreflightError {
                        podman system migrate",
                 )
             }
+            PreflightError::TailscaleCliMissing => {
+                write!(
+                    f,
+                    "the `tailscale` CLI isn't on PATH.\n\
+                     \n\
+                     Fix (Debian/Ubuntu):\n  \
+                       curl -fsSL https://tailscale.com/install.sh | sh\n\
+                     Or drop --tailscale and reach the service via Caddy \
+                     (run `ryra add caddy` first) or your own URL (--url).",
+                )
+            }
+            PreflightError::TailscaleNotLoggedIn => {
+                write!(
+                    f,
+                    "this node isn't logged into a tailnet.\n\
+                     `tailscale status` doesn't return a *.ts.net hostname.\n\
+                     \n\
+                     Fix:\n  \
+                       sudo tailscale up",
+                )
+            }
         }
     }
 }
 
-/// Run all preflight checks. Returns the first failure, or `Ok(())` if all pass.
-pub fn check() -> Result<(), PreflightError> {
+/// Run host-level preflight checks before any service install. Currently
+/// just subuid/subgid; provider-specific checks (e.g. `--tailscale`)
+/// fire inline at the relevant flag/prompt site instead of being driven
+/// from a global config field.
+pub fn check(_config: &Config) -> Result<(), PreflightError> {
     check_subid_range()?;
+    Ok(())
+}
+
+/// Verify the host can do `tailscale serve`: the CLI is on PATH and the
+/// node is logged into a tailnet. Called from the `--tailscale` flag
+/// handler and the "Tailscale" branch of the exposure prompt; failure is
+/// fatal (we can't auto-derive a tailnet URL without a logged-in node).
+pub fn check_tailscale_runtime() -> Result<(), PreflightError> {
+    if !tailscale::cli_available() {
+        return Err(PreflightError::TailscaleCliMissing);
+    }
+    if tailscale::self_dns_name().is_none() {
+        return Err(PreflightError::TailscaleNotLoggedIn);
+    }
     Ok(())
 }
 
@@ -135,4 +184,27 @@ mod tests {
         assert!(s.contains("/etc/subuid"));
         assert!(s.contains("/etc/subgid"));
     }
+
+    #[test]
+    fn tailscale_cli_missing_display_has_install_hint() {
+        let s = format!("{}", PreflightError::TailscaleCliMissing);
+        // Must point the user at a working install command and at the
+        // alternative paths (Caddy / explicit --url) so they can choose.
+        assert!(s.contains("tailscale.com/install"));
+        assert!(s.contains("ryra add caddy") && s.contains("--url"));
+    }
+
+    #[test]
+    fn tailscale_not_logged_in_display_has_up_command() {
+        let s = format!("{}", PreflightError::TailscaleNotLoggedIn);
+        assert!(s.contains("tailscale up"));
+    }
+
+    // No positive Tailscale test here: we'd need to either mock the
+    // `tailscale` binary or assume the test host has it. Both are bad —
+    // mocking adds complexity for a single check, and assuming presence
+    // would make the test flaky on any CI without tailscale. The negative
+    // path (CLI absent → TailscaleCliMissing) is exercised by the
+    // `tailscale::cli_available` path being a thin Command wrapper, and
+    // the Display tests above prove the error renders correctly.
 }

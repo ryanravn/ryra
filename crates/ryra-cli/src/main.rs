@@ -45,10 +45,11 @@ enum Command {
         /// in non-interactive mode, or prompted for interactively.
         #[arg(long = "enable", value_name = "GROUP")]
         enable: Vec<String>,
-        /// Expose via Tailscale MagicDNS without prompting. Equivalent to
-        /// answering "yes" to the interactive Tailscale prompt. Ignored if
-        /// --url is also set (explicit --url wins) or if `tailscale` isn't
-        /// logged in on this host.
+        /// Expose this service on the local tailnet via `tailscale serve`.
+        /// Allocates one of {443, 8443, 10000} (the only ports tailscale
+        /// serve allows for HTTPS) and runs `tailscale serve` with sudo
+        /// (or prints the command to run yourself if sudo isn't available).
+        /// Mutually exclusive with --url.
         #[arg(long, conflicts_with = "url")]
         tailscale: bool,
         /// Skip confirmation prompts (including untrusted registry warnings)

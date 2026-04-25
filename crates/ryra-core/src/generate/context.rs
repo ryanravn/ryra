@@ -86,23 +86,10 @@ pub fn build_context(
         ctx.insert("smtp.security".into(), smtp.security.as_str().into());
     }
 
-    // tls.*
-    if let Some(tls) = &config.tls {
-        use crate::config::schema::TlsConfig;
-        match tls {
-            TlsConfig::Caddy => {
-                ctx.insert("tls.provider".into(), "caddy".into());
-            }
-            TlsConfig::Custom { cert, key } => {
-                ctx.insert("tls.provider".into(), "custom".into());
-                ctx.insert("tls.cert".into(), cert.display().to_string());
-                ctx.insert("tls.key".into(), key.display().to_string());
-            }
-            TlsConfig::None => {
-                ctx.insert("tls.provider".into(), "none".into());
-            }
-        }
-    }
+    // (No tls.* template namespace anymore — TLS provider isn't a global
+    // config knob. Service URLs are inspected directly when needed; if a
+    // template ever needs to know "is this Caddy local?", it can match on
+    // the URL hostname against `CADDY_LOCAL_DOMAIN`.)
 
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
@@ -141,9 +128,14 @@ pub fn build_context(
         // network entry (see caddy::ensure_auth_provider_routed) and trust
         // Caddy's self-signed CA via the mounted CA bundle.
         //
-        // `--auth` requires Caddy (auth_bridge::build returns None otherwise,
-        // so the CA bundle and host-resolve helpers aren't generated and the
-        // service's OIDC flow won't work end-to-end without Caddy).
+        // `--auth` runs through Caddy as the *internal* TLS terminator —
+        // auth_bridge::build inspects authelia's URL hostname and only
+        // builds the bridge for `*.internal` URLs (Caddy local). Other
+        // hostnames imply the user is running their own TLS path (Tailscale
+        // serve, external proxy) and ryra returns no bridge: the CA bundle
+        // and host-resolve helpers aren't generated, and runtime OIDC
+        // across containers is out of scope until someone wires user-cert
+        // mounting in.
         let internal_url = external_url.clone();
         ctx.insert("auth.url".into(), auth_base_url.clone());
         ctx.insert("auth.internal_url".into(), internal_url.clone());

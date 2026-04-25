@@ -36,6 +36,13 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
         println!("Resetting ryra...");
         apply::execute_all(&result.steps).await?;
         ryra_core::finalize_reset()?;
+        // Clear failed-state for any unit that died at some point during
+        // the user's session (e.g. a service that crashed before reset
+        // ran). Without this, `systemctl --user list-units` keeps showing
+        // those units in failed state long after their files are gone.
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "reset-failed"])
+            .status();
         remove_caddy_ca();
         super::linger::note_if_enabled().await;
         println!("\nryra has been fully reset.");

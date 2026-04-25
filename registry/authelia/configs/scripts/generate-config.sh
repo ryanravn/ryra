@@ -12,8 +12,12 @@ elif echo "$DOMAIN" | grep -q '\..*\.'; then
 else
   COOKIE_DOMAIN="$DOMAIN"
 fi
-if [ "$DOMAIN" = "localhost" ]; then
-  # No real hostname — fall back to the cookie-scope address.
+# Prefer the URL ryra resolved at install time (--url/--tailscale/Caddy
+# auto). Falls back to reconstruction only when service.external_url
+# wasn't set in the template context — e.g. localhost-only deployments.
+if [ -n "${RYRA_AUTHELIA_URL:-}" ]; then
+  AUTHELIA_URL="$RYRA_AUTHELIA_URL"
+elif [ "$DOMAIN" = "localhost" ]; then
   AUTHELIA_URL="https://$COOKIE_DOMAIN"
 elif systemctl --user is-active caddy.service >/dev/null 2>&1; then
   AUTHELIA_URL="https://$DOMAIN:8443"

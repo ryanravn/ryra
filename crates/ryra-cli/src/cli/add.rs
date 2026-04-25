@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
 use ryra_core::config::ConfigPaths;
-use ryra_core::config::schema::{Config, TlsConfig};
+use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::{AuthKind, HttpsRequirement};
 use ryra_core::{REGISTRY_BUNDLED, Warning, WellKnownService};
@@ -51,8 +51,20 @@ pub async fn run(
         bail!("--enable can only be used when adding a single service");
     }
 
-    if let Err(e) = ryra_core::system::preflight::check() {
+    let preflight_paths = ryra_core::config::ConfigPaths::resolve()?;
+    let preflight_config = ryra_core::config::load_or_default(&preflight_paths.config_file)?;
+    if let Err(e) = ryra_core::system::preflight::check(&preflight_config) {
         bail!("preflight check failed:\n\n{e}");
+    }
+
+    // --tailscale check fires here so a missing CLI / unlogged tailnet
+    // surfaces before any service planning. Sudo-optional: the actual
+    // `tailscale serve` step runs later via the apply path's sudo -n
+    // fallback (see apply.rs).
+    if tailscale
+        && let Err(e) = ryra_core::system::preflight::check_tailscale_runtime()
+    {
+        bail!("--tailscale flag passed but {e}");
     }
 
     let interactive = super::is_interactive();
@@ -67,7 +79,7 @@ pub async fn run(
 
     // Auto-install authelia for --auth
     if !dry_run {
-        ensure_dependencies(auth, interactive).await?;
+        ensure_dependencies(auth, tailscale, interactive).await?;
     }
 
     // --smtp=<provider>: non-interactive equivalent of the prompts below.
@@ -248,41 +260,80 @@ pub async fn run(
             config = ryra_core::config::load_or_default(&paths.config_file)?;
         }
 
-        // TLS — prompt if HTTPS is needed.
+        // Resolve where this service will be reachable.
         //
         // Must run after resolve_auth_kind: an interactive "Enable oidc auth?"
         // yes has the same HTTPS implications as `--auth`, so we evaluate
         // needs_https against the final auth decision, not the raw CLI flag.
-        //
-        // When Caddy is the TLS provider and no --url was given, auto-generate
-        // an `.internal` domain so HTTPS works out of the box.
         let needs_https = needs_https(
             reg_service.def.service.https.clone(),
             auth_kind.is_some(),
             url,
         );
-        if needs_https && !dry_run {
-            ensure_tls_configured(&config, &paths, interactive).await?;
-            // Reload — ensure_tls_configured may have installed caddy
-            config = ryra_core::config::load_or_default(&paths.config_file)?;
-        }
-        let auto_url: Option<String>;
-        let url: Option<&str> = if needs_https && url.is_none() {
-            if matches!(config.tls, Some(TlsConfig::Caddy)) {
+
+        // URL precedence:
+        //   1. explicit --url (highest)
+        //   2. --tailscale (allocate port from {443, 8443, 10000} → derive URL)
+        //   3. Caddy installed + needs_https → auto-derive `*.internal`
+        //   4. interactive prompt (Local/Tailscale/Custom) when needs_https
+        //   5. None — service runs on plain http://127.0.0.1:<port>
+        // Clap's `conflicts_with = "url"` on --tailscale means 1+2 don't collide.
+        //
+        // `mut` because the cleanup-and-retry path below may need to re-resolve
+        // the Tailscale port: a previous killed install can leave its
+        // `tailscale_port` reservation in config, which the allocator skips.
+        // After cleanup the reservation is gone, and re-allocating reclaims
+        // the originally-intended port.
+        let mut resolved_url: Option<String>;
+        let mut tailscale_port: Option<u16>;
+        if let Some(u) = url {
+            resolved_url = Some(u.to_string());
+            tailscale_port = None;
+        } else if tailscale {
+            let (u, p) = derive_tailscale_url_and_port(&config)?;
+            resolved_url = Some(u);
+            tailscale_port = Some(p);
+        } else if needs_https {
+            let caddy_installed = config
+                .services
+                .iter()
+                .any(|s| WellKnownService::Caddy.matches(&s.name));
+            if caddy_installed {
                 let caddy_https_port = config
                     .services
                     .iter()
                     .find(|s| WellKnownService::Caddy.matches(&s.name))
                     .and_then(|s| s.ports.get("https").copied())
                     .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
-                auto_url = Some(format!("https://{service}.internal:{caddy_https_port}"));
-                auto_url.as_deref()
+                resolved_url = Some(format!(
+                    "https://{service}.{}:{caddy_https_port}",
+                    ryra_core::config::schema::CADDY_LOCAL_DOMAIN
+                ));
+                tailscale_port = None;
+            } else if interactive && !dry_run {
+                let (chosen_url, chosen_port) =
+                    prompt_exposure_for(service, &config).await?;
+                // Reload after potential Caddy install inside the prompt.
+                config = ryra_core::config::load_or_default(&paths.config_file)?;
+                resolved_url = Some(chosen_url);
+                tailscale_port = chosen_port;
             } else {
-                url
+                bail!(
+                    "service '{service}' requires HTTPS but no exposure was selected.\n\
+                     Pass --tailscale, --url <X>, or `ryra add caddy` first to enable \
+                     local HTTPS."
+                );
             }
         } else {
-            url
-        };
+            resolved_url = None;
+            tailscale_port = None;
+        }
+        // Shadow the input `url` flag with the resolved URL so all the
+        // `--url`-aware code below (template context, warnings, planner
+        // input) sees the value we actually intend to use. Re-borrowed
+        // each time it's needed so the cleanup-and-retry branch can
+        // still mutate `resolved_url`.
+        let url: Option<&str> = resolved_url.as_deref();
 
         // Prompt for env vars based on their kind
         use ryra_core::registry::service_def::EnvKind;
@@ -458,10 +509,20 @@ pub async fn run(
                     let steps = ryra_core::orphan_purge_steps(&svc_data);
                     apply::execute_all(&steps).await?;
                 }
+                // The killed previous install may have reserved a Tailscale
+                // port; cleanup just removed that reservation, so re-allocate
+                // against the freshly-cleaned config to reclaim the originally
+                // intended port (e.g. 443 instead of skipping to 8443).
+                if tailscale {
+                    let cleaned = ryra_core::config::load_or_default(&paths.config_file)?;
+                    let (u, p) = derive_tailscale_url_and_port(&cleaned)?;
+                    resolved_url = Some(u);
+                    tailscale_port = Some(p);
+                }
                 // Retry now that the partial state is gone
                 ryra_core::add_service(
                     service,
-                    url,
+                    resolved_url.as_deref(),
                     auth_kind.clone(),
                     auth || auth_kind.is_some(),
                     enable_smtp,
@@ -476,43 +537,17 @@ pub async fn run(
             other => other?,
         };
 
-        // Tailscale auto-URL: if the user didn't pass --url and a tailnet
-        // node is logged in, offer (or force, with --tailscale) to expose
-        // on the tailnet. Re-plans with the generated URL — the host port
-        // is now known from the first pass, so we can bake it in.
-        if url.is_none()
-            && !dry_run
-            && let Some(ts_host) = tailscale_self_dns_name()
-            && let Some((_, port)) = result.allocated_ports.first()
+        // --tailscale: append the `tailscale serve` step now that planning
+        // is done (we have the allocated host port). Kept as a post-plan
+        // append rather than threaded through `add_service` to avoid bloating
+        // the planner signature for what's purely a CLI-driven side-effect.
+        if let Some(https_port) = tailscale_port
+            && let Some((_, target_port)) = result.allocated_ports.first()
         {
-            let proposed = format!("http://{ts_host}:{port}");
-            let use_ts = if tailscale {
-                // --tailscale: accept without prompting (works non-interactively too)
-                true
-            } else if interactive {
-                Confirm::new()
-                    .with_prompt(format!("Tailscale detected — expose at {proposed}?"))
-                    .default(true)
-                    .interact()?
-            } else {
-                // No flag and no TTY: don't silently change URL shape in scripts
-                false
-            };
-            if use_ts {
-                result = ryra_core::add_service(
-                    service,
-                    Some(&proposed),
-                    auth_kind.clone(),
-                    auth || auth_kind.is_some(),
-                    enable_smtp,
-                    &env_overrides,
-                    &enabled_groups,
-                    service_ref.registry_name(),
-                    &repo_dir,
-                    prompt_ctx.clone(),
-                    &super::is_port_in_use,
-                )?;
-            }
+            result.steps.push(ryra_core::Step::TailscaleServe {
+                https_port,
+                target_port: *target_port,
+            });
         }
 
         // Show warnings and confirm
@@ -619,6 +654,7 @@ pub async fn run(
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
                 url: result.url.as_deref(),
+                tailscale_port,
             })?;
 
             // Preview what's about to happen — the user sees "pulls / writes /
@@ -667,12 +703,14 @@ pub async fn run(
             ryra_core::mark_installed(service)?;
 
             // Trust Caddy's self-signed CA, and register the service's
-            // hostname in /etc/hosts for browser access.
-            if let Some(service_url) = result.url.as_deref() {
-                let config = ryra_core::config::load_or_default(&paths.config_file)?;
-                if matches!(config.tls, Some(TlsConfig::Caddy)) {
-                    setup_host_access(&[service_url]);
-                }
+            // hostname in /etc/hosts for browser access. Only fires for
+            // *.internal URLs (Caddy local) — Tailscale's MagicDNS handles
+            // *.ts.net for free, and External hostnames are the user's
+            // DNS to manage.
+            if let Some(service_url) = result.url.as_deref()
+                && service_url_is_caddy_local(service_url)
+            {
+                setup_host_access(&[service_url]);
             }
 
             let home_dir = ryra_core::service_home(service)?;
@@ -796,33 +834,7 @@ fn collect_non_interactive<'a>(
 /// Register Caddy's CA with every rootless trust store we can reach, and
 /// print (but never run) hints for the stores that need sudo — `/etc/hosts`
 /// for any hostname the user's resolver can't reach (including
-/// `*.internal`, which unlike `*.localhost` does not auto-resolve), and
-/// Returns the local node's Tailscale MagicDNS name (e.g.
-/// `debian.cobbler-tuna.ts.net`) if `tailscale` is installed and logged in.
-/// Used only to print a post-install hint; silent on any error.
-fn tailscale_self_dns_name() -> Option<String> {
-    let out = std::process::Command::new("tailscale")
-        .args(["status", "--json"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    // Self comes before Peer in the JSON, so the first DNSName is ours.
-    // Parse manually to avoid pulling in a JSON crate just for this hint;
-    // `tailscale status --json` pretty-prints, so we tolerate whitespace
-    // between the key and its string value.
-    let body = std::str::from_utf8(&out.stdout).ok()?;
-    let after_key = body.split_once("\"DNSName\"")?.1;
-    let after_colon = after_key
-        .trim_start()
-        .strip_prefix(':')?
-        .trim_start()
-        .strip_prefix('"')?;
-    let (value, _) = after_colon.split_once('"')?;
-    let name = value.trim_end_matches('.');
-    name.ends_with(".ts.net").then(|| name.to_string())
-}
+/// `*.internal`, which unlike `*.localhost` does not auto-resolve).
 
 /// the system trust bundle for curl/wget/Firefox-on-p11-kit users.
 ///
@@ -1043,90 +1055,81 @@ fn add_ca_to_nssdb(nss_arg: &str, ca: &std::path::Path, context: &str) {
     }
 }
 
-/// Ensure TLS is configured when a service needs HTTPS.
-/// Prompts the user to choose a TLS provider if not already configured.
-async fn ensure_tls_configured(
+/// Allocate a Tailscale serve port and resolve the local node's MagicDNS
+/// FQDN, returning `(url, port)`. Factored out because both the initial
+/// `--tailscale` resolution AND the cleanup-and-retry path call it: a
+/// killed previous install can leave its port reservation in config, so
+/// after cleanup we re-run this against the cleaned config to reclaim
+/// the original port.
+fn derive_tailscale_url_and_port(
     config: &Config,
-    paths: &ConfigPaths,
-    interactive: bool,
-) -> Result<()> {
-    // Already configured
-    if let Some(ref tls) = config.tls {
-        match tls {
-            TlsConfig::Caddy => {
-                // Ensure Caddy is installed (may have been removed or config edited manually)
-                let caddy_installed = config
-                    .services
-                    .iter()
-                    .any(|s| WellKnownService::Caddy.matches(&s.name));
-                if !caddy_installed {
-                    println!("\nInstalling caddy (TLS provider)...\n");
-                    Box::pin(run(
-                        &[WellKnownService::Caddy.to_string()],
-                        None,
-                        false,
-                        None,
-                        &[],
-                        false,
-                        false,
-                        true,
-                    ))
-                    .await?;
-                }
-            }
-            TlsConfig::None => {
-                println!(
-                    "  NOTE: This service requires HTTPS — make sure it's configured externally."
-                );
-            }
-            TlsConfig::Custom { .. } => {}
-        }
-        return Ok(());
-    }
+) -> Result<(String, u16)> {
+    let port = ryra_core::config::schema::allocate_tailscale_port(config)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let node = ryra_core::system::tailscale::self_dns_name().ok_or_else(|| {
+        anyhow::anyhow!("--tailscale: no logged-in tailnet (preflight should have caught this)")
+    })?;
+    Ok((tailscale_serve_url(&node, port), port))
+}
 
-    // Not configured yet. In non-interactive mode, auto-configure TLS via Caddy
-    // if Caddy is already installed — the user has implicitly opted in by
-    // installing Caddy first. Otherwise bail with a helpful message.
-    if !interactive {
-        let caddy_installed = config
-            .services
-            .iter()
-            .any(|s| WellKnownService::Caddy.matches(&s.name));
-        if caddy_installed {
-            let mut cfg = config.clone();
-            cfg.tls = Some(TlsConfig::Caddy);
-            paths.ensure_dirs()?;
-            ryra_core::config::save_config(&paths.config_file, &cfg)?;
-            println!("  TLS auto-configured (provider: caddy)");
-            return Ok(());
-        }
-        bail!(
-            "this service requires HTTPS — configure [tls] in ryra.toml first\n\
-             Example:\n  [tls]\n  provider = \"caddy\""
-        );
+/// URL `tailscale serve` actually exposes for `(node, port)`. Port 443 is
+/// the default HTTPS port — `tailscale serve --https=443` returns
+/// `https://<node>/` without the suffix, and OIDC libraries that
+/// string-compare issuer URLs reject `https://<node>:443/` as a mismatch
+/// for the bare form. So we omit `:443` here and keep `:8443` / `:10000`
+/// since those need explicit ports to reach.
+fn tailscale_serve_url(node: &str, port: u16) -> String {
+    if port == 443 {
+        format!("https://{node}")
+    } else {
+        format!("https://{node}:{port}")
     }
+}
 
-    println!("\nThis service requires HTTPS.\n");
+/// True when a service URL targets Caddy's local-CA `*.internal` domain.
+/// Used to gate `/etc/hosts` writes and CA trust setup — Tailscale and
+/// External URLs handle DNS / trust through other paths.
+fn service_url_is_caddy_local(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        .is_some_and(|h| {
+            h.ends_with(&format!(".{}", ryra_core::config::schema::CADDY_LOCAL_DOMAIN))
+        })
+}
+
+/// Interactive prompt: how should this service be reachable? Returns the
+/// browser-visible URL plus the allocated `tailscale serve` port (if any),
+/// after applying any side-effects the choice implies (installing Caddy,
+/// running tailscale preflight, etc.).
+///
+/// Called from the per-service URL resolver when needs_https is true and
+/// neither `--url` nor `--tailscale` was given.
+async fn prompt_exposure_for(
+    service: &str,
+    config: &Config,
+) -> Result<(String, Option<u16>)> {
     let items = &[
-        "Caddy (automatic HTTPS — recommended)",
-        "Custom certificates (provide cert/key paths)",
-        "None (I'll handle TLS myself)",
+        "Local — Caddy on *.internal (single machine, local CA)",
+        "Tailscale — exposed on your tailnet (publicly-trusted cert)",
+        "Custom URL — you'll handle TLS / reverse proxy",
     ];
     let selection = dialoguer::Select::new()
-        .with_prompt("How would you like to handle TLS?")
+        .with_prompt(format!("How will '{service}' be reachable?"))
         .items(items)
         .default(0)
         .interact()?;
 
-    let tls = match selection {
+    match selection {
         0 => {
-            // Ensure Caddy is installed
+            // Local: install Caddy if it isn't already there, then derive
+            // the *.internal URL using its allocated HTTPS port.
             let caddy_installed = config
                 .services
                 .iter()
                 .any(|s| WellKnownService::Caddy.matches(&s.name));
             if !caddy_installed {
-                println!("\nInstalling caddy...\n");
+                println!("\nInstalling caddy (local HTTPS provider)...\n");
                 Box::pin(run(
                     &[WellKnownService::Caddy.to_string()],
                     None,
@@ -1139,45 +1142,42 @@ async fn ensure_tls_configured(
                 ))
                 .await?;
             }
-            TlsConfig::Caddy
+            let config = ryra_core::config::load_or_default(
+                &ryra_core::config::ConfigPaths::resolve()?.config_file,
+            )?;
+            let caddy_https_port = config
+                .services
+                .iter()
+                .find(|s| WellKnownService::Caddy.matches(&s.name))
+                .and_then(|s| s.ports.get("https").copied())
+                .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
+            Ok((
+                format!(
+                    "https://{service}.{}:{caddy_https_port}",
+                    ryra_core::config::schema::CADDY_LOCAL_DOMAIN
+                ),
+                None,
+            ))
         }
         1 => {
-            let cert: String = Input::new()
-                .with_prompt("  Path to certificate (fullchain.pem)")
-                .interact_text()?;
-            let key: String = Input::new()
-                .with_prompt("  Path to private key (privkey.pem)")
-                .interact_text()?;
-            let cert_path = std::path::PathBuf::from(&cert);
-            let key_path = std::path::PathBuf::from(&key);
-            if !cert_path.exists() {
-                bail!("certificate file not found: {cert}");
+            // Tailscale: same path as `--tailscale` flag — preflight, allocate,
+            // derive URL. Failures bail rather than save partial state.
+            if let Err(e) = ryra_core::system::preflight::check_tailscale_runtime() {
+                bail!("Tailscale not ready:\n\n{e}");
             }
-            if !key_path.exists() {
-                bail!("private key file not found: {key}");
-            }
-            TlsConfig::Custom {
-                cert: cert_path,
-                key: key_path,
-            }
+            let port = ryra_core::config::schema::allocate_tailscale_port(config)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let node = ryra_core::system::tailscale::self_dns_name()
+                .ok_or_else(|| anyhow::anyhow!("tailscale: not logged in"))?;
+            Ok((tailscale_serve_url(&node, port), Some(port)))
         }
         _ => {
-            println!("  Make sure HTTPS is configured externally before using this service.");
-            TlsConfig::None
+            let url: String = Input::new()
+                .with_prompt(format!("Public URL for '{service}'"))
+                .interact_text()?;
+            Ok((url, None))
         }
-    };
-
-    // Reload config from disk — Caddy install may have updated it
-    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
-    config.tls = Some(tls);
-    paths.ensure_dirs()?;
-    ryra_core::config::save_config(&paths.config_file, &config)?;
-    println!(
-        "  TLS configured. Saved to {}\n",
-        paths.config_file.display()
-    );
-
-    Ok(())
+    }
 }
 
 /// Auto-install inbucket and point `config.smtp` at it for `--smtp=inbucket`.
@@ -1237,8 +1237,18 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
     Ok(())
 }
 
-/// Auto-install authelia when --auth requires it.
-async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
+/// Auto-install authelia when `--auth` requires it.
+///
+/// Propagates the parent invocation's `--tailscale` flag so that
+/// `ryra add seafile --auth --tailscale` ends up with both seafile *and*
+/// authelia exposed on the tailnet — without that propagation, seafile
+/// would hit a tailnet hostname and authelia would fall back to Caddy
+/// local, which a tailnet device can't resolve.
+///
+/// Authelia's URL is otherwise resolved by the recursive `run()` call:
+/// it goes through the same `--url` / `--tailscale` / Caddy-auto / prompt
+/// flow as any service install, so all the URL logic lives in one place.
+async fn ensure_dependencies(auth: bool, tailscale: bool, interactive: bool) -> Result<()> {
     let config = ryra_core::config::load_or_default(
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
@@ -1253,32 +1263,6 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Caddy is needed for authelia OIDC when TLS provider is caddy.
-    // The TLS prompt (ensure_tls_configured) handles Caddy installation
-    // when the user picks caddy as their TLS provider, so we only need
-    // to install Caddy here if tls is already set to caddy but Caddy
-    // isn't installed yet (e.g., config was edited manually).
-    let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
-    let caddy_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Caddy.matches(&s.name));
-    if is_caddy_tls && !caddy_installed {
-        println!("\nInstalling caddy (TLS provider)...\n");
-        Box::pin(run(
-            &[WellKnownService::Caddy.to_string()],
-            None,
-            false,
-            None,
-            &[],
-            false,
-            false,
-            true,
-        ))
-        .await?;
-    }
-
-    // Install authelia
     if interactive {
         let confirm = Confirm::new()
             .with_prompt("Authelia (SSO provider) is not installed. Install it?")
@@ -1287,42 +1271,20 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
         if !confirm {
             bail!("authelia is required for --auth");
         }
-        // Prompt for authelia's URL
-        let authelia_url: String = Input::new()
-            .with_prompt("URL for Authelia")
-            .default("https://auth.internal".to_string())
-            .interact_text()?;
-        println!("\nInstalling authelia...\n");
-        Box::pin(run(
-            &[WellKnownService::Authelia.to_string()],
-            Some(&authelia_url),
-            false,
-            None,
-            &[],
-            false,
-            false,
-            true,
-        ))
-        .await?;
-        setup_host_access(&[&authelia_url]);
-    } else {
-        // Non-interactive: need AUTHELIA_URL in env
-        let authelia_url =
-            std::env::var("AUTHELIA_URL").unwrap_or_else(|_| "https://auth.internal".to_string());
-        println!("\nInstalling authelia...\n");
-        Box::pin(run(
-            &[WellKnownService::Authelia.to_string()],
-            Some(&authelia_url),
-            false,
-            None,
-            &[],
-            false,
-            false,
-            true,
-        ))
-        .await?;
-        setup_host_access(&[&authelia_url]);
     }
+
+    println!("\nInstalling authelia...\n");
+    Box::pin(run(
+        &[WellKnownService::Authelia.to_string()],
+        None,
+        false,
+        None,
+        &[],
+        tailscale,
+        false,
+        true,
+    ))
+    .await?;
 
     Ok(())
 }
@@ -1352,43 +1314,14 @@ async fn ensure_auth_for_add(
                 return Ok(false);
             }
 
-            // Prompt for authelia URL
-            let authelia_url: String = if super::is_interactive() {
-                Input::new()
-                    .with_prompt("URL for Authelia")
-                    .default("https://auth.internal".to_string())
-                    .interact_text()?
-            } else {
-                std::env::var("AUTHELIA_URL")
-                    .unwrap_or_else(|_| "https://auth.internal".to_string())
-            };
-            // Caddy is needed when TLS provider is caddy.
-            let is_caddy_tls = matches!(config.tls, Some(TlsConfig::Caddy));
-            let caddy_installed = config
-                .services
-                .iter()
-                .any(|s| WellKnownService::Caddy.matches(&s.name));
-            if is_caddy_tls && !caddy_installed {
-                println!("\nInstalling caddy (TLS provider)...\n");
-                Box::pin(run(
-                    &[WellKnownService::Caddy.to_string()],
-                    None,
-                    false,
-                    None,
-                    &[],
-                    false,
-                    dry_run,
-                    true,
-                ))
-                .await?;
-                *config = ryra_core::config::load_or_default(&paths.config_file)?;
-            }
-
             println!("\nInstalling authelia...\n");
-            // Recursively install authelia, then reload config
+            // The recursive run() handles URL resolution (--url / --tailscale /
+            // Caddy-auto / prompt) the same way any other service add does, so
+            // there's a single code path for all "pick where authelia lives"
+            // logic. Caddy gets installed inline if the user picks Local.
             Box::pin(run(
                 &[WellKnownService::Authelia.to_string()],
-                Some(&authelia_url),
+                None,
                 false,
                 None,
                 &[],
@@ -1397,9 +1330,6 @@ async fn ensure_auth_for_add(
                 true,
             ))
             .await?;
-            if !dry_run {
-                setup_host_access(&[&authelia_url]);
-            }
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
             if config.auth.is_some() {

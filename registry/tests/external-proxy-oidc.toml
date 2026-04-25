@@ -54,21 +54,17 @@ echo '127.0.0.1 auth.test.local vikunja.test.local' | sudo tee -a /etc/hosts > /
 """
 timeout = 180
 
-# Pre-seed ryra's config with tls=none. Without this, adding authelia
-# (which has `https = "required"`) bails in non-interactive mode
-# because no TLS provider is configured and Caddy isn't installed.
-# Setting tls=none says "I'll handle HTTPS myself" — exactly the
-# external-proxy story.
+# No [tls] block needed — ryra's TlsConfig was removed in favour of
+# per-service URL inspection. authelia is added below with explicit
+# `--url https://auth.test.local`, which both satisfies the `https =
+# "always"` requirement and tells ryra to template against the
+# user-supplied hostname (handled by nginx, not Caddy).
 [[steps]]
 action = "shell"
-name = "declare-external-tls"
+name = "ensure-config-dir"
 run = """
 set -e
 mkdir -p $HOME/.config/ryra
-cat > $HOME/.config/ryra/ryra.toml <<'EOF'
-[tls]
-provider = "none"
-EOF
 """
 timeout = 5
 

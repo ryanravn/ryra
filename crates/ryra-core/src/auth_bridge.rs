@@ -46,8 +46,16 @@ pub struct AuthBridgeParams<'a> {
 }
 
 /// Build auth-bridge artifacts for a service. Returns `Ok(None)` when the
-/// bridge does not apply — either the caller isn't using auth, or Caddy/
-/// Authelia aren't installed, or the service is one of those two itself.
+/// bridge does not apply — the caller isn't using auth, the service is
+/// authelia/caddy itself, authelia/Caddy aren't yet installed, or
+/// authelia's URL isn't a Caddy-local hostname (`*.internal`).
+///
+/// Dispatch is driven by authelia's URL: when the hostname is `*.internal`,
+/// Caddy is the internal TLS terminator and we build the existing bridge
+/// (CA bundle, alias-to-Caddy, host-resolve script). Other URLs (Tailscale
+/// FQDNs, public domains) imply the user is running their own internal
+/// trust path, which ryra doesn't construct yet — bridge returns None and
+/// runtime OIDC across containers is the user's responsibility for now.
 pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     if !params.enable_auth {
         return Ok(None);
@@ -62,14 +70,27 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
         .services
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name));
+    let Some(authelia) = authelia else {
+        return Ok(None);
+    };
+    // Bridge applies only when authelia is reachable via a Caddy-fronted
+    // *.internal hostname. Other hostnames mean another trust path is in
+    // play (Tailscale serve, user's external proxy) and ryra doesn't have
+    // matching client-side plumbing yet.
+    let authelia_is_caddy_local = authelia
+        .url
+        .as_deref()
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        .is_some_and(|h| h.ends_with(".internal"));
+    if !authelia_is_caddy_local {
+        return Ok(None);
+    }
     let caddy_installed = params
         .config
         .services
         .iter()
         .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-    let Some(authelia) = authelia else {
-        return Ok(None);
-    };
     if !caddy_installed {
         return Ok(None);
     }
@@ -215,6 +236,7 @@ mod tests {
             ports: BTreeMap::new(),
             auth_kind: None,
             url: url.map(String::from),
+            tailscale_port: None,
             installed: true,
         }
     }
@@ -298,6 +320,52 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "authelia",
+            enable_auth: true,
+            config: &cfg,
+            service_data: tmp.path(),
+        })?;
+        assert!(out.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn returns_none_for_non_internal_authelia_url() -> TestResult {
+        // Authelia at a non-`*.internal` URL means another trust path is
+        // in play (Tailscale serve, user's external proxy). ryra doesn't
+        // construct that bridge — runtime OIDC across containers is the
+        // user's responsibility for non-Caddy deployments.
+        let tmp = tempfile::tempdir()?;
+        let cfg = config_with(
+            vec![
+                installed("authelia", Some("https://auth.test.local")),
+                installed("caddy", None),
+            ],
+            None,
+        );
+        let out = build(&AuthBridgeParams {
+            service_name: "forgejo",
+            enable_auth: true,
+            config: &cfg,
+            service_data: tmp.path(),
+        })?;
+        assert!(out.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn returns_none_for_authelia_url_without_host() -> TestResult {
+        // Defensive: a URL that fails to parse or lacks a host shouldn't
+        // crash the builder — it should bail cleanly.
+        let tmp = tempfile::tempdir()?;
+        let cfg = config_with(
+            vec![
+                installed("authelia", Some("not-a-url")),
+                installed("caddy", None),
+            ],
+            None,
+        );
+        let out = build(&AuthBridgeParams {
+            service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
             service_data: tmp.path(),
@@ -393,17 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn skips_auth_hosts_when_authelia_has_no_url() -> TestResult {
+    fn returns_none_when_authelia_has_no_url() -> TestResult {
+        // Bridge dispatch reads authelia's URL hostname; without one, ryra
+        // can't tell if the deployment is Caddy-local or something else, so
+        // it bails rather than guessing.
         let tmp = tempfile::tempdir()?;
-        let service_data = tmp.path().join("forgejo");
-        let bridge = build_forgejo_bridge(&service_data, None)?;
-
-        let paths = write_paths(&bridge);
-        assert!(paths.contains(&service_data.join("ca-bundle.crt").as_path()));
-        assert!(paths.contains(&service_data.join("refresh-ca-bundle.sh").as_path()));
-        assert!(!paths.contains(&service_data.join("resolve-auth-host.sh").as_path()));
-        assert!(!paths.contains(&service_data.join("auth-hosts.txt").as_path()));
-        assert!(!bridge.volumes.iter().any(|v| v.contains("/etc/hosts")));
+        let cfg = config_with(
+            vec![installed("authelia", None), installed("caddy", None)],
+            None,
+        );
+        let out = build(&AuthBridgeParams {
+            service_name: "forgejo",
+            enable_auth: true,
+            config: &cfg,
+            service_data: tmp.path(),
+        })?;
+        assert!(out.is_none());
         Ok(())
     }
 
@@ -437,7 +510,9 @@ mod tests {
     fn auth_hosts_contains_authelia_hostname() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.test.local"))?;
+        // *.internal is the bridge's domain — non-internal URLs fall
+        // outside Caddy-local dispatch and don't get a bridge.
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.internal"))?;
 
         let hosts_step = bridge
             .steps
@@ -447,7 +522,7 @@ mod tests {
                 _ => None,
             })
             .ok_or("auth-hosts.txt step missing")?;
-        assert_eq!(hosts_step.content, "127.0.0.1 auth.test.local\n");
+        assert_eq!(hosts_step.content, "127.0.0.1 auth.internal\n");
         Ok(())
     }
 
