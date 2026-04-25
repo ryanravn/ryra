@@ -47,8 +47,8 @@ prompt = "Admin username"
 
 [[env]]
 name = "AUTHELIA_ADMIN_PASSWORD"
-value = ""
-kind = "required"
+value = "{{secret.admin_password}}"
+kind = "prompted"
 prompt = "Admin password"
 
 [[env]]

@@ -260,13 +260,12 @@ pub async fn ensure_image(
 /// Ensure a browser-ready image exists (base image + bun + playwright + chromium).
 /// Built on top of the base prepared image — one-time operation.
 pub async fn ensure_browser_image(
+    base: &Image,
     distro: &Distro,
     redownload: bool,
     use_kvm: bool,
     max_memory_mb: u32,
 ) -> Result<Image> {
-    // Ensure base image first (use default RAM for base — browser snapshot overrides)
-    let base = ensure_image(distro, redownload, use_kvm, max_memory_mb).await?;
     let cache = cache_dir()?;
     let browser_path = cache.join(distro.browser_prepared_filename());
 
@@ -332,8 +331,8 @@ pub async fn ensure_browser_image(
 
     Ok(Image {
         path: browser_path,
-        efi_code: base.efi_code,
-        efi_vars_template: base.efi_vars_template,
+        efi_code: base.efi_code.clone(),
+        efi_vars_template: base.efi_vars_template.clone(),
         prepared: true,
         snapshot,
     })

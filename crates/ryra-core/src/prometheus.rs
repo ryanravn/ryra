@@ -46,11 +46,6 @@ pub fn register_scrape_target(
     if !service_def.integrations.prometheus || !prometheus_installed {
         return Ok(Vec::new());
     }
-    if WellKnownService::Prometheus.matches(service_name) {
-        // Prometheus scrapes itself via a static_config in its own
-        // prometheus.yml, not via file_sd. Skip.
-        return Ok(Vec::new());
-    }
     let container_port = match service_def.ports.first() {
         Some(p) => p.container_port,
         None => return Ok(Vec::new()),
@@ -66,9 +61,6 @@ pub fn register_scrape_target(
 /// No-op if the target file doesn't exist. Safe to call when prometheus
 /// was never installed — `Step::RemoveFile` is `rm -f` under the hood.
 pub fn unregister_scrape_target(service_name: &str) -> Result<Vec<Step>> {
-    if WellKnownService::Prometheus.matches(service_name) {
-        return Ok(Vec::new());
-    }
     let path = target_file(service_name)?;
     if !path.exists() {
         return Ok(Vec::new());

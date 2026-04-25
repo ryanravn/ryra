@@ -127,6 +127,8 @@ prompt = "Studio dashboard username"
 [[env]]
 name = "DASHBOARD_PASSWORD"
 value = "{{secret.dashboard_password}}"
+kind = "prompted"
+prompt = "Dashboard password"
 
 # --- Auth (GoTrue) ---
 

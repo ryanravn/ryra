@@ -58,6 +58,13 @@ service = "immich"
 poll = { interval = 5, attempts = 60 }
 timeout = 360
 [[tests.steps]]
+action = "http"
+name = "immich-caddy-ready"
+url = "https://immich.internal:8443/api/server/ping"
+service = "immich"
+poll = { interval = 2, attempts = 30 }
+timeout = 120
+[[tests.steps]]
 action = "shell"
 name = "create-admin"
 run = """

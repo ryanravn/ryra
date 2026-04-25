@@ -86,6 +86,8 @@ prompt = "Admin email"
 [[env]]
 name = "INIT_SEAFILE_ADMIN_PASSWORD"
 value = "{{secret.admin_password}}"
+kind = "prompted"
+prompt = "Admin password"
 
 # --- Redis cache ---
 

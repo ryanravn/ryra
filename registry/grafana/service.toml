@@ -28,8 +28,8 @@ prompt = "Admin username"
 
 [[env]]
 name = "GF_SECURITY_ADMIN_PASSWORD"
-value = ""
-kind = "required"
+value = "{{secret.admin_password}}"
+kind = "prompted"
 prompt = "Admin password"
 
 [[env]]

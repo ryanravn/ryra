@@ -95,7 +95,7 @@ value = "{{service.domain | default('_')}}"
 
 [[env]]
 name = "ZAMMAD_FQDN"
-value = "{{ service.domain | default('127.0.0.1:' ~ service.port) }}"
+value = "{{ service.external_authority | default('127.0.0.1:' ~ service.port) }}"
 
 [[env]]
 name = "ZAMMAD_HTTP_TYPE"
@@ -113,6 +113,8 @@ value = "2"
 [[env]]
 name = "ZAMMAD_ADMIN_PASSWORD"
 value = "{{secret.admin_password}}"
+kind = "prompted"
+prompt = "Admin password"
 
 # AUTOWIZARD_RELATIVE_PATH steers the entrypoint's base64-decoded JSON into
 # the shared `zammad-storage` volume (mounted at /opt/zammad/storage in all
