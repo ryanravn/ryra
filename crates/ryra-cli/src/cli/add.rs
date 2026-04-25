@@ -837,6 +837,8 @@ fn setup_host_access(domains: &[&str]) {
     let hostnames: Vec<String> = domains
         .iter()
         .filter_map(|d| url::Url::parse(d).ok().and_then(|u| u.host_str().map(String::from)))
+        // Tailscale MagicDNS already resolves *.ts.net — skip /etc/hosts dance.
+        .filter(|h| !h.to_ascii_lowercase().ends_with(".ts.net"))
         .collect();
     let hosts_content = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
     let mut missing_hosts: Vec<&str> = hostnames

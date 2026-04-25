@@ -105,6 +105,19 @@ pub fn quadlet_dir() -> Result<PathBuf> {
     Ok(base.join("containers").join("systemd"))
 }
 
+/// True if the URL's host is a Tailscale MagicDNS name (`*.ts.net`). When
+/// this matches, ryra skips the dances it does for `.internal` (Caddy route,
+/// `/etc/hosts` entry, local CA trust) — Tailscale's tunnel already provides
+/// routing, DNS, and encryption. Templates still populate normally so
+/// service-specific config (trusted_domains, OIDC callbacks) picks up the
+/// Tailscale hostname.
+pub fn is_tailscale_url(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+        .is_some_and(|h| h.ends_with(".ts.net"))
+}
+
 /// Look up Caddy's HTTPS port from the installed service record.
 pub(crate) fn caddy_https_port(config: &Config) -> u16 {
     config
@@ -793,8 +806,12 @@ pub fn add_service(
 
     // 9. Add Caddy route for services with a URL when Caddy is installed.
     // This creates a reverse proxy from the service's domain to its container port.
+    //
+    // Tailscale URLs (*.ts.net) skip this: the service is already reachable on
+    // its host port via the tailnet, and MagicDNS handles the hostname.
     if let Some(url) = url
         && !WellKnownService::Caddy.matches(service_name)
+        && !is_tailscale_url(url)
     {
         if caddy_installed {
             let parsed = url::Url::parse(url)
@@ -1414,6 +1431,25 @@ pub struct ServiceDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tailscale_url_matches() {
+        assert!(is_tailscale_url("http://debian.cobbler-tuna.ts.net"));
+        assert!(is_tailscale_url("http://debian.cobbler-tuna.ts.net:10001/"));
+        assert!(is_tailscale_url("https://foo.example-net.ts.net"));
+        assert!(is_tailscale_url("http://HOST.COBBLER-TUNA.TS.NET"));
+    }
+
+    #[test]
+    fn tailscale_url_rejects() {
+        assert!(!is_tailscale_url("https://nextcloud.internal:8443"));
+        assert!(!is_tailscale_url("https://example.com"));
+        assert!(!is_tailscale_url("http://127.0.0.1:10001"));
+        // lookalike — must be exact `.ts.net` suffix
+        assert!(!is_tailscale_url("https://ts.net"));
+        assert!(!is_tailscale_url("https://evil-ts.net.example.com"));
+        assert!(!is_tailscale_url("not a url"));
+    }
 
     // resolve_extra_networks positional args:
     // (name, enable_auth, authelia_installed, caddy_installed, inbucket_installed,
