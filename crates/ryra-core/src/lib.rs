@@ -1,4 +1,5 @@
 pub mod auth_bridge;
+pub mod tailscale_sidecar;
 pub mod authelia;
 pub mod caddy;
 pub mod config;
@@ -161,15 +162,6 @@ pub enum Step {
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
     CopyFile { src: PathBuf, dst: PathBuf },
-    /// Configure `tailscale serve` to terminate TLS on `https_port` and
-    /// proxy to a local service on `target_port`. Persistent across reboots
-    /// (tailscaled stores the serve config). Requires sudo — execution
-    /// follows the `setup_host_access` pattern: try `sudo -n`, fall back
-    /// to printing the command for the user to run.
-    ///
-    /// `tailscale serve` only binds 443 / 8443 / 10000 for HTTPS, so
-    /// `https_port` must be one of those.
-    TailscaleServe { https_port: u16, target_port: u16 },
 }
 
 impl Step {
@@ -194,12 +186,6 @@ impl Step {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
-            Step::TailscaleServe {
-                https_port,
-                target_port,
-            } => format!(
-                "sudo tailscale serve --bg --https={https_port} http://127.0.0.1:{target_port}"
-            ),
         }
     }
 }
@@ -489,6 +475,7 @@ pub fn add_service(
     repo_dir: &Path,
     pre_built_ctx: Option<BTreeMap<String, String>>,
     port_in_use: &dyn Fn(u16) -> bool,
+    tailscale_enabled: bool,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
@@ -728,6 +715,7 @@ pub fn add_service(
             podman_args: &podman_args,
             extra_exec_start_pre: &extra_exec_start_pre,
             port_vars: &port_vars,
+            tailscale_enabled,
         })?;
 
     // Generate warnings
@@ -773,6 +761,48 @@ pub fn add_service(
     // 3. Write quadlet files from bundle
     for file in bundle.quadlet_files {
         steps.push(Step::WriteFile(file));
+    }
+
+    // 3b. Tailscale sidecar quadlet — when --tailscale was used, every
+    // service gets its own `ts-<name>` tailscaled in a shared netns,
+    // so the service is reachable at `https://<name>.<tailnet>.ts.net/`
+    // with a publicly-trusted cert and no host-side `tailscale serve`.
+    if tailscale_enabled {
+        let auth_key = config
+            .tailscale
+            .as_ref()
+            .map(|t| t.auth_key.clone())
+            .ok_or_else(|| {
+                Error::AuthContext(
+                    "tailscale_enabled was set but config.tailscale.auth_key is missing — \
+                     CLI should have prompted for it before calling add_service"
+                        .into(),
+                )
+            })?;
+        // The first declared port is conventionally the HTTP port the
+        // service listens on inside its container; that's what tailscale
+        // serve proxies to via the shared netns's localhost.
+        let container_port = reg_service
+            .def
+            .ports
+            .first()
+            .map(|p| p.container_port)
+            .ok_or_else(|| {
+                Error::Bundle(format!(
+                    "service '{service_name}' has no ports — can't wire tailscale serve"
+                ))
+            })?;
+        steps.push(Step::PullImage {
+            image: "docker.io/tailscale/tailscale:stable".to_string(),
+        });
+        let sidecar = tailscale_sidecar::build(
+            service_name,
+            container_port,
+            &auth_key,
+            &quadlet_path,
+        );
+        steps.push(Step::WriteFile(sidecar.container_quadlet));
+        steps.push(Step::WriteFile(sidecar.state_volume_quadlet));
     }
 
     // 4. Write config files from bundle
@@ -958,6 +988,25 @@ pub fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names:
     })
 }
 
+/// Extension of `quadlet_belongs_to` that also recognises the
+/// `ts-<service>` tailscale-sidecar quadlets emitted when a service is
+/// installed with `--tailscale`. Strips the `ts-` prefix and re-runs
+/// the standard ownership check so the all-names tie-breaker still
+/// works for nested service names.
+fn quadlet_or_ts_sidecar_belongs_to(
+    filename: &str,
+    service_name: &str,
+    all_service_names: &[&str],
+) -> bool {
+    if quadlet_belongs_to(filename, service_name, all_service_names) {
+        return true;
+    }
+    match filename.strip_prefix("ts-") {
+        Some(rest) => quadlet_belongs_to(rest, service_name, all_service_names),
+        None => false,
+    }
+}
+
 /// How destructive `remove_service` should be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoveMode {
@@ -995,7 +1044,9 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
         for entry in entries.flatten() {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
-            if !quadlet_belongs_to(&name, service_name, &all_names) {
+            // Catches both the service's own quadlets (foo.container,
+            // foo-db.container, …) and its `ts-foo*` tailscale sidecar.
+            if !quadlet_or_ts_sidecar_belongs_to(&name, service_name, &all_names) {
                 continue;
             }
             // Stop each .container unit before removing files
@@ -1114,8 +1165,10 @@ pub struct RecordPendingParams<'a> {
     pub repo_dir: &'a Path,
     /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
     pub url: Option<&'a str>,
-    /// `tailscale serve --https=<port>` allocation when `--tailscale` was used.
-    pub tailscale_port: Option<u16>,
+    /// True when `--tailscale` (or the "Tailscale" exposure prompt) was
+    /// used. Persisted on the InstalledService record so removal knows
+    /// to tear down the sibling `ts-<service>` sidecar quadlet.
+    pub tailscale_enabled: bool,
 }
 
 /// Record a service as pending installation (installed: false).
@@ -1134,7 +1187,7 @@ pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
         ports,
         auth_kind: params.auth_kind,
         url: params.url.map(|u| u.to_string()),
-        tailscale_port: params.tailscale_port,
+        tailscale_enabled: params.tailscale_enabled,
         installed: false,
     });
 
@@ -1237,11 +1290,13 @@ pub fn reset() -> Result<ResetResult> {
         for entry in entries.flatten() {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
-            // Only touch files belonging to a ryra-installed service
+            // Only touch files belonging to a ryra-installed service —
+            // including the `ts-<service>` tailscale sidecars when the
+            // service was installed with --tailscale.
             let is_ryra_file = config
                 .services
                 .iter()
-                .any(|s| quadlet_belongs_to(&name, &s.name, &all_names));
+                .any(|s| quadlet_or_ts_sidecar_belongs_to(&name, &s.name, &all_names));
             if !is_ryra_file {
                 continue;
             }
@@ -1490,21 +1545,6 @@ mod tests {
         assert!(!is_tailscale_url("not a url"));
     }
 
-    #[test]
-    fn tailscale_serve_step_renders_canonical_command() {
-        // The shell rendering matters because it's what dry-run shows the
-        // user, and it has to be a real, runnable `tailscale serve` invocation
-        // — the apply path uses the same args.
-        let s = Step::TailscaleServe {
-            https_port: 8443,
-            target_port: 9091,
-        };
-        assert_eq!(
-            s.to_command(),
-            "sudo tailscale serve --bg --https=8443 http://127.0.0.1:9091"
-        );
-    }
-
     // resolve_extra_networks positional args:
     // (name, enable_auth, authelia_installed, caddy_installed, inbucket_installed,
     //  prometheus_installed, has_url, has_smtp, has_prometheus)
@@ -1628,6 +1668,49 @@ mod tests {
         let all = &["foo", "foo-bar"];
         assert!(!quadlet_belongs_to("foo-bar.container", "foo", all));
         assert!(!quadlet_belongs_to("foo-bar-db.volume", "foo", all));
+    }
+
+    #[test]
+    fn ts_sidecar_belongs_to_owner_service() {
+        let all = &["seafile"];
+        assert!(quadlet_or_ts_sidecar_belongs_to(
+            "ts-seafile.container",
+            "seafile",
+            all
+        ));
+        assert!(quadlet_or_ts_sidecar_belongs_to(
+            "ts-seafile-state.volume",
+            "seafile",
+            all
+        ));
+    }
+
+    #[test]
+    fn ts_sidecar_respects_prefix_collision() {
+        // `ts-foo-bar.container` belongs to "foo-bar", not "foo".
+        let all = &["foo", "foo-bar"];
+        assert!(!quadlet_or_ts_sidecar_belongs_to(
+            "ts-foo-bar.container",
+            "foo",
+            all
+        ));
+        assert!(quadlet_or_ts_sidecar_belongs_to(
+            "ts-foo-bar.container",
+            "foo-bar",
+            all
+        ));
+    }
+
+    #[test]
+    fn ts_sidecar_helper_falls_back_to_regular_quadlet_check() {
+        // Plain `foo.container` (no ts- prefix) is still seen as belonging
+        // to foo — the sidecar check is additive, never restrictive.
+        let all = &["foo"];
+        assert!(quadlet_or_ts_sidecar_belongs_to(
+            "foo.container",
+            "foo",
+            all
+        ));
     }
 
     #[test]

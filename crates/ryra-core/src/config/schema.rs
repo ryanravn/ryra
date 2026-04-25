@@ -19,6 +19,11 @@ pub struct Config {
     pub admin_email: Option<String>,
     pub smtp: Option<SmtpCredentials>,
     pub auth: Option<AuthCredentials>,
+    /// Tailscale auth credential + cached tailnet metadata. Set on first
+    /// `--tailscale` install; reused for every subsequent service so the
+    /// user only ever pastes their key once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<TailscaleConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
     #[serde(default)]
@@ -109,6 +114,26 @@ impl AuthCredentials {
 /// has to dispatch on it (auth bridge, /etc/hosts writes).
 pub const CADDY_LOCAL_DOMAIN: &str = "internal";
 
+// --- Tailscale ---
+
+/// Auth credential + cached tailnet metadata. Stored in ryra.toml under
+/// `[tailscale]` so the user pastes their auth key once and every
+/// subsequent `--tailscale` install reuses it. Same file mode (0600) as
+/// SMTP/auth credentials, no separate secret file to manage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailscaleConfig {
+    /// Auth credential — accepts both `tskey-auth-…` (pre-auth key) and
+    /// `tskey-client-…` (OAuth client secret). The Tailscale container
+    /// detects the format from the prefix; ryra doesn't care which one.
+    pub auth_key: String,
+    /// Cached tailnet suffix (e.g. `cobbler-tuna.ts.net`). Resolved
+    /// lazily from `tailscale status --json` and remembered so we don't
+    /// re-shell out on every install. Empty `Option` means "resolve on
+    /// next install".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailnet: Option<String>,
+}
+
 // --- Registry entry ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,66 +159,18 @@ pub struct InstalledService {
     /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// `tailscale serve --https=<port>` allocation for this service when
-    /// `--tailscale` is used. Drawn from `TAILSCALE_HTTPS_PORTS` because
-    /// `tailscale serve` only binds those three ports for HTTPS. Persisted
-    /// so subsequent `ryra add --tailscale` calls don't re-allocate the
-    /// same port, and `ryra remove` knows what to tear down.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tailscale_port: Option<u16>,
+    /// True when this service was installed with `--tailscale` (or "Tailscale"
+    /// picked in the exposure prompt). Means the service has a sibling
+    /// `ts-<name>` sidecar quadlet running tailscaled in a shared netns,
+    /// joined to the user's tailnet as its own device. `ryra remove` uses
+    /// this to know it has to tear down the sidecar and its state volume.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tailscale_enabled: bool,
     /// Whether the service was fully installed (all steps completed).
     /// Services with `installed: false` are partially installed and can be
     /// retried with `ryra add` or cleaned up with `ryra remove`.
     #[serde(default)]
     pub installed: bool,
-}
-
-/// HTTPS ports `tailscale serve` is allowed to bind. Tailscale enforces
-/// this at the daemon level; ryra allocates from the pool when services
-/// are added with `--tailscale` and refuses the 4th request with a clear
-/// error pointing at the constraint.
-pub const TAILSCALE_HTTPS_PORTS: [u16; 3] = [443, 8443, 10000];
-
-/// Failure modes for `allocate_tailscale_port`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TailscalePortError {
-    /// All three of {443, 8443, 10000} are already in use by other services.
-    PoolExhausted { taken: Vec<u16> },
-}
-
-impl std::fmt::Display for TailscalePortError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TailscalePortError::PoolExhausted { taken } => {
-                let taken_str: Vec<String> = taken.iter().map(|p| p.to_string()).collect();
-                write!(
-                    f,
-                    "tailscale serve only supports 3 HTTPS ports per node \
-                     (443, 8443, 10000) and all are already used by ryra services: {}.\n\
-                     Options: drop --tailscale on this service (run on plain HTTP and \
-                     reach via tailnet IP), or front a path-routing reverse proxy on \
-                     one of the existing ports.",
-                    taken_str.join(", "),
-                )
-            }
-        }
-    }
-}
-
-/// Pick a free Tailscale HTTPS port for a new service, given the ports
-/// already taken by services in `config.services`.
-pub fn allocate_tailscale_port(config: &Config) -> Result<u16, TailscalePortError> {
-    let taken: Vec<u16> = config
-        .services
-        .iter()
-        .filter_map(|s| s.tailscale_port)
-        .collect();
-    for port in TAILSCALE_HTTPS_PORTS {
-        if !taken.contains(&port) {
-            return Ok(port);
-        }
-    }
-    Err(TailscalePortError::PoolExhausted { taken })
 }
 
 impl Config {
@@ -213,75 +190,72 @@ impl Config {
 mod tests {
     use super::*;
 
-    fn config_with_tailscale_ports(ports: &[u16]) -> Config {
-        let services: Vec<InstalledService> = ports
-            .iter()
-            .enumerate()
-            .map(|(i, p)| InstalledService {
-                name: format!("svc-{i}"),
-                version: "0.1.0".into(),
-                repo: "bundled".into(),
-                ports: BTreeMap::new(),
-                auth_kind: None,
-                url: None,
-                tailscale_port: Some(*p),
-                installed: true,
-            })
-            .collect();
-        Config {
-            services,
+    #[test]
+    fn tailscale_config_round_trip() {
+        let cfg = Config {
+            tailscale: Some(TailscaleConfig {
+                auth_key: "tskey-auth-XXXX".into(),
+                tailnet: Some("cobbler-tuna.ts.net".into()),
+            }),
             ..Config::default()
-        }
-    }
-
-    #[test]
-    fn allocate_first_tailscale_port_is_443() {
-        // Empty config → first allocation is the canonical primary port.
-        let cfg = Config::default();
-        assert_eq!(allocate_tailscale_port(&cfg), Ok(443));
-    }
-
-    #[test]
-    fn allocate_skips_taken_ports_in_order() {
-        let cfg = config_with_tailscale_ports(&[443]);
-        assert_eq!(allocate_tailscale_port(&cfg), Ok(8443));
-        let cfg = config_with_tailscale_ports(&[443, 8443]);
-        assert_eq!(allocate_tailscale_port(&cfg), Ok(10000));
-    }
-
-    #[test]
-    fn allocate_handles_out_of_order_takes() {
-        // User installed services in a non-canonical order: 10000, then 443.
-        // Allocator should still find 8443 — it's the *value* not the order.
-        let cfg = config_with_tailscale_ports(&[10000, 443]);
-        assert_eq!(allocate_tailscale_port(&cfg), Ok(8443));
-    }
-
-    #[test]
-    fn allocate_errors_when_pool_exhausted() {
-        let cfg = config_with_tailscale_ports(&[443, 8443, 10000]);
-        let err = allocate_tailscale_port(&cfg).unwrap_err();
-        match err {
-            TailscalePortError::PoolExhausted { taken } => {
-                // Order is the order ports appear in services, not the canonical order.
-                assert_eq!(taken.len(), 3);
-                assert!(taken.contains(&443));
-                assert!(taken.contains(&8443));
-                assert!(taken.contains(&10000));
-            }
-        }
-    }
-
-    #[test]
-    fn pool_exhausted_display_names_taken_ports_and_options() {
-        let err = TailscalePortError::PoolExhausted {
-            taken: vec![443, 8443, 10000],
         };
-        let s = format!("{err}");
-        assert!(s.contains("443"));
-        assert!(s.contains("8443"));
-        assert!(s.contains("10000"));
-        assert!(s.contains("path-routing")); // points user at the workaround
+        let serialized = toml::to_string(&cfg).unwrap();
+        assert!(serialized.contains("[tailscale]"));
+        assert!(serialized.contains("auth_key = \"tskey-auth-XXXX\""));
+        assert!(serialized.contains("tailnet = \"cobbler-tuna.ts.net\""));
+        let parsed: Config = toml::from_str(&serialized).unwrap();
+        let ts = parsed.tailscale.expect("[tailscale] should round-trip");
+        assert_eq!(ts.auth_key, "tskey-auth-XXXX");
+        assert_eq!(ts.tailnet.as_deref(), Some("cobbler-tuna.ts.net"));
     }
 
+    #[test]
+    fn tailscale_config_tailnet_optional() {
+        // Cached tailnet should be skipped on serialize when None — the
+        // first install resolves it lazily and writes it back; serialize
+        // shouldn't emit `tailnet = ""` for fresh configs.
+        let cfg = Config {
+            tailscale: Some(TailscaleConfig {
+                auth_key: "tskey-client-YYY".into(),
+                tailnet: None,
+            }),
+            ..Config::default()
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        assert!(!s.contains("tailnet"));
+    }
+
+    #[test]
+    fn installed_service_skips_tailscale_when_false() {
+        // Default-false: don't write `tailscale_enabled = false` on every
+        // service that doesn't use it — keeps ryra.toml tidy.
+        let svc = InstalledService {
+            name: "uptime-kuma".into(),
+            version: "0.1.0".into(),
+            repo: "bundled".into(),
+            ports: BTreeMap::new(),
+            auth_kind: None,
+            url: None,
+            tailscale_enabled: false,
+            installed: true,
+        };
+        let s = toml::to_string(&svc).unwrap();
+        assert!(!s.contains("tailscale_enabled"));
+    }
+
+    #[test]
+    fn installed_service_writes_tailscale_when_true() {
+        let svc = InstalledService {
+            name: "seafile".into(),
+            version: "0.1.0".into(),
+            repo: "bundled".into(),
+            ports: BTreeMap::new(),
+            auth_kind: None,
+            url: None,
+            tailscale_enabled: true,
+            installed: true,
+        };
+        let s = toml::to_string(&svc).unwrap();
+        assert!(s.contains("tailscale_enabled = true"));
+    }
 }

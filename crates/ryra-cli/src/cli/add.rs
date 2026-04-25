@@ -58,9 +58,7 @@ pub async fn run(
     }
 
     // --tailscale check fires here so a missing CLI / unlogged tailnet
-    // surfaces before any service planning. Sudo-optional: the actual
-    // `tailscale serve` step runs later via the apply path's sudo -n
-    // fallback (see apply.rs).
+    // surfaces before any service planning.
     if tailscale
         && let Err(e) = ryra_core::system::preflight::check_tailscale_runtime()
     {
@@ -68,6 +66,16 @@ pub async fn run(
     }
 
     let interactive = super::is_interactive();
+
+    // Tailscale auth key acquisition: when `--tailscale` is set and we
+    // don't already have one cached from a previous install, ask the
+    // user to paste one (or read from RYRA_TS_AUTHKEY in non-interactive
+    // runs). Saved to `config.tailscale.auth_key` so subsequent --tailscale
+    // installs are silent. Done up-front so a missing key fails fast,
+    // before any image pulls or service planning.
+    if tailscale && !dry_run {
+        ensure_tailscale_auth_key(interactive).await?;
+    }
 
     // "First add" = no ryra config on disk yet. Latch the answer before any
     // side-effect creates the file — we use this at the end to decide between
@@ -273,26 +281,20 @@ pub async fn run(
 
         // URL precedence:
         //   1. explicit --url (highest)
-        //   2. --tailscale (allocate port from {443, 8443, 10000} → derive URL)
+        //   2. --tailscale → https://<service>.<tailnet> (no port — each
+        //      service gets its own tailnet node via a sidecar tailscaled)
         //   3. Caddy installed + needs_https → auto-derive `*.internal`
         //   4. interactive prompt (Local/Tailscale/Custom) when needs_https
         //   5. None — service runs on plain http://127.0.0.1:<port>
         // Clap's `conflicts_with = "url"` on --tailscale means 1+2 don't collide.
-        //
-        // `mut` because the cleanup-and-retry path below may need to re-resolve
-        // the Tailscale port: a previous killed install can leave its
-        // `tailscale_port` reservation in config, which the allocator skips.
-        // After cleanup the reservation is gone, and re-allocating reclaims
-        // the originally-intended port.
-        let mut resolved_url: Option<String>;
-        let mut tailscale_port: Option<u16>;
+        let resolved_url: Option<String>;
+        let tailscale_enabled: bool;
         if let Some(u) = url {
             resolved_url = Some(u.to_string());
-            tailscale_port = None;
+            tailscale_enabled = false;
         } else if tailscale {
-            let (u, p) = derive_tailscale_url_and_port(&config)?;
-            resolved_url = Some(u);
-            tailscale_port = Some(p);
+            resolved_url = Some(derive_tailscale_url(service)?);
+            tailscale_enabled = true;
         } else if needs_https {
             let caddy_installed = config
                 .services
@@ -309,14 +311,14 @@ pub async fn run(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
                 ));
-                tailscale_port = None;
+                tailscale_enabled = false;
             } else if interactive && !dry_run {
-                let (chosen_url, chosen_port) =
+                let (chosen_url, chosen_ts) =
                     prompt_exposure_for(service, &config).await?;
                 // Reload after potential Caddy install inside the prompt.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
                 resolved_url = Some(chosen_url);
-                tailscale_port = chosen_port;
+                tailscale_enabled = chosen_ts;
             } else {
                 bail!(
                     "service '{service}' requires HTTPS but no exposure was selected.\n\
@@ -326,13 +328,11 @@ pub async fn run(
             }
         } else {
             resolved_url = None;
-            tailscale_port = None;
+            tailscale_enabled = false;
         }
         // Shadow the input `url` flag with the resolved URL so all the
         // `--url`-aware code below (template context, warnings, planner
-        // input) sees the value we actually intend to use. Re-borrowed
-        // each time it's needed so the cleanup-and-retry branch can
-        // still mutate `resolved_url`.
+        // input) sees the value we actually intend to use.
         let url: Option<&str> = resolved_url.as_deref();
 
         // Prompt for env vars based on their kind
@@ -451,7 +451,7 @@ pub async fn run(
         }
 
         // If a previous add failed partway, clean up before retrying.
-        let mut result = match ryra_core::add_service(
+        let result = match ryra_core::add_service(
             service,
             url,
             auth_kind.clone(),
@@ -463,6 +463,7 @@ pub async fn run(
             &repo_dir,
             prompt_ctx.clone(),
             &super::is_port_in_use,
+            tailscale_enabled,
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 // Two cases land here: a previous `ryra add` crashed mid-way
@@ -513,16 +514,14 @@ pub async fn run(
                 // port; cleanup just removed that reservation, so re-allocate
                 // against the freshly-cleaned config to reclaim the originally
                 // intended port (e.g. 443 instead of skipping to 8443).
-                if tailscale {
-                    let cleaned = ryra_core::config::load_or_default(&paths.config_file)?;
-                    let (u, p) = derive_tailscale_url_and_port(&cleaned)?;
-                    resolved_url = Some(u);
-                    tailscale_port = Some(p);
-                }
+                // (No URL re-resolution needed: with per-service tailnet
+                // nodes, the URL is `https://<service>.<tailnet>/` and
+                // doesn't depend on any pool that the killed previous
+                // install might have reserved.)
                 // Retry now that the partial state is gone
                 ryra_core::add_service(
                     service,
-                    resolved_url.as_deref(),
+                    url,
                     auth_kind.clone(),
                     auth || auth_kind.is_some(),
                     enable_smtp,
@@ -532,23 +531,16 @@ pub async fn run(
                     &repo_dir,
                     prompt_ctx.clone(),
                     &super::is_port_in_use,
+                    tailscale_enabled,
                 )?
             }
             other => other?,
         };
 
-        // --tailscale: append the `tailscale serve` step now that planning
-        // is done (we have the allocated host port). Kept as a post-plan
-        // append rather than threaded through `add_service` to avoid bloating
-        // the planner signature for what's purely a CLI-driven side-effect.
-        if let Some(https_port) = tailscale_port
-            && let Some((_, target_port)) = result.allocated_ports.first()
-        {
-            result.steps.push(ryra_core::Step::TailscaleServe {
-                https_port,
-                target_port: *target_port,
-            });
-        }
+        // (--tailscale: the per-service sidecar quadlet — `ts-<service>` —
+        // gets generated by add_service when `tailscale_enabled` is set.
+        // No host-side `tailscale serve` step is needed; each service has
+        // its own tailscaled now.)
 
         // Show warnings and confirm
         // Show port reassignment notes + reverse-proxy hints (both informational).
@@ -654,7 +646,7 @@ pub async fn run(
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
                 url: result.url.as_deref(),
-                tailscale_port,
+                tailscale_enabled,
             })?;
 
             // Preview what's about to happen — the user sees "pulls / writes /
@@ -1055,35 +1047,92 @@ fn add_ca_to_nssdb(nss_arg: &str, ca: &std::path::Path, context: &str) {
     }
 }
 
-/// Allocate a Tailscale serve port and resolve the local node's MagicDNS
-/// FQDN, returning `(url, port)`. Factored out because both the initial
-/// `--tailscale` resolution AND the cleanup-and-retry path call it: a
-/// killed previous install can leave its port reservation in config, so
-/// after cleanup we re-run this against the cleaned config to reclaim
-/// the original port.
-fn derive_tailscale_url_and_port(
-    config: &Config,
-) -> Result<(String, u16)> {
-    let port = ryra_core::config::schema::allocate_tailscale_port(config)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+/// Ensure `config.tailscale.auth_key` is set, prompting (interactive) or
+/// reading from `RYRA_TS_AUTHKEY` (non-interactive) if not.
+///
+/// Persists to ryra.toml so the user pastes their key once and every
+/// subsequent `--tailscale` install reuses it. Same single-paste UX as
+/// SMTP password / authelia URL today.
+async fn ensure_tailscale_auth_key(interactive: bool) -> Result<()> {
+    let paths = ryra_core::config::ConfigPaths::resolve()?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+    if config.tailscale.is_some() {
+        return Ok(()); // already cached
+    }
+
+    let auth_key = if interactive {
+        prompt_tailscale_auth_key()?
+    } else {
+        std::env::var("RYRA_TS_AUTHKEY").map_err(|_| {
+            anyhow::anyhow!(
+                "--tailscale needs a Tailscale auth key. Set RYRA_TS_AUTHKEY \
+                 (e.g. tskey-auth-XXX) or run interactively to be prompted.\n\
+                 Generate one at https://login.tailscale.com/admin/settings/keys"
+            )
+        })?
+    };
+
+    config.tailscale = Some(ryra_core::config::schema::TailscaleConfig {
+        auth_key,
+        tailnet: None,
+    });
+    paths.ensure_dirs()?;
+    ryra_core::config::save_config(&paths.config_file, &config)?;
+    println!("  ✓ Tailscale auth key saved to {}", paths.config_file.display());
+    Ok(())
+}
+
+/// Interactive prompt for a Tailscale auth key.
+///
+/// Accepts both `tskey-auth-…` (pre-auth key, simplest) and
+/// `tskey-client-…` (OAuth client secret — Tailscale's container
+/// auto-mints fresh per-device keys from it). Validates the prefix so
+/// pastes of the wrong thing (e.g. an API token, a tag name) get
+/// rejected with a clear hint instead of failing later.
+fn prompt_tailscale_auth_key() -> Result<String> {
+    println!();
+    println!("First-time Tailscale setup — paste an auth key.");
+    println!("  Generate at: https://login.tailscale.com/admin/settings/keys");
+    println!("  Recommended: Reusable=yes, Ephemeral=no");
+    println!();
+
+    let raw: String = Input::new()
+        .with_prompt("Tailnet auth key")
+        .validate_with(|input: &String| -> std::result::Result<(), &str> {
+            let s = input.trim();
+            if s.starts_with("tskey-auth-") || s.starts_with("tskey-client-") {
+                Ok(())
+            } else {
+                Err(
+                    "Auth keys start with `tskey-auth-` (pre-auth key) or \
+                     `tskey-client-` (OAuth client secret). \
+                     Generate one at https://login.tailscale.com/admin/settings/keys",
+                )
+            }
+        })
+        .interact_text()?;
+    Ok(raw.trim().to_string())
+}
+
+/// Build the `https://<service>.<tailnet>/` URL for a service installed
+/// with `--tailscale`. Each service gets its own tailnet node (via a
+/// sidecar tailscaled), so the hostname is `<service>` and the suffix
+/// is the local node's tailnet (e.g. `cobbler-tuna.ts.net`).
+///
+/// No port — `tailscale serve --https=443` from the sidecar runs at
+/// the standard HTTPS port, and putting `:443` in the URL trips up
+/// OIDC libraries that string-compare issuer URLs.
+fn derive_tailscale_url(service: &str) -> Result<String> {
     let node = ryra_core::system::tailscale::self_dns_name().ok_or_else(|| {
         anyhow::anyhow!("--tailscale: no logged-in tailnet (preflight should have caught this)")
     })?;
-    Ok((tailscale_serve_url(&node, port), port))
-}
-
-/// URL `tailscale serve` actually exposes for `(node, port)`. Port 443 is
-/// the default HTTPS port — `tailscale serve --https=443` returns
-/// `https://<node>/` without the suffix, and OIDC libraries that
-/// string-compare issuer URLs reject `https://<node>:443/` as a mismatch
-/// for the bare form. So we omit `:443` here and keep `:8443` / `:10000`
-/// since those need explicit ports to reach.
-fn tailscale_serve_url(node: &str, port: u16) -> String {
-    if port == 443 {
-        format!("https://{node}")
-    } else {
-        format!("https://{node}:{port}")
-    }
+    let tailnet = ryra_core::system::tailscale::tailnet_suffix(&node).ok_or_else(|| {
+        anyhow::anyhow!(
+            "--tailscale: couldn't extract tailnet from MagicDNS name '{node}' \
+             (expected three-label `<host>.<tailnet>.ts.net`)"
+        )
+    })?;
+    Ok(format!("https://{service}.{tailnet}"))
 }
 
 /// True when a service URL targets Caddy's local-CA `*.internal` domain.
@@ -1108,7 +1157,7 @@ fn service_url_is_caddy_local(url: &str) -> bool {
 async fn prompt_exposure_for(
     service: &str,
     config: &Config,
-) -> Result<(String, Option<u16>)> {
+) -> Result<(String, bool)> {
     let items = &[
         "Local — Caddy on *.internal (single machine, local CA)",
         "Tailscale — exposed on your tailnet (publicly-trusted cert)",
@@ -1156,26 +1205,24 @@ async fn prompt_exposure_for(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
                 ),
-                None,
+                false,
             ))
         }
         1 => {
-            // Tailscale: same path as `--tailscale` flag — preflight, allocate,
-            // derive URL. Failures bail rather than save partial state.
+            // Tailscale: same path as `--tailscale` flag — preflight,
+            // ensure auth key, derive `https://<service>.<tailnet>/`.
+            // Failures bail rather than save partial state.
             if let Err(e) = ryra_core::system::preflight::check_tailscale_runtime() {
                 bail!("Tailscale not ready:\n\n{e}");
             }
-            let port = ryra_core::config::schema::allocate_tailscale_port(config)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            let node = ryra_core::system::tailscale::self_dns_name()
-                .ok_or_else(|| anyhow::anyhow!("tailscale: not logged in"))?;
-            Ok((tailscale_serve_url(&node, port), Some(port)))
+            ensure_tailscale_auth_key(true).await?;
+            Ok((derive_tailscale_url(service)?, true))
         }
         _ => {
             let url: String = Input::new()
                 .with_prompt(format!("Public URL for '{service}'"))
                 .interact_text()?;
-            Ok((url, None))
+            Ok((url, false))
         }
     }
 }

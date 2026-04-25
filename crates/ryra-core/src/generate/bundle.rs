@@ -18,6 +18,13 @@ pub struct ProcessBundleParams<'a> {
     /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
     /// values because systemd doesn't expand EnvironmentFile vars in directives.
     pub port_vars: &'a [(String, String)],
+    /// When true, the service runs alongside a `ts-<service>` tailscaled
+    /// sidecar in a shared network namespace. The transformation strips
+    /// `PublishPort=` lines from the service's `.container` (the sidecar
+    /// owns the public surface), adds `Network=container:ts-<service>`,
+    /// and adds the `Requires=`/`After=` dependency on the sidecar so
+    /// systemd starts them in the right order.
+    pub tailscale_enabled: bool,
 }
 
 /// Result of processing a quadlet bundle from the registry.
@@ -136,6 +143,49 @@ pub fn inject_podman_args(content: &str, args: &[String]) -> String {
     inject_before_section(content, &line, "[Service]")
 }
 
+/// Rewrite a `.container` quadlet to share the `ts-<service>` sidecar's
+/// network namespace:
+///
+/// - Strips every `PublishPort=` directive (the sidecar owns the public
+///   surface; the service is reachable only through tailscale serve).
+/// - Strips every existing `Network=` directive (a `Network=container:…`
+///   has to be alone — it can't combine with podman-network entries).
+/// - Adds `Network=container:ts-<service>` so the service shares the
+///   sidecar's netns and tailscale serve can reach it on `localhost`.
+/// - Adds `Requires=ts-<service>.service` and
+///   `After=ts-<service>.service` to the `[Unit]` section so systemd
+///   starts the sidecar first and waits for it.
+pub fn inject_tailscale_sidecar(content: &str, service: &str) -> String {
+    let sidecar_unit = format!("ts-{service}.service");
+    let mut lines: Vec<String> = content
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            // Drop existing PublishPort= and Network= directives — both
+            // are incompatible with shared-netns mode.
+            !t.starts_with("PublishPort=") && !t.starts_with("Network=")
+        })
+        .map(String::from)
+        .collect();
+
+    // Replace [Container] networking with the sidecar's namespace.
+    if let Some(pos) = lines.iter().position(|l| l.trim() == "[Container]") {
+        lines.insert(pos + 1, format!("Network=container:ts-{service}"));
+    }
+
+    // Add the dependency on the sidecar in [Unit].
+    if let Some(pos) = lines.iter().position(|l| l.trim() == "[Unit]") {
+        lines.insert(pos + 1, format!("Requires={sidecar_unit}"));
+        lines.insert(pos + 2, format!("After={sidecar_unit}"));
+    }
+
+    let mut result = lines.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 /// Append `Volume=` lines to the `[Container]` section of a quadlet file.
 /// Inserts just before `[Service]` section if it exists, otherwise appends at end.
 pub fn inject_extra_volumes(content: &str, volumes: &[String]) -> String {
@@ -237,13 +287,22 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             content = inject_podman_args(&content, params.podman_args);
             // Inject ExecStartPre into the main service container
             // (the one named <service>.container, not sidecars)
-            if file_name == format!("{}.container", params.service_name) {
+            let is_main_container = file_name == format!("{}.container", params.service_name);
+            if is_main_container {
                 for cmd in params.extra_exec_start_pre {
                     content = inject_before_section(
                         &content,
                         &format!("ExecStartPre={cmd}"),
                         "[Install]",
                     );
+                }
+                // Tailscale sidecar mode: only the *main* container (not
+                // service-specific helpers like seafile-mariadb.container)
+                // gets remapped to share the sidecar's network namespace.
+                // Sub-containers stay on the regular podman network so
+                // they can reach each other via container DNS as before.
+                if params.tailscale_enabled {
+                    content = inject_tailscale_sidecar(&content, params.service_name);
                 }
             }
             // Expand ${RYRA_PORT_*} in PublishPort lines — systemd doesn't
@@ -493,6 +552,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_vars: &[],
+            tailscale_enabled: false,
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("quadlets/ directory not found"));
@@ -530,6 +590,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_vars: &[],
+            tailscale_enabled: false,
         };
 
         let bundle = process_quadlet_bundle(&params)
@@ -579,6 +640,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_vars: &[],
+            tailscale_enabled: false,
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));

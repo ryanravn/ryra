@@ -236,7 +236,7 @@ mod tests {
             ports: BTreeMap::new(),
             auth_kind: None,
             url: url.map(String::from),
-            tailscale_port: None,
+            tailscale_enabled: false,
             installed: true,
         }
     }
