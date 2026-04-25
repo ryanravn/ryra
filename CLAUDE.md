@@ -11,6 +11,20 @@ Applied:
 - A symmetric code path in core (planning) is better than a new Step variant when the existing ones already express it (e.g., `Step::WriteFile` for Caddyfile edits — don't add `Step::EditCaddyfile`).
 - When in doubt, delete.
 
+## Core Principle: Design for the Right Shape, Not the Smallest Diff
+
+"Fewer features" is about feature surface, not change surface. When the *right* design for a problem requires touching many files, restructuring an enum across multiple crates, or unifying parallel code paths into one, do that — don't ship a narrow patch that leaves the architecture worse and call it done because it's smaller. Design for scalability, not MVP.
+
+A holistic refactor that gets the abstractions right is cheaper long-term than a sequence of minimal patches that each accrete a new special case. If a config field, enum variant, or call site is in the wrong shape for what the system needs to do, fix the shape — even if it ripples through the codebase.
+
+Applied:
+- Don't choose a worse design because it's a smaller change. The size of the diff is not the cost; the size of the resulting support burden is.
+- Don't preserve a parallel code path "for now" when one unified path is more correct.
+- When a new feature exposes that an existing abstraction is wrong, restructure the abstraction. Don't bolt the feature onto the wrong shape and leave the cleanup as future work.
+- Design for the system you'll have in a year, not the smallest thing that works today.
+
+This complements "Fewer Features, Well Implemented" — it does not contradict it. Ship less, but make what you ship structurally right. "Smallest thing that works end-to-end" applies to *feature scope* (no speculative knobs, no hypothetical-future parameters); it does not give you license to pick a design you know is wrong because the corrected one is more code.
+
 ## Core Principle: Make Invalid State Unrepresentable
 
 Use enums and pattern matching everywhere instead of string comparisons, boolean flags, or if-chains. This applies at every layer:
