@@ -773,16 +773,20 @@ fn tailscale_self_dns_name() -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    // We only need one field; avoid a full-JSON dep just for this.
+    // Self comes before Peer in the JSON, so the first DNSName is ours.
+    // Parse manually to avoid pulling in a JSON crate just for this hint;
+    // `tailscale status --json` pretty-prints, so we tolerate whitespace
+    // between the key and its string value.
     let body = std::str::from_utf8(&out.stdout).ok()?;
-    let key = "\"DNSName\":\"";
-    let start = body.find(key)? + key.len();
-    let end = body[start..].find('"')?;
-    let name = body[start..start + end].trim_end_matches('.').to_string();
-    if name.is_empty() || !name.ends_with(".ts.net") {
-        return None;
-    }
-    Some(name)
+    let after_key = body.split_once("\"DNSName\"")?.1;
+    let after_colon = after_key
+        .trim_start()
+        .strip_prefix(':')?
+        .trim_start()
+        .strip_prefix('"')?;
+    let (value, _) = after_colon.split_once('"')?;
+    let name = value.trim_end_matches('.');
+    name.ends_with(".ts.net").then(|| name.to_string())
 }
 
 /// the system trust bundle for curl/wget/Firefox-on-p11-kit users.
