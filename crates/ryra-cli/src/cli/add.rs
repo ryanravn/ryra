@@ -641,6 +641,17 @@ pub async fn run(
                 for (_, host_port) in &result.allocated_ports {
                     println!("  URL: http://127.0.0.1:{host_port}");
                 }
+                // Tailscale hint: if the user is on a tailnet and didn't pass
+                // --url, whisper the exact command for tailnet access.
+                if let Some(ts_host) = tailscale_self_dns_name()
+                    && let Some((_, primary_port)) = result.allocated_ports.first()
+                {
+                    println!();
+                    println!("  Tailscale detected — to access via tailnet, re-add with:");
+                    println!(
+                        "    ryra add {service} --url http://{ts_host}:{primary_port}"
+                    );
+                }
             }
             if !result.generated_secrets.is_empty() {
                 // Show generated secret values so the user can log in
@@ -751,6 +762,29 @@ fn collect_non_interactive<'a>(
 /// print (but never run) hints for the stores that need sudo — `/etc/hosts`
 /// for any hostname the user's resolver can't reach (including
 /// `*.internal`, which unlike `*.localhost` does not auto-resolve), and
+/// Returns the local node's Tailscale MagicDNS name (e.g.
+/// `debian.cobbler-tuna.ts.net`) if `tailscale` is installed and logged in.
+/// Used only to print a post-install hint; silent on any error.
+fn tailscale_self_dns_name() -> Option<String> {
+    let out = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // We only need one field; avoid a full-JSON dep just for this.
+    let body = std::str::from_utf8(&out.stdout).ok()?;
+    let key = "\"DNSName\":\"";
+    let start = body.find(key)? + key.len();
+    let end = body[start..].find('"')?;
+    let name = body[start..start + end].trim_end_matches('.').to_string();
+    if name.is_empty() || !name.ends_with(".ts.net") {
+        return None;
+    }
+    Some(name)
+}
+
 /// the system trust bundle for curl/wget/Firefox-on-p11-kit users.
 ///
 /// The rootless work covers Chromium-family browsers (via the user's
