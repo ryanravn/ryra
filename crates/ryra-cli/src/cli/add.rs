@@ -398,7 +398,7 @@ pub async fn run(
         }
 
         // If a previous add failed partway, clean up before retrying.
-        let result = match ryra_core::add_service(
+        let mut result = match ryra_core::add_service(
             service,
             url,
             auth_kind.clone(),
@@ -473,6 +473,38 @@ pub async fn run(
             }
             other => other?,
         };
+
+        // Tailscale auto-URL: if the user didn't pass --url and a tailnet
+        // node is logged in, offer to expose on the tailnet. Re-plans with
+        // the generated URL if accepted — the host port is now known from
+        // the first pass, so we can bake it into the URL.
+        if url.is_none()
+            && interactive
+            && !dry_run
+            && let Some(ts_host) = tailscale_self_dns_name()
+            && let Some((_, port)) = result.allocated_ports.first()
+        {
+            let proposed = format!("http://{ts_host}:{port}");
+            let use_ts = Confirm::new()
+                .with_prompt(format!("Tailscale detected — expose at {proposed}?"))
+                .default(true)
+                .interact()?;
+            if use_ts {
+                result = ryra_core::add_service(
+                    service,
+                    Some(&proposed),
+                    auth_kind.clone(),
+                    auth || auth_kind.is_some(),
+                    enable_smtp,
+                    &env_overrides,
+                    &enabled_groups,
+                    service_ref.registry_name(),
+                    &repo_dir,
+                    prompt_ctx.clone(),
+                    &super::is_port_in_use,
+                )?;
+            }
+        }
 
         // Show warnings and confirm
         // Show port reassignment notes + reverse-proxy hints (both informational).
@@ -640,17 +672,6 @@ pub async fn run(
             if result.url.is_none() && !result.allocated_ports.is_empty() {
                 for (_, host_port) in &result.allocated_ports {
                     println!("  URL: http://127.0.0.1:{host_port}");
-                }
-                // Tailscale hint: if the user is on a tailnet and didn't pass
-                // --url, whisper the exact command for tailnet access.
-                if let Some(ts_host) = tailscale_self_dns_name()
-                    && let Some((_, primary_port)) = result.allocated_ports.first()
-                {
-                    println!();
-                    println!("  Tailscale detected — to access via tailnet, re-add with:");
-                    println!(
-                        "    ryra add {service} --url http://{ts_host}:{primary_port}"
-                    );
                 }
             }
             if !result.generated_secrets.is_empty() {
