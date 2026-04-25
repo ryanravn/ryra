@@ -50,6 +50,10 @@ pub async fn run(
         bail!("--enable can only be used when adding a single service");
     }
 
+    if let Err(e) = ryra_core::system::preflight::check() {
+        bail!("preflight check failed:\n\n{e}");
+    }
+
     let interactive = super::is_interactive();
 
     // "First add" = no ryra config on disk yet. Latch the answer before any
