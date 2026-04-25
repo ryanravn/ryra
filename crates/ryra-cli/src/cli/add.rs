@@ -40,6 +40,7 @@ pub async fn run(
     auth: bool,
     smtp: Option<SmtpProvider>,
     enable: &[String],
+    tailscale: bool,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
@@ -196,6 +197,7 @@ pub async fn run(
                                 false,
                                 None,
                                 &[],
+                                false,
                                 false,
                                 true,
                             ))
@@ -475,20 +477,27 @@ pub async fn run(
         };
 
         // Tailscale auto-URL: if the user didn't pass --url and a tailnet
-        // node is logged in, offer to expose on the tailnet. Re-plans with
-        // the generated URL if accepted — the host port is now known from
-        // the first pass, so we can bake it into the URL.
+        // node is logged in, offer (or force, with --tailscale) to expose
+        // on the tailnet. Re-plans with the generated URL — the host port
+        // is now known from the first pass, so we can bake it in.
         if url.is_none()
-            && interactive
             && !dry_run
             && let Some(ts_host) = tailscale_self_dns_name()
             && let Some((_, port)) = result.allocated_ports.first()
         {
             let proposed = format!("http://{ts_host}:{port}");
-            let use_ts = Confirm::new()
-                .with_prompt(format!("Tailscale detected — expose at {proposed}?"))
-                .default(true)
-                .interact()?;
+            let use_ts = if tailscale {
+                // --tailscale: accept without prompting (works non-interactively too)
+                true
+            } else if interactive {
+                Confirm::new()
+                    .with_prompt(format!("Tailscale detected — expose at {proposed}?"))
+                    .default(true)
+                    .interact()?
+            } else {
+                // No flag and no TTY: don't silently change URL shape in scripts
+                false
+            };
             if use_ts {
                 result = ryra_core::add_service(
                     service,
@@ -639,6 +648,11 @@ pub async fn run(
                             if let Err(e) = ryra_core::finalize_remove(service) {
                                 eprintln!("Warning: finalize_remove failed: {e}");
                             }
+                            // Clear lingering `failed` flags on user units so the
+                            // next `ryra add` isn't poisoned by stale systemd state.
+                            let _ = std::process::Command::new("systemctl")
+                                .args(["--user", "reset-failed"])
+                                .status();
                             eprintln!("Cleaned up. Retry with: ryra add {service}");
                         }
                     }
@@ -1054,6 +1068,7 @@ async fn ensure_tls_configured(
                         None,
                         &[],
                         false,
+                        false,
                         true,
                     ))
                     .await?;
@@ -1118,6 +1133,7 @@ async fn ensure_tls_configured(
                     false,
                     None,
                     &[],
+                    false,
                     false,
                     true,
                 ))
@@ -1191,6 +1207,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
                     None,
                     &[],
                     false,
+                    false,
                     true,
                 ))
                 .await?;
@@ -1255,6 +1272,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             None,
             &[],
             false,
+            false,
             true,
         ))
         .await?;
@@ -1282,6 +1300,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             None,
             &[],
             false,
+            false,
             true,
         ))
         .await?;
@@ -1297,6 +1316,7 @@ async fn ensure_dependencies(auth: bool, interactive: bool) -> Result<()> {
             false,
             None,
             &[],
+            false,
             false,
             true,
         ))
@@ -1356,6 +1376,7 @@ async fn ensure_auth_for_add(
                     false,
                     None,
                     &[],
+                    false,
                     dry_run,
                     true,
                 ))
@@ -1371,6 +1392,7 @@ async fn ensure_auth_for_add(
                 false,
                 None,
                 &[],
+                false,
                 dry_run,
                 true,
             ))

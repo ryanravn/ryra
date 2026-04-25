@@ -45,6 +45,12 @@ enum Command {
         /// in non-interactive mode, or prompted for interactively.
         #[arg(long = "enable", value_name = "GROUP")]
         enable: Vec<String>,
+        /// Expose via Tailscale MagicDNS without prompting. Equivalent to
+        /// answering "yes" to the interactive Tailscale prompt. Ignored if
+        /// --url is also set (explicit --url wins) or if `tailscale` isn't
+        /// logged in on this host.
+        #[arg(long, conflicts_with = "url")]
+        tailscale: bool,
         /// Skip confirmation prompts (including untrusted registry warnings)
         #[arg(long, short = 'y')]
         yes: bool,
@@ -201,9 +207,22 @@ async fn main() -> anyhow::Result<()> {
             auth,
             smtp,
             ref enable,
+            tailscale,
             yes,
             dry_run,
-        } => cli::add::run(services, url.as_deref(), auth, smtp, enable, dry_run, yes).await?,
+        } => {
+            cli::add::run(
+                services,
+                url.as_deref(),
+                auth,
+                smtp,
+                enable,
+                tailscale,
+                dry_run,
+                yes,
+            )
+            .await?
+        }
         Command::Remove {
             ref services,
             all,
