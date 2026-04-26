@@ -8,6 +8,7 @@ pub mod registry_cmd;
 pub mod remove;
 pub mod reset;
 pub mod search;
+pub mod sysctl_low_ports;
 pub mod test;
 
 use std::io::IsTerminal;

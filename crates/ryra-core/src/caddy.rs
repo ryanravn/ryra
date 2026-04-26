@@ -16,6 +16,37 @@ pub fn caddyfile_path() -> Result<PathBuf> {
         .join("Caddyfile"))
 }
 
+/// Path to the user-owned TLS snippet.
+///
+/// Site blocks emit `import ryra_tls`; the actual TLS strategy lives here.
+/// Default is `tls internal` (LAN mode); `ryra add caddy --acme <email>`
+/// seeds it with `tls <email>` (Let's Encrypt). After first write, ryra
+/// never touches this file — users edit it for Cloudflare DNS-01,
+/// wildcards, BYO certs, or anything else Caddy supports.
+pub fn tls_snippet_path() -> Result<PathBuf> {
+    Ok(crate::service_home(WellKnownService::Caddy.as_str())?
+        .join("config")
+        .join("tls.caddy"))
+}
+
+/// Default snippet for LAN mode (self-signed via Caddy's internal CA).
+pub fn lan_snippet() -> &'static str {
+    "(ryra_tls) {\n\ttls internal\n}\n"
+}
+
+/// Snippet for Let's Encrypt mode. The email is optional — Caddy registers
+/// anonymously when it's empty, foregoing renewal-notification email but
+/// still issuing real certs.
+pub fn acme_snippet(email: &str) -> String {
+    if email.is_empty() {
+        // Empty body — sites that import this get no `tls` directive,
+        // which makes Caddy auto-issue LE certs for any public hostname.
+        "(ryra_tls) {\n}\n".to_string()
+    } else {
+        format!("(ryra_tls) {{\n\ttls {email}\n}}\n")
+    }
+}
+
 /// Ensure Caddy is set up to route requests for the auth provider.
 ///
 /// Returns steps to (a) add Caddy to the auth provider's podman network with
@@ -117,10 +148,20 @@ pub struct CaddySiteParams {
 ///
 /// The block always starts with a `# ryra:<service_name>` marker comment
 /// so that [`add_route`] and [`remove_route`] can locate it.
+///
+/// TLS strategy is delegated to the user-owned `(ryra_tls)` snippet
+/// imported at the top of the Caddyfile — see [`tls_snippet_path`].
+/// Exception: `*.internal` hosts always use `tls internal` directly,
+/// because Let's Encrypt can't issue certs for the reserved `.internal`
+/// TLD even when the user has flipped the snippet to ACME mode.
 pub fn render_site_block(params: &CaddySiteParams) -> String {
     let mut block = format!("# ryra:{}\n", params.service_name);
     block.push_str(&format!("{}:{} {{\n", params.domain, params.https_port));
-    block.push_str("    tls internal\n");
+    if params.domain.ends_with(".internal") {
+        block.push_str("    tls internal\n");
+    } else {
+        block.push_str("    import ryra_tls\n");
+    }
     // Use the container name on caddy's shared network for direct communication.
     block.push_str(&format!(
         "    reverse_proxy {}:{}\n",
@@ -242,8 +283,52 @@ mod tests {
         let block = render_site_block(&params);
         assert!(block.starts_with("# ryra:whoami\n"));
         assert!(block.contains("whoami.example.com:8443 {"));
+        assert!(block.contains("    import ryra_tls\n"));
+        assert!(!block.contains("tls internal"));
         assert!(block.contains("    reverse_proxy whoami:8080"));
         assert!(block.ends_with("}\n"));
+    }
+
+    #[test]
+    fn render_internal_domain_keeps_tls_internal() {
+        // *.internal hosts can't get LE certs, so they must bypass the
+        // user-owned snippet (which may have been flipped to ACME mode).
+        let params = CaddySiteParams {
+            service_name: "authelia".to_string(),
+            domain: "auth.internal".to_string(),
+            container_port: 9091,
+            https_port: 8443,
+        };
+        let block = render_site_block(&params);
+        assert!(block.contains("    tls internal\n"));
+        assert!(!block.contains("import ryra_tls"));
+    }
+
+    #[test]
+    fn lan_snippet_format() {
+        let s = lan_snippet();
+        assert!(s.starts_with("(ryra_tls) {"));
+        assert!(s.contains("tls internal"));
+    }
+
+    #[test]
+    fn acme_snippet_format() {
+        let s = acme_snippet("admin@example.com");
+        assert!(s.starts_with("(ryra_tls) {"));
+        assert!(s.contains("tls admin@example.com"));
+        assert!(!s.contains("tls internal"));
+    }
+
+    #[test]
+    fn acme_snippet_empty_email_omits_tls_line() {
+        let s = acme_snippet("");
+        assert!(s.starts_with("(ryra_tls) {"));
+        // No `tls` *directive* inside the body — Caddy auto-issues
+        // anonymously when the snippet is empty. The "tls" inside
+        // `ryra_tls` is the snippet name and must remain.
+        assert!(!s.contains("\ttls "));
+        assert!(!s.contains("tls internal"));
+        assert!(!s.contains("tls @"));
     }
 
     #[test]

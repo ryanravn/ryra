@@ -118,6 +118,34 @@ pub fn is_tailscale_url(url: &str) -> bool {
         .is_some_and(|h| h.ends_with(".ts.net"))
 }
 
+/// True when the URL's host is publicly resolvable — i.e. something a
+/// browser on the open internet would expect to reach. Used by the CLI
+/// to decide whether to surface the Let's Encrypt prompt.
+///
+/// False for hosts that are LAN/loopback/tailnet by construction:
+/// `*.internal`, `*.localhost`, `*.local`, the bare `localhost`,
+/// `*.ts.net`, and any literal IP address.
+pub fn is_public_url(url: &str) -> bool {
+    let Some(host) = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+    else {
+        return false;
+    };
+    // url::Url wraps IPv6 hosts in `[ ]`; strip them before the IpAddr parse.
+    let bare = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(&host);
+    if bare.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    if host == "localhost" {
+        return false;
+    }
+    !(host.ends_with(".internal")
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".ts.net"))
+}
+
 /// Look up Caddy's HTTPS port from the installed service record.
 pub(crate) fn caddy_https_port(config: &Config) -> u16 {
     config
@@ -501,6 +529,7 @@ pub fn add_service(
     pre_built_ctx: Option<BTreeMap<String, String>>,
     port_in_use: &dyn Fn(u16) -> bool,
     tailscale_enabled: bool,
+    acme_email: Option<&str>,
 ) -> Result<AddResult> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
@@ -631,6 +660,24 @@ pub fn add_service(
         };
         claimed.insert(host);
         resolved_ports.push((p.name.clone(), host));
+    }
+
+    // Caddy on rootless podman can't bind <1024 by default — service.toml
+    // therefore declares 8080/8443 as the host ports. When the kernel has
+    // been retuned (`sysctl net.ipv4.ip_unprivileged_port_start=80`), we
+    // can listen on 80/443 directly: cleaner URLs, no router NAT
+    // translation needed. Override here so the quadlet's `PublishPort=`
+    // and the stored config record both reflect the real listen port.
+    if WellKnownService::Caddy.matches(service_name)
+        && system::sysctl::rootless_can_bind_low_ports()
+    {
+        for (name, port) in resolved_ports.iter_mut() {
+            match name.as_str() {
+                "http" if *port == 8080 => *port = 80,
+                "https" if *port == 8443 => *port = 443,
+                _ => {}
+            }
+        }
     }
 
     // Primary host port drives service.url / service.port templating.
@@ -923,6 +970,26 @@ pub fn add_service(
         &quadlet_path,
         Some(repo_dir),
     ));
+
+    // 9d. Caddy: seed the user-owned `tls.caddy` snippet on first install.
+    // Site blocks emit `import ryra_tls`; this file defines that snippet.
+    // After first write ryra never touches it — users edit it directly
+    // for Cloudflare DNS-01, wildcards, BYO certs, plain HTTP for Tunnel,
+    // anything Caddy supports. seed-caddyfile.sh defensively recreates
+    // the file as `tls internal` on container start if it goes missing.
+    if WellKnownService::Caddy.matches(service_name) {
+        let snippet_path = caddy::tls_snippet_path()?;
+        if !snippet_path.exists() {
+            let content = match acme_email {
+                Some(email) => caddy::acme_snippet(email),
+                None => caddy::lan_snippet().to_string(),
+            };
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: snippet_path,
+                content,
+            }));
+        }
+    }
 
     // 10. Reload and start via systemd
     steps.push(Step::DaemonReload);
@@ -1549,6 +1616,26 @@ mod tests {
         assert!(!is_tailscale_url("https://ts.net"));
         assert!(!is_tailscale_url("https://evil-ts.net.example.com"));
         assert!(!is_tailscale_url("not a url"));
+    }
+
+    #[test]
+    fn public_url_accepts_public_domains() {
+        assert!(is_public_url("https://seafile.ryra.no"));
+        assert!(is_public_url("https://example.com"));
+        assert!(is_public_url("https://docs.ryra.no:8443"));
+    }
+
+    #[test]
+    fn public_url_rejects_lan_and_tailnet() {
+        assert!(!is_public_url("https://nextcloud.internal:8443"));
+        assert!(!is_public_url("https://service.localhost"));
+        assert!(!is_public_url("https://something.local"));
+        assert!(!is_public_url("https://localhost:8080"));
+        assert!(!is_public_url("https://debian.cobbler-tuna.ts.net"));
+        assert!(!is_public_url("http://127.0.0.1:10001"));
+        assert!(!is_public_url("http://192.168.1.10"));
+        assert!(!is_public_url("http://[::1]"));
+        assert!(!is_public_url("not a url"));
     }
 
     // resolve_extra_networks positional args:

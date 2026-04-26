@@ -34,6 +34,7 @@ pub enum SmtpProvider {
     Inbucket,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     services: &[String],
     url: Option<&str>,
@@ -41,6 +42,7 @@ pub async fn run(
     smtp: Option<SmtpProvider>,
     enable: &[String],
     tailscale: bool,
+    acme: Option<&str>,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
@@ -49,6 +51,25 @@ pub async fn run(
     }
     if !enable.is_empty() && services.len() > 1 {
         bail!("--enable can only be used when adding a single service");
+    }
+    // --acme drives caddy's TLS mode. It's accepted on any `ryra add`:
+    // when adding caddy directly it sets the snippet; when adding a
+    // service with `--url <public>` it auto-installs caddy in ACME mode
+    // before the service is added (non-interactive equivalent of the
+    // TLS prompt below).
+
+    // When this run is the one installing caddy in ACME mode, offer to
+    // lower `net.ipv4.ip_unprivileged_port_start` so Caddy binds 80/443
+    // directly. The check has to run before add_service, because that's
+    // where the caddy quadlet's `PublishPort=` is generated based on the
+    // current sysctl value. Skipped silently if already enabled, or for
+    // LAN/Tailscale paths where 8080/8443 is fine.
+    if acme.is_some()
+        && services
+            .iter()
+            .any(|s| WellKnownService::Caddy.matches(s))
+    {
+        super::sysctl_low_ports::offer_enable().await?;
     }
 
     let preflight_paths = ryra_core::config::ConfigPaths::resolve()?;
@@ -219,6 +240,7 @@ pub async fn run(
                                 None,
                                 &[],
                                 false,
+                                None,
                                 false,
                                 true,
                             ))
@@ -290,7 +312,9 @@ pub async fn run(
             resolved_url = Some(u.to_string());
             tailscale_enabled = false;
         } else if tailscale {
-            resolved_url = Some(derive_tailscale_url(service)?);
+            let ts_url = derive_tailscale_url(service)?;
+            println!("→ Using {ts_url} (Tailscale)");
+            resolved_url = Some(ts_url);
             tailscale_enabled = true;
         } else if needs_https {
             let caddy_installed = config
@@ -304,10 +328,18 @@ pub async fn run(
                     .find(|s| WellKnownService::Caddy.matches(&s.name))
                     .and_then(|s| s.ports.get("https").copied())
                     .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
-                resolved_url = Some(format!(
+                let default_url = format!(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
-                ));
+                );
+                resolved_url = Some(if interactive && !dry_run {
+                    Input::new()
+                        .with_prompt(format!("URL for '{service}'"))
+                        .default(default_url)
+                        .interact_text()?
+                } else {
+                    default_url
+                });
                 tailscale_enabled = false;
             } else if interactive && !dry_run {
                 let (chosen_url, chosen_ts) =
@@ -331,6 +363,80 @@ pub async fn run(
         // `--url`-aware code below (template context, warnings, planner
         // input) sees the value we actually intend to use.
         let url: Option<&str> = resolved_url.as_deref();
+
+        // Auto-install Caddy when the user gives a public URL but Caddy
+        // isn't installed yet. Without this, the install would succeed
+        // but the URL wouldn't actually route anywhere — the user would
+        // have to know to add Caddy first, which the previous flow
+        // forced and most people forget.
+        let caddy_already_installed = config
+            .services
+            .iter()
+            .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+        let need_caddy_for_public_url = url
+            .is_some_and(ryra_core::is_public_url)
+            && !caddy_already_installed
+            && !WellKnownService::Caddy.matches(service)
+            && !tailscale_enabled
+            && !dry_run;
+        if need_caddy_for_public_url {
+            let chosen = match acme {
+                Some(email) => Some(TlsHandling::LetsEncrypt(email.to_string())),
+                None if interactive => Some(prompt_tls_for_public_url(url.unwrap_or("")).await?),
+                None => None,
+            };
+            match chosen {
+                Some(TlsHandling::LetsEncrypt(email)) => {
+                    if let Some(u) = url {
+                        dns_preflight_for_acme(u, interactive).await?;
+                    }
+                    println!("\nInstalling caddy (Let's Encrypt mode)...\n");
+                    Box::pin(run(
+                        &[WellKnownService::Caddy.to_string()],
+                        None,
+                        false,
+                        None,
+                        &[],
+                        false,
+                        Some(&email),
+                        false,
+                        true,
+                    ))
+                    .await?;
+                    config = ryra_core::config::load_or_default(&paths.config_file)?;
+                }
+                Some(TlsHandling::SelfSigned) => {
+                    println!("\nInstalling caddy (self-signed LAN mode)...\n");
+                    Box::pin(run(
+                        &[WellKnownService::Caddy.to_string()],
+                        None,
+                        false,
+                        None,
+                        &[],
+                        false,
+                        None,
+                        false,
+                        true,
+                    ))
+                    .await?;
+                    config = ryra_core::config::load_or_default(&paths.config_file)?;
+                }
+                Some(TlsHandling::External) | None => {
+                    // Skip Caddy install — user is fronting with their own
+                    // reverse proxy (Cloudflare Tunnel, nginx, etc.). The
+                    // existing `UrlWithoutReverseProxy` warning still fires
+                    // from add_service so the user knows routing is on them.
+                }
+            }
+        } else if acme.is_some() && caddy_already_installed && !WellKnownService::Caddy.matches(service) {
+            // --acme passed but Caddy is already installed — the snippet
+            // is set; flipping mode means editing tls.caddy directly.
+            // Warn but don't bail; let the install proceed.
+            eprintln!(
+                "\nNote: --acme is ignored — caddy is already installed.\n  \
+                 Edit ~/.local/share/ryra/caddy/config/tls.caddy to switch TLS mode.\n"
+            );
+        }
 
         // Authelia already exists — make sure its exposure isn't narrower
         // than the service we're about to add. Local-only authelia + tailnet
@@ -468,6 +574,15 @@ pub async fn run(
             }
         }
 
+        // --acme only takes effect on first caddy install — after that
+        // tls.caddy is user-managed. Filter so it only flows when adding
+        // caddy (the top-level guard already rejects other combos).
+        let acme_for_service = if WellKnownService::Caddy.matches(service) {
+            acme
+        } else {
+            None
+        };
+
         // If a previous add failed partway, clean up before retrying.
         let result = match ryra_core::add_service(
             service,
@@ -482,6 +597,7 @@ pub async fn run(
             prompt_ctx.clone(),
             &super::is_port_in_use,
             tailscale_enabled,
+            acme_for_service,
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 // Two cases land here: a previous `ryra add` crashed mid-way
@@ -550,6 +666,7 @@ pub async fn run(
                     prompt_ctx.clone(),
                     &super::is_port_in_use,
                     tailscale_enabled,
+                    acme_for_service,
                 )?
             }
             other => other?,
@@ -773,6 +890,61 @@ pub async fn run(
             println!("  systemctl --user restart {service}  # restart (picks up .env changes)");
             println!("  systemctl --user status {service}  # check if running");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
+
+            // Caddy-only: tell the user which TLS mode they got and where
+            // to switch to a different one. The snippet path is the only
+            // thing they need to know to swap in Cloudflare DNS-01,
+            // wildcards, BYO certs, plain HTTP for Tunnel, etc.
+            if WellKnownService::Caddy.matches(service) {
+                let snippet_path = ryra_core::caddy::tls_snippet_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "~/.local/share/ryra/caddy/config/tls.caddy".to_string());
+                println!();
+                if let Some(email) = acme_for_service {
+                    if email.is_empty() {
+                        println!("TLS: Let's Encrypt (anonymous — no renewal notices)");
+                    } else {
+                        println!("TLS: Let's Encrypt ({email})");
+                    }
+                    let (http_port, https_port) = result
+                        .allocated_ports
+                        .iter()
+                        .fold((8080u16, 8443u16), |(h, hs), (n, p)| match n.as_str() {
+                            "http" => (*p, hs),
+                            "https" => (h, *p),
+                            _ => (h, hs),
+                        });
+                    println!("  For LE to issue certs Caddy must be reachable from the internet:");
+                    println!("    - DNS A/AAAA for each --url host must point at this machine");
+                    if http_port == 80 && https_port == 443 {
+                        println!(
+                            "    - Caddy listens on host 80/443; forward router 80→80 and 443→443"
+                        );
+                        println!(
+                            "    - Firewall must allow 80/443 (ufw / firewalld / nft varies)"
+                        );
+                    } else {
+                        println!(
+                            "    - Caddy listens on host {http_port}/{https_port} (rootless); \
+                             forward router 80→{http_port} and 443→{https_port}"
+                        );
+                        println!(
+                            "    - Firewall must allow {http_port}/{https_port} \
+                             (ufw / firewalld / nft varies)"
+                        );
+                    }
+                    println!("  Cert issuance is async — watch progress with:");
+                    println!("    journalctl --user -u caddy -f");
+                } else {
+                    println!("TLS: self-signed (LAN — browsers warn unless ryra's CA is trusted)");
+                    println!(
+                        "  For Let's Encrypt:  ryra remove caddy && ryra add caddy --acme you@example.com"
+                    );
+                }
+                println!(
+                    "  For Cloudflare DNS-01, wildcards, or BYO certs: edit {snippet_path}"
+                );
+            }
         }
     } // end for service_input in services
 
@@ -1208,6 +1380,100 @@ fn check_auth_exposure_compat(
     );
 }
 
+/// Smoke-test DNS for `host` so we can warn before burning a Let's Encrypt
+/// validation slot on a hostname that isn't pointed anywhere yet. Only
+/// catches the "DNS not configured at all" case — a record pointing at
+/// the wrong IP would still fail in Caddy. That's fine: this exists to
+/// stop the most common rate-limit pitfall, not validate the full setup.
+async fn dns_resolves(host: &str) -> bool {
+    tokio::net::lookup_host((host, 0u16))
+        .await
+        .map(|mut it| it.next().is_some())
+        .unwrap_or(false)
+}
+
+/// Before we hand a public URL to Caddy in ACME mode, check that DNS
+/// resolves for it. If it doesn't, warn loudly about LE rate limits and
+/// (if interactive) ask the user to confirm before continuing — failed
+/// validations count against ~5/hour limits per registered domain, so
+/// looping `ryra add` against a half-configured domain can lock you out
+/// of real issuance for hours.
+async fn dns_preflight_for_acme(url: &str, interactive: bool) -> Result<()> {
+    let Some(host) = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_string()))
+    else {
+        return Ok(());
+    };
+    if dns_resolves(&host).await {
+        return Ok(());
+    }
+    eprintln!("\n  Warning: DNS for '{host}' doesn't resolve.");
+    eprintln!("  Caddy will request a Let's Encrypt cert and fail repeatedly until DNS is fixed.");
+    eprintln!(
+        "  Each failure counts against LE rate limits (~5 failed validations/hour per domain)."
+    );
+    if !interactive {
+        eprintln!("  (Continuing — you're running non-interactively.)");
+        return Ok(());
+    }
+    let proceed = Confirm::new()
+        .with_prompt(format!("Continue installing Caddy with LE for '{host}'?"))
+        .default(false)
+        .interact()?;
+    if !proceed {
+        bail!("aborted: fix DNS for '{host}' and re-run, or pick a different TLS option");
+    }
+    Ok(())
+}
+
+/// User's choice for how Caddy should issue TLS for a public URL.
+enum TlsHandling {
+    /// Caddy auto-issues real certs from Let's Encrypt with this email
+    /// for renewal notices. Requires DNS pointing at this host and Caddy
+    /// reachable from the internet (ACME challenge).
+    LetsEncrypt(String),
+    /// Caddy issues self-signed certs from its internal CA. Browsers warn
+    /// unless the CA is trusted. LAN-friendly default.
+    SelfSigned,
+    /// Don't install Caddy — the user is fronting with their own reverse
+    /// proxy (Cloudflare Tunnel, nginx, external Caddy, etc.).
+    External,
+}
+
+/// Prompt the user how TLS should be handled for `url` when Caddy isn't
+/// installed. Fires from the per-service add when `--url` points at a
+/// public host. Picks the email inline for the LE branch.
+async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| url.to_string());
+    println!();
+    println!("'{host}' is a public URL but Caddy (reverse proxy) isn't installed.");
+    let items = &[
+        "Let's Encrypt — Caddy auto-issues real certs (DNS + Caddy reachable from the internet)",
+        "Self-signed (LAN) — Caddy local CA, browsers warn unless trusted",
+        "External — I'll handle TLS myself (Cloudflare Tunnel, nginx, etc.)",
+    ];
+    let selection = dialoguer::Select::new()
+        .with_prompt("How should TLS be handled?")
+        .items(items)
+        .default(0)
+        .interact()?;
+    match selection {
+        0 => {
+            let email: String = Input::new()
+                .with_prompt("Email for Let's Encrypt (optional — for renewal notices, press Enter to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            Ok(TlsHandling::LetsEncrypt(email))
+        }
+        1 => Ok(TlsHandling::SelfSigned),
+        _ => Ok(TlsHandling::External),
+    }
+}
+
 /// Interactive prompt: how should this service be reachable? Returns the
 /// browser-visible URL plus the allocated `tailscale serve` port (if any),
 /// after applying any side-effects the choice implies (installing Caddy,
@@ -1221,9 +1487,10 @@ async fn prompt_exposure_for(
     auth_will_inherit: bool,
 ) -> Result<(String, bool)> {
     let items = &[
-        "Local — Caddy on *.internal (single machine, local CA)",
+        "Self-signed (LAN) — Caddy local CA at *.internal (browsers warn unless trusted)",
         "Tailscale — exposed on your tailnet (publicly-trusted cert)",
-        "Custom URL — you'll handle TLS / reverse proxy",
+        "Public + Let's Encrypt — Caddy issues real certs (DNS + Caddy reachable from the internet)",
+        "External — I have my own reverse proxy (Cloudflare Tunnel, nginx, etc.)",
     ];
     if auth_will_inherit {
         println!(
@@ -1238,16 +1505,17 @@ async fn prompt_exposure_for(
 
     match selection {
         0 => {
-            // Local: install Caddy if it isn't already there, then derive
-            // the *.internal URL using its allocated HTTPS port. Match the
-            // planner's `installed`-aware check — a stale `installed = false`
-            // entry from a killed previous install must not count as ready.
+            // Self-signed (LAN): install Caddy in default mode if it isn't
+            // already there, then derive the *.internal URL using its
+            // allocated HTTPS port. Match the planner's `installed`-aware
+            // check — a stale `installed = false` entry from a killed
+            // previous install must not count as ready.
             let caddy_installed = config
                 .services
                 .iter()
                 .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
             if !caddy_installed {
-                println!("\nInstalling caddy (local HTTPS provider)...\n");
+                println!("\nInstalling caddy (self-signed LAN mode)...\n");
                 Box::pin(run(
                     &[WellKnownService::Caddy.to_string()],
                     None,
@@ -1255,6 +1523,7 @@ async fn prompt_exposure_for(
                     None,
                     &[],
                     false,
+                    None,
                     false,
                     true,
                 ))
@@ -1287,7 +1556,50 @@ async fn prompt_exposure_for(
             ensure_tailscale_admin_token(true).await?;
             Ok((derive_tailscale_url(service)?, true))
         }
+        2 => {
+            // Public + Let's Encrypt: ask for the public URL and the LE
+            // registration email, install Caddy in ACME mode if it isn't
+            // already there, then return the URL. If Caddy is already
+            // installed (rare here — this prompt only fires when caddy is
+            // missing — but still possible if a prior step installed it),
+            // skip re-installing and warn that tls.caddy may need editing.
+            let url: String = Input::new()
+                .with_prompt(format!("Public URL for '{service}'"))
+                .interact_text()?;
+            let caddy_installed = config
+                .services
+                .iter()
+                .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+            if !caddy_installed {
+                let email: String = Input::new()
+                    .with_prompt("Email for Let's Encrypt (optional — for renewal notices, press Enter to skip)")
+                    .allow_empty(true)
+                    .interact_text()?;
+                dns_preflight_for_acme(&url, true).await?;
+                println!("\nInstalling caddy (Let's Encrypt mode)...\n");
+                Box::pin(run(
+                    &[WellKnownService::Caddy.to_string()],
+                    None,
+                    false,
+                    None,
+                    &[],
+                    false,
+                    Some(&email),
+                    false,
+                    true,
+                ))
+                .await?;
+            } else {
+                eprintln!(
+                    "  Note: caddy is already installed — using its existing TLS mode.\n  \
+                     Edit ~/.local/share/ryra/caddy/config/tls.caddy to switch to Let's Encrypt."
+                );
+            }
+            Ok((url, false))
+        }
         _ => {
+            // External: user is fronting with their own reverse proxy.
+            // Prompt for the URL but don't touch Caddy.
             let url: String = Input::new()
                 .with_prompt(format!("Public URL for '{service}'"))
                 .interact_text()?;
@@ -1323,6 +1635,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
                     None,
                     &[],
                     false,
+                    None,
                     false,
                     true,
                 ))
@@ -1397,6 +1710,7 @@ async fn ensure_dependencies(auth: bool, tailscale: bool, interactive: bool) -> 
         None,
         &[],
         tailscale,
+        None,
         false,
         true,
     ))
@@ -1447,6 +1761,7 @@ async fn ensure_auth_for_add(
                 None,
                 &[],
                 parent_tailscale,
+                None,
                 dry_run,
                 true,
             ))

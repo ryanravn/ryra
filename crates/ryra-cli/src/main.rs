@@ -52,6 +52,14 @@ enum Command {
         /// Mutually exclusive with --url.
         #[arg(long, conflicts_with = "url")]
         tailscale: bool,
+        /// Use Let's Encrypt for Caddy-managed routes. Pass `--acme you@example.com`
+        /// to register with that email for renewal notices, or `--acme` alone to
+        /// register anonymously. Without this flag, Caddy uses its internal CA
+        /// (self-signed). After first install, edit
+        /// `~/.local/share/ryra/caddy/config/tls.caddy` directly to switch to
+        /// wildcards, Cloudflare DNS-01, BYO certs, etc.
+        #[arg(long, value_name = "EMAIL", num_args = 0..=1, default_missing_value = "")]
+        acme: Option<String>,
         /// Skip confirmation prompts (including untrusted registry warnings)
         #[arg(long, short = 'y')]
         yes: bool,
@@ -209,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
             smtp,
             ref enable,
             tailscale,
+            ref acme,
             yes,
             dry_run,
         } => {
@@ -219,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
                 smtp,
                 enable,
                 tailscale,
+                acme.as_deref(),
                 dry_run,
                 yes,
             )
