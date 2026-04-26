@@ -93,11 +93,17 @@ action = "wait"
 service = "paperless-ngx"
 [[tests.steps]]
 action = "http"
+# Mirrors the basic test's window. Paperless's first-boot Django
+# migrations on an empty DB take ~70s; `--auth` adds
+# `allauth.socialaccount.providers.openid_connect` to PAPERLESS_APPS,
+# which brings ~30 extra `account.*` / `socialaccount.*` migrations on
+# top — pushing total startup well past 90s. The previous 60s poll
+# window was racing the inherent migration cost.
 name = "paperless-responds"
 url = "http://127.0.0.1:$RYRA_PORT_HTTP"
 service = "paperless-ngx"
-poll = { interval = 2, attempts = 30 }
-timeout = 90
+poll = { interval = 5, attempts = 60 }
+timeout = 330
 [[tests.steps]]
 action = "playwright"
 name = "playwright-auth-flow"

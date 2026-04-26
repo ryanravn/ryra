@@ -19,8 +19,6 @@ HealthCmd=curl -sf http://localhost:8000/ || exit 1
 
 [Service]
 EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
-ExecStartPre=/bin/bash %h/.local/share/ryra/paperless-ngx/configs/scripts/merge-ca-bundle.sh
-ExecStartPost=/bin/bash -c "podman cp %h/.local/share/ryra/paperless-ngx/ca-bundle.crt paperless-ngx:/tmp/ca-bundle.crt 2>/dev/null || true"
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
