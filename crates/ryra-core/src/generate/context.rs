@@ -111,12 +111,7 @@ pub fn build_context(
             .unwrap_or_else(|| auth_base_url.clone());
         if caddy_installed {
             let port = crate::caddy_https_port(config);
-            let parsed = url::Url::parse(&external_url).map_err(|e| {
-                Error::Template(format!("invalid auth provider URL '{external_url}': {e}"))
-            })?;
-            if parsed.port().is_none() {
-                external_url = format!("{external_url}:{port}");
-            }
+            external_url = with_caddy_port(&external_url, port)?;
         }
         // auth.internal_url — how containers reach the auth provider for OIDC
         // discovery and token exchange (server-to-server calls).
@@ -257,4 +252,70 @@ pub fn build_context(
     }
 
     Ok(ctx)
+}
+
+/// Ensure `url` reflects Caddy's HTTPS port without double-appending
+/// when the URL already includes (or implies) it. `Url::port()` returns
+/// `None` for the scheme's default port (443 for https, 80 for http), so
+/// a naive `if parsed.port().is_none() { url.push_str(":port") }` check
+/// produces `https://host:443:443/...` whenever Caddy is on 443 — which
+/// is what low-ports mode does. Comparing `port_or_known_default()`
+/// against the target port covers both the explicit and implicit cases.
+fn with_caddy_port(url: &str, caddy_port: u16) -> Result<String> {
+    let mut parsed = url::Url::parse(url)
+        .map_err(|e| Error::Template(format!("invalid auth provider URL '{url}': {e}")))?;
+    if parsed.port_or_known_default() == Some(caddy_port) {
+        return Ok(url.to_string());
+    }
+    parsed.set_port(Some(caddy_port)).map_err(|_| {
+        Error::Template(format!(
+            "auth provider URL '{url}' is not a base URL — can't set port"
+        ))
+    })?;
+    let mut s = parsed.to_string();
+    // url::Url adds a trailing slash to bare-host URLs after a
+    // round-trip; trim it so downstream `format!("{}/foo", url)` calls
+    // don't produce `…:443//foo`.
+    if s.ends_with('/') {
+        s.pop();
+    }
+    Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_caddy_port_already_explicit_default() {
+        // Regression: low-ports mode (Caddy on 443) used to render
+        // `https://authelia.internal:443:443/...` because url::Url::port()
+        // reports `None` for default ports. Fix compares
+        // `port_or_known_default()` instead.
+        let out = with_caddy_port("https://authelia.internal:443", 443).unwrap();
+        assert_eq!(out, "https://authelia.internal:443");
+    }
+
+    #[test]
+    fn with_caddy_port_no_port_needs_default() {
+        let out = with_caddy_port("https://authelia.internal", 443).unwrap();
+        // Either form is fine — url::Url normalizes default ports out of
+        // the string. What matters is no `:443:443`.
+        assert!(out == "https://authelia.internal" || out == "https://authelia.internal:443");
+    }
+
+    #[test]
+    fn with_caddy_port_replaces_mismatched_port() {
+        // Caddy moved to a non-default port (e.g. high-port mode 8443):
+        // the URL should be rewritten to match, even if it had a different
+        // port baked in already.
+        let out = with_caddy_port("https://authelia.internal:8443", 9443).unwrap();
+        assert_eq!(out, "https://authelia.internal:9443");
+    }
+
+    #[test]
+    fn with_caddy_port_appends_high_port_to_bare_host() {
+        let out = with_caddy_port("https://authelia.internal", 8443).unwrap();
+        assert_eq!(out, "https://authelia.internal:8443");
+    }
 }
