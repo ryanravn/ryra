@@ -89,11 +89,15 @@ pub fn list_available(repo_dir: &Path) -> Result<Vec<RegistryService>> {
 }
 
 /// Up to three close-match service names from `repo_dir` for a typo'd
-/// `name`. Bypasses [`list_available`]'s service.toml parse so we don't
-/// fail to suggest just because a sibling service has a malformed file:
-/// directory names alone are enough to compare. The Levenshtein
-/// threshold is `len/3 + 1` (max 3) so short names get tighter matching
-/// — "for" shouldn't match "forgejo" but "forgeo" should.
+/// `name`. The Levenshtein threshold is `len/3 + 1` (max 3) so short
+/// names get tighter matching — "for" shouldn't match "forgejo", but
+/// "forgeo" should. Bypasses [`list_available`]'s service.toml parse so
+/// we don't fail to suggest just because a sibling service has a
+/// malformed file: directory names alone are enough to compare.
+///
+/// Only called from [`find_service`] — `remove`/`config`/`test` errors
+/// already list or imply the small candidate set, so adding fuzzy
+/// suggestions there would be polish without payoff.
 fn suggest_close_names(repo_dir: &Path, name: &str) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(repo_dir) else {
         return Vec::new();
