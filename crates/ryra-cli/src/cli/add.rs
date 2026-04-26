@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use anyhow::{Result, bail};
 use dialoguer::{Confirm, Input};
 
+use ryra_core::caddy::AcmeMode;
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
@@ -42,7 +43,7 @@ pub async fn run(
     smtp: Option<SmtpProvider>,
     enable: &[String],
     tailscale: bool,
-    acme: Option<&str>,
+    acme: Option<&AcmeMode>,
     dry_run: bool,
     yes: bool,
 ) -> Result<()> {
@@ -298,24 +299,26 @@ pub async fn run(
         // and to drive the propagation below.
         let will_install_authelia = auth_kind.is_some() && config.auth.is_none();
 
-        // URL precedence:
-        //   1. explicit --url (highest)
-        //   2. --tailscale → https://<service>.<tailnet> (no port — each
-        //      service gets its own tailnet node via a sidecar tailscaled)
+        // Resolve a single typed `Exposure` once — replaces the prior
+        // `(resolved_url, tailscale_enabled)` pair so downstream code
+        // can pattern-match instead of juggling a parallel
+        // `(Option<String>, bool)` that allowed silently invalid combos
+        // like a `*.ts.net` URL with `tailscale_enabled = false`.
+        //
+        // Precedence:
+        //   1. explicit --url (classified by hostname suffix)
+        //   2. --tailscale → derive `<service>.<tailnet>.ts.net`
         //   3. Caddy installed + needs_https → auto-derive `*.internal`
-        //   4. interactive prompt (Local/Tailscale/Custom) when needs_https
-        //   5. None — service runs on plain http://127.0.0.1:<port>
+        //   4. interactive prompt (Self-signed / Tailscale / Public+LE /
+        //      External) when needs_https and Caddy isn't installed
+        //   5. Loopback — service runs on plain http://127.0.0.1:<port>
         // Clap's `conflicts_with = "url"` on --tailscale means 1+2 don't collide.
-        let resolved_url: Option<String>;
-        let tailscale_enabled: bool;
-        if let Some(u) = url {
-            resolved_url = Some(u.to_string());
-            tailscale_enabled = false;
+        let exposure: ryra_core::Exposure = if let Some(u) = url {
+            ryra_core::Exposure::from_url(u)
         } else if tailscale {
             let ts_url = derive_tailscale_url(service)?;
             println!("→ Using {ts_url} (Tailscale)");
-            resolved_url = Some(ts_url);
-            tailscale_enabled = true;
+            ryra_core::Exposure::Tailscale { url: ts_url }
         } else if needs_https {
             let caddy_installed = config
                 .services
@@ -332,22 +335,20 @@ pub async fn run(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
                 );
-                resolved_url = Some(if interactive && !dry_run {
+                let chosen = if interactive && !dry_run {
                     Input::new()
                         .with_prompt(format!("URL for '{service}'"))
                         .default(default_url)
                         .interact_text()?
                 } else {
                     default_url
-                });
-                tailscale_enabled = false;
+                };
+                ryra_core::Exposure::from_url(&chosen)
             } else if interactive && !dry_run {
-                let (chosen_url, chosen_ts) =
-                    prompt_exposure_for(service, &config, will_install_authelia).await?;
+                let chosen = prompt_exposure_for(service, &config, will_install_authelia).await?;
                 // Reload after potential Caddy install inside the prompt.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
-                resolved_url = Some(chosen_url);
-                tailscale_enabled = chosen_ts;
+                chosen
             } else {
                 bail!(
                     "service '{service}' requires HTTPS but no exposure was selected.\n\
@@ -356,13 +357,13 @@ pub async fn run(
                 );
             }
         } else {
-            resolved_url = None;
-            tailscale_enabled = false;
-        }
-        // Shadow the input `url` flag with the resolved URL so all the
-        // `--url`-aware code below (template context, warnings, planner
-        // input) sees the value we actually intend to use.
-        let url: Option<&str> = resolved_url.as_deref();
+            ryra_core::Exposure::Loopback
+        };
+        // Derive locals for downstream code that still threads the legacy
+        // shape (env templating, OIDC client registration). Goes away as
+        // each call site migrates to take `&Exposure` directly.
+        let url: Option<&str> = exposure.url();
+        let tailscale_enabled: bool = exposure.is_tailscale();
 
         // Auto-install Caddy when the user gives a public URL but Caddy
         // isn't installed yet. Without this, the install would succeed
@@ -381,12 +382,12 @@ pub async fn run(
             && !dry_run;
         if need_caddy_for_public_url {
             let chosen = match acme {
-                Some(email) => Some(TlsHandling::LetsEncrypt(email.to_string())),
+                Some(mode) => Some(TlsHandling::LetsEncrypt(mode.clone())),
                 None if interactive => Some(prompt_tls_for_public_url(url.unwrap_or("")).await?),
                 None => None,
             };
             match chosen {
-                Some(TlsHandling::LetsEncrypt(email)) => {
+                Some(TlsHandling::LetsEncrypt(mode)) => {
                     if let Some(u) = url {
                         dns_preflight_for_acme(u, interactive).await?;
                     }
@@ -398,7 +399,7 @@ pub async fn run(
                         None,
                         &[],
                         false,
-                        Some(&email),
+                        Some(&mode),
                         false,
                         true,
                     ))
@@ -586,7 +587,7 @@ pub async fn run(
         // If a previous add failed partway, clean up before retrying.
         let result = match ryra_core::add_service(
             service,
-            url,
+            &exposure,
             auth_kind.clone(),
             auth || auth_kind.is_some(),
             enable_smtp,
@@ -596,7 +597,6 @@ pub async fn run(
             &repo_dir,
             prompt_ctx.clone(),
             &super::is_port_in_use,
-            tailscale_enabled,
             acme_for_service,
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
@@ -655,7 +655,7 @@ pub async fn run(
                 // Retry now that the partial state is gone
                 ryra_core::add_service(
                     service,
-                    url,
+                    &exposure,
                     auth_kind.clone(),
                     auth || auth_kind.is_some(),
                     enable_smtp,
@@ -665,7 +665,6 @@ pub async fn run(
                     &repo_dir,
                     prompt_ctx.clone(),
                     &super::is_port_in_use,
-                    tailscale_enabled,
                     acme_for_service,
                 )?
             }
@@ -780,8 +779,7 @@ pub async fn run(
                 registry_name: service_ref.registry_name(),
                 allocated_ports: &result.allocated_ports,
                 repo_dir: &repo_dir,
-                url: result.url.as_deref(),
-                tailscale_enabled,
+                exposure: &exposure,
             })?;
 
             // Preview what's about to happen — the user sees "pulls / writes /
@@ -900,12 +898,25 @@ pub async fn run(
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| "~/.local/share/ryra/caddy/config/tls.caddy".to_string());
                 println!();
-                if let Some(email) = acme_for_service {
-                    if email.is_empty() {
-                        println!("TLS: Let's Encrypt (anonymous — no renewal notices)");
-                    } else {
+                // Match the four user-facing TLS states exhaustively. The
+                // implicit `None` case (no --acme flag) collapses into the
+                // same self-signed message as `Some(Internal)` — they
+                // produce the same `tls.caddy` content.
+                let mode_for_msg = acme_for_service.unwrap_or(&AcmeMode::Internal);
+                match mode_for_msg {
+                    AcmeMode::WithEmail(email) => {
                         println!("TLS: Let's Encrypt ({email})");
                     }
+                    AcmeMode::Anonymous => {
+                        println!("TLS: Let's Encrypt (anonymous — no renewal notices)");
+                    }
+                    AcmeMode::Internal => {
+                        println!(
+                            "TLS: self-signed (LAN — browsers warn unless ryra's CA is trusted)"
+                        );
+                    }
+                }
+                if matches!(mode_for_msg, AcmeMode::WithEmail(_) | AcmeMode::Anonymous) {
                     let (http_port, https_port) = result
                         .allocated_ports
                         .iter()
@@ -936,7 +947,6 @@ pub async fn run(
                     println!("  Cert issuance is async — watch progress with:");
                     println!("    journalctl --user -u caddy -f");
                 } else {
-                    println!("TLS: self-signed (LAN — browsers warn unless ryra's CA is trusted)");
                     println!(
                         "  For Let's Encrypt:  ryra remove caddy && ryra add caddy --acme you@example.com"
                     );
@@ -1428,17 +1438,32 @@ async fn dns_preflight_for_acme(url: &str, interactive: bool) -> Result<()> {
 }
 
 /// User's choice for how Caddy should issue TLS for a public URL.
+/// The `LetsEncrypt` variant carries an [`AcmeMode`] — the LE-specific
+/// subset is `Anonymous` or `WithEmail(...)` — so the install-time
+/// translation to the snippet is a single match instead of an
+/// `if email.is_empty()` branch.
 enum TlsHandling {
-    /// Caddy auto-issues real certs from Let's Encrypt with this email
-    /// for renewal notices. Requires DNS pointing at this host and Caddy
-    /// reachable from the internet (ACME challenge).
-    LetsEncrypt(String),
+    /// Caddy auto-issues real certs from Let's Encrypt. Requires DNS
+    /// pointing at this host and Caddy reachable from the internet
+    /// (ACME challenge).
+    LetsEncrypt(AcmeMode),
     /// Caddy issues self-signed certs from its internal CA. Browsers warn
     /// unless the CA is trusted. LAN-friendly default.
     SelfSigned,
     /// Don't install Caddy — the user is fronting with their own reverse
     /// proxy (Cloudflare Tunnel, nginx, external Caddy, etc.).
     External,
+}
+
+/// Convert an interactive email input into the right [`AcmeMode`] —
+/// empty string (user hit Enter) means anonymous LE, anything else
+/// means LE with that email for renewal notices.
+fn acme_mode_from_email(email: String) -> AcmeMode {
+    if email.is_empty() {
+        AcmeMode::Anonymous
+    } else {
+        AcmeMode::WithEmail(email)
+    }
 }
 
 /// Prompt the user how TLS should be handled for `url` when Caddy isn't
@@ -1467,17 +1492,16 @@ async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
                 .with_prompt("Email for Let's Encrypt (optional — for renewal notices, press Enter to skip)")
                 .allow_empty(true)
                 .interact_text()?;
-            Ok(TlsHandling::LetsEncrypt(email))
+            Ok(TlsHandling::LetsEncrypt(acme_mode_from_email(email)))
         }
         1 => Ok(TlsHandling::SelfSigned),
         _ => Ok(TlsHandling::External),
     }
 }
 
-/// Interactive prompt: how should this service be reachable? Returns the
-/// browser-visible URL plus the allocated `tailscale serve` port (if any),
-/// after applying any side-effects the choice implies (installing Caddy,
-/// running tailscale preflight, etc.).
+/// Interactive prompt: how should this service be reachable? Returns
+/// the typed [`Exposure`] decision after applying any side-effects the
+/// choice implies (installing Caddy, running tailscale preflight, etc.).
 ///
 /// Called from the per-service URL resolver when needs_https is true and
 /// neither `--url` nor `--tailscale` was given.
@@ -1485,7 +1509,7 @@ async fn prompt_exposure_for(
     service: &str,
     config: &Config,
     auth_will_inherit: bool,
-) -> Result<(String, bool)> {
+) -> Result<ryra_core::Exposure> {
     let items = &[
         "Self-signed (LAN) — Caddy local CA at *.internal (browsers warn unless trusted)",
         "Tailscale — exposed on your tailnet (publicly-trusted cert)",
@@ -1538,13 +1562,12 @@ async fn prompt_exposure_for(
                 .find(|s| WellKnownService::Caddy.matches(&s.name))
                 .and_then(|s| s.ports.get("https").copied())
                 .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
-            Ok((
-                format!(
+            Ok(ryra_core::Exposure::Internal {
+                url: format!(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
                 ),
-                false,
-            ))
+            })
         }
         1 => {
             // Tailscale: same path as `--tailscale` flag — preflight,
@@ -1554,7 +1577,9 @@ async fn prompt_exposure_for(
                 bail!("Tailscale not ready:\n\n{e}");
             }
             ensure_tailscale_admin_token(true).await?;
-            Ok((derive_tailscale_url(service)?, true))
+            Ok(ryra_core::Exposure::Tailscale {
+                url: derive_tailscale_url(service)?,
+            })
         }
         2 => {
             // Public + Let's Encrypt: ask for the public URL and the LE
@@ -1576,6 +1601,7 @@ async fn prompt_exposure_for(
                     .allow_empty(true)
                     .interact_text()?;
                 dns_preflight_for_acme(&url, true).await?;
+                let mode = acme_mode_from_email(email);
                 println!("\nInstalling caddy (Let's Encrypt mode)...\n");
                 Box::pin(run(
                     &[WellKnownService::Caddy.to_string()],
@@ -1584,7 +1610,7 @@ async fn prompt_exposure_for(
                     None,
                     &[],
                     false,
-                    Some(&email),
+                    Some(&mode),
                     false,
                     true,
                 ))
@@ -1595,7 +1621,7 @@ async fn prompt_exposure_for(
                      Edit ~/.local/share/ryra/caddy/config/tls.caddy to switch to Let's Encrypt."
                 );
             }
-            Ok((url, false))
+            Ok(ryra_core::Exposure::Public { url })
         }
         _ => {
             // External: user is fronting with their own reverse proxy.
@@ -1603,7 +1629,7 @@ async fn prompt_exposure_for(
             let url: String = Input::new()
                 .with_prompt(format!("Public URL for '{service}'"))
                 .interact_text()?;
-            Ok((url, false))
+            Ok(ryra_core::Exposure::Public { url })
         }
     }
 }

@@ -300,7 +300,10 @@ fn confirm_bulk(
             config
                 .services
                 .iter()
-                .any(|s| &s.name == *n && s.tailscale_enabled)
+                .any(|s| {
+                    &s.name == *n
+                        && matches!(s.exposure, ryra_core::Exposure::Tailscale { .. })
+                })
         })
         .count();
     if tailnet_count > 0 {

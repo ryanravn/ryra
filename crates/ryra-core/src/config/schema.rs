@@ -156,7 +156,56 @@ pub struct RegistryEntry {
 
 // --- Installed service record ---
 
+/// Wire-format struct used only on deserialization. Captures both the
+/// historical `(url, tailscale_enabled)` pair and the new `exposure`
+/// field so existing `ryra.toml` files keep loading after the typed
+/// migration. New writes always emit `exposure` (see [`InstalledService`]'s
+/// `Serialize`-derived form, which has no legacy fields), so old
+/// shapes phase out the next time the config is saved.
+#[derive(Deserialize)]
+struct InstalledServiceCompat {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub ports: BTreeMap<String, u16>,
+    #[serde(default)]
+    pub auth_kind: Option<AuthKind>,
+    /// New, typed field. Present on configs written by current ryra.
+    #[serde(default)]
+    pub exposure: Option<crate::Exposure>,
+    /// Legacy fields. Used only when `exposure` is absent (loading a
+    /// pre-migration config); ignored otherwise.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub tailscale_enabled: bool,
+    #[serde(default)]
+    pub installed: bool,
+}
+
+impl From<InstalledServiceCompat> for InstalledService {
+    fn from(c: InstalledServiceCompat) -> Self {
+        let exposure = c.exposure.unwrap_or_else(|| match (c.url, c.tailscale_enabled) {
+            (None, _) => crate::Exposure::Loopback,
+            (Some(u), true) => crate::Exposure::Tailscale { url: u },
+            (Some(u), false) => crate::Exposure::from_url(&u),
+        });
+        InstalledService {
+            name: c.name,
+            version: c.version,
+            repo: c.repo,
+            ports: c.ports,
+            auth_kind: c.auth_kind,
+            exposure,
+            installed: c.installed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "InstalledServiceCompat")]
 pub struct InstalledService {
     pub name: String,
     pub version: String,
@@ -168,16 +217,12 @@ pub struct InstalledService {
     /// The auth kind the user chose when installing this service, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_kind: Option<AuthKind>,
-    /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    /// True when this service was installed with `--tailscale` (or "Tailscale"
-    /// picked in the exposure prompt). Means the service has a sibling
-    /// `ts-<name>` sidecar quadlet running tailscaled in a shared netns,
-    /// joined to the user's tailnet as its own device. `ryra remove` uses
-    /// this to know it has to tear down the sidecar and its state volume.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub tailscale_enabled: bool,
+    /// How this service is reachable. Replaces the old `url` +
+    /// `tailscale_enabled` pair so consumers pattern-match a single
+    /// typed value instead of reconstructing the variant from string
+    /// inspection. Old configs with `url`/`tailscale_enabled` are
+    /// auto-migrated by [`InstalledServiceCompat`].
+    pub exposure: crate::Exposure,
     /// Whether the service was fully installed (all steps completed).
     /// Services with `installed: false` are partially installed and can be
     /// retried with `ryra add` or cleaned up with `ryra remove`.
@@ -238,36 +283,73 @@ mod tests {
     }
 
     #[test]
-    fn installed_service_skips_tailscale_when_false() {
-        // Default-false: don't write `tailscale_enabled = false` on every
-        // service that doesn't use it — keeps ryra.toml tidy.
+    fn installed_service_serializes_loopback_exposure() {
         let svc = InstalledService {
             name: "uptime-kuma".into(),
             version: "0.1.0".into(),
             repo: "bundled".into(),
             ports: BTreeMap::new(),
             auth_kind: None,
-            url: None,
-            tailscale_enabled: false,
+            exposure: crate::Exposure::Loopback,
             installed: true,
         };
         let s = toml::to_string(&svc).unwrap();
+        assert!(s.contains(r#"kind = "loopback""#));
+        // No legacy fields leaked into the new serialized form.
         assert!(!s.contains("tailscale_enabled"));
+        assert!(!s.contains("url ="));
     }
 
     #[test]
-    fn installed_service_writes_tailscale_when_true() {
+    fn installed_service_serializes_tailscale_exposure() {
         let svc = InstalledService {
             name: "seafile".into(),
             version: "0.1.0".into(),
             repo: "bundled".into(),
             ports: BTreeMap::new(),
             auth_kind: None,
-            url: None,
-            tailscale_enabled: true,
+            exposure: crate::Exposure::Tailscale {
+                url: "https://seafile.foo.ts.net".into(),
+            },
             installed: true,
         };
         let s = toml::to_string(&svc).unwrap();
-        assert!(s.contains("tailscale_enabled = true"));
+        assert!(s.contains(r#"kind = "tailscale""#));
+        assert!(s.contains("seafile.foo.ts.net"));
+    }
+
+    #[test]
+    fn installed_service_loads_legacy_url_and_tailscale_fields() {
+        // Pre-migration shape: a `[[services]]` table with `url` and
+        // `tailscale_enabled` fields and no `exposure`. The compat
+        // deserializer should reconstruct the right variant.
+        let toml = r#"
+            name = "seafile"
+            version = "0.1.0"
+            repo = "bundled"
+            url = "https://seafile.foo.ts.net"
+            tailscale_enabled = true
+            installed = true
+        "#;
+        let svc: InstalledService = toml::from_str(toml).unwrap();
+        match svc.exposure {
+            crate::Exposure::Tailscale { url } => assert_eq!(url, "https://seafile.foo.ts.net"),
+            other => panic!("expected Tailscale, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn installed_service_loads_legacy_internal_url_no_tailscale() {
+        let toml = r#"
+            name = "vaultwarden"
+            version = "0.1.0"
+            url = "https://vault.internal:8443"
+            installed = true
+        "#;
+        let svc: InstalledService = toml::from_str(toml).unwrap();
+        match svc.exposure {
+            crate::Exposure::Internal { url } => assert_eq!(url, "https://vault.internal:8443"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
     }
 }

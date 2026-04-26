@@ -106,8 +106,8 @@ pub fn build_context(
             .services
             .iter()
             .find(|s| s.name == auth.provider_name())
-            .and_then(|s| s.url.as_ref())
-            .cloned()
+            .and_then(|s| s.exposure.url())
+            .map(|u| u.to_string())
             .unwrap_or_else(|| auth_base_url.clone());
         if caddy_installed {
             let port = crate::caddy_https_port(config);

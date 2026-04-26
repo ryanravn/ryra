@@ -169,8 +169,8 @@ fn url_for(svc: &ServiceData, installed: Option<&InstalledService>) -> String {
     let Some(entry) = installed else {
         return "—".to_string();
     };
-    if let Some(url) = &entry.url {
-        return url.clone();
+    if let Some(url) = entry.exposure.url() {
+        return url.to_string();
     }
     if let Some(http_port) = entry.ports.get("http") {
         return format!("http://127.0.0.1:{http_port}");

@@ -49,7 +49,7 @@ impl StatusInfo {
                 .iter()
                 .map(|s| ServiceInfo {
                     name: s.name.clone(),
-                    url: s.url.clone(),
+                    url: s.exposure.url().map(|u| u.to_string()),
                     ports: s.ports.clone(),
                     installed: s.installed,
                 })

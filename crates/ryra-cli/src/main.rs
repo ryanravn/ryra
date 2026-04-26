@@ -221,6 +221,20 @@ async fn main() -> anyhow::Result<()> {
             yes,
             dry_run,
         } => {
+            // Map clap's raw flag to a typed AcmeMode at the CLI boundary so
+            // every interior call site pattern-matches an exhaustive enum
+            // instead of poking at a `Option<String>` with empty-string
+            // sentinels:
+            //   absent              → None (planner falls back to Internal)
+            //   `--acme`            → Some(Anonymous)
+            //   `--acme me@foo.bar` → Some(WithEmail(...))
+            let acme_mode: Option<ryra_core::caddy::AcmeMode> = acme.as_deref().map(|s| {
+                if s.is_empty() {
+                    ryra_core::caddy::AcmeMode::Anonymous
+                } else {
+                    ryra_core::caddy::AcmeMode::WithEmail(s.to_string())
+                }
+            });
             cli::add::run(
                 services,
                 url.as_deref(),
@@ -228,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
                 smtp,
                 enable,
                 tailscale,
-                acme.as_deref(),
+                acme_mode.as_ref(),
                 dry_run,
                 yes,
             )

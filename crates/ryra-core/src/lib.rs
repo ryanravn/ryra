@@ -118,6 +118,83 @@ pub fn is_tailscale_url(url: &str) -> bool {
         .is_some_and(|h| h.ends_with(".ts.net"))
 }
 
+/// How a service is exposed to clients. Decided once at install time
+/// (`--url`, `--tailscale`, the interactive prompt, or auto-derived)
+/// and threaded through the planner so every code path that needs to
+/// know "where does this service live?" pattern-matches a single
+/// typed value instead of juggling a parallel `(Option<url>, bool)`
+/// pair where some combinations were silently invalid (e.g. a
+/// `*.ts.net` URL with `tailscale_enabled = false`).
+///
+/// Serialized form on disk uses an internal `kind` tag so the variant
+/// is explicit in the TOML — no guessing whether `url = "foo.ts.net"`
+/// implies Tailscale-mode or not.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Exposure {
+    /// No public-facing URL. Service runs on `http://127.0.0.1:<port>`
+    /// only — reachable from the host but nothing routes external
+    /// traffic to it. Used for services that don't need a domain
+    /// (e.g. inbucket, prometheus when the user only hits them via
+    /// localhost).
+    Loopback,
+    /// LAN-only via Caddy at a `*.internal` hostname. Self-signed
+    /// certs from Caddy's internal CA — useful on a single machine
+    /// where the user has imported ryra's CA into their browser.
+    Internal { url: String },
+    /// Exposed on the user's tailnet at `<service>.<tailnet>.ts.net`
+    /// via `tailscale serve` on the host. Real cert from the
+    /// Tailscale-managed CA, no Caddyfile entry needed.
+    Tailscale { url: String },
+    /// A public hostname. Caddy is the reverse proxy when installed
+    /// (LE or self-signed depending on `tls.caddy`); without Caddy,
+    /// the user is fronting with their own proxy (Cloudflare Tunnel,
+    /// nginx, etc.) and ryra leaves routing alone.
+    Public { url: String },
+}
+
+impl Exposure {
+    /// Browser-visible URL, if any. Convenient when something
+    /// downstream is OK with `Option<&str>` (template context, OIDC
+    /// redirects) and doesn't care about the routing variant.
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Exposure::Loopback => None,
+            Exposure::Internal { url }
+            | Exposure::Tailscale { url }
+            | Exposure::Public { url } => Some(url),
+        }
+    }
+
+    /// True when this exposure is reached via `tailscale serve` instead
+    /// of Caddy. Used to skip Caddyfile routes for `*.ts.net` URLs.
+    pub fn is_tailscale(&self) -> bool {
+        matches!(self, Exposure::Tailscale { .. })
+    }
+
+    /// Classify a user-supplied URL string into the corresponding
+    /// Exposure variant. `*.internal` → `Internal`, `*.ts.net` →
+    /// `Tailscale`, anything else → `Public`. Used by the CLI when a
+    /// raw `--url <X>` flag is passed.
+    pub fn from_url(url: &str) -> Self {
+        let host = url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()));
+        match host.as_deref() {
+            Some(h) if h.ends_with(".internal") => Exposure::Internal {
+                url: url.to_string(),
+            },
+            Some(h) if h.ends_with(".ts.net") => Exposure::Tailscale {
+                url: url.to_string(),
+            },
+            _ => Exposure::Public {
+                url: url.to_string(),
+            },
+        }
+    }
+
+}
+
 /// True when the URL's host is publicly resolvable — i.e. something a
 /// browser on the open internet would expect to reach. Used by the CLI
 /// to decide whether to surface the Let's Encrypt prompt.
@@ -359,8 +436,14 @@ fn retroactive_network_joins(
             continue;
         }
         let (network_name, should_join) = if is_caddy {
-            // caddy: URL-having services want reverse proxy routing.
-            ("caddy".to_string(), svc.url.is_some())
+            // caddy: services with a Caddy-routed URL want the proxy
+            // network. Tailscale-exposed services route via the host's
+            // tailscale serve, not Caddy, so they skip.
+            let wants_caddy = matches!(
+                svc.exposure,
+                Exposure::Internal { .. } | Exposure::Public { .. }
+            );
+            ("caddy".to_string(), wants_caddy)
         } else if is_inbucket {
             // inbucket: any already-installed service whose .env points
             // SMTP at the "inbucket" hostname needs to reach it.
@@ -518,7 +601,7 @@ fn resolve_extra_networks(
 #[allow(clippy::too_many_arguments)]
 pub fn add_service(
     service_name: &str,
-    url: Option<&str>,
+    exposure: &Exposure,
     auth_kind: Option<registry::service_def::AuthKind>,
     enable_auth: bool,
     enable_smtp: bool,
@@ -528,9 +611,16 @@ pub fn add_service(
     repo_dir: &Path,
     pre_built_ctx: Option<BTreeMap<String, String>>,
     port_in_use: &dyn Fn(u16) -> bool,
-    tailscale_enabled: bool,
-    acme_email: Option<&str>,
+    acme_mode: Option<&caddy::AcmeMode>,
 ) -> Result<AddResult> {
+    // Legacy locals — the rest of this function still threads
+    // `Option<&str>` URLs and a tailscale bool through downstream
+    // helpers (env templating, OIDC client registration, port
+    // resolution). Extracted once at the boundary so callers can't
+    // construct invalid `(url, tailscale)` combinations and the body
+    // doesn't have to be rewritten in one go.
+    let url: Option<&str> = exposure.url();
+    let tailscale_enabled: bool = exposure.is_tailscale();
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
 
@@ -898,11 +988,11 @@ pub fn add_service(
     // 9. Add Caddy route for services with a URL when Caddy is installed.
     // This creates a reverse proxy from the service's domain to its container port.
     //
-    // Tailscale URLs (*.ts.net) skip this: the service is already reachable on
+    // Tailscale exposures skip this: the service is already reachable on
     // its host port via the tailnet, and MagicDNS handles the hostname.
     if let Some(url) = url
         && !WellKnownService::Caddy.matches(service_name)
-        && !is_tailscale_url(url)
+        && !exposure.is_tailscale()
     {
         if caddy_installed {
             let parsed = url::Url::parse(url)
@@ -980,13 +1070,10 @@ pub fn add_service(
     if WellKnownService::Caddy.matches(service_name) {
         let snippet_path = caddy::tls_snippet_path()?;
         if !snippet_path.exists() {
-            let content = match acme_email {
-                Some(email) => caddy::acme_snippet(email),
-                None => caddy::lan_snippet().to_string(),
-            };
+            let mode = acme_mode.cloned().unwrap_or(caddy::AcmeMode::Internal);
             steps.push(Step::WriteFile(GeneratedFile {
                 path: snippet_path,
-                content,
+                content: mode.snippet(),
             }));
         }
     }
@@ -1090,7 +1177,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     // Always emit when the service was tailscale-enabled — the API
     // delete is idempotent and `tailscale serve --service=svc:X off`
     // is fine to run on a service that's already cleared.
-    if installed.tailscale_enabled {
+    if matches!(installed.exposure, Exposure::Tailscale { .. }) {
         steps.push(Step::TailscaleDisable {
             service: service_name.to_string(),
         });
@@ -1127,7 +1214,14 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     // Clean up ryra-managed Caddy site block + OIDC client registration
     // BEFORE the daemon reload, so the routing layers drop their stale
     // pointers while the doomed containers are already stopped.
-    if !WellKnownService::Caddy.matches(service_name) && installed.url.is_some() {
+    // Caddy-routed exposures (Internal / Public) had a `# ryra:<svc>`
+    // block written into the Caddyfile on add; remove it now. Loopback
+    // and Tailscale never had one (no Caddy involvement), so skip.
+    let had_caddy_route = matches!(
+        installed.exposure,
+        Exposure::Internal { .. } | Exposure::Public { .. }
+    );
+    if !WellKnownService::Caddy.matches(service_name) && had_caddy_route {
         let caddyfile_path = caddy::caddyfile_path()?;
         if caddyfile_path.exists() {
             let existing =
@@ -1205,7 +1299,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
         }
     }
 
-    let url = installed.url.clone();
+    let url = installed.exposure.url().map(|s| s.to_string());
 
     Ok(RemoveResult {
         steps,
@@ -1221,12 +1315,13 @@ pub struct RecordPendingParams<'a> {
     pub registry_name: &'a str,
     pub allocated_ports: &'a [(String, u16)],
     pub repo_dir: &'a Path,
-    /// Public URL for this service (browser-visible, e.g., https://docs.example.com).
-    pub url: Option<&'a str>,
-    /// True when `--tailscale` (or the "Tailscale" exposure prompt) was
-    /// used. Persisted on the InstalledService record so removal knows
-    /// to tear down the sibling `ts-<service>` sidecar quadlet.
-    pub tailscale_enabled: bool,
+    /// How the service is exposed to clients. Replaces the previous
+    /// `(url: Option<&str>, tailscale_enabled: bool)` pair so callers
+    /// can't construct invalid combinations like a `*.ts.net` URL with
+    /// `tailscale_enabled = false`. Decomposed into the legacy storage
+    /// fields inside `record_pending` until the schema migrates to
+    /// hold the typed enum directly.
+    pub exposure: &'a Exposure,
 }
 
 /// Record a service as pending installation (installed: false).
@@ -1244,14 +1339,16 @@ pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
         repo: params.registry_name.to_string(),
         ports,
         auth_kind: params.auth_kind,
-        url: params.url.map(|u| u.to_string()),
-        tailscale_enabled: params.tailscale_enabled,
+        exposure: params.exposure.clone(),
         installed: false,
     });
 
     // Auto-configure [auth] when an auth provider is installed
     if WellKnownService::Authelia.matches(params.service_name) {
-        config.auth = Some(authelia::auth_config(params.allocated_ports, params.url)?);
+        config.auth = Some(authelia::auth_config(
+            params.allocated_ports,
+            params.exposure.url(),
+        )?);
     }
 
     config::save_config(&paths.config_file, &config)?;
@@ -1342,7 +1439,7 @@ pub fn reset() -> Result<ResetResult> {
     // hostnames.
     if let Some(ref config) = config {
         for service in &config.services {
-            if service.tailscale_enabled {
+            if matches!(service.exposure, Exposure::Tailscale { .. }) {
                 steps.push(Step::TailscaleDisable {
                     service: service.name.clone(),
                 });

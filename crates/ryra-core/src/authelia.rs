@@ -220,7 +220,7 @@ pub fn register_oidc_client(
         .services
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name))
-        .and_then(|s| s.url.as_ref())
+        .and_then(|s| s.exposure.url())
         .and_then(|u| url::Url::parse(u).ok())
         .and_then(|parsed| parsed.host_str().map(|h| h.to_string()))
     {

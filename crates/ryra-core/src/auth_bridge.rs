@@ -74,16 +74,10 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
         return Ok(None);
     };
     // Bridge applies only when authelia is reachable via a Caddy-fronted
-    // *.internal hostname. Other hostnames mean another trust path is in
-    // play (Tailscale serve, user's external proxy) and ryra doesn't have
-    // matching client-side plumbing yet.
-    let authelia_is_caddy_local = authelia
-        .url
-        .as_deref()
-        .and_then(|u| url::Url::parse(u).ok())
-        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
-        .is_some_and(|h| h.ends_with(".internal"));
-    if !authelia_is_caddy_local {
+    // *.internal hostname. Other exposures (Tailscale serve, user's
+    // external proxy on a public domain) mean another trust path is in
+    // play and ryra doesn't have matching client-side plumbing yet.
+    if !matches!(authelia.exposure, crate::Exposure::Internal { .. }) {
         return Ok(None);
     }
     let caddy_installed = params
@@ -158,7 +152,7 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     // isn't resolvable via normal DNS, so we write a small hosts file at
     // service-start time mapping it to caddy's current container IP and
     // bind-mount that over /etc/hosts.
-    if let Some(auth_url) = authelia.url.as_deref()
+    if let Some(auth_url) = authelia.exposure.url()
         && let Ok(parsed) = url::Url::parse(auth_url)
         && let Some(host) = parsed.host_str()
     {
@@ -229,14 +223,17 @@ mod tests {
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
     fn installed(name: &str, url: Option<&str>) -> InstalledService {
+        let exposure = match url {
+            Some(u) => crate::Exposure::from_url(u),
+            None => crate::Exposure::Loopback,
+        };
         InstalledService {
             name: name.into(),
             version: "0.1.0".into(),
             repo: "bundled".into(),
             ports: BTreeMap::new(),
             auth_kind: None,
-            url: url.map(String::from),
-            tailscale_enabled: false,
+            exposure,
             installed: true,
         }
     }

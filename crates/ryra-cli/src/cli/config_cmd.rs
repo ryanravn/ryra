@@ -159,7 +159,7 @@ async fn show_service(service: &str) -> Result<()> {
         let home_dir = ryra_core::service_home(service_name)?;
         println!();
         println!("Installed");
-        if let Some(ref url) = svc.url {
+        if let Some(url) = svc.exposure.url() {
             println!("URL:      {url}");
         }
         println!("Config:   {}", home_dir.display());

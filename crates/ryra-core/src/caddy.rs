@@ -29,21 +29,33 @@ pub fn tls_snippet_path() -> Result<PathBuf> {
         .join("tls.caddy"))
 }
 
-/// Default snippet for LAN mode (self-signed via Caddy's internal CA).
-pub fn lan_snippet() -> &'static str {
-    "(ryra_tls) {\n\ttls internal\n}\n"
+/// What ryra writes into `tls.caddy` on first install of caddy.
+///
+/// Modeled as an exhaustive enum so callers can't smuggle a third
+/// state via empty-string sentinels — `match` on this and the planner,
+/// install message, and snippet renderer stay in agreement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcmeMode {
+    /// Self-signed via Caddy's internal CA (LAN-friendly default).
+    /// Browsers warn unless ryra's CA is trusted.
+    Internal,
+    /// Let's Encrypt with no registration email — real certs but no
+    /// renewal-notice email tied to an account.
+    Anonymous,
+    /// Let's Encrypt with a registration email for renewal notices.
+    WithEmail(String),
 }
 
-/// Snippet for Let's Encrypt mode. The email is optional — Caddy registers
-/// anonymously when it's empty, foregoing renewal-notification email but
-/// still issuing real certs.
-pub fn acme_snippet(email: &str) -> String {
-    if email.is_empty() {
-        // Empty body — sites that import this get no `tls` directive,
-        // which makes Caddy auto-issue LE certs for any public hostname.
-        "(ryra_tls) {\n}\n".to_string()
-    } else {
-        format!("(ryra_tls) {{\n\ttls {email}\n}}\n")
+impl AcmeMode {
+    /// Renders the `(ryra_tls) { … }` snippet body for this mode.
+    pub fn snippet(&self) -> String {
+        match self {
+            AcmeMode::Internal => "(ryra_tls) {\n\ttls internal\n}\n".to_string(),
+            // Empty body — sites that import this get no `tls` directive,
+            // which makes Caddy auto-issue LE certs for any public hostname.
+            AcmeMode::Anonymous => "(ryra_tls) {\n}\n".to_string(),
+            AcmeMode::WithEmail(email) => format!("(ryra_tls) {{\n\ttls {email}\n}}\n"),
+        }
     }
 }
 
@@ -305,23 +317,23 @@ mod tests {
     }
 
     #[test]
-    fn lan_snippet_format() {
-        let s = lan_snippet();
+    fn acme_mode_internal_snippet() {
+        let s = AcmeMode::Internal.snippet();
         assert!(s.starts_with("(ryra_tls) {"));
         assert!(s.contains("tls internal"));
     }
 
     #[test]
-    fn acme_snippet_format() {
-        let s = acme_snippet("admin@example.com");
+    fn acme_mode_with_email_snippet() {
+        let s = AcmeMode::WithEmail("admin@example.com".to_string()).snippet();
         assert!(s.starts_with("(ryra_tls) {"));
         assert!(s.contains("tls admin@example.com"));
         assert!(!s.contains("tls internal"));
     }
 
     #[test]
-    fn acme_snippet_empty_email_omits_tls_line() {
-        let s = acme_snippet("");
+    fn acme_mode_anonymous_snippet_omits_tls_directive() {
+        let s = AcmeMode::Anonymous.snippet();
         assert!(s.starts_with("(ryra_tls) {"));
         // No `tls` *directive* inside the body — Caddy auto-issues
         // anonymously when the snippet is empty. The "tls" inside
