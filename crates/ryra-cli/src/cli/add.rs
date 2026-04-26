@@ -260,25 +260,21 @@ pub async fn run(
             config.auth.is_some(),
         )?;
 
-        // If the user chose auth but no provider is configured, install one
-        if auth_kind.is_some() && config.auth.is_none() {
-            if !ensure_auth_for_add(&mut config, &paths, dry_run).await? {
-                return Ok(());
-            }
-            // Reload — ensure_auth_for_add may have installed authelia
-            config = ryra_core::config::load_or_default(&paths.config_file)?;
-        }
-
-        // Resolve where this service will be reachable.
-        //
-        // Must run after resolve_auth_kind: an interactive "Enable oidc auth?"
-        // yes has the same HTTPS implications as `--auth`, so we evaluate
-        // needs_https against the final auth decision, not the raw CLI flag.
+        // Resolve exposure BEFORE auto-installing authelia so the provider
+        // inherits the parent's choice. Picking the two separately let users
+        // mismatch (authelia local + service tailnet → tailnet clients can't
+        // reach `authelia.internal` for OIDC redirects). One prompt, one
+        // decision, propagated.
         let needs_https = needs_https(
             reg_service.def.service.https.clone(),
             auth_kind.is_some(),
             url,
         );
+
+        // True iff this run will auto-install authelia. Used both to show a
+        // "(authelia will inherit this choice)" hint in the exposure prompt
+        // and to drive the propagation below.
+        let will_install_authelia = auth_kind.is_some() && config.auth.is_none();
 
         // URL precedence:
         //   1. explicit --url (highest)
@@ -300,7 +296,7 @@ pub async fn run(
             let caddy_installed = config
                 .services
                 .iter()
-                .any(|s| WellKnownService::Caddy.matches(&s.name));
+                .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
             if caddy_installed {
                 let caddy_https_port = config
                     .services
@@ -315,7 +311,7 @@ pub async fn run(
                 tailscale_enabled = false;
             } else if interactive && !dry_run {
                 let (chosen_url, chosen_ts) =
-                    prompt_exposure_for(service, &config).await?;
+                    prompt_exposure_for(service, &config, will_install_authelia).await?;
                 // Reload after potential Caddy install inside the prompt.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
                 resolved_url = Some(chosen_url);
@@ -335,6 +331,27 @@ pub async fn run(
         // `--url`-aware code below (template context, warnings, planner
         // input) sees the value we actually intend to use.
         let url: Option<&str> = resolved_url.as_deref();
+
+        // Authelia already exists — make sure its exposure isn't narrower
+        // than the service we're about to add. Local-only authelia + tailnet
+        // service silently breaks OIDC redirects for off-host clients.
+        if auth_kind.is_some() && config.auth.is_some() {
+            check_auth_exposure_compat(&config, service, url)?;
+        }
+
+        // If the user chose auth but no provider is configured, install one,
+        // passing `tailscale_enabled` so authelia inherits the parent's
+        // exposure (Local → caddy already up from the prompt → auto-derives
+        // `*.internal`; Tailscale → propagates --tailscale; Custom → falls
+        // through to authelia's own exposure resolution since custom URLs
+        // are per-service and can't be inherited).
+        if will_install_authelia {
+            if !ensure_auth_for_add(&mut config, &paths, dry_run, tailscale_enabled).await? {
+                return Ok(());
+            }
+            // Reload — ensure_auth_for_add may have installed authelia
+            config = ryra_core::config::load_or_default(&paths.config_file)?;
+        }
 
         // Prompt for env vars based on their kind
         use ryra_core::registry::service_def::EnvKind;
@@ -1153,6 +1170,44 @@ fn service_url_is_caddy_local(url: &str) -> bool {
         })
 }
 
+/// Bail when authelia is exposed locally (`*.internal`) but the service we're
+/// about to add will be reachable somewhere broader (tailnet, custom URL).
+/// In that combination, off-host clients (a phone on the tailnet, a public
+/// browser) hit the service fine but can't follow the OIDC redirect to
+/// `authelia.internal` because that hostname only resolves on the ryra host.
+///
+/// The reverse — authelia broader than the service — is fine: the local
+/// browser reaches both, and `*.ts.net` resolves on the host via MagicDNS.
+fn check_auth_exposure_compat(
+    config: &Config,
+    service: &str,
+    service_url: Option<&str>,
+) -> Result<()> {
+    let Some(auth) = &config.auth else {
+        return Ok(());
+    };
+    let auth_url = auth.url();
+    let auth_is_local = service_url_is_caddy_local(auth_url);
+    if !auth_is_local {
+        return Ok(());
+    }
+    let Some(svc_url) = service_url else {
+        return Ok(());
+    };
+    if service_url_is_caddy_local(svc_url) {
+        return Ok(());
+    }
+    bail!(
+        "authelia is local-only at {auth_url}, but {service} will be reachable at \
+         {svc_url}. Off-host clients (e.g., other devices on your tailnet) can't \
+         resolve `*.internal` hostnames, so the OIDC redirect from {service} back \
+         to authelia would fail.\n\n\
+         Fix: re-install authelia at the same exposure as {service}:\n  \
+         ryra remove authelia --purge\n  \
+         ryra add authelia --tailscale  (or --url <public-https-url>)"
+    );
+}
+
 /// Interactive prompt: how should this service be reachable? Returns the
 /// browser-visible URL plus the allocated `tailscale serve` port (if any),
 /// after applying any side-effects the choice implies (installing Caddy,
@@ -1163,12 +1218,18 @@ fn service_url_is_caddy_local(url: &str) -> bool {
 async fn prompt_exposure_for(
     service: &str,
     config: &Config,
+    auth_will_inherit: bool,
 ) -> Result<(String, bool)> {
     let items = &[
         "Local — Caddy on *.internal (single machine, local CA)",
         "Tailscale — exposed on your tailnet (publicly-trusted cert)",
         "Custom URL — you'll handle TLS / reverse proxy",
     ];
+    if auth_will_inherit {
+        println!(
+            "(authelia will inherit this choice — install it separately first if you need a different exposure)"
+        );
+    }
     let selection = dialoguer::Select::new()
         .with_prompt(format!("How will '{service}' be reachable?"))
         .items(items)
@@ -1178,11 +1239,13 @@ async fn prompt_exposure_for(
     match selection {
         0 => {
             // Local: install Caddy if it isn't already there, then derive
-            // the *.internal URL using its allocated HTTPS port.
+            // the *.internal URL using its allocated HTTPS port. Match the
+            // planner's `installed`-aware check — a stale `installed = false`
+            // entry from a killed previous install must not count as ready.
             let caddy_installed = config
                 .services
                 .iter()
-                .any(|s| WellKnownService::Caddy.matches(&s.name));
+                .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
             if !caddy_installed {
                 println!("\nInstalling caddy (local HTTPS provider)...\n");
                 Box::pin(run(
@@ -1348,6 +1411,7 @@ async fn ensure_auth_for_add(
     config: &mut Config,
     paths: &ConfigPaths,
     dry_run: bool,
+    parent_tailscale: bool,
 ) -> Result<bool> {
     match prompts::ensure_auth_configured(config, paths).await? {
         prompts::AuthSetupChoice::External(_) => Ok(true),
@@ -1368,17 +1432,21 @@ async fn ensure_auth_for_add(
             }
 
             println!("\nInstalling authelia...\n");
-            // The recursive run() handles URL resolution (--url / --tailscale /
-            // Caddy-auto / prompt) the same way any other service add does, so
-            // there's a single code path for all "pick where authelia lives"
-            // logic. Caddy gets installed inline if the user picks Local.
+            // Inherit the parent service's exposure choice instead of asking
+            // the user a second time (which let them pick mismatched setups,
+            // e.g. local authelia + tailscale service → tailnet OIDC broken).
+            // For Local: caddy is already installed by the parent's prompt,
+            // so authelia's recursive URL resolution auto-derives `*.internal`.
+            // For Tailscale: pass --tailscale through.
+            // For Custom: fall through (custom URLs are per-service — authelia
+            // gets its own exposure prompt).
             Box::pin(run(
                 &[WellKnownService::Authelia.to_string()],
                 None,
                 false,
                 None,
                 &[],
-                false,
+                parent_tailscale,
                 dry_run,
                 true,
             ))

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use dialoguer::Input;
+use ryra_core::Step;
 use ryra_core::config::schema::Config;
 use ryra_core::data::{ServiceData, ServiceStatus};
 
@@ -32,7 +33,7 @@ pub async fn run(
             println!("No orphan data to purge.");
             return Ok(());
         }
-        confirm_bulk(&names, true, yes, dry_run)?;
+        confirm_bulk(&names, true, yes, dry_run, &config)?;
         (names, true)
     } else if all {
         let mut names: Vec<String> = config
@@ -53,7 +54,7 @@ pub async fn run(
             return Ok(());
         }
         names.sort();
-        confirm_bulk(&names, purge, yes, dry_run)?;
+        confirm_bulk(&names, purge, yes, dry_run, &config)?;
         (names, purge)
     } else {
         (services.to_vec(), purge)
@@ -121,8 +122,13 @@ async fn remove_one(
             Vec::new()
         };
 
+        let tailnet_disable = result
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::TailscaleDisable { .. }));
+
         if !skip_prompt {
-            prompt_installed(service, mode, &preserved)?;
+            prompt_installed(service, mode, &preserved, tailnet_disable)?;
         }
 
         if dry_run {
@@ -168,6 +174,11 @@ async fn remove_one(
     } else {
         println!("Purging {service}...");
         apply::execute_all(&steps).await?;
+        // A killed `ryra add` can leave a config entry with `installed = false`
+        // *and* data on disk. The orphan branch handles the data; this drops
+        // the stale entry so `ryra list -a` doesn't keep showing the service.
+        // No-op when there's no matching entry (orphan with no stale row).
+        ryra_core::finalize_remove(service)?;
         println!("\n{service} purged.");
     }
     Ok(())
@@ -177,6 +188,7 @@ fn prompt_installed(
     service: &str,
     mode: ryra_core::RemoveMode,
     preserved: &[String],
+    tailnet_disable: bool,
 ) -> Result<()> {
     if !super::is_interactive() {
         anyhow::bail!("use --yes (-y) to confirm removal in non-interactive mode");
@@ -184,6 +196,11 @@ fn prompt_installed(
     let home_dir = ryra_core::service_home(service)?;
     println!("This will:");
     println!("  - Stop and remove {service}");
+    if tailnet_disable {
+        println!(
+            "  - Remove {service} from your tailnet (deregister via Tailscale Admin API)"
+        );
+    }
     match mode {
         ryra_core::RemoveMode::Purge => {
             println!("  - Delete ALL data and config at {}", home_dir.display());
@@ -259,7 +276,13 @@ fn prompt_orphan(svc: &ServiceData) -> Result<()> {
     Ok(())
 }
 
-fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Result<()> {
+fn confirm_bulk(
+    names: &[String],
+    purge: bool,
+    yes: bool,
+    dry_run: bool,
+    config: &Config,
+) -> Result<()> {
     if yes || dry_run {
         return Ok(());
     }
@@ -271,6 +294,22 @@ fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Resu
         println!("  {n}");
     }
     println!();
+    let tailnet_count = names
+        .iter()
+        .filter(|n| {
+            config
+                .services
+                .iter()
+                .any(|s| &s.name == *n && s.tailscale_enabled)
+        })
+        .count();
+    if tailnet_count > 0 {
+        let plural = if tailnet_count == 1 { "" } else { "s" };
+        println!(
+            "{tailnet_count} service{plural} on your tailnet — will be deregistered via Tailscale Admin API."
+        );
+        println!();
+    }
     if purge {
         println!("Mode: --purge — every listed service AND its data/volumes will be wiped.");
     } else {

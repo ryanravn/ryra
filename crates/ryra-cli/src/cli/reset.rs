@@ -1,5 +1,6 @@
 use anyhow::Result;
 use dialoguer::Input;
+use ryra_core::Step;
 
 use super::{apply, remove_caddy_ca};
 
@@ -10,10 +11,22 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
+    let tailnet_count = result
+        .steps
+        .iter()
+        .filter(|s| matches!(s, Step::TailscaleDisable { .. }))
+        .count();
+
     if !yes && !dry_run {
         if super::is_interactive() {
             println!("This will:");
             println!("  - Stop and remove all installed services");
+            if tailnet_count > 0 {
+                let plural = if tailnet_count == 1 { "" } else { "s" };
+                println!(
+                    "  - Remove {tailnet_count} service{plural} from your tailnet (deregister via Tailscale Admin API)"
+                );
+            }
             println!("  - Delete all ryra state and configuration");
             println!();
 
