@@ -1,5 +1,4 @@
 pub mod auth_bridge;
-pub mod tailscale_sidecar;
 pub mod authelia;
 pub mod caddy;
 pub mod config;
@@ -162,14 +161,22 @@ pub enum Step {
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
     CopyFile { src: PathBuf, dst: PathBuf },
-    /// `podman exec ts-<service> tailscale logout` — graceful tailnet
-    /// detach for a tailscale-enabled service before purge/reset
-    /// removes its state volume. Without this, the tailnet device
-    /// stays in the admin UI as offline forever, and the next install
-    /// with the same hostname gets `-1` appended to avoid the
-    /// collision. Best-effort: if the sidecar is already stopped or
-    /// the exec fails, the step prints a hint and continues.
-    TailscaleLogout { service: String },
+    /// First-time Tailscale Services setup on this tailnet: ensure ACL
+    /// has `tag:ryra-host` + `tag:ryra-service` tagOwners and the
+    /// services autoApprover entry, then apply `tag:ryra-host` to the
+    /// local node so it's allowed to advertise services. Idempotent:
+    /// reads current state via API and only writes diffs.
+    TailscaleSetup,
+    /// Define a Tailscale Service via the admin API and advertise it
+    /// from the host: `sudo tailscale serve --service=svc:<service>
+    /// --https=443 http://127.0.0.1:<host_port>`. The service gets
+    /// `tag:ryra-service` (matches the autoApprover) so the host's
+    /// advertisement auto-approves with no manual UI clicks.
+    TailscaleEnable { service: String, host_port: u16 },
+    /// Stop advertising a Tailscale Service on this host and delete
+    /// its definition via the admin API. Used in `ryra remove --purge`
+    /// and `ryra reset` for tailscale-enabled services.
+    TailscaleDisable { service: String },
 }
 
 impl Step {
@@ -194,8 +201,15 @@ impl Step {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
-            Step::TailscaleLogout { service } => {
-                format!("podman exec ts-{service} tailscale logout")
+            Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),
+            Step::TailscaleEnable {
+                service,
+                host_port,
+            } => format!(
+                "tailscale serve --service=svc:{service} --https=443 http://127.0.0.1:{host_port}"
+            ),
+            Step::TailscaleDisable { service } => {
+                format!("tailscale serve --service=svc:{service} off + delete service")
             }
         }
     }
@@ -726,7 +740,6 @@ pub fn add_service(
             podman_args: &podman_args,
             extra_exec_start_pre: &extra_exec_start_pre,
             port_vars: &port_vars,
-            tailscale_enabled,
         })?;
 
     // Generate warnings
@@ -774,46 +787,21 @@ pub fn add_service(
         steps.push(Step::WriteFile(file));
     }
 
-    // 3b. Tailscale sidecar quadlet — when --tailscale was used, every
-    // service gets its own `ts-<name>` tailscaled in a shared netns,
-    // so the service is reachable at `https://<name>.<tailnet>.ts.net/`
-    // with a publicly-trusted cert and no host-side `tailscale serve`.
-    if tailscale_enabled {
-        let auth_key = config
-            .tailscale
-            .as_ref()
-            .map(|t| t.auth_key.clone())
-            .ok_or_else(|| {
-                Error::AuthContext(
-                    "tailscale_enabled was set but config.tailscale.auth_key is missing — \
-                     CLI should have prompted for it before calling add_service"
-                        .into(),
-                )
-            })?;
-        // The first declared port is conventionally the HTTP port the
-        // service listens on inside its container; that's what tailscale
-        // serve proxies to via the shared netns's localhost.
-        let container_port = reg_service
-            .def
-            .ports
-            .first()
-            .map(|p| p.container_port)
-            .ok_or_else(|| {
-                Error::Bundle(format!(
-                    "service '{service_name}' has no ports — can't wire tailscale serve"
-                ))
-            })?;
-        steps.push(Step::PullImage {
-            image: "docker.io/tailscale/tailscale:stable".to_string(),
+    // 3b. Tailscale Services — when `--tailscale` was used, the host's
+    // existing tailscaled advertises the service at
+    // `https://<name>.<tailnet>.ts.net` (TailVIP-routed). One-time
+    // `TailscaleSetup` ensures ACL tags + auto-approval are in place;
+    // `TailscaleEnable` defines the service via admin API and runs
+    // `tailscale serve --service=...` from the host. No sidecar
+    // containers, no per-service tailscaled.
+    if tailscale_enabled
+        && let Some(port) = host_port
+    {
+        steps.push(Step::TailscaleSetup);
+        steps.push(Step::TailscaleEnable {
+            service: service_name.to_string(),
+            host_port: port,
         });
-        let sidecar = tailscale_sidecar::build(
-            service_name,
-            container_port,
-            &auth_key,
-            &quadlet_path,
-        );
-        steps.push(Step::WriteFile(sidecar.container_quadlet));
-        steps.push(Step::WriteFile(sidecar.state_volume_quadlet));
     }
 
     // 4. Write config files from bundle
@@ -999,24 +987,6 @@ pub fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names:
     })
 }
 
-/// Extension of `quadlet_belongs_to` that also recognises the
-/// `ts-<service>` tailscale-sidecar quadlets emitted when a service is
-/// installed with `--tailscale`. Strips the `ts-` prefix and re-runs
-/// the standard ownership check so the all-names tie-breaker still
-/// works for nested service names.
-fn quadlet_or_ts_sidecar_belongs_to(
-    filename: &str,
-    service_name: &str,
-    all_service_names: &[&str],
-) -> bool {
-    if quadlet_belongs_to(filename, service_name, all_service_names) {
-        return true;
-    }
-    match filename.strip_prefix("ts-") {
-        Some(rest) => quadlet_belongs_to(rest, service_name, all_service_names),
-        None => false,
-    }
-}
 
 /// How destructive `remove_service` should be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1049,13 +1019,12 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let mut has_named_volumes = false;
     let all_names: Vec<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
 
-    // Tailscale logout BEFORE we stop the sidecar — only in Purge mode,
-    // since Preserve keeps the state volume and we want the device to
-    // stay registered for a clean re-add. Without this, the next
-    // `--purge && add` cycle gets `<service>-1.<tailnet>.ts.net` because
-    // the offline-but-present record still owns the bare hostname.
-    if installed.tailscale_enabled && matches!(mode, RemoveMode::Purge) {
-        steps.push(Step::TailscaleLogout {
+    // Disable the Tailscale Service before tearing the host port down.
+    // Always emit when the service was tailscale-enabled — the API
+    // delete is idempotent and `tailscale serve --service=svc:X off`
+    // is fine to run on a service that's already cleared.
+    if installed.tailscale_enabled {
+        steps.push(Step::TailscaleDisable {
             service: service_name.to_string(),
         });
     }
@@ -1068,7 +1037,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
             let name = file_name.to_string_lossy();
             // Catches both the service's own quadlets (foo.container,
             // foo-db.container, …) and its `ts-foo*` tailscale sidecar.
-            if !quadlet_or_ts_sidecar_belongs_to(&name, service_name, &all_names) {
+            if !quadlet_belongs_to(&name, service_name, &all_names) {
                 continue;
             }
             // Stop each .container unit before removing files
@@ -1299,15 +1268,15 @@ pub fn reset() -> Result<ResetResult> {
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
 
-    // 0. Logout each tailscale-enabled service from the tailnet before
-    // we tear anything down. Reset is destructive (state volumes get
-    // removed), so without an explicit logout the offline records pile
-    // up in the admin UI and the next install collides on the bare
-    // hostname (`authelia-1`, `seafile-2`, …).
+    // 0. Disable every Tailscale Service before tearing services down.
+    // `TailscaleDisable` stops `tailscale serve --service=svc:<X>` and
+    // deletes the admin-side service definition via the API, so the
+    // tailnet is clean after reset and the next install gets bare
+    // hostnames.
     if let Some(ref config) = config {
         for service in &config.services {
             if service.tailscale_enabled {
-                steps.push(Step::TailscaleLogout {
+                steps.push(Step::TailscaleDisable {
                     service: service.name.clone(),
                 });
             }
@@ -1333,7 +1302,7 @@ pub fn reset() -> Result<ResetResult> {
             let is_ryra_file = config
                 .services
                 .iter()
-                .any(|s| quadlet_or_ts_sidecar_belongs_to(&name, &s.name, &all_names));
+                .any(|s| quadlet_belongs_to(&name, &s.name, &all_names));
             if !is_ryra_file {
                 continue;
             }
@@ -1705,49 +1674,6 @@ mod tests {
         let all = &["foo", "foo-bar"];
         assert!(!quadlet_belongs_to("foo-bar.container", "foo", all));
         assert!(!quadlet_belongs_to("foo-bar-db.volume", "foo", all));
-    }
-
-    #[test]
-    fn ts_sidecar_belongs_to_owner_service() {
-        let all = &["seafile"];
-        assert!(quadlet_or_ts_sidecar_belongs_to(
-            "ts-seafile.container",
-            "seafile",
-            all
-        ));
-        assert!(quadlet_or_ts_sidecar_belongs_to(
-            "ts-seafile-state.volume",
-            "seafile",
-            all
-        ));
-    }
-
-    #[test]
-    fn ts_sidecar_respects_prefix_collision() {
-        // `ts-foo-bar.container` belongs to "foo-bar", not "foo".
-        let all = &["foo", "foo-bar"];
-        assert!(!quadlet_or_ts_sidecar_belongs_to(
-            "ts-foo-bar.container",
-            "foo",
-            all
-        ));
-        assert!(quadlet_or_ts_sidecar_belongs_to(
-            "ts-foo-bar.container",
-            "foo-bar",
-            all
-        ));
-    }
-
-    #[test]
-    fn ts_sidecar_helper_falls_back_to_regular_quadlet_check() {
-        // Plain `foo.container` (no ts- prefix) is still seen as belonging
-        // to foo — the sidecar check is additive, never restrictive.
-        let all = &["foo"];
-        assert!(quadlet_or_ts_sidecar_belongs_to(
-            "foo.container",
-            "foo",
-            all
-        ));
     }
 
     #[test]

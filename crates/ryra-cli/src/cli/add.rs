@@ -67,14 +67,15 @@ pub async fn run(
 
     let interactive = super::is_interactive();
 
-    // Tailscale auth key acquisition: when `--tailscale` is set and we
-    // don't already have one cached from a previous install, ask the
-    // user to paste one (or read from RYRA_TS_AUTHKEY in non-interactive
-    // runs). Saved to `config.tailscale.auth_key` so subsequent --tailscale
-    // installs are silent. Done up-front so a missing key fails fast,
-    // before any image pulls or service planning.
+    // Tailscale admin API token acquisition: when `--tailscale` is set
+    // and we don't already have one cached from a previous install,
+    // prompt the user to paste one (or read RYRA_TS_API_KEY in
+    // non-interactive runs). Saved to `config.tailscale.admin_api_key`.
+    // Done up-front so a missing token fails fast, before any image
+    // pulls or service planning. The token is needed at install time
+    // (define service via API) and removal time (delete service).
     if tailscale && !dry_run {
-        ensure_tailscale_auth_key(interactive).await?;
+        ensure_tailscale_admin_token(interactive).await?;
     }
 
     // "First add" = no ryra config on disk yet. Latch the answer before any
@@ -1047,66 +1048,71 @@ fn add_ca_to_nssdb(nss_arg: &str, ca: &std::path::Path, context: &str) {
     }
 }
 
-/// Ensure `config.tailscale.auth_key` is set, prompting (interactive) or
-/// reading from `RYRA_TS_AUTHKEY` (non-interactive) if not.
+/// Ensure `config.tailscale.admin_api_key` is set, prompting (interactive)
+/// or reading from `RYRA_TS_API_KEY` (non-interactive) if not.
 ///
-/// Persists to ryra.toml so the user pastes their key once and every
-/// subsequent `--tailscale` install reuses it. Same single-paste UX as
-/// SMTP password / authelia URL today.
-async fn ensure_tailscale_auth_key(interactive: bool) -> Result<()> {
+/// Persists to ryra.toml so the user pastes their token once and every
+/// subsequent `--tailscale` install + remove reuses it for service
+/// definition + ACL setup via the admin API.
+async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.tailscale.is_some() {
         return Ok(()); // already cached
     }
 
-    let auth_key = if interactive {
-        prompt_tailscale_auth_key()?
+    let admin_api_key = if interactive {
+        prompt_tailscale_admin_token()?
     } else {
-        std::env::var("RYRA_TS_AUTHKEY").map_err(|_| {
+        std::env::var("RYRA_TS_API_KEY").map_err(|_| {
             anyhow::anyhow!(
-                "--tailscale needs a Tailscale auth key. Set RYRA_TS_AUTHKEY \
-                 (e.g. tskey-auth-XXX) or run interactively to be prompted.\n\
-                 Generate one at https://login.tailscale.com/admin/settings/keys"
+                "--tailscale needs a Tailscale admin API token. Set RYRA_TS_API_KEY \
+                 (tskey-api-…) or run interactively to be prompted.\n\
+                 Generate one at https://login.tailscale.com/admin/settings/keys \
+                 (use the \"API access token\" type, not an auth key)"
             )
         })?
     };
 
     config.tailscale = Some(ryra_core::config::schema::TailscaleConfig {
-        auth_key,
+        admin_api_key,
         tailnet: None,
     });
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, &config)?;
-    println!("  ✓ Tailscale auth key saved to {}", paths.config_file.display());
+    println!("  ✓ Tailscale admin token saved to {}", paths.config_file.display());
     Ok(())
 }
 
-/// Interactive prompt for a Tailscale auth key.
+/// Interactive prompt for a Tailscale admin API token.
 ///
-/// Accepts both `tskey-auth-…` (pre-auth key, simplest) and
-/// `tskey-client-…` (OAuth client secret — Tailscale's container
-/// auto-mints fresh per-device keys from it). Validates the prefix so
-/// pastes of the wrong thing (e.g. an API token, a tag name) get
-/// rejected with a clear hint instead of failing later.
-fn prompt_tailscale_auth_key() -> Result<String> {
+/// Validates the `tskey-api-` prefix so pastes of the wrong thing (e.g.
+/// a pre-auth key, an OAuth client secret) get rejected with a clear
+/// hint instead of failing later when the API call returns 401.
+fn prompt_tailscale_admin_token() -> Result<String> {
     println!();
-    println!("First-time Tailscale setup — paste an auth key.");
+    println!("First-time Tailscale setup — paste an admin API token.");
     println!("  Generate at: https://login.tailscale.com/admin/settings/keys");
-    println!("  Recommended: Reusable=yes, Ephemeral=no");
+    println!("  Type:        \"API access token\" (NOT an auth key)");
+    println!();
+    println!("  ryra uses this to define Tailscale Services in your tailnet,");
+    println!("  set up the ACL with auto-approval, and apply tag:ryra-host");
+    println!("  to this machine — all so `ryra add … --tailscale` is one step.");
     println!();
 
     let raw: String = Input::new()
-        .with_prompt("Tailnet auth key")
+        .with_prompt("Tailnet admin API token")
         .validate_with(|input: &String| -> std::result::Result<(), &str> {
             let s = input.trim();
-            if s.starts_with("tskey-auth-") || s.starts_with("tskey-client-") {
+            if s.starts_with("tskey-api-") {
                 Ok(())
             } else {
                 Err(
-                    "Auth keys start with `tskey-auth-` (pre-auth key) or \
-                     `tskey-client-` (OAuth client secret). \
-                     Generate one at https://login.tailscale.com/admin/settings/keys",
+                    "Admin API tokens start with `tskey-api-`. The other tskey-* \
+                     prefixes (auth-, client-) are for joining devices, not for \
+                     admin operations. Generate one at \
+                     https://login.tailscale.com/admin/settings/keys with type \
+                     \"API access token\".",
                 )
             }
         })
@@ -1215,7 +1221,7 @@ async fn prompt_exposure_for(
             if let Err(e) = ryra_core::system::preflight::check_tailscale_runtime() {
                 bail!("Tailscale not ready:\n\n{e}");
             }
-            ensure_tailscale_auth_key(true).await?;
+            ensure_tailscale_admin_token(true).await?;
             Ok((derive_tailscale_url(service)?, true))
         }
         _ => {

@@ -116,20 +116,32 @@ pub const CADDY_LOCAL_DOMAIN: &str = "internal";
 
 // --- Tailscale ---
 
-/// Auth credential + cached tailnet metadata. Stored in ryra.toml under
-/// `[tailscale]` so the user pastes their auth key once and every
-/// subsequent `--tailscale` install reuses it. Same file mode (0600) as
-/// SMTP/auth credentials, no separate secret file to manage.
+/// Tag ryra applies to the host advertising services. Required by
+/// Tailscale Services (service hosts must be tagged), declared in the
+/// tailnet ACL by `ensure_setup`. Single per-tailnet tag — every ryra
+/// host shares it.
+pub const RYRA_HOST_TAG: &str = "tag:ryra-host";
+
+/// Tag ryra applies to defined services. Used by autoApprovers in the
+/// ACL so every ryra-defined service auto-approves its host without
+/// manual admin clicks.
+pub const RYRA_SERVICE_TAG: &str = "tag:ryra-service";
+
+/// Admin API token + cached tailnet metadata for Tailscale Services.
+/// Stored in ryra.toml under `[tailscale]` so the user pastes the
+/// admin token once and every subsequent `--tailscale` install reuses
+/// it for service definition + ACL setup. Same file mode (0600) as
+/// SMTP/auth credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TailscaleConfig {
-    /// Auth credential — accepts both `tskey-auth-…` (pre-auth key) and
-    /// `tskey-client-…` (OAuth client secret). The Tailscale container
-    /// detects the format from the prefix; ryra doesn't care which one.
-    pub auth_key: String,
+    /// Admin API token (`tskey-api-…`). Used to manage Tailscale
+    /// Services: define services, update ACL with auto-approval, tag
+    /// the host. Stored locally because every `--tailscale` install
+    /// (and every `--tailscale` removal) calls the API.
+    pub admin_api_key: String,
     /// Cached tailnet suffix (e.g. `cobbler-tuna.ts.net`). Resolved
     /// lazily from `tailscale status --json` and remembered so we don't
-    /// re-shell out on every install. Empty `Option` means "resolve on
-    /// next install".
+    /// re-shell out on every install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tailnet: Option<String>,
 }
@@ -194,18 +206,18 @@ mod tests {
     fn tailscale_config_round_trip() {
         let cfg = Config {
             tailscale: Some(TailscaleConfig {
-                auth_key: "tskey-auth-XXXX".into(),
+                admin_api_key: "tskey-api-XXXX".into(),
                 tailnet: Some("cobbler-tuna.ts.net".into()),
             }),
             ..Config::default()
         };
         let serialized = toml::to_string(&cfg).unwrap();
         assert!(serialized.contains("[tailscale]"));
-        assert!(serialized.contains("auth_key = \"tskey-auth-XXXX\""));
+        assert!(serialized.contains("admin_api_key = \"tskey-api-XXXX\""));
         assert!(serialized.contains("tailnet = \"cobbler-tuna.ts.net\""));
         let parsed: Config = toml::from_str(&serialized).unwrap();
         let ts = parsed.tailscale.expect("[tailscale] should round-trip");
-        assert_eq!(ts.auth_key, "tskey-auth-XXXX");
+        assert_eq!(ts.admin_api_key, "tskey-api-XXXX");
         assert_eq!(ts.tailnet.as_deref(), Some("cobbler-tuna.ts.net"));
     }
 
@@ -216,7 +228,7 @@ mod tests {
         // shouldn't emit `tailnet = ""` for fresh configs.
         let cfg = Config {
             tailscale: Some(TailscaleConfig {
-                auth_key: "tskey-client-YYY".into(),
+                admin_api_key: "tskey-api-YYY".into(),
                 tailnet: None,
             }),
             ..Config::default()

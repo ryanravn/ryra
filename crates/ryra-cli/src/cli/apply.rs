@@ -210,34 +210,262 @@ async fn execute(step: &Step) -> Result<()> {
             })?;
             Ok(())
         }
-        Step::TailscaleLogout { service } => {
-            // Best-effort: if the sidecar isn't running (already stopped,
-            // crashed, never started), the device may still be in the
-            // admin UI but we can't do anything from here. Print a hint
-            // so the user knows to delete it manually if hostname
-            // collisions show up on the next install.
-            let unit = format!("ts-{service}");
-            let result = Command::new("podman")
-                .args(["exec", &unit, "tailscale", "logout"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .status();
-            match result {
-                Ok(s) if s.success() => {
-                    println!("  Tailscale: logged out {unit} (device removed from tailnet)");
-                }
-                _ => {
-                    eprintln!(
-                        "  Note: couldn't run `tailscale logout` in {unit} (container not \
-                         running?). The tailnet device may stick around in the admin UI."
-                    );
-                    eprintln!(
-                        "    To clean up: visit https://login.tailscale.com/admin/machines"
-                    );
-                }
-            }
-            Ok(())
+        Step::TailscaleSetup => tailscale_services::ensure_setup(),
+        Step::TailscaleEnable {
+            service,
+            host_port,
+        } => tailscale_services::enable(service, *host_port),
+        Step::TailscaleDisable { service } => tailscale_services::disable(service),
+    }
+}
+
+/// Tailscale Services orchestration: read-modify-write the tailnet ACL,
+/// tag the host, define services, and run `tailscale serve`. All API
+/// calls go through `curl` (already a system dep — see CLAUDE.md) +
+/// `serde_json` (already a workspace dep). Keeping this in apply.rs
+/// rather than ryra-core because it's pure side-effect — ryra-core's
+/// add/remove paths emit Steps; apply.rs realises them.
+mod tailscale_services {
+    use anyhow::{Context, Result, bail};
+    use std::process::{Command, Stdio};
+    use ryra_core::config::schema::{RYRA_HOST_TAG, RYRA_SERVICE_TAG, TailscaleConfig};
+
+    /// Read the admin token + cached tailnet from ryra.toml. Bails if
+    /// the user is somehow running a tailscale step without ever having
+    /// pasted a token (the CLI prompts up-front, so this should be
+    /// unreachable in practice — defensive).
+    fn token() -> Result<TailscaleConfig> {
+        let paths = ryra_core::config::ConfigPaths::resolve()?;
+        let cfg = ryra_core::config::load_or_default(&paths.config_file)?;
+        cfg.tailscale.ok_or_else(|| {
+            anyhow::anyhow!(
+                "tailscale step ran but [tailscale] config is missing — \
+                 the CLI should have prompted for an admin token before this point"
+            )
+        })
+    }
+
+    /// `curl` wrapper. Returns (status_code, body). Body may be empty.
+    fn curl(method: &str, url: &str, token: &str, body: Option<&str>) -> Result<(u16, String)> {
+        let mut cmd = Command::new("curl");
+        cmd.args(["-sS", "-X", method])
+            .arg("-H")
+            .arg(format!("Authorization: Bearer {token}"))
+            .arg("-H")
+            .arg("Accept: application/json")
+            .arg("-w")
+            .arg("\n%{http_code}");
+        if let Some(b) = body {
+            cmd.args(["-H", "Content-Type: application/json", "--data-binary", b]);
         }
+        cmd.arg(url);
+        let out = cmd.output().with_context(|| format!("curl {method} {url}"))?;
+        let combined = String::from_utf8_lossy(&out.stdout).into_owned();
+        let (body, code) = combined
+            .rsplit_once('\n')
+            .ok_or_else(|| anyhow::anyhow!("malformed curl response (no status code)"))?;
+        let code: u16 = code
+            .trim()
+            .parse()
+            .with_context(|| format!("non-numeric HTTP status: {code:?}"))?;
+        Ok((code, body.to_string()))
+    }
+
+    /// Idempotent ACL + tag setup. Reads current state, only writes
+    /// changes. Caches the resolved tailnet suffix so the URL
+    /// derivation in add.rs (which runs before apply) still works on
+    /// every install without re-shelling tailscale status.
+    pub fn ensure_setup() -> Result<()> {
+        let ts = token()?;
+        let key = &ts.admin_api_key;
+
+        // 1. Update ACL if our tagOwners + autoApprovers entries are missing.
+        let (code, body) = curl("GET", "https://api.tailscale.com/api/v2/tailnet/-/acl", key, None)?;
+        if code != 200 {
+            bail!("read ACL failed (HTTP {code}): {body}");
+        }
+        let mut acl: serde_json::Value = serde_json::from_str(&body)
+            .with_context(|| format!("ACL JSON parse: {body}"))?;
+        let mut changed = false;
+        let owners = acl
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("ACL root is not an object"))?
+            .entry("tagOwners")
+            .or_insert_with(|| serde_json::json!({}));
+        for tag in [RYRA_HOST_TAG, RYRA_SERVICE_TAG] {
+            if owners.get(tag).is_none() {
+                owners[tag] = serde_json::json!(["autogroup:admin"]);
+                changed = true;
+            }
+        }
+        let approvers = acl
+            .as_object_mut()
+            .unwrap()
+            .entry("autoApprovers")
+            .or_insert_with(|| serde_json::json!({}));
+        let services = approvers
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("autoApprovers is not an object"))?
+            .entry("services")
+            .or_insert_with(|| serde_json::json!({}));
+        if services.get(RYRA_SERVICE_TAG).is_none() {
+            services[RYRA_SERVICE_TAG] = serde_json::json!([RYRA_HOST_TAG]);
+            changed = true;
+        }
+        if changed {
+            let new_body = serde_json::to_string(&acl)?;
+            let (code, body) = curl(
+                "POST",
+                "https://api.tailscale.com/api/v2/tailnet/-/acl",
+                key,
+                Some(&new_body),
+            )?;
+            if code != 200 {
+                bail!("write ACL failed (HTTP {code}): {body}");
+            }
+            println!("  Tailscale: ACL updated (added {RYRA_HOST_TAG} + {RYRA_SERVICE_TAG} + auto-approval)");
+        }
+
+        // 2. Tag the local host if not already tagged.
+        let node_dns = ryra_core::system::tailscale::self_dns_name()
+            .ok_or_else(|| anyhow::anyhow!("local node not logged into a tailnet"))?;
+        let (code, body) = curl(
+            "GET",
+            "https://api.tailscale.com/api/v2/tailnet/-/devices",
+            key,
+            None,
+        )?;
+        if code != 200 {
+            bail!("list devices failed (HTTP {code}): {body}");
+        }
+        let devices: serde_json::Value = serde_json::from_str(&body)?;
+        let device = devices["devices"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|d| d["name"].as_str() == Some(&node_dns)))
+            .ok_or_else(|| anyhow::anyhow!("local device {node_dns} not found in API"))?;
+        let node_id = device["nodeId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("device record missing nodeId"))?
+            .to_string();
+        let already_tagged = device["tags"]
+            .as_array()
+            .map(|tags| tags.iter().any(|t| t.as_str() == Some(RYRA_HOST_TAG)))
+            .unwrap_or(false);
+        if !already_tagged {
+            let body = format!(r#"{{"tags":["{RYRA_HOST_TAG}"]}}"#);
+            let (code, resp) = curl(
+                "POST",
+                &format!("https://api.tailscale.com/api/v2/device/{node_id}/tags"),
+                key,
+                Some(&body),
+            )?;
+            if code != 200 {
+                bail!("tag host failed (HTTP {code}): {resp}");
+            }
+            println!("  Tailscale: tagged {node_dns} as {RYRA_HOST_TAG}");
+        }
+
+        // 3. Cache tailnet suffix in config so URL derivation doesn't
+        // shell out to `tailscale status` on every install.
+        let tailnet = ryra_core::system::tailscale::tailnet_suffix(&node_dns);
+        if tailnet.is_some() && ts.tailnet != tailnet {
+            let paths = ryra_core::config::ConfigPaths::resolve()?;
+            let mut cfg = ryra_core::config::load_or_default(&paths.config_file)?;
+            if let Some(t) = cfg.tailscale.as_mut() {
+                t.tailnet = tailnet;
+                ryra_core::config::save_config(&paths.config_file, &cfg)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Define the service via API (tagged for auto-approval), then run
+    /// `tailscale serve --service=svc:<name> --https=443
+    /// http://127.0.0.1:<host_port>`. Sudo-optional via the apply
+    /// path's existing `sudo -n` policy.
+    pub fn enable(service: &str, host_port: u16) -> Result<()> {
+        let ts = token()?;
+        let key = &ts.admin_api_key;
+
+        // PUT (create or update) the service. Tagging it with
+        // RYRA_SERVICE_TAG makes the autoApprover entry kick in so the
+        // host's advertisement auto-approves.
+        let body = format!(
+            r#"{{"name":"svc:{service}","tags":["{RYRA_SERVICE_TAG}"],"ports":["tcp:443"]}}"#
+        );
+        let (code, resp) = curl(
+            "PUT",
+            &format!("https://api.tailscale.com/api/v2/tailnet/-/services/svc:{service}"),
+            key,
+            Some(&body),
+        )?;
+        if code != 200 {
+            bail!("define service svc:{service} failed (HTTP {code}): {resp}");
+        }
+
+        // Advertise the service from this host. Match the existing
+        // sudo policy: try `sudo -n` first; if interactive and that
+        // fails, fall through to interactive `sudo`.
+        let target = format!("http://127.0.0.1:{host_port}");
+        let svc_arg = format!("--service=svc:{service}");
+        let status = Command::new("sudo")
+            .args(["-n", "tailscale", "serve", &svc_arg, "--https=443", &target])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+        let success = matches!(status, Ok(s) if s.success());
+        if !success {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                println!();
+                println!("  Configuring `tailscale serve` (sudo may prompt for your password):");
+                let s = Command::new("sudo")
+                    .args(["tailscale", "serve", &svc_arg, "--https=443", &target])
+                    .status();
+                if !matches!(s, Ok(s) if s.success()) {
+                    println!();
+                    println!("  Run this manually to finish exposing the service:");
+                    println!("    sudo tailscale serve {svc_arg} --https=443 {target}");
+                }
+            } else {
+                println!();
+                println!("  Run this manually to finish exposing the service (requires sudo):");
+                println!("    sudo tailscale serve {svc_arg} --https=443 {target}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Stop advertising and delete the service definition. Idempotent:
+    /// either step failing is logged but doesn't fail the disable
+    /// (e.g. service already deleted, host already not advertising).
+    pub fn disable(service: &str) -> Result<()> {
+        let ts = token()?;
+        let key = &ts.admin_api_key;
+
+        // Stop advertising. Errors here are usually "wasn't advertising
+        // anyway" — fine to ignore.
+        let svc_arg = format!("--service=svc:{service}");
+        let _ = Command::new("sudo")
+            .args(["-n", "tailscale", "serve", &svc_arg, "off"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        // Delete from tailnet. 404 is fine (already gone).
+        let (code, _resp) = curl(
+            "DELETE",
+            &format!("https://api.tailscale.com/api/v2/tailnet/-/services/svc:{service}"),
+            key,
+            None,
+        )?;
+        if code == 200 || code == 404 {
+            println!("  Tailscale: removed svc:{service} from tailnet");
+        } else {
+            eprintln!("  Note: deleting svc:{service} returned HTTP {code}; check admin UI");
+        }
+        Ok(())
     }
 }
 
