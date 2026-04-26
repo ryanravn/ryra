@@ -27,15 +27,16 @@ EOF
 fi
 
 [ -f "$CADDYFILE" ] && exit 0
+# No HTTPS catchall block — Caddy's auto-HTTPS doesn't recognize
+# non-standard ports like 8080 the way it does port 80, so pairing a
+# bare-port `:8080 { respond 404 }` with `:8443 { tls internal; respond 404 }`
+# trips the parser ("automation policy from site block is also default
+# /catch-all policy ... in conflict"). Per-service blocks below create
+# their own HTTPS listener; the seed only needs the HTTP catchall.
 cat > "$CADDYFILE" <<EOF
 import tls.caddy
 
 :${PORT_HTTP} {
-	respond 404
-}
-
-:${PORT_HTTPS} {
-	import ryra_tls
 	respond 404
 }
 EOF
