@@ -210,6 +210,34 @@ async fn execute(step: &Step) -> Result<()> {
             })?;
             Ok(())
         }
+        Step::TailscaleLogout { service } => {
+            // Best-effort: if the sidecar isn't running (already stopped,
+            // crashed, never started), the device may still be in the
+            // admin UI but we can't do anything from here. Print a hint
+            // so the user knows to delete it manually if hostname
+            // collisions show up on the next install.
+            let unit = format!("ts-{service}");
+            let result = Command::new("podman")
+                .args(["exec", &unit, "tailscale", "logout"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .status();
+            match result {
+                Ok(s) if s.success() => {
+                    println!("  Tailscale: logged out {unit} (device removed from tailnet)");
+                }
+                _ => {
+                    eprintln!(
+                        "  Note: couldn't run `tailscale logout` in {unit} (container not \
+                         running?). The tailnet device may stick around in the admin UI."
+                    );
+                    eprintln!(
+                        "    To clean up: visit https://login.tailscale.com/admin/machines"
+                    );
+                }
+            }
+            Ok(())
+        }
     }
 }
 

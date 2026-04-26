@@ -296,14 +296,19 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
                         "[Install]",
                     );
                 }
-                // Tailscale sidecar mode: only the *main* container (not
-                // service-specific helpers like seafile-mariadb.container)
-                // gets remapped to share the sidecar's network namespace.
-                // Sub-containers stay on the regular podman network so
-                // they can reach each other via container DNS as before.
-                if params.tailscale_enabled {
-                    content = inject_tailscale_sidecar(&content, params.service_name);
-                }
+            }
+            // Tailscale sidecar mode: every container belonging to this
+            // service (main + sub-containers like seafile-mariadb,
+            // seafile-redis) gets remapped to share the `ts-<service>`
+            // sidecar's network namespace. Otherwise the main service
+            // container can't reach its DB siblings — `Network=container:`
+            // is exclusive, so once the main container is in the
+            // sidecar's netns it loses its connection to the service
+            // network where mariadb/redis live. Putting them all in the
+            // shared netns means they reach each other via localhost
+            // and the sidecar can serve the main container externally.
+            if params.tailscale_enabled {
+                content = inject_tailscale_sidecar(&content, params.service_name);
             }
             // Expand ${RYRA_PORT_*} in PublishPort lines — systemd doesn't
             // expand EnvironmentFile vars in quadlet directives.

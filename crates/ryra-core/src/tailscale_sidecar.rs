@@ -67,9 +67,20 @@ pub fn build(
 }
 
 fn render_container_quadlet(service: &str, container_port: u16, auth_key: &str) -> String {
-    // `?ephemeral=false` overrides whatever ephemerality the auth key
-    // (or OAuth client) was minted with — ryra-managed services should
-    // persist across container restarts, not re-register on every boot.
+    // `TS_AUTHKEY` is passed verbatim — no `?ephemeral=…` suffix. That
+    // suffix only works with `tskey-client-…` OAuth secrets (where
+    // tailscale mints fresh per-device keys at use time and respects
+    // the override); pre-auth keys (`tskey-auth-…`) bake their settings
+    // in at creation and reject any URL parameters as invalid. The
+    // first-time prompt tells the user to uncheck Ephemeral when
+    // generating the key, which is the right place to set it.
+    //
+    // `TS_AUTH_ONCE=true` skips re-auth on every restart when state is
+    // already valid (the persistent state volume holds the node key,
+    // and tailscaled re-attaches to the existing tailnet device on
+    // boot). Without this, tailscaled tries to re-use the auth key on
+    // every container start, which can burn one-shot keys and produces
+    // unnecessary control-plane traffic.
     //
     // `TS_USERSPACE=true` runs tailscaled with userspace networking
     // (no TUN device), which is what rootless podman needs since
@@ -90,7 +101,8 @@ fn render_container_quadlet(service: &str, container_port: u16, auth_key: &str) 
          ContainerName=ts-{service}\n\
          Image=docker.io/tailscale/tailscale:stable\n\
          Volume=ts-{service}-state.volume:/var/lib/tailscale:U\n\
-         Environment=TS_AUTHKEY={auth_key}?ephemeral=false\n\
+         Environment=TS_AUTHKEY={auth_key}\n\
+         Environment=TS_AUTH_ONCE=true\n\
          Environment=TS_HOSTNAME={service}\n\
          Environment=TS_STATE_DIR=/var/lib/tailscale\n\
          Environment=TS_USERSPACE=true\n\
@@ -140,9 +152,13 @@ mod tests {
         assert!(c.contains("Image=docker.io/tailscale/tailscale:stable"));
         assert!(c.contains("ContainerName=ts-seafile"));
         assert!(c.contains("Volume=ts-seafile-state.volume:/var/lib/tailscale:U"));
-        // Auth + identity
-        assert!(c.contains("TS_AUTHKEY=tskey-auth-XXX?ephemeral=false"));
+        // Auth + identity (no `?ephemeral=…` suffix — see comment in
+        // render_container_quadlet for why).
+        assert!(c.contains("TS_AUTHKEY=tskey-auth-XXX"));
+        assert!(!c.contains("?ephemeral"));
         assert!(c.contains("TS_HOSTNAME=seafile"));
+        // Skip re-auth on restart — state volume already has the node key.
+        assert!(c.contains("TS_AUTH_ONCE=true"));
         // Userspace mode (rootless-compatible)
         assert!(c.contains("TS_USERSPACE=true"));
         // Serve config issued post-start to localhost:<container_port>

@@ -162,6 +162,14 @@ pub enum Step {
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
     CopyFile { src: PathBuf, dst: PathBuf },
+    /// `podman exec ts-<service> tailscale logout` — graceful tailnet
+    /// detach for a tailscale-enabled service before purge/reset
+    /// removes its state volume. Without this, the tailnet device
+    /// stays in the admin UI as offline forever, and the next install
+    /// with the same hostname gets `-1` appended to avoid the
+    /// collision. Best-effort: if the sidecar is already stopped or
+    /// the exec fails, the step prints a hint and continues.
+    TailscaleLogout { service: String },
 }
 
 impl Step {
@@ -186,6 +194,9 @@ impl Step {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
+            Step::TailscaleLogout { service } => {
+                format!("podman exec ts-{service} tailscale logout")
+            }
         }
     }
 }
@@ -1038,6 +1049,17 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let mut has_named_volumes = false;
     let all_names: Vec<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
 
+    // Tailscale logout BEFORE we stop the sidecar — only in Purge mode,
+    // since Preserve keeps the state volume and we want the device to
+    // stay registered for a clean re-add. Without this, the next
+    // `--purge && add` cycle gets `<service>-1.<tailnet>.ts.net` because
+    // the offline-but-present record still owns the bare hostname.
+    if installed.tailscale_enabled && matches!(mode, RemoveMode::Purge) {
+        steps.push(Step::TailscaleLogout {
+            service: service_name.to_string(),
+        });
+    }
+
     if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
     {
@@ -1276,6 +1298,21 @@ pub fn reset() -> Result<ResetResult> {
 
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
+
+    // 0. Logout each tailscale-enabled service from the tailnet before
+    // we tear anything down. Reset is destructive (state volumes get
+    // removed), so without an explicit logout the offline records pile
+    // up in the admin UI and the next install collides on the bare
+    // hostname (`authelia-1`, `seafile-2`, …).
+    if let Some(ref config) = config {
+        for service in &config.services {
+            if service.tailscale_enabled {
+                steps.push(Step::TailscaleLogout {
+                    service: service.name.clone(),
+                });
+            }
+        }
+    }
 
     // 1. Stop and remove only ryra-managed quadlet files (scoped by installed service names)
     let quadlet_path = quadlet_dir()?;
