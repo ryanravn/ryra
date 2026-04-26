@@ -26,8 +26,12 @@ pub enum Error {
     #[error("failed to serialize config: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
 
-    #[error("service {0} not found in any registry")]
-    ServiceNotFound(String),
+    #[error("service {name} not found in any registry{}",
+        crate::registry::format_service_suggestions(suggestions))]
+    ServiceNotFound {
+        name: String,
+        suggestions: Vec<String>,
+    },
 
     #[error("service {0} is already installed")]
     ServiceAlreadyInstalled(String),

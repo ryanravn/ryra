@@ -511,10 +511,18 @@ fn with_simple_spinner<T>(msg: &str, f: impl FnOnce() -> Result<T>) -> Result<T>
 /// Core spinner loop. After a 2s grace period, redraws `label()` on stderr
 /// every second with an elapsed counter appended. Clears the line on exit.
 /// Fast operations stay silent.
+///
+/// Stays silent entirely when stderr isn't a TTY: scripts and CI logs would
+/// otherwise see raw `\r\x1b[2K` escape sequences interleaved with output,
+/// which is ugly to grep/diff/page through.
 fn status_spinner<T>(
     label: impl Fn() -> String + Send + 'static,
     f: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
+    use std::io::IsTerminal;
+    if !std::io::stderr().is_terminal() {
+        return f();
+    }
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = Arc::clone(&done);
     let handle = std::thread::spawn(move || {
