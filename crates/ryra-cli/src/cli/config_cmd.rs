@@ -123,6 +123,10 @@ async fn show_service(service: &str) -> Result<()> {
         ),
     };
 
+    let installed_service = ryra_core::list_installed()?
+        .into_iter()
+        .find(|s| s.name == service_name);
+
     println!("{}", detail.name);
     println!("  {}", detail.description);
 
@@ -134,7 +138,16 @@ async fn show_service(service: &str) -> Result<()> {
         println!();
         println!("Ports:");
         for (port, proto, name) in &detail.ports {
-            println!("  {name}: {port}/{proto}");
+            // When the service is installed, the registry's static port
+            // (from service.toml) may be overridden by the actual
+            // resolved host port (e.g. caddy auto-bumped 8443→443 when
+            // sysctl allows low-port binding). Prefer the installed
+            // record's port so what we display matches what's listening.
+            let effective = installed_service
+                .as_ref()
+                .and_then(|s| s.ports.get(name).copied())
+                .unwrap_or(*port);
+            println!("  {name}: {effective}/{proto}");
         }
     }
 
@@ -150,10 +163,6 @@ async fn show_service(service: &str) -> Result<()> {
             println!("  {name}: {}", prompt.as_deref().unwrap_or(""));
         }
     }
-
-    let installed_service = ryra_core::list_installed()?
-        .into_iter()
-        .find(|s| s.name == service_name);
 
     if let Some(ref svc) = installed_service {
         let home_dir = ryra_core::service_home(service_name)?;

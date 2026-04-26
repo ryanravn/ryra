@@ -31,7 +31,10 @@ enum Command {
         /// Public URL for this service (e.g., https://docs.example.com)
         #[arg(long)]
         url: Option<String>,
-        /// Enable auth (forward auth via Caddy, or native OIDC if supported)
+        /// Wire this service to OIDC SSO via Authelia. Auto-installs Authelia
+        /// at https://authelia.internal:<port> if it isn't already configured.
+        /// Only works for services that declare native OIDC support — see the
+        /// SUPPORTS column in `ryra search`.
         #[arg(long)]
         auth: bool,
         /// Configure SMTP non-interactively. Currently the only choice is
@@ -45,10 +48,13 @@ enum Command {
         /// in non-interactive mode, or prompted for interactively.
         #[arg(long = "enable", value_name = "GROUP")]
         enable: Vec<String>,
-        /// Expose this service on the local tailnet via `tailscale serve`.
-        /// Allocates one of {443, 8443, 10000} (the only ports tailscale
-        /// serve allows for HTTPS) and runs `tailscale serve` with sudo
-        /// (or prints the command to run yourself if sudo isn't available).
+        /// Expose this service on your tailnet at
+        /// `https://<service>.<tailnet>.ts.net` via Tailscale Services.
+        /// Defines the service through the Tailscale admin API and runs
+        /// `tailscale serve --service=svc:<name>` from the host (sudo
+        /// required) — no sidecar containers, no port pool. Requires the
+        /// `tailscale` CLI installed and a logged-in tailnet (configure
+        /// the API token with RYRA_TS_API_KEY or interactively).
         /// Mutually exclusive with --url.
         #[arg(long, conflicts_with = "url")]
         tailscale: bool,

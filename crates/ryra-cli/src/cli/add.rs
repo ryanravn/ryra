@@ -894,16 +894,27 @@ pub async fn run(
             // thing they need to know to swap in Cloudflare DNS-01,
             // wildcards, BYO certs, plain HTTP for Tunnel, etc.
             if WellKnownService::Caddy.matches(service) {
-                let snippet_path = ryra_core::caddy::tls_snippet_path()
+                let snippet_pathbuf = ryra_core::caddy::tls_snippet_path().ok();
+                let snippet_path = snippet_pathbuf
+                    .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "~/.local/share/ryra/caddy/config/tls.caddy".to_string());
+                    .unwrap_or_else(|| "~/.local/share/ryra/caddy/config/tls.caddy".to_string());
+                // Read tls.caddy from disk and report what's actually in
+                // effect — not what `--acme` asked for. This matters when a
+                // pre-existing snippet was preserved across re-installs
+                // (or hand-edited to a custom shape ryra doesn't write).
+                // Falls back to the flag value if the read fails or the
+                // snippet doesn't match a known ryra-written shape.
+                let detected_mode: Option<AcmeMode> = snippet_pathbuf
+                    .as_ref()
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .and_then(|s| AcmeMode::detect_from_snippet(&s));
                 println!();
-                // Match the four user-facing TLS states exhaustively. The
-                // implicit `None` case (no --acme flag) collapses into the
-                // same self-signed message as `Some(Internal)` — they
-                // produce the same `tls.caddy` content.
-                let mode_for_msg = acme_for_service.unwrap_or(&AcmeMode::Internal);
-                match mode_for_msg {
+                let displayed_mode: AcmeMode = detected_mode
+                    .clone()
+                    .or_else(|| acme_for_service.cloned())
+                    .unwrap_or(AcmeMode::Internal);
+                match &displayed_mode {
                     AcmeMode::WithEmail(email) => {
                         println!("TLS: Let's Encrypt ({email})");
                     }
@@ -916,7 +927,15 @@ pub async fn run(
                         );
                     }
                 }
-                if matches!(mode_for_msg, AcmeMode::WithEmail(_) | AcmeMode::Anonymous) {
+                // If the snippet on disk doesn't match a ryra-written
+                // shape at all, say so explicitly so the user isn't misled
+                // into thinking ryra is managing it.
+                if detected_mode.is_none() && acme_for_service.is_none() {
+                    println!(
+                        "  (note: tls.caddy looks user-customized — leaving it untouched)"
+                    );
+                }
+                if matches!(displayed_mode, AcmeMode::WithEmail(_) | AcmeMode::Anonymous) {
                     let (http_port, https_port) = result
                         .allocated_ports
                         .iter()

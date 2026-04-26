@@ -57,6 +57,44 @@ impl AcmeMode {
             AcmeMode::WithEmail(email) => format!("(ryra_tls) {{\n\ttls {email}\n}}\n"),
         }
     }
+
+    /// Best-effort reverse of [`Self::snippet`]: looks at the contents
+    /// of `tls.caddy` and recognizes the three ryra-written shapes —
+    /// `tls internal`, `tls <email>`, or an empty body. Returns `None`
+    /// for user-customized snippets (Cloudflare DNS-01, BYO cert paths,
+    /// arbitrary directives) so the install message can fall back to
+    /// "user-managed" instead of misclassifying.
+    pub fn detect_from_snippet(contents: &str) -> Option<Self> {
+        // Strip the `(ryra_tls) { … }` wrapper and look at the body.
+        let open = contents.find('{')?;
+        let close = contents.rfind('}')?;
+        if close <= open {
+            return None;
+        }
+        let body = contents[open + 1..close].trim();
+        if body.is_empty() {
+            return Some(AcmeMode::Anonymous);
+        }
+        // Single-line body. Anything more complicated (multiple
+        // directives, sub-blocks like `tls { dns cloudflare ... }`) is
+        // user territory.
+        if body.lines().count() != 1 {
+            return None;
+        }
+        let line = body.trim();
+        if line == "tls internal" {
+            return Some(AcmeMode::Internal);
+        }
+        if let Some(rest) = line.strip_prefix("tls ") {
+            let arg = rest.trim();
+            // Reject obvious non-email shapes (file paths, directive
+            // blocks) — those are user-managed.
+            if arg.contains('@') && !arg.contains(' ') {
+                return Some(AcmeMode::WithEmail(arg.to_string()));
+            }
+        }
+        None
+    }
 }
 
 /// Ensure Caddy is set up to route requests for the auth provider.
@@ -329,6 +367,34 @@ mod tests {
         assert!(s.starts_with("(ryra_tls) {"));
         assert!(s.contains("tls admin@example.com"));
         assert!(!s.contains("tls internal"));
+    }
+
+    #[test]
+    fn acme_mode_detect_round_trips() {
+        for mode in [
+            AcmeMode::Internal,
+            AcmeMode::Anonymous,
+            AcmeMode::WithEmail("admin@example.com".into()),
+        ] {
+            let snippet = mode.snippet();
+            let detected = AcmeMode::detect_from_snippet(&snippet);
+            assert_eq!(detected, Some(mode));
+        }
+    }
+
+    #[test]
+    fn acme_mode_detect_user_customized_returns_none() {
+        // Cloudflare DNS-01 and BYO-cert shapes shouldn't be mis-classified
+        // as one of the ryra-written modes — the install message has to
+        // fall back to "user-managed" instead of lying.
+        let cf = "(ryra_tls) {\n\ttls {\n\t\tdns cloudflare {env.CF_API_TOKEN}\n\t}\n}\n";
+        assert_eq!(AcmeMode::detect_from_snippet(cf), None);
+
+        let byo = "(ryra_tls) {\n\ttls /etc/ssl/cert.pem /etc/ssl/key.pem\n}\n";
+        assert_eq!(AcmeMode::detect_from_snippet(byo), None);
+
+        let extra = "(ryra_tls) {\n\ttls internal\n\theader X-Foo bar\n}\n";
+        assert_eq!(AcmeMode::detect_from_snippet(extra), None);
     }
 
     #[test]
