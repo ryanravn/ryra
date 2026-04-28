@@ -110,11 +110,14 @@ pub fn metadata_path(service_name: &str) -> Result<PathBuf> {
 /// Per-install record. Written at `ryra add` time, read by every
 /// command that needs to know how a service was set up. Mirrors the
 /// data that used to live in `# Service-*` quadlet header comments.
+///
+/// Exposure isn't stored — it's derived from `url` at read time
+/// (absent = Loopback, `.internal` = Internal, `.ts.net` = Tailscale,
+/// otherwise Public). One source of truth for "where does this
+/// service live."
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub registry: String,
-    /// Exposure variant: `loopback` | `internal` | `public` | `tailscale`.
-    pub exposure: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Auth kind: `oidc` if `--auth` was used, otherwise absent.
@@ -935,7 +938,6 @@ pub fn add_service(
     // reconstruct the install reads back from this file.
     let install_metadata = Metadata {
         registry: registry_name.to_string(),
-        exposure: exposure.kind_str().to_string(),
         url: url.map(str::to_string),
         auth: auth_kind.as_ref().map(|a| a.to_string()),
     };
@@ -1676,12 +1678,10 @@ pub fn scan_managed_services() -> Result<Vec<String>> {
 fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService> {
     let meta = load_metadata(service_name).ok().flatten()?;
 
-    // Loopback is the no-URL variant; everything else carries one.
-    let exposure = match (meta.exposure.as_str(), meta.url.as_deref()) {
-        ("internal", Some(u)) => Exposure::Internal { url: u.to_string() },
-        ("public", Some(u)) => Exposure::Public { url: u.to_string() },
-        ("tailscale", Some(u)) => Exposure::Tailscale { url: u.to_string() },
-        _ => Exposure::Loopback,
+    // Loopback when no URL; otherwise classify by hostname suffix.
+    let exposure = match meta.url.as_deref() {
+        None => Exposure::Loopback,
+        Some(u) => Exposure::from_url(u),
     };
 
     let auth_kind = meta.auth.as_deref().and_then(|s| match s {
