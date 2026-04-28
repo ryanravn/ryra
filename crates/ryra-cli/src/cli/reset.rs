@@ -16,19 +16,33 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
         .iter()
         .filter(|s| matches!(s, Step::TailscaleDisable { .. }))
         .count();
+    let volume_count = result
+        .steps
+        .iter()
+        .filter(|s| matches!(s, Step::RemoveVolume { .. }))
+        .count();
 
     if !yes && !dry_run {
         if super::is_interactive() {
             println!("This will:");
+            println!("  - Stop all installed services");
             println!(
-                "  - Stop and remove all installed services (quadlets in ~/.config/containers/systemd/ + podman volumes)"
+                "  - Delete ~/.local/share/services/  (per-service quadlets, configs, .env, metadata.toml, bind-mounted data)"
             );
-            println!("  - Delete service data in ~/.local/share/services/");
-            println!("  - Delete ryra config in ~/.config/services/");
+            println!("  - Delete ~/.config/services/        (ryra preferences)");
+            println!(
+                "  - Clear ryra symlinks from ~/.config/containers/systemd/"
+            );
             if tailnet_count > 0 {
                 let plural = if tailnet_count == 1 { "" } else { "s" };
                 println!(
                     "  - Remove {tailnet_count} service{plural} from your tailnet (deregister via Tailscale Admin API)"
+                );
+            }
+            if volume_count > 0 {
+                let plural = if volume_count == 1 { "" } else { "s" };
+                println!(
+                    "  - Remove {volume_count} legacy podman volume{plural} (from pre-bind-mount installs)"
                 );
             }
             println!("  - Remove the local Caddy CA cert from your trust store (if present)");

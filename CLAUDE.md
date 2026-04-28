@@ -145,7 +145,7 @@ Always prefer podman-native and quadlet-native features over workarounds:
 
 - **Networking**: Use podman networks for cross-container DNS resolution instead of `AddHost` with hardcoded IPs. Services with `--auth` join the auth provider's network for direct HTTP communication.
 - **Service discovery**: Containers on the same network can resolve each other by container name (e.g., `systemd-authelia`). Use this instead of `host.containers.internal` or IP addresses
-- **Volumes**: Use named volumes (`.volume` quadlet files) for data persistence, bind mounts only when host access is needed
+- **Volumes**: Bind-mount everything under `~/.local/share/services/<svc>/<role>/` (db-data, data, media, etc.). Don't ship `.volume` files — named volumes hide state in podman's namespace and split the user's backup target. Use `Volume=%h/.local/share/services/<svc>/<role>:/container/path:Z,U`.
 - **Dependencies**: Use `After=` and `Requires=` in quadlet `[Unit]` sections for startup ordering
 - **Health checks**: Use quadlet `HealthCmd=` instead of custom wait scripts
 
