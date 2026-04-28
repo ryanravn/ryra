@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::registry::service_def::AuthKind;
 
-/// Top-level ryra.toml configuration.
+/// Top-level preferences.toml configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     /// Ryra version that last wrote this config. Written on every save,
@@ -120,15 +120,15 @@ pub const CADDY_LOCAL_DOMAIN: &str = "internal";
 /// Tailscale Services (service hosts must be tagged), declared in the
 /// tailnet ACL by `ensure_setup`. Single per-tailnet tag — every ryra
 /// host shares it.
-pub const RYRA_HOST_TAG: &str = "tag:ryra-host";
+pub const HOST_TAG: &str = "tag:ryra-host";
 
 /// Tag ryra applies to defined services. Used by autoApprovers in the
 /// ACL so every ryra-defined service auto-approves its host without
 /// manual admin clicks.
-pub const RYRA_SERVICE_TAG: &str = "tag:ryra-service";
+pub const SERVICE_TAG: &str = "tag:ryra-service";
 
 /// Admin API token + cached tailnet metadata for Tailscale Services.
-/// Stored in ryra.toml under `[tailscale]` so the user pastes the
+/// Stored in preferences.toml under `[tailscale]` so the user pastes the
 /// admin token once and every subsequent `--tailscale` install reuses
 /// it for service definition + ACL setup. Same file mode (0600) as
 /// SMTP/auth credentials.
@@ -158,7 +158,7 @@ pub struct RegistryEntry {
 
 /// Wire-format struct used only on deserialization. Captures both the
 /// historical `(url, tailscale_enabled)` pair and the new `exposure`
-/// field so existing `ryra.toml` files keep loading after the typed
+/// field so existing `preferences.toml` files keep loading after the typed
 /// migration. New writes always emit `exposure` (see [`InstalledService`]'s
 /// `Serialize`-derived form, which has no legacy fields), so old
 /// shapes phase out the next time the config is saved.

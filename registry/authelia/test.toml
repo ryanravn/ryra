@@ -21,13 +21,13 @@ service = "authelia"
 [[tests.steps]]
 action = "http"
 name = "health-check"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+url = "http://127.0.0.1:$PORT_HTTP/api/health"
 service = "authelia"
 poll = { interval = 2, attempts = 15 }
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/authelia"
+run = "test -d $HOME/services/authelia"
 
 # SMTP: install with --smtp=inbucket, trigger a password-reset email,
 # poll inbucket until the mail arrives for the admin account.

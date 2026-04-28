@@ -15,14 +15,15 @@ action = "wait"
 service = "vikunja"
 timeout = 120
 
-# After add, `ryra list -a` must report vikunja as installed. Plain
-# `ryra list` drops the STATUS column (everything shown is installed by
-# definition), so `-a` is required to assert the literal "installed"
-# marker.
+# After add, `ryra list -a` must report vikunja with a live status.
+# `ryra list -a` shows "running" (installed + systemd active) or
+# "stopped" (installed + inactive); we accept either since the wait step
+# above only verifies the unit reached `active`, not that the container
+# is still running by the time we grep.
 [[steps]]
 action = "shell"
 name = "installed-shows-in-list"
-run = "ryra list -a | grep -E '^vikunja\\s+installed'"
+run = "ryra list -a | grep -E '^vikunja\\s+(running|stopped)'"
 timeout = 30
 
 # Data-preserving remove (no --purge): service home dir and podman
@@ -32,21 +33,21 @@ action = "shell"
 name = "remove-preserves-data"
 run = """set -e
 ryra remove vikunja -y
-test -d ~/.local/share/ryra/vikunja
+test -d ~/services/vikunja
 # .env must be gone (ephemeral)
-! test -f ~/.local/share/ryra/vikunja/.env
+! test -f ~/services/vikunja/.env
 # The podman volumes must still exist
 podman volume exists systemd-vikunja-db
 podman volume exists systemd-vikunja-files
 """
 timeout = 60
 
-# After remove (without --purge), `ryra list` must now report vikunja as
-# orphan.
+# After remove (without --purge), `ryra list -a` must now report vikunja
+# as removed (data preserved, no longer installed).
 [[steps]]
 action = "shell"
 name = "orphan-shows-in-list"
-run = "ryra list -a | grep -E '^vikunja\\s+orphan'"
+run = "ryra list -a | grep -E '^vikunja\\s+removed'"
 timeout = 30
 
 # `ryra remove vikunja --purge -y` on an orphan must wipe home dir +
@@ -56,7 +57,7 @@ action = "shell"
 name = "purge-cleans-up"
 run = """set -e
 ryra remove vikunja --purge -y
-! test -d ~/.local/share/ryra/vikunja
+! test -d ~/services/vikunja
 ! podman volume exists systemd-vikunja-db
 ! podman volume exists systemd-vikunja-files
 """

@@ -9,20 +9,20 @@ After=seafile-mariadb.service seafile-redis.service
 Image=docker.io/seafileltd/seafile-mc:13.0.20
 ContainerName=seafile
 Network=seafile.network
-PublishPort=${RYRA_PORT_HTTP}:80
-Volume=%h/.local/share/ryra/seafile/shared:/shared:Z
+PublishPort=${PORT_HTTP}:80
+Volume=%h/services/seafile/shared:/shared:Z
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/seafile/.env
+EnvironmentFile=%h/services/seafile/.env
 HealthCmd=curl -sf http://localhost:80/ || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/seafile/.env
+EnvironmentFile=%h/services/seafile/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=900
-ExecStartPost=/bin/bash %h/.local/share/ryra/seafile/configs/scripts/inject-oauth.sh
-ExecStartPost=/bin/bash %h/.local/share/ryra/seafile/configs/scripts/inject-smtp.sh
-ExecStartPost=/bin/bash %h/.local/share/ryra/seafile/configs/scripts/restart-seahub.sh
+ExecStartPost=/bin/bash %h/services/seafile/configs/scripts/inject-oauth.sh
+ExecStartPost=/bin/bash %h/services/seafile/configs/scripts/inject-smtp.sh
+ExecStartPost=/bin/bash %h/services/seafile/configs/scripts/restart-seahub.sh
 
 [Install]
 WantedBy=default.target

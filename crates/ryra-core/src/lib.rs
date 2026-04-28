@@ -82,16 +82,15 @@ pub(crate) fn home_dir() -> Result<PathBuf> {
 }
 
 /// Root directory holding every installed service's home dir:
-/// `~/.local/share/ryra/`.
+/// `~/services/`. Sits at the top of `$HOME` (not under `.local/share/`)
+/// because services are first-class artifacts a sysadmin should be able
+/// to find at a glance — `ls ~/services/` is the discoverable equivalent
+/// of looking in `/srv/` on a system-wide setup.
 pub fn service_data_root() -> Result<std::path::PathBuf> {
-    let base = match dirs::data_local_dir() {
-        Some(d) => d,
-        None => home_dir()?.join(".local/share"),
-    };
-    Ok(base.join("ryra"))
+    Ok(home_dir()?.join("services"))
 }
 
-/// Data directory for a service: ~/.local/share/ryra/<name>
+/// Data directory for a service: ~/services/<name>
 pub fn service_home(service_name: &str) -> Result<PathBuf> {
     Ok(service_data_root()?.join(service_name))
 }
@@ -860,7 +859,7 @@ pub fn add_service(
         .iter()
         .map(|(name, port)| {
             (
-                format!("RYRA_PORT_{}", name.to_uppercase()),
+                format!("PORT_{}", name.to_uppercase()),
                 port.to_string(),
             )
         })
@@ -1214,7 +1213,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     // Clean up ryra-managed Caddy site block + OIDC client registration
     // BEFORE the daemon reload, so the routing layers drop their stale
     // pointers while the doomed containers are already stopped.
-    // Caddy-routed exposures (Internal / Public) had a `# ryra:<svc>`
+    // Caddy-routed exposures (Internal / Public) had a `# Service-Source: registry/<svc>`
     // block written into the Caddyfile on add; remove it now. Loopback
     // and Tailscale never had one (no Caddy involvement), so skip.
     let had_caddy_route = matches!(
@@ -1399,7 +1398,7 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
 /// Steps to purge leftover data/volumes for an orphan service — one with
 /// data on disk but no config entry (e.g., after `ryra remove <svc>` in
 /// default Preserve mode). Unlike `remove_service`, this doesn't require
-/// the service to be in `ryra.toml`.
+/// the service to be in `preferences.toml`.
 pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
     let mut steps = Vec::new();
     for path in &svc.data_paths {
@@ -1432,6 +1431,22 @@ pub fn reset() -> Result<ResetResult> {
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
 
+    // Build the authoritative set of ryra-managed service names by
+    // unioning preferences.toml entries with marker scan results — this
+    // catches drift cases where preferences was wiped but services are
+    // still on disk (they remain ryra-managed, so reset must reach them).
+    let prefs_names: Vec<String> = config
+        .as_ref()
+        .map(|c| c.services.iter().map(|s| s.name.clone()).collect())
+        .unwrap_or_default();
+    let scanned_names = scan_managed_services().unwrap_or_default();
+    let mut managed_names: Vec<String> = prefs_names.clone();
+    for n in &scanned_names {
+        if !managed_names.contains(n) {
+            managed_names.push(n.clone());
+        }
+    }
+
     // 0. Disable every Tailscale Service before tearing services down.
     // `TailscaleDisable` stops `tailscale serve --service=svc:<X>` and
     // deletes the admin-side service definition via the API, so the
@@ -1449,24 +1464,19 @@ pub fn reset() -> Result<ResetResult> {
 
     // 1. Stop and remove only ryra-managed quadlet files (scoped by installed service names)
     let quadlet_path = quadlet_dir()?;
-    let all_names: Vec<&str> = config
-        .as_ref()
-        .map(|c| c.services.iter().map(|s| s.name.as_str()).collect())
-        .unwrap_or_default();
-    if let Some(ref config) = config
-        && quadlet_path.is_dir()
+    let all_names: Vec<&str> = managed_names.iter().map(|s| s.as_str()).collect();
+    if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
     {
         for entry in entries.flatten() {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
-            // Only touch files belonging to a ryra-installed service —
+            // Only touch files belonging to a ryra-managed service —
             // including the `ts-<service>` tailscale sidecars when the
             // service was installed with --tailscale.
-            let is_ryra_file = config
-                .services
+            let is_ryra_file = managed_names
                 .iter()
-                .any(|s| quadlet_belongs_to(&name, &s.name, &all_names));
+                .any(|svc| quadlet_belongs_to(&name, svc, &all_names));
             if !is_ryra_file {
                 continue;
             }
@@ -1503,14 +1513,13 @@ pub fn reset() -> Result<ResetResult> {
         steps.push(Step::RemoveVolume { name: vol_name });
     }
 
-    // 4. Remove service data directories
-    if let Some(ref config) = config {
-        for service in &config.services {
-            if let Ok(data_dir) = service_home(&service.name)
-                && data_dir.exists()
-            {
-                steps.push(Step::RemoveDir(data_dir));
-            }
+    // 4. Remove service data directories — every ryra-managed service,
+    // whether known via preferences or via marker scan.
+    for name in &managed_names {
+        if let Ok(data_dir) = service_home(name)
+            && data_dir.exists()
+        {
+            steps.push(Step::RemoveDir(data_dir));
         }
     }
 
@@ -1548,11 +1557,76 @@ pub fn status() -> config::status::RyraStatus {
     ))
 }
 
-/// List installed services.
+/// Scan the user's quadlet directory for ryra-managed services. A
+/// `.container` file is considered ryra-managed iff it carries a
+/// `# Service-Source: registry/<name>` comment within its first 16
+/// lines (added at install time). Returns the deduplicated set of
+/// service names found.
+///
+/// This makes the on-disk quadlet directory the source of truth for
+/// "which services are installed" — `preferences.toml` was historically
+/// authoritative, but could drift (e.g. if config was wiped while
+/// services kept running). Callers that want richer metadata (URL,
+/// exposure) still need `preferences.toml`; for "is X installed" the
+/// quadlet scan is reliable.
+pub fn scan_managed_services() -> Result<Vec<String>> {
+    let dir = match quadlet_dir() {
+        Ok(d) => d,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(Error::FileRead { path: dir, source }),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("container") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in content.lines().take(16) {
+            if let Some(rest) = line.trim().strip_prefix("# Service-Source: registry/")
+                && !rest.is_empty()
+                && !names.iter().any(|n| n == rest)
+            {
+                names.push(rest.to_string());
+                break;
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// List installed services. Reads metadata from `preferences.toml`,
+/// then unions in any service whose `.container` file is on disk but
+/// missing from preferences (drift recovery — those entries appear with
+/// minimal metadata). The quadlet scan is authoritative for presence;
+/// preferences supplies URL/exposure/auth that aren't easily derivable
+/// from quadlet content alone.
 pub fn list_installed() -> Result<Vec<InstalledService>> {
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
-    Ok(config.services)
+    let mut out = config.services.clone();
+    let on_disk = scan_managed_services().unwrap_or_default();
+    for name in on_disk {
+        if !out.iter().any(|s| s.name == name) {
+            out.push(InstalledService {
+                name,
+                version: String::new(),
+                repo: String::new(),
+                ports: std::collections::BTreeMap::new(),
+                auth_kind: None,
+                exposure: Exposure::Loopback,
+                installed: true,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Search available services in a repo, optionally filtered by query.

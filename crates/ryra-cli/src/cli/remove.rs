@@ -137,6 +137,7 @@ async fn remove_one(
             println!("Removing {service}...");
             apply::execute_all(&result.steps).await?;
             ryra_core::finalize_remove(&result.service_name)?;
+            super::remove_hosts_entries(service);
             if ryra_core::WellKnownService::Caddy.matches(service) {
                 super::remove_caddy_ca();
             }

@@ -20,12 +20,12 @@ impl ConfigPaths {
             .ok_or(Error::HomeDirNotFound)?;
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| home.join(".config"))
-            .join("ryra");
+            .join("services");
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| home.join(".cache"))
-            .join("ryra");
+            .join("services");
         Ok(Self {
-            config_file: config_dir.join("ryra.toml"),
+            config_file: config_dir.join("preferences.toml"),
             cache_dir,
             config_dir,
         })

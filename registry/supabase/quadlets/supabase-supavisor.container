@@ -9,21 +9,21 @@ After=supabase-db.service
 ContainerName=supabase-supavisor
 Image=docker.io/supabase/supavisor:2.7.4
 Network=supabase.network:alias=supavisor
-PublishPort=${RYRA_PORT_POSTGRES}:5432
-PublishPort=${RYRA_PORT_POOLER}:6543
-Volume=%h/.local/share/ryra/supabase/configs/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
+PublishPort=${PORT_POSTGRES}:5432
+PublishPort=${PORT_POOLER}:6543
+Volume=%h/services/supabase/configs/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
 Entrypoint=/bin/sh
 Exec=-c "export DATABASE_URL=ecto://supabase_admin:$$POSTGRES_PASSWORD@db:$$POSTGRES_PORT/_supabase && /app/bin/migrate && /app/bin/supavisor eval \"$$(cat /etc/pooler/pooler.exs)\" && /app/bin/server"
 Environment=PORT=4000
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 HealthCmd=curl -sSfL --head -o /dev/null http://localhost:4000/api/health
 HealthInterval=10s
 HealthTimeout=5s
 HealthRetries=5
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

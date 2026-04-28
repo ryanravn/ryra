@@ -11,9 +11,9 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceStatus {
-    /// Service is present in ryra.toml with installed=true.
+    /// Service is present in preferences.toml with installed=true.
     Installed,
-    /// Service has data but ryra.toml has no entry (or installed=false).
+    /// Service has data but preferences.toml has no entry (or installed=false).
     Orphan,
 }
 
@@ -21,14 +21,14 @@ pub enum ServiceStatus {
 pub struct ServiceData {
     pub service: String,
     pub status: ServiceStatus,
-    /// `~/.local/share/ryra/<service>/` — may not exist if only volumes remain.
+    /// `~/services/<service>/` — may not exist if only volumes remain.
     pub home_dir: PathBuf,
     /// Top-level children of `home_dir` classified as data (not ephemeral).
     pub data_paths: Vec<PathBuf>,
     pub volumes: Vec<volumes::VolumeRef>,
 }
 
-/// Top-level dirs under `~/.local/share/ryra/` that are NOT services —
+/// Top-level dirs under `~/services/` that are NOT services —
 /// written by ryra itself for tooling (e.g. test reports). Skip them so
 /// `ryra data ls` doesn't surface them as orphan services.
 const NON_SERVICE_DIRS: &[&str] = &["test-reports"];
@@ -38,9 +38,21 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
     let home_root = crate::service_data_root()?;
     let quadlet = crate::quadlet_dir()?;
 
-    // Collect candidate service names: installed ones + any dir under the data root.
+    // Collect candidate service names: installed ones + any service whose
+    // `.container` carries our `# Service-Source:` marker + any dir under
+    // the data root. The quadlet scan is what catches drift — if
+    // preferences.toml was wiped but the service is still on disk, the
+    // marker proves ryra installed it and `ryra list` should still show it.
     let mut names: std::collections::BTreeSet<String> =
         config.services.iter().map(|s| s.name.clone()).collect();
+    let managed_via_marker: std::collections::HashSet<String> =
+        crate::scan_managed_services()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    for n in &managed_via_marker {
+        names.insert(n.clone());
+    }
     if home_root.is_dir() {
         let entries = std::fs::read_dir(&home_root).map_err(|source| Error::FileRead {
             path: home_root.clone(),
@@ -89,6 +101,9 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
     for name in names {
         let status = match config.services.iter().find(|s| s.name == name) {
             Some(s) if s.installed => ServiceStatus::Installed,
+            // Preferences entry missing but a marker'd quadlet is on
+            // disk → the service is installed; preferences just drifted.
+            _ if managed_via_marker.contains(&name) => ServiceStatus::Installed,
             _ => ServiceStatus::Orphan,
         };
         let home_dir = home_root.join(&name);

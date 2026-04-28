@@ -13,10 +13,10 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=3s
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+EnvironmentFile=%h/services/paperless-ngx/.env
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+EnvironmentFile=%h/services/paperless-ngx/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

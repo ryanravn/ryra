@@ -12,14 +12,14 @@ service = "open-webui"
 [[tests.steps]]
 action = "http"
 name = "open-webui-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "open-webui"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/open-webui"
+run = "test -d $HOME/services/open-webui"
 timeout = 10
 
 # OIDC browser flow. Ups RAM to 2048 — open-webui + authelia + caddy
@@ -55,7 +55,7 @@ service = "open-webui"
 [[tests.steps]]
 action = "http"
 name = "open-webui-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "open-webui"
 poll = { interval = 2, attempts = 30 }
 timeout = 90

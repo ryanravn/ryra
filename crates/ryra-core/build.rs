@@ -22,7 +22,7 @@ fn main() {
         std::hash::Hash::hash(content, &mut hasher);
     }
     let hash = std::hash::Hasher::finish(&hasher);
-    println!("cargo::rustc-env=RYRA_REGISTRY_HASH={hash:016x}");
+    println!("cargo::rustc-env=REGISTRY_HASH={hash:016x}");
 }
 
 fn walk_dir(dir: &Path) {

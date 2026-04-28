@@ -12,7 +12,7 @@ service = "twenty"
 [[tests.steps]]
 action = "http"
 name = "twenty-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "twenty"
 poll = { interval = 5, attempts = 60 }
 timeout = 300
@@ -29,7 +29,7 @@ timeout = 5
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/twenty"
+run = "test -d $HOME/services/twenty"
 
 # SMTP via onboarding invite flow — the playwright spec walks the UI and
 # clicks Finish on the invite step. Mail delivery is async through bullmq

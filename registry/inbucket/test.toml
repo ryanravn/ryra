@@ -14,11 +14,11 @@ service = "inbucket"
 [[tests.steps]]
 action = "http"
 name = "web-ui-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "inbucket"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/inbucket"
+run = "test -d $HOME/services/inbucket"

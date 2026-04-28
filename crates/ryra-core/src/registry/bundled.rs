@@ -9,7 +9,7 @@ static BUNDLED_REGISTRY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../
 const BUNDLED_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Content hash of the registry at build time — changes when any file is modified,
 /// even if the crate version stays the same.
-const BUNDLED_HASH: &str = env!("RYRA_REGISTRY_HASH");
+const BUNDLED_HASH: &str = env!("REGISTRY_HASH");
 
 /// Ensures the bundled registry is extracted to `<cache_dir>/bundled/`.
 ///

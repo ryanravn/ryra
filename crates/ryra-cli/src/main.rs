@@ -54,7 +54,7 @@ enum Command {
         /// `tailscale serve --service=svc:<name>` from the host (sudo
         /// required) — no sidecar containers, no port pool. Requires the
         /// `tailscale` CLI installed and a logged-in tailnet (configure
-        /// the API token with RYRA_TS_API_KEY or interactively).
+        /// the API token with TAILSCALE_API_KEY or interactively).
         /// Mutually exclusive with --url.
         #[arg(long, conflicts_with = "url")]
         tailscale: bool,
@@ -62,7 +62,7 @@ enum Command {
         /// to register with that email for renewal notices, or `--acme` alone to
         /// register anonymously. Without this flag, Caddy uses its internal CA
         /// (self-signed). After first install, edit
-        /// `~/.local/share/ryra/caddy/config/tls.caddy` directly to switch to
+        /// `~/services/caddy/config/tls.caddy` directly to switch to
         /// wildcards, Cloudflare DNS-01, BYO certs, etc.
         #[arg(long, value_name = "EMAIL", num_args = 0..=1, default_missing_value = "")]
         acme: Option<String>,

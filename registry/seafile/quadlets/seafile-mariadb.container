@@ -14,10 +14,10 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=5s
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/seafile/.env
+EnvironmentFile=%h/services/seafile/.env
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/seafile/.env
+EnvironmentFile=%h/services/seafile/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

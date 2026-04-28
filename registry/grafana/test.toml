@@ -20,7 +20,7 @@ service = "grafana"
 [[tests.steps]]
 action = "http"
 name = "grafana-health"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+url = "http://127.0.0.1:$PORT_HTTP/api/health"
 service = "grafana"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
@@ -30,7 +30,7 @@ timeout = 90
 [[tests.steps]]
 action = "http"
 name = "prometheus-datasource-provisioned"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/datasources"
+url = "http://127.0.0.1:$PORT_HTTP/api/datasources"
 service = "grafana"
 headers = { Authorization = "Basic YWRtaW46Z3JhZmFuYS10ZXN0LTEyMw==" }
 contains = "\"type\":\"prometheus\""
@@ -71,7 +71,7 @@ service = "grafana"
 [[tests.steps]]
 action = "http"
 name = "grafana-health"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/health"
+url = "http://127.0.0.1:$PORT_HTTP/api/health"
 service = "grafana"
 poll = { interval = 2, attempts = 30 }
 timeout = 90

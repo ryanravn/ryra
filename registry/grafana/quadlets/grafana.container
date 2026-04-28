@@ -6,15 +6,15 @@ StartLimitBurst=3
 [Container]
 ContainerName=grafana
 Image=docker.io/grafana/grafana:11.3.1
-PublishPort=${RYRA_PORT_HTTP}:3000
+PublishPort=${PORT_HTTP}:3000
 Volume=grafana-data.volume:/var/lib/grafana:U
-Volume=%h/.local/share/ryra/grafana/configs/provisioning:/etc/grafana/provisioning:Z,ro
+Volume=%h/services/grafana/configs/provisioning:/etc/grafana/provisioning:Z,ro
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/grafana/.env
+EnvironmentFile=%h/services/grafana/.env
 HealthCmd=wget -q --spider http://localhost:3000/api/health || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/grafana/.env
+EnvironmentFile=%h/services/grafana/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

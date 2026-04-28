@@ -26,9 +26,9 @@ pub struct VolumeRef {
 /// Parse every `*.volume` quadlet file in `quadlet_dir` and compute its
 /// podman name (`systemd-<stem>`) and owning service.
 ///
-/// `known_services` is the set of service names from ryra.toml plus any
-/// service dir under `~/.local/share/ryra/`. Pass both so we match
-/// volumes of orphaned services (home dir exists, ryra.toml entry gone).
+/// `known_services` is the set of service names from preferences.toml plus any
+/// service dir under `~/services/`. Pass both so we match
+/// volumes of orphaned services (home dir exists, preferences.toml entry gone).
 pub fn parse_volume_quadlets(
     quadlet_dir: &Path,
     known_services: &[String],

@@ -11,14 +11,14 @@ service = "vikunja"
 [[tests.steps]]
 action = "http"
 name = "vikunja-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "vikunja"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/vikunja"
+run = "test -d $HOME/services/vikunja"
 timeout = 10
 
 # SMTP: register a user — Vikunja's mailer sends a confirmation email
@@ -42,7 +42,7 @@ service = "vikunja"
 [[tests.steps]]
 action = "http"
 name = "vikunja-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "vikunja"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
@@ -50,7 +50,7 @@ timeout = 90
 action = "http"
 name = "trigger-signup-email"
 method = "post"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/register"
+url = "http://127.0.0.1:$PORT_HTTP/api/v1/register"
 service = "vikunja"
 body = '{"username":"smtptest","email":"smtptest@example.com","password":"Testing-Smtp-123!"}'
 timeout = 30
@@ -91,7 +91,7 @@ service = "vikunja"
 [[tests.steps]]
 action = "http"
 name = "vikunja-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "vikunja"
 poll = { interval = 2, attempts = 20 }
 timeout = 60

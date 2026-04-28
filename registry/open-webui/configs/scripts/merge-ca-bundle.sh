@@ -2,8 +2,8 @@
 # Merge Caddy's self-signed root CA into certifi's CA bundle so Python/httpx
 # trusts both public CAs and the internal Caddy cert for OIDC discovery.
 # Must not fail — ExecStartPre failure prevents the service from starting.
-SERVICE_HOME="$HOME/.local/share/ryra/open-webui"
-CADDY_CA="$HOME/.local/share/ryra/caddy-root-ca.crt"
+SERVICE_HOME="$HOME/services/open-webui"
+CADDY_CA="$HOME/services/caddy-root-ca.crt"
 MERGED="$SERVICE_HOME/ca-bundle.crt"
 
 # Only needed when --auth is used (Caddy self-signed cert needs trusting)

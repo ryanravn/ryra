@@ -29,7 +29,7 @@ done
 #    equivalent script does and works reliably.
 AUTH_HOST=$(echo "$OAUTH_ISSUER_URL" | sed 's|https\?://||; s|[:/].*||')
 CADDY_IP=$(podman inspect caddy --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}')
-CADDY_CA="$(dirname "$RYRA_SERVICE_HOME")/caddy-root-ca.crt"
+CADDY_CA="$(dirname "$SERVICE_HOME")/caddy-root-ca.crt"
 
 # /etc/hosts entry for the auth domain — PHP cURL, Guzzle, getent, and
 # curl -v all honour this for non-`.localhost` hostnames.

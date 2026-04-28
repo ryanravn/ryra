@@ -2,7 +2,7 @@
 set -euo pipefail
 [ -z "${SMTP_HOST:-}" ] && exit 0
 
-CONF=$RYRA_SERVICE_HOME/shared/seafile/conf
+CONF=$SERVICE_HOME/shared/seafile/conf
 
 echo "Waiting for $CONF/seahub_settings.py to appear..."
 for i in $(seq 1 60); do

@@ -7,14 +7,14 @@ StartLimitBurst=3
 ContainerName=inbucket
 Image=docker.io/inbucket/inbucket:3.1.1
 Network=inbucket.network
-PublishPort=${RYRA_PORT_HTTP}:9000
-PublishPort=${RYRA_PORT_SMTP}:2500
+PublishPort=${PORT_HTTP}:9000
+PublishPort=${PORT_SMTP}:2500
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/inbucket/.env
+EnvironmentFile=%h/services/inbucket/.env
 HealthCmd=curl -sf http://localhost:9000/status || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/inbucket/.env
+EnvironmentFile=%h/services/inbucket/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

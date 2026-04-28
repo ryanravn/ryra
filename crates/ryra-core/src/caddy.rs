@@ -147,7 +147,7 @@ pub fn ensure_auth_provider_routed(
         path: caddyfile_path.clone(),
         source,
     })?;
-    if !caddyfile.contains(&format!("# ryra:{auth_service}")) {
+    if !caddyfile.contains(&format!("# Service-Source: registry/{auth_service}")) {
         let block = render_site_block(&CaddySiteParams {
             service_name: auth_service.to_string(),
             domain: auth_domain.to_string(),
@@ -196,7 +196,7 @@ pub struct CaddySiteParams {
 
 /// Generate a Caddy site block for a service.
 ///
-/// The block always starts with a `# ryra:<service_name>` marker comment
+/// The block always starts with a `# Service-Source: registry/<service_name>` marker comment
 /// so that [`add_route`] and [`remove_route`] can locate it.
 ///
 /// TLS strategy is delegated to the user-owned `(ryra_tls)` snippet
@@ -205,7 +205,7 @@ pub struct CaddySiteParams {
 /// because Let's Encrypt can't issue certs for the reserved `.internal`
 /// TLD even when the user has flipped the snippet to ACME mode.
 pub fn render_site_block(params: &CaddySiteParams) -> String {
-    let mut block = format!("# ryra:{}\n", params.service_name);
+    let mut block = format!("# Service-Source: registry/{}\n", params.service_name);
     block.push_str(&format!("{}:{} {{\n", params.domain, params.https_port));
     if params.domain.ends_with(".internal") {
         block.push_str("    tls internal\n");
@@ -223,7 +223,7 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
 
 /// Add or replace a service's block in the Caddyfile content.
 ///
-/// If a block with `# ryra:<service_name>` already exists, it is replaced.
+/// If a block with `# Service-Source: registry/<service_name>` already exists, it is replaced.
 /// Otherwise the new block is appended.
 pub fn add_route(caddyfile: &str, service_name: &str, block: &str) -> String {
     let cleaned = remove_route(caddyfile, service_name);
@@ -238,11 +238,11 @@ pub fn add_route(caddyfile: &str, service_name: &str, block: &str) -> String {
 
 /// Remove a service's block from the Caddyfile content.
 ///
-/// Finds the `# ryra:<service_name>` marker and removes everything from
+/// Finds the `# Service-Source: registry/<service_name>` marker and removes everything from
 /// that line through the closing `}` at brace depth 0, using brace-depth
 /// tracking to correctly handle nested blocks.
 pub fn remove_route(caddyfile: &str, service_name: &str) -> String {
-    let marker = format!("# ryra:{service_name}");
+    let marker = format!("# Service-Source: registry/{service_name}");
     let lines: Vec<&str> = caddyfile.lines().collect();
     let mut result = Vec::new();
     let mut i = 0;
@@ -294,14 +294,14 @@ pub fn remove_route(caddyfile: &str, service_name: &str) -> String {
 
 /// Parse ryra-managed domains from a Caddyfile.
 ///
-/// Returns `(service_name, domain)` pairs extracted from `# ryra:` markers.
+/// Returns `(service_name, domain)` pairs extracted from `# Service-Source: registry/` markers.
 pub fn parse_domains(caddyfile: &str) -> Vec<(String, String)> {
     let mut domains = Vec::new();
     let mut current_service: Option<String> = None;
 
     for line in caddyfile.lines() {
         let trimmed = line.trim();
-        if let Some(svc) = trimmed.strip_prefix("# ryra:") {
+        if let Some(svc) = trimmed.strip_prefix("# Service-Source: registry/") {
             current_service = Some(svc.to_string());
         } else if let Some(ref svc) = current_service {
             // Next non-comment line after marker should be "domain.com {"
@@ -331,7 +331,7 @@ mod tests {
             https_port: 8443,
         };
         let block = render_site_block(&params);
-        assert!(block.starts_with("# ryra:whoami\n"));
+        assert!(block.starts_with("# Service-Source: registry/whoami\n"));
         assert!(block.contains("whoami.example.com:8443 {"));
         assert!(block.contains("    import ryra_tls\n"));
         assert!(!block.contains("tls internal"));
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn add_route_to_empty() {
-        let block = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
+        let block = "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
         let result = add_route("", "whoami", block);
         assert_eq!(result, format!("{block}\n"));
     }
@@ -431,18 +431,18 @@ mod tests {
     #[test]
     fn add_route_appends() {
         let existing =
-            "# ryra:foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n";
+            "# Service-Source: registry/foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n";
         let block =
-            "# ryra:bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n";
+            "# Service-Source: registry/bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n";
         let result = add_route(existing, "bar", block);
-        assert!(result.contains("# ryra:foo"));
-        assert!(result.contains("# ryra:bar"));
+        assert!(result.contains("# Service-Source: registry/foo"));
+        assert!(result.contains("# Service-Source: registry/bar"));
     }
 
     #[test]
     fn add_route_replaces_existing() {
-        let existing = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
-        let new_block = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:9090\n}\n";
+        let existing = "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
+        let new_block = "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:9090\n}\n";
         let result = add_route(existing, "whoami", new_block);
         assert!(!result.contains("8080"));
         assert!(result.contains("9090"));
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn remove_route_single() {
-        let caddyfile = "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
+        let caddyfile = "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n";
         let result = remove_route(caddyfile, "whoami");
         assert_eq!(result, "");
     }
@@ -458,12 +458,12 @@ mod tests {
     #[test]
     fn remove_route_preserves_others() {
         let caddyfile = concat!(
-            "# ryra:foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n\n",
-            "# ryra:bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n",
+            "# Service-Source: registry/foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n\n",
+            "# Service-Source: registry/bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n",
         );
         let result = remove_route(caddyfile, "foo");
         assert!(!result.contains("foo"));
-        assert!(result.contains("# ryra:bar"));
+        assert!(result.contains("# Service-Source: registry/bar"));
         assert!(result.contains("reverse_proxy host.containers.internal:4000"));
     }
 
@@ -471,7 +471,7 @@ mod tests {
     fn remove_route_preserves_user_blocks() {
         let caddyfile = concat!(
             "mysite.example.com {\n    root * /var/www\n    file_server\n}\n\n",
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n",
+            "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n",
         );
         let result = remove_route(caddyfile, "whoami");
         assert!(result.contains("mysite.example.com"));
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn remove_route_with_nested_braces() {
         let caddyfile = concat!(
-            "# ryra:grafana\n",
+            "# Service-Source: registry/grafana\n",
             "grafana.example.com {\n",
             "    forward_auth host.containers.internal:9091 {\n",
             "        uri /api/authz/forward-auth\n",
@@ -497,8 +497,8 @@ mod tests {
     #[test]
     fn parse_domains_basic() {
         let caddyfile = concat!(
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n\n",
-            "# ryra:grafana\ngrafana.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n",
+            "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n\n",
+            "# Service-Source: registry/grafana\ngrafana.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n",
         );
         let domains = parse_domains(caddyfile);
         assert_eq!(domains.len(), 2);
@@ -516,7 +516,7 @@ mod tests {
     fn parse_domains_ignores_user_blocks() {
         let caddyfile = concat!(
             "mysite.example.com {\n    file_server\n}\n\n",
-            "# ryra:whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n",
+            "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n",
         );
         let domains = parse_domains(caddyfile);
         assert_eq!(domains.len(), 1);
@@ -527,7 +527,7 @@ mod tests {
     fn caddyfile_path_is_under_service_home() {
         let path = caddyfile_path().expect("HOME should be set in test environment");
         assert!(
-            path.ends_with("ryra/caddy/config/Caddyfile"),
+            path.ends_with("services/caddy/config/Caddyfile"),
             "unexpected caddyfile path: {path:?}"
         );
     }

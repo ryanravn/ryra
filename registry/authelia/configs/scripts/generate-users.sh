@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CONFIG_DIR="$RYRA_SERVICE_HOME/config"
+CONFIG_DIR="$SERVICE_HOME/config"
 mkdir -p "$CONFIG_DIR"
 USERS_FILE="$CONFIG_DIR/users_database.yml"
 [ -f "$USERS_FILE" ] && exit 0

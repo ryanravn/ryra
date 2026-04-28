@@ -768,11 +768,11 @@ mod tests {
             r#"
 [[tests]]
 name = "responds"
-run = "curl -sf http://127.0.0.1:$RYRA_PORT_HTTP"
+run = "curl -sf http://127.0.0.1:$PORT_HTTP"
 
 [[tests]]
 name = "hostname"
-run = "curl -s http://127.0.0.1:$RYRA_PORT_HTTP | grep -q Hostname"
+run = "curl -s http://127.0.0.1:$PORT_HTTP | grep -q Hostname"
 timeout = 10
 "#,
         )

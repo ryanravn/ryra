@@ -111,6 +111,70 @@ pub fn firefox_profile_dirs() -> Vec<std::path::PathBuf> {
     profiles
 }
 
+/// Remove `/etc/hosts` entries this service added on install. Only lines
+/// whose trailing comment matches `# Service-Source: registry/<service>`
+/// are removed — handwritten entries (no marker) are left alone, so a
+/// pre-existing `127.0.0.1 seafile` from before ryra never got clobbered.
+///
+/// Best-effort with sudo: tries `sudo -n` first (passwordless / cached),
+/// escalates to interactive prompt if stderr is a TTY, prints a warning
+/// otherwise. Failure to remove is non-fatal — the entry is harmless;
+/// we just can't clean it up automatically.
+pub fn remove_hosts_entries(service: &str) {
+    use std::io::Write;
+    let marker = format!("# Service-Source: registry/{service}");
+    let Ok(content) = std::fs::read_to_string("/etc/hosts") else {
+        return;
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let kept: Vec<&str> = lines.iter().filter(|l| !l.contains(&marker)).copied().collect();
+    if kept.len() == lines.len() {
+        return;
+    }
+    let removed_count = lines.len() - kept.len();
+    let mut new_content = kept.join("\n");
+    if content.ends_with('\n') && !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+
+    let try_write = |interactive: bool| -> bool {
+        let mut cmd = std::process::Command::new("sudo");
+        if !interactive {
+            cmd.arg("-n");
+        }
+        cmd.args(["sh", "-c", "cat > /etc/hosts"]);
+        cmd.stdin(std::process::Stdio::piped());
+        let Ok(mut child) = cmd.spawn() else {
+            return false;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(new_content.as_bytes());
+        }
+        child.wait().map(|s| s.success()).unwrap_or(false)
+    };
+
+    if try_write(false) {
+        println!(
+            "  Removed {removed_count} stale /etc/hosts entry(ies) (via sudo)."
+        );
+    } else if std::io::stderr().is_terminal() {
+        eprintln!(
+            "  Removing {removed_count} stale /etc/hosts entry(ies) (sudo required):"
+        );
+        if try_write(true) {
+            println!("  Removed.");
+        } else {
+            eprintln!(
+                "  WARN: failed to remove /etc/hosts entries for {service}. They are harmless but persist."
+            );
+        }
+    } else {
+        eprintln!(
+            "  WARN: {removed_count} stale /etc/hosts entry(ies) for {service} not removed (sudo required)."
+        );
+    }
+}
+
 /// Remove Caddy's CA certificate from every rootless trust store (user NSS
 /// DB, Firefox profiles). For the system trust store — which ryra never
 /// installed itself, only ever printed a hint for — we print the matching

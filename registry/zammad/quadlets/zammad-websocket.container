@@ -12,10 +12,10 @@ Network=zammad.network:alias=websocket
 Volume=zammad-storage.volume:/opt/zammad/storage:U
 Exec=zammad-websocket
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/zammad/.env
+EnvironmentFile=%h/services/zammad/.env
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/zammad/.env
+EnvironmentFile=%h/services/zammad/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=600

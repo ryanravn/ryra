@@ -6,14 +6,14 @@ StartLimitBurst=3
 [Container]
 ContainerName=vaultwarden
 Image=docker.io/vaultwarden/server:1.35.4
-PublishPort=${RYRA_PORT_HTTP}:80
+PublishPort=${PORT_HTTP}:80
 Volume=vaultwarden-data.volume:/data:U
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
+EnvironmentFile=%h/services/vaultwarden/.env
 HealthCmd=curl -sf http://localhost:80/alive || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/vaultwarden/.env
+EnvironmentFile=%h/services/vaultwarden/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

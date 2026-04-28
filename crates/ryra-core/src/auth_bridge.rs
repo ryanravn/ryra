@@ -41,7 +41,7 @@ pub struct AuthBridgeParams<'a> {
     pub service_name: &'a str,
     pub enable_auth: bool,
     pub config: &'a Config,
-    /// Absolute path to the service's data dir (`~/.local/share/ryra/<name>`).
+    /// Absolute path to the service's data dir (`~/services/<name>`).
     pub service_data: &'a Path,
 }
 

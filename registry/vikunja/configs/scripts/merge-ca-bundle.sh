@@ -2,8 +2,8 @@
 # Prepare CA bundle and /etc/hosts for vikunja container.
 # Runs as ExecStartPre — must not fail or the service won't start.
 # All operations are best-effort with explicit error handling.
-SERVICE_HOME="${RYRA_SERVICE_HOME:-$HOME/.local/share/ryra/vikunja}"
-CADDY_CA="$HOME/.local/share/ryra/caddy-root-ca.crt"
+SERVICE_HOME="${SERVICE_HOME:-$HOME/services/vikunja}"
+CADDY_CA="$HOME/services/caddy-root-ca.crt"
 MERGED="$SERVICE_HOME/ca-bundle.crt"
 HOSTS="$SERVICE_HOME/hosts"
 
@@ -31,7 +31,7 @@ fi
 CADDY_IP=$(podman inspect caddy --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}')
 if [ -n "$CADDY_IP" ]; then
   # Find .internal domains in service .env files and map them to caddy
-  for f in "$HOME"/.local/share/ryra/*/.env; do
+  for f in "$HOME"/services/*/.env; do
     [ -f "$f" ] || continue
     sed -n 's|.*://\([^:/]*\.internal\).*|\1|p' "$f" 2>/dev/null
   done | sort -u | while read -r domain; do

@@ -10,10 +10,10 @@ ContainerName=supabase-meta
 Image=docker.io/supabase/postgres-meta:v0.96.3
 Network=supabase.network:alias=meta
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

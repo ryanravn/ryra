@@ -8,7 +8,7 @@ Image=docker.io/library/postgres:16-alpine
 ContainerName=synapse-db
 Network=synapse.network:alias=db
 Volume=synapse-db.volume:/var/lib/postgresql/data:U
-EnvironmentFile=%h/.local/share/ryra/synapse/.env
+EnvironmentFile=%h/services/synapse/.env
 # Synapse recommends C-collation UTF8 to avoid index-ordering bugs. Quadlet
 # parses Environment= by whitespace, so the value must be double-quoted.
 Environment="POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=C --lc-ctype=C"
@@ -20,7 +20,7 @@ HealthTimeout=5s
 Pull=missing
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/synapse/.env
+EnvironmentFile=%h/services/synapse/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

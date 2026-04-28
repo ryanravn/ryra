@@ -11,11 +11,11 @@ service = "openclaw"
 [[tests.steps]]
 action = "http"
 name = "http-responds"
-url = "http://127.0.0.1:$RYRA_PORT_GATEWAY"
+url = "http://127.0.0.1:$PORT_GATEWAY"
 service = "openclaw"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/openclaw"
+run = "test -d $HOME/services/openclaw"

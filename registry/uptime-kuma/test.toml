@@ -11,11 +11,11 @@ service = "uptime-kuma"
 [[tests.steps]]
 action = "http"
 name = "http-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "uptime-kuma"
 poll = { interval = 2, attempts = 20 }
 timeout = 60
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/uptime-kuma"
+run = "test -d $HOME/services/uptime-kuma"

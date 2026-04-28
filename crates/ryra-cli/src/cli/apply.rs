@@ -27,14 +27,14 @@ async fn execute(step: &Step) -> Result<()> {
     match step {
         Step::WriteFile(file) => {
             // Pick the permission mode by file kind:
-            // - `.env` / `ryra.toml`  — contain credentials, owner-only (0o600)
-            // - `.sh`                  — executable scripts (0o755)
-            // - everything else        — conventional world-readable (0o644)
+            // - `.env` / `preferences.toml`  — contain credentials, owner-only (0o600)
+            // - `.sh`                   — executable scripts (0o755)
+            // - everything else         — conventional world-readable (0o644)
             // Using atomic write across the board so a crash mid-write can't
             // leave a half-written quadlet/config behind.
             let name = file.path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let ext = file.path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let mode = if name == ".env" || name == "ryra.toml" {
+            let mode = if name == ".env" || name == "preferences.toml" {
                 0o600
             } else if ext == "sh" {
                 0o755
@@ -158,7 +158,7 @@ async fn execute(step: &Step) -> Result<()> {
             // inside the user namespace where our UID maps to root, so it
             // nukes anything regardless of subuid ownership. Fall back to
             // std::fs on any podman failure (e.g. plain-user-owned paths
-            // like ~/.config/ryra) so non-podman dirs still work.
+            // like ~/.config/services) so non-podman dirs still work.
             let path_str = path.display().to_string();
             with_simple_spinner(&format!("removing {}", path.display()), || {
                 let unshare = Command::new("podman")
@@ -228,9 +228,9 @@ async fn execute(step: &Step) -> Result<()> {
 mod tailscale_services {
     use anyhow::{Context, Result, bail};
     use std::process::{Command, Stdio};
-    use ryra_core::config::schema::{RYRA_HOST_TAG, RYRA_SERVICE_TAG, TailscaleConfig};
+    use ryra_core::config::schema::{HOST_TAG, SERVICE_TAG, TailscaleConfig};
 
-    /// Read the admin token + cached tailnet from ryra.toml. Bails if
+    /// Read the admin token + cached tailnet from preferences.toml. Bails if
     /// the user is somehow running a tailscale step without ever having
     /// pasted a token (the CLI prompts up-front, so this should be
     /// unreachable in practice — defensive).
@@ -292,7 +292,7 @@ mod tailscale_services {
             .ok_or_else(|| anyhow::anyhow!("ACL root is not an object"))?
             .entry("tagOwners")
             .or_insert_with(|| serde_json::json!({}));
-        for tag in [RYRA_HOST_TAG, RYRA_SERVICE_TAG] {
+        for tag in [HOST_TAG, SERVICE_TAG] {
             if owners.get(tag).is_none() {
                 owners[tag] = serde_json::json!(["autogroup:admin"]);
                 changed = true;
@@ -308,8 +308,8 @@ mod tailscale_services {
             .ok_or_else(|| anyhow::anyhow!("autoApprovers is not an object"))?
             .entry("services")
             .or_insert_with(|| serde_json::json!({}));
-        if services.get(RYRA_SERVICE_TAG).is_none() {
-            services[RYRA_SERVICE_TAG] = serde_json::json!([RYRA_HOST_TAG]);
+        if services.get(SERVICE_TAG).is_none() {
+            services[SERVICE_TAG] = serde_json::json!([HOST_TAG]);
             changed = true;
         }
         if changed {
@@ -323,7 +323,7 @@ mod tailscale_services {
             if code != 200 {
                 bail!("write ACL failed (HTTP {code}): {body}");
             }
-            println!("  Tailscale: ACL updated (added {RYRA_HOST_TAG} + {RYRA_SERVICE_TAG} + auto-approval)");
+            println!("  Tailscale: ACL updated (added {HOST_TAG} + {SERVICE_TAG} + auto-approval)");
         }
 
         // 2. Tag the local host if not already tagged.
@@ -349,10 +349,10 @@ mod tailscale_services {
             .to_string();
         let already_tagged = device["tags"]
             .as_array()
-            .map(|tags| tags.iter().any(|t| t.as_str() == Some(RYRA_HOST_TAG)))
+            .map(|tags| tags.iter().any(|t| t.as_str() == Some(HOST_TAG)))
             .unwrap_or(false);
         if !already_tagged {
-            let body = format!(r#"{{"tags":["{RYRA_HOST_TAG}"]}}"#);
+            let body = format!(r#"{{"tags":["{HOST_TAG}"]}}"#);
             let (code, resp) = curl(
                 "POST",
                 &format!("https://api.tailscale.com/api/v2/device/{node_id}/tags"),
@@ -362,7 +362,7 @@ mod tailscale_services {
             if code != 200 {
                 bail!("tag host failed (HTTP {code}): {resp}");
             }
-            println!("  Tailscale: tagged {node_dns} as {RYRA_HOST_TAG}");
+            println!("  Tailscale: tagged {node_dns} as {HOST_TAG}");
         }
 
         // 3. Cache tailnet suffix in config so URL derivation doesn't
@@ -389,10 +389,10 @@ mod tailscale_services {
         let key = &ts.admin_api_key;
 
         // PUT (create or update) the service. Tagging it with
-        // RYRA_SERVICE_TAG makes the autoApprover entry kick in so the
+        // SERVICE_TAG makes the autoApprover entry kick in so the
         // host's advertisement auto-approves.
         let body = format!(
-            r#"{{"name":"svc:{service}","tags":["{RYRA_SERVICE_TAG}"],"ports":["tcp:443"]}}"#
+            r#"{{"name":"svc:{service}","tags":["{SERVICE_TAG}"],"ports":["tcp:443"]}}"#
         );
         let (code, resp) = curl(
             "PUT",

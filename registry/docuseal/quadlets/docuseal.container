@@ -8,12 +8,12 @@ After=network-online.target
 Image=docker.io/docuseal/docuseal:2.4.4
 ContainerName=docuseal
 Network=docuseal.network
-PublishPort=${RYRA_PORT_HTTP}:3000
+PublishPort=${PORT_HTTP}:3000
 # DocuSeal stores SQLite db, uploaded PDFs, signed outputs, and a secret
 # encryption key under /data. Bind mount so the data survives container
 # replacement and is inspectable from the host.
-Volume=%h/.local/share/ryra/docuseal/data:/data:Z,U
-EnvironmentFile=%h/.local/share/ryra/docuseal/.env
+Volume=%h/services/docuseal/data:/data:Z,U
+EnvironmentFile=%h/services/docuseal/.env
 HealthCmd=wget -qO- http://localhost:3000/up >/dev/null || exit 1
 HealthStartPeriod=30s
 HealthInterval=15s
@@ -22,7 +22,7 @@ HealthTimeout=5s
 Pull=missing
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/docuseal/.env
+EnvironmentFile=%h/services/docuseal/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

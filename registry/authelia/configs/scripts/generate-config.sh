@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
-CONFIG_DIR="$RYRA_SERVICE_HOME/config"
+CONFIG_DIR="$SERVICE_HOME/config"
 mkdir -p "$CONFIG_DIR"
 CONFIG_FILE="$CONFIG_DIR/configuration.yml"
 [ -f "$CONFIG_FILE" ] && exit 0
-DOMAIN="${RYRA_DOMAIN:-localhost}"
+DOMAIN="${DOMAIN:-localhost}"
 if [ "$DOMAIN" = "localhost" ]; then
   COOKIE_DOMAIN="127.0.0.1"
 elif echo "$DOMAIN" | grep -q '\..*\.'; then
@@ -15,8 +15,8 @@ fi
 # Prefer the URL ryra resolved at install time (--url/--tailscale/Caddy
 # auto). Falls back to reconstruction only when service.external_url
 # wasn't set in the template context — e.g. localhost-only deployments.
-if [ -n "${RYRA_AUTHELIA_URL:-}" ]; then
-  AUTHELIA_URL="$RYRA_AUTHELIA_URL"
+if [ -n "${AUTH_URL:-}" ]; then
+  AUTHELIA_URL="$AUTH_URL"
 elif [ "$DOMAIN" = "localhost" ]; then
   AUTHELIA_URL="https://$COOKIE_DOMAIN"
 elif systemctl --user is-active caddy.service >/dev/null 2>&1; then

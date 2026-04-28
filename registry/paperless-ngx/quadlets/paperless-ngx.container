@@ -10,15 +10,15 @@ After=paperless-ngx-redis.service
 ContainerName=paperless-ngx
 Image=ghcr.io/paperless-ngx/paperless-ngx:2.20.14
 Network=paperless-ngx.network
-PublishPort=${RYRA_PORT_HTTP}:8000
+PublishPort=${PORT_HTTP}:8000
 Volume=paperless-ngx-data.volume:/usr/src/paperless/data:U
 Volume=paperless-ngx-media.volume:/usr/src/paperless/media:U
-EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+EnvironmentFile=%h/services/paperless-ngx/.env
 Pull=missing
 HealthCmd=curl -sf http://localhost:8000/ || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/paperless-ngx/.env
+EnvironmentFile=%h/services/paperless-ngx/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

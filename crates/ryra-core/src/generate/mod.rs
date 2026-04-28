@@ -23,7 +23,7 @@ pub struct GenerateEnvParams<'a> {
     /// Primary host port (for `service.url` / `service.port` templating).
     pub host_port: Option<u16>,
     /// Per-port resolved host ports, keyed by port name (e.g. "http", "smtp").
-    /// Used to emit `RYRA_PORT_*` lines in the .env file — each entry here
+    /// Used to emit `PORT_*` lines in the .env file — each entry here
     /// corresponds to one `[[ports]]` definition in service.toml.
     pub resolved_ports: &'a [(String, u16)],
     pub env_overrides: &'a BTreeMap<String, String>,
@@ -112,13 +112,13 @@ fn build_env_file(
     }
 
     // Expose service home path so scripts can reference it
-    lines.push(format!("RYRA_SERVICE_HOME={}", home_dir.display()));
+    lines.push(format!("SERVICE_HOME={}", home_dir.display()));
 
-    // Expose each [[ports]] entry as RYRA_PORT_<NAME> with its resolved
+    // Expose each [[ports]] entry as PORT_<NAME> with its resolved
     // host port. Caller passes the per-port mapping computed in
     // `add_service` so multi-port services get distinct values.
     for (name, port) in resolved_ports {
-        let var_name = format!("RYRA_PORT_{}", name.to_uppercase());
+        let var_name = format!("PORT_{}", name.to_uppercase());
         lines.push(format!("{var_name}={port}"));
     }
 

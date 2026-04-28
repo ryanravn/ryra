@@ -14,10 +14,10 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=5s
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/zammad/.env
+EnvironmentFile=%h/services/zammad/.env
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/zammad/.env
+EnvironmentFile=%h/services/zammad/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

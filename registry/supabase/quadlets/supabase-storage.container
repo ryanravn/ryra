@@ -11,14 +11,14 @@ Image=docker.io/supabase/storage-api:v1.48.26
 Network=supabase.network:alias=storage
 Environment=PORT=5000
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 HealthCmd=wget --no-verbose --tries=1 --spider http://storage:5000/status
 HealthInterval=5s
 HealthTimeout=5s
 HealthRetries=3
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

@@ -5,7 +5,7 @@
 ## time environment or secrets change.
 set -euo pipefail
 
-SERVICE_HOME="${RYRA_SERVICE_HOME:-$HOME/.local/share/ryra/synapse}"
+SERVICE_HOME="${SERVICE_HOME:-$HOME/services/synapse}"
 CONFIGS="$SERVICE_HOME/configs"
 DATA="$SERVICE_HOME/data"
 

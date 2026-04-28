@@ -7,22 +7,22 @@ StartLimitBurst=3
 ContainerName=caddy
 Image=docker.io/library/caddy:2-alpine
 Network=caddy.network
-PublishPort=${RYRA_PORT_HTTP}:${RYRA_PORT_HTTP}
-PublishPort=${RYRA_PORT_HTTPS}:${RYRA_PORT_HTTPS}
+PublishPort=${PORT_HTTP}:${PORT_HTTP}
+PublishPort=${PORT_HTTPS}:${PORT_HTTPS}
 Volume=caddy-data.volume:/data:U
 Volume=caddy-config-state.volume:/config:U
-Volume=%h/.local/share/ryra/caddy/config:/etc/caddy:Z
+Volume=%h/services/caddy/config:/etc/caddy:Z
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/caddy/.env
+EnvironmentFile=%h/services/caddy/.env
 HealthCmd=caddy version || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/caddy/.env
+EnvironmentFile=%h/services/caddy/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPre=/bin/bash %h/.local/share/ryra/caddy/configs/scripts/seed-caddyfile.sh
-ExecStartPost=-/bin/bash %h/.local/share/ryra/caddy/configs/scripts/export-root-ca.sh
+ExecStartPre=/bin/bash %h/services/caddy/configs/scripts/seed-caddyfile.sh
+ExecStartPost=-/bin/bash %h/services/caddy/configs/scripts/export-root-ca.sh
 
 [Install]
 WantedBy=default.target

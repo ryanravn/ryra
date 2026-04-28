@@ -7,7 +7,7 @@ use crate::scenario::{Outcome, ScenarioResult};
 /// Root directory where test reports for the previous run live.
 pub fn reports_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME").context("$HOME is not set")?;
-    Ok(PathBuf::from(home).join(".local/share/ryra/test-reports"))
+    Ok(PathBuf::from(home).join("services/test-reports"))
 }
 
 /// Wipe the reports directory so only results from this run remain.

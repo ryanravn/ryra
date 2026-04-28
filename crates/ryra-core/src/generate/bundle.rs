@@ -14,7 +14,7 @@ pub struct ProcessBundleParams<'a> {
     pub podman_args: &'a [String],
     /// Extra ExecStartPre commands to inject into [Service] section.
     pub extra_exec_start_pre: &'a [String],
-    /// Port variable expansions (e.g., `RYRA_PORT_HTTP` → `8080`).
+    /// Port variable expansions (e.g., `PORT_HTTP` → `8080`).
     /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
     /// values because systemd doesn't expand EnvironmentFile vars in directives.
     pub port_vars: &'a [(String, String)],
@@ -230,6 +230,15 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             .ok_or_else(|| Error::Bundle(format!("invalid file path: {}", path.display())))?
             .to_string_lossy();
 
+        // Stamp every generated quadlet with a provenance marker so `ryra
+        // remove` and `ryra list` can tell registry-managed files from
+        // hand-written ones. The format intentionally matches the marker
+        // used in Caddyfile site blocks and /etc/hosts entries.
+        content = format!(
+            "# Service-Source: registry/{}\n{}",
+            params.service_name, content
+        );
+
         // Only inject networks/volumes into .container files
         if file_name.ends_with(".container") {
             content = inject_networks(&content, params.extra_networks);
@@ -247,7 +256,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
                     );
                 }
             }
-            // Expand ${RYRA_PORT_*} in PublishPort lines — systemd doesn't
+            // Expand ${PORT_*} in PublishPort lines — systemd doesn't
             // expand EnvironmentFile vars in quadlet directives.
             for (var, val) in params.port_vars {
                 content = content.replace(&format!("${{{var}}}"), val);
@@ -510,7 +519,7 @@ mod tests {
 
         std::fs::write(
             quadlets_dir.join("app.container"),
-            "[Container]\nImage=nginx:latest\nVolume=%h/.local/share/ryra/myservice/data:/data\n\n[Service]\nRestart=always\n",
+            "[Container]\nImage=nginx:latest\nVolume=%h/services/myservice/data:/data\n\n[Service]\nRestart=always\n",
         )
         .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
@@ -548,7 +557,7 @@ mod tests {
         assert!(
             container_file
                 .content
-                .contains("%h/.local/share/ryra/myservice/data:/data")
+                .contains("%h/services/myservice/data:/data")
         );
         // Check network injection happened
         assert!(container_file.content.contains("Network=caddy.network"));
@@ -601,7 +610,7 @@ mod tests {
         std::fs::write(sub_dir.join("nested.conf"), "no placeholders\n")
             .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
-        let service_home = Path::new("/home/user/.local/share/ryra/svc");
+        let service_home = Path::new("/home/user/services/svc");
 
         let files = process_configs(&service_dir, service_home)
             .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
@@ -614,7 +623,7 @@ mod tests {
             .unwrap_or_else(|| unreachable!("main.conf must exist"));
         assert_eq!(
             main_conf.path,
-            PathBuf::from("/home/user/.local/share/ryra/svc/configs/main.conf")
+            PathBuf::from("/home/user/services/svc/configs/main.conf")
         );
         assert!(main_conf.content.contains("/some/path"));
 
@@ -624,7 +633,7 @@ mod tests {
             .unwrap_or_else(|| unreachable!("nested.conf must exist"));
         assert_eq!(
             nested_conf.path,
-            PathBuf::from("/home/user/.local/share/ryra/svc/configs/subdir/nested.conf")
+            PathBuf::from("/home/user/services/svc/configs/subdir/nested.conf")
         );
         assert_eq!(nested_conf.content, "no placeholders\n");
     }
@@ -635,7 +644,7 @@ mod tests {
         let files = vec![
             GeneratedFile {
                 path: PathBuf::from("/q/immich.container"),
-                content: "Volume=%h/.local/share/ryra/immich/upload:/data:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
+                content: "Volume=%h/services/immich/upload:/data:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
             },
             GeneratedFile {
                 path: PathBuf::from("/q/immich.network"),
@@ -646,7 +655,7 @@ mod tests {
         assert_eq!(
             dirs,
             vec![PathBuf::from(format!(
-                "{home}/.local/share/ryra/immich/upload"
+                "{home}/services/immich/upload"
             ))]
         );
     }
@@ -680,7 +689,7 @@ mod tests {
         std::fs::create_dir_all(&service_dir)
             .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
 
-        let files = process_configs(&service_dir, Path::new("/home/user/.local/share/ryra/svc"))
+        let files = process_configs(&service_dir, Path::new("/home/user/services/svc"))
             .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
 
         assert!(files.is_empty());

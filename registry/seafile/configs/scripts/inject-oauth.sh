@@ -2,7 +2,7 @@
 set -euo pipefail
 [ -z "${OAUTH_CLIENT_ID:-}" ] && exit 0
 
-CONF=$RYRA_SERVICE_HOME/shared/seafile/conf
+CONF=$SERVICE_HOME/shared/seafile/conf
 
 echo "Waiting for $CONF/seahub_settings.py to appear (Seafile creates it on first boot)..."
 for i in $(seq 1 60); do

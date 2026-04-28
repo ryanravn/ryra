@@ -8,15 +8,15 @@ After=network-online.target
 ContainerName=vikunja
 Image=docker.io/vikunja/vikunja:2.3.0
 Network=vikunja.network
-PublishPort=${RYRA_PORT_HTTP}:3456
+PublishPort=${PORT_HTTP}:3456
 Volume=vikunja-db.volume:/db:U
 Volume=vikunja-files.volume:/app/vikunja/files:U
-EnvironmentFile=%h/.local/share/ryra/vikunja/.env
+EnvironmentFile=%h/services/vikunja/.env
 Pull=missing
 HealthCmd=curl -sf http://localhost:3456/api/v1/info || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/vikunja/.env
+EnvironmentFile=%h/services/vikunja/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

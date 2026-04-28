@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-CONFIG_DIR="$RYRA_SERVICE_HOME/config"
+CONFIG_DIR="$SERVICE_HOME/config"
 RSA_KEY="$CONFIG_DIR/oidc.jwk.rsa.pem"
 [ -f "$RSA_KEY" ] && exit 0
 podman run --rm -v "$CONFIG_DIR:/out:Z" docker.io/authelia/authelia:4.39 \

@@ -14,7 +14,7 @@ service = "zammad"
 [[tests.steps]]
 action = "http"
 name = "zammad-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "zammad"
 poll = { interval = 5, attempts = 60 }
 timeout = 300
@@ -31,7 +31,7 @@ timeout = 5
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/zammad"
+run = "test -d $HOME/services/zammad"
 [[tests.steps]]
 action = "shell"
 name = "autowizard-created-admin"
@@ -84,7 +84,7 @@ timeout = 300
 [[tests.steps]]
 action = "http"
 name = "zammad-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "zammad"
 poll = { interval = 3, attempts = 60 }
 timeout = 300

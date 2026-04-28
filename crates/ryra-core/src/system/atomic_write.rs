@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn tightens_permissions_on_overwrite() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("ryra.toml");
+        let path = dir.path().join("preferences.toml");
         atomic_write(&path, b"v1", 0o644)?;
         atomic_write(&path, b"v2", 0o600)?;
 

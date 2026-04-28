@@ -9,24 +9,24 @@ After=nextcloud-postgres.service nextcloud-redis.service
 Image=docker.io/library/nextcloud:31-apache
 ContainerName=nextcloud
 Network=nextcloud.network
-PublishPort=${RYRA_PORT_HTTP}:80
+PublishPort=${PORT_HTTP}:80
 Volume=nextcloud-app.volume:/var/www/html:U
-Volume=%h/.local/share/ryra/nextcloud/data:/var/www/html/data:Z
+Volume=%h/services/nextcloud/data:/var/www/html/data:Z
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/nextcloud/.env
+EnvironmentFile=%h/services/nextcloud/.env
 HealthCmd=curl -sf http://localhost/status.php || exit 1
 HealthStartPeriod=120s
 HealthInterval=30s
 HealthRetries=5
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/nextcloud/.env
+EnvironmentFile=%h/services/nextcloud/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=900
-ExecStartPost=/bin/bash %h/.local/share/ryra/nextcloud/configs/scripts/configure-background-jobs.sh
-ExecStartPost=/bin/bash %h/.local/share/ryra/nextcloud/configs/scripts/configure-smtp.sh
-ExecStartPost=/bin/bash %h/.local/share/ryra/nextcloud/configs/scripts/configure-oidc.sh
+ExecStartPost=/bin/bash %h/services/nextcloud/configs/scripts/configure-background-jobs.sh
+ExecStartPost=/bin/bash %h/services/nextcloud/configs/scripts/configure-smtp.sh
+ExecStartPost=/bin/bash %h/services/nextcloud/configs/scripts/configure-oidc.sh
 
 [Install]
 WantedBy=default.target

@@ -7,17 +7,17 @@ StartLimitBurst=3
 ContainerName=prometheus
 Image=docker.io/prom/prometheus:v2.55.1
 Network=prometheus.network
-PublishPort=${RYRA_PORT_HTTP}:9090
-Volume=%h/.local/share/ryra/prometheus/configs/prometheus.yml:/etc/prometheus/prometheus.yml:Z,ro
-Volume=%h/.local/share/ryra/prometheus/targets:/etc/prometheus/targets:Z,ro
+PublishPort=${PORT_HTTP}:9090
+Volume=%h/services/prometheus/configs/prometheus.yml:/etc/prometheus/prometheus.yml:Z,ro
+Volume=%h/services/prometheus/targets:/etc/prometheus/targets:Z,ro
 Volume=prometheus-data.volume:/prometheus:U
 Exec=--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles --web.enable-lifecycle
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/prometheus/.env
+EnvironmentFile=%h/services/prometheus/.env
 HealthCmd=wget -q --spider http://localhost:9090/-/ready || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/prometheus/.env
+EnvironmentFile=%h/services/prometheus/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

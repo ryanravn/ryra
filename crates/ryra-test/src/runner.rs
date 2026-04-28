@@ -98,7 +98,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
     if !failed {
         for service in services {
             let port_cmd = format!(
-                "grep RYRA_PORT $HOME/.local/share/ryra/{service}/.env 2>/dev/null | cut -d= -f2"
+                "grep PORT $HOME/services/{service}/.env 2>/dev/null | cut -d= -f2"
             );
             if let Ok(out) = vm.exec(&port_cmd).await {
                 for port in out.stdout.trim().lines() {
@@ -307,7 +307,7 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
         DiscoveredTest::Simple { setup, .. } => {
             if setup.services.len() == 1 {
                 Ok(load_env_shell(&format!(
-                    "$HOME/.local/share/ryra/{}/.env",
+                    "$HOME/services/{}/.env",
                     setup.services[0]
                 )))
             } else if setup.services.len() > 1 {
@@ -320,7 +320,7 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
                         "while IFS='=' read -r key val; do \
                          case \"$key\" in \"\"|\\#*) continue ;; esac; \
                          export {prefix}__$key=\"$val\"; \
-                         done < $HOME/.local/share/ryra/{service}/.env"
+                         done < $HOME/services/{service}/.env"
                     ));
                 }
                 Ok(lines.join(" && "))
@@ -395,7 +395,7 @@ async fn run_browser_step(
     let test_name_esc = shell_escape(test_name);
 
     // Shell command:
-    // 1. Source all service .env files so port vars (RYRA_PORT_HTTP etc.) are
+    // 1. Source all service .env files so port vars (PORT_HTTP etc.) are
     //    available to the spec. Static env from the toml step overrides these.
     // 2. Pre-create the canonical report directory and tell playwright to
     //    emit the HTML report directly there (no intermediate copy step).
@@ -409,14 +409,14 @@ async fn run_browser_step(
     // Per-file safe .env load — same rationale as load_env_shell(): raw
     // `.` would choke on values with whitespace (supabase `DB_AFTER_*`, etc.)
     let env_loop = format!(
-        "for __f in $HOME/.local/share/ryra/*/.env; do \
+        "for __f in $HOME/services/*/.env; do \
            [ -f \"$__f\" ] && {loader}; \
          done",
         loader = load_env_shell("\"$__f\"")
     );
     let cmd = format!(
         "{env_loop} && \
-         DEST=\"$HOME/.local/share/ryra/test-reports/{test_name_esc}/playwright\" && \
+         DEST=\"$HOME/services/test-reports/{test_name_esc}/playwright\" && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
          if [ ! -d node_modules ]; then \
@@ -448,11 +448,11 @@ async fn run_browser_step(
     // most valuable ones to inspect.
     if let Ok(home) = std::env::var("HOME") {
         let local_dir = std::path::PathBuf::from(&home)
-            .join(".local/share/ryra/test-reports")
+            .join("services/test-reports")
             .join(test_name)
             .join("playwright");
         let remote_dir =
-            format!("/home/ryra/.local/share/ryra/test-reports/{test_name}/playwright");
+            format!("/home/ryra/services/test-reports/{test_name}/playwright");
         if let Err(e) = vm.fetch_dir(&remote_dir, &local_dir).await {
             eprintln!("warning: failed to fetch playwright report: {e:#}");
         }
@@ -605,19 +605,19 @@ pub async fn run_lifecycle_test(
             } => {
                 let step_name = http_name.as_deref().unwrap_or(url);
                 println!("{p}  http: {step_name}...");
-                // Source service .env files for variable expansion ($RYRA_PORT_HTTP etc.),
+                // Source service .env files for variable expansion ($PORT_HTTP etc.),
                 // follow redirects (-L), skip TLS verification (-k) for self-signed certs.
                 // URL uses double quotes so shell variables expand.
                 let url_esc = url.replace('"', r#"\""#);
                 let env_source = match service {
-                    Some(svc) => load_env_shell(&format!("$HOME/.local/share/ryra/{svc}/.env")),
+                    Some(svc) => load_env_shell(&format!("$HOME/services/{svc}/.env")),
                     None => format!(
-                        "for __f in $HOME/.local/share/ryra/*/.env; do [ -f \"$__f\" ] && {}; done",
+                        "for __f in $HOME/services/*/.env; do [ -f \"$__f\" ] && {}; done",
                         load_env_shell("\"$__f\"")
                     ),
                 };
                 // Assemble curl. For non-GET methods we prepend a heredoc so
-                // the body flows verbatim into a $RYRA_BODY variable — this
+                // the body flows verbatim into a $BODY variable — this
                 // dodges all the shell-quoting edge cases of embedding
                 // arbitrary JSON/form bodies directly in the command string.
                 let verb = method.as_curl_arg();
@@ -635,11 +635,11 @@ pub async fn run_lifecycle_test(
                     .collect::<String>();
                 let curl = match body {
                     Some(b) => format!(
-                        "RYRA_BODY=$(cat <<'RYRA_HTTP_BODY_EOF'\n{b}\nRYRA_HTTP_BODY_EOF\n) && \
+                        "BODY=$(cat <<'HTTP_BODY_EOF'\n{b}\nHTTP_BODY_EOF\n) && \
                          HTTP_CODE=$(curl -skL -o /dev/null -w '%{{http_code}}' \
                             -X {verb} \
                             -H \"Content-Type: {ct_esc}\"{header_args} \
-                            --data-raw \"$RYRA_BODY\" \
+                            --data-raw \"$BODY\" \
                             \"{url_esc}\")"
                     ),
                     None => format!(
@@ -705,15 +705,15 @@ pub async fn run_lifecycle_test(
                 let mailbox_esc = shell_escape(mailbox);
                 let contains_check = match contains {
                     Some(c) => {
-                        format!(" && echo \"$RYRA_BODY\" | grep -q -- '{}'", shell_escape(c),)
+                        format!(" && echo \"$BODY\" | grep -q -- '{}'", shell_escape(c),)
                     }
                     None => String::new(),
                 };
                 let cmd = format!(
-                    "INBUCKET_PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/inbucket/.env 2>/dev/null | cut -d= -f2); \
-                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/.local/share/ryra/inbucket/.env'; exit 2; }}; \
-                     RYRA_BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
-                     [ -n \"$RYRA_BODY\" ] && [ \"$RYRA_BODY\" != '[]' ]{contains_check}"
+                    "INBUCKET_PORT=$(grep PORT_HTTP $HOME/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
+                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/services/inbucket/.env'; exit 2; }}; \
+                     BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
+                     [ -n \"$BODY\" ] && [ \"$BODY\" != '[]' ]{contains_check}"
                 );
                 let event = run_step_with_poll(
                     vm,
@@ -923,7 +923,7 @@ async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str])
         }
 
         // Env file
-        let cmd = format!("cat $HOME/.local/share/ryra/{svc}/.env 2>&1 | grep RYRA_PORT || true");
+        let cmd = format!("cat $HOME/services/{svc}/.env 2>&1 | grep PORT || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {

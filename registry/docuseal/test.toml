@@ -14,14 +14,14 @@ service = "docuseal"
 [[tests.steps]]
 action = "http"
 name = "docuseal-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "docuseal"
 poll = { interval = 2, attempts = 45 }
 timeout = 120
 [[tests.steps]]
 action = "shell"
 name = "sqlite-db-initialised"
-run = "test -s $HOME/.local/share/ryra/docuseal/data/docuseal/db.sqlite3"
+run = "test -s $HOME/services/docuseal/data/docuseal/db.sqlite3"
 timeout = 30
 
 # SMTP: `rails runner` triggers a mail through the app's configured
@@ -46,7 +46,7 @@ service = "docuseal"
 [[tests.steps]]
 action = "http"
 name = "docuseal-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP"
+url = "http://127.0.0.1:$PORT_HTTP"
 service = "docuseal"
 poll = { interval = 2, attempts = 45 }
 timeout = 120

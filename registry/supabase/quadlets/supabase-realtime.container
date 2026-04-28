@@ -12,14 +12,14 @@ HostName=realtime-dev.supabase-realtime
 Network=supabase.network:alias=realtime-dev.supabase-realtime
 Environment=PORT=4000
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 HealthCmd=curl -sSfL --head -o /dev/null http://localhost:4000/api/health
 HealthInterval=10s
 HealthTimeout=5s
 HealthRetries=5
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/supabase/.env
+EnvironmentFile=%h/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

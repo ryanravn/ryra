@@ -3,7 +3,7 @@ set -euo pipefail
 [ -z "${OIDC_CLIENT_ID:-}" ] && exit 0
 echo "Waiting for Forgejo API..."
 for i in $(seq 1 120); do
-  curl -sf http://127.0.0.1:$RYRA_PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break
+  curl -sf http://127.0.0.1:$PORT_HTTP/api/v1/settings/api >/dev/null 2>&1 && break
   sleep 5
 done
 
@@ -17,7 +17,7 @@ done
 #    trusts it during OIDC discovery.
 AUTH_HOST=$(echo "$OIDC_DISCOVERY_URL" | sed 's|https\?://||; s|[:/].*||')
 CADDY_IP=$(podman inspect caddy --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' 2>/dev/null | awk '{print $1}')
-CADDY_CA="$(dirname "$RYRA_SERVICE_HOME")/caddy-root-ca.crt"
+CADDY_CA="$(dirname "$SERVICE_HOME")/caddy-root-ca.crt"
 
 if [ -n "$CADDY_IP" ] && [ -n "$AUTH_HOST" ]; then
   podman exec forgejo sh -c "echo '$CADDY_IP $AUTH_HOST' >> /etc/hosts" 2>/dev/null || true

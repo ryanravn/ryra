@@ -12,11 +12,11 @@ Network=twenty.network
 Exec=yarn worker:prod
 Volume=twenty-data.volume:/app/docker-data:Z
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/twenty/.env
+EnvironmentFile=%h/services/twenty/.env
 Environment=DISABLE_DB_MIGRATIONS=true
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/twenty/.env
+EnvironmentFile=%h/services/twenty/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

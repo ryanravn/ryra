@@ -91,7 +91,7 @@ pub async fn run(
 
     // Tailscale admin API token acquisition: when `--tailscale` is set
     // and we don't already have one cached from a previous install,
-    // prompt the user to paste one (or read RYRA_TS_API_KEY in
+    // prompt the user to paste one (or read TAILSCALE_API_KEY in
     // non-interactive runs). Saved to `config.tailscale.admin_api_key`.
     // Done up-front so a missing token fails fast, before any image
     // pulls or service planning. The token is needed at install time
@@ -435,7 +435,7 @@ pub async fn run(
             // Warn but don't bail; let the install proceed.
             eprintln!(
                 "\nNote: --acme is ignored — caddy is already installed.\n  \
-                 Edit ~/.local/share/ryra/caddy/config/tls.caddy to switch TLS mode.\n"
+                 Edit ~/services/caddy/config/tls.caddy to switch TLS mode.\n"
             );
         }
 
@@ -835,7 +835,7 @@ pub async fn run(
             if let Some(service_url) = result.url.as_deref()
                 && service_url_is_caddy_local(service_url)
             {
-                setup_host_access(&[service_url]);
+                setup_host_access(service, &[service_url]);
             }
 
             let home_dir = ryra_core::service_home(service)?;
@@ -898,7 +898,7 @@ pub async fn run(
                 let snippet_path = snippet_pathbuf
                     .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "~/.local/share/ryra/caddy/config/tls.caddy".to_string());
+                    .unwrap_or_else(|| "~/services/caddy/config/tls.caddy".to_string());
                 // Read tls.caddy from disk and report what's actually in
                 // effect — not what `--acme` asked for. This matters when a
                 // pre-existing snippet was preserved across re-installs
@@ -1052,7 +1052,7 @@ fn collect_non_interactive<'a>(
 /// The rootless work covers Chromium-family browsers (via the user's
 /// `~/.pki/nssdb`) and every Firefox profile with a `cert9.db`. That's the
 /// mkcert pattern and enough for ~95% of browser traffic on Linux.
-fn setup_host_access(domains: &[&str]) {
+fn setup_host_access(service: &str, domains: &[&str]) {
     use std::process::Command;
 
     // --- CA source: whatever Caddy's first start wrote out ---
@@ -1149,7 +1149,13 @@ fn setup_host_access(domains: &[&str]) {
         .collect();
 
     if !missing_hosts.is_empty() {
-        let line = format!("127.0.0.1 {}", missing_hosts.join(" "));
+        // Append a sentinel comment so `ryra remove` can later identify
+        // and remove only entries it added — handwritten entries (no
+        // marker) are left alone.
+        let line = format!(
+            "127.0.0.1 {}  # Service-Source: registry/{service}",
+            missing_hosts.join(" ")
+        );
         // First, try non-interactive sudo — works on CI/test VMs with
         // passwordless sudo and is silent otherwise. If that fails AND
         // stderr is a TTY, escalate to interactive sudo so the user can
@@ -1267,9 +1273,9 @@ fn add_ca_to_nssdb(nss_arg: &str, ca: &std::path::Path, context: &str) {
 }
 
 /// Ensure `config.tailscale.admin_api_key` is set, prompting (interactive)
-/// or reading from `RYRA_TS_API_KEY` (non-interactive) if not.
+/// or reading from `TAILSCALE_API_KEY` (non-interactive) if not.
 ///
-/// Persists to ryra.toml so the user pastes their token once and every
+/// Persists to preferences.toml so the user pastes their token once and every
 /// subsequent `--tailscale` install + remove reuses it for service
 /// definition + ACL setup via the admin API.
 async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
@@ -1282,9 +1288,9 @@ async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
     let admin_api_key = if interactive {
         prompt_tailscale_admin_token()?
     } else {
-        std::env::var("RYRA_TS_API_KEY").map_err(|_| {
+        std::env::var("TAILSCALE_API_KEY").map_err(|_| {
             anyhow::anyhow!(
-                "--tailscale needs a Tailscale admin API token. Set RYRA_TS_API_KEY \
+                "--tailscale needs a Tailscale admin API token. Set TAILSCALE_API_KEY \
                  (tskey-api-…) or run interactively to be prompted.\n\
                  Generate one at https://login.tailscale.com/admin/settings/keys \
                  (use the \"API access token\" type, not an auth key)"
@@ -1637,7 +1643,7 @@ async fn prompt_exposure_for(
             } else {
                 eprintln!(
                     "  Note: caddy is already installed — using its existing TLS mode.\n  \
-                     Edit ~/.local/share/ryra/caddy/config/tls.caddy to switch to Let's Encrypt."
+                     Edit ~/services/caddy/config/tls.caddy to switch to Let's Encrypt."
                 );
             }
             Ok(ryra_core::Exposure::Public { url })
@@ -1661,7 +1667,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
 
     if config.smtp.is_some() {
         // Already configured — whether by a previous --smtp, prompt, or a
-        // hand-edited ryra.toml. Don't clobber it.
+        // hand-edited preferences.toml. Don't clobber it.
         return Ok(());
     }
 
@@ -1961,7 +1967,7 @@ fn warn_untrusted_service(
 }
 
 /// Try to configure auth from an already-installed authelia instance.
-/// The .env is user-readable under ~/.local/share/ryra/authelia/.env.
+/// The .env is user-readable under ~/services/authelia/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
     let env_path = ryra_core::service_home(WellKnownService::Authelia.as_str())?.join(".env");
     let env_content = match std::fs::read_to_string(&env_path) {

@@ -9,11 +9,11 @@ ContainerName=twenty-postgres
 Network=twenty.network:alias=db
 Volume=twenty-db-data.volume:/var/lib/postgresql/data:U
 Pull=missing
-EnvironmentFile=%h/.local/share/ryra/twenty/.env
+EnvironmentFile=%h/services/twenty/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-twenty} || exit 1
 
 [Service]
-EnvironmentFile=%h/.local/share/ryra/twenty/.env
+EnvironmentFile=%h/services/twenty/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

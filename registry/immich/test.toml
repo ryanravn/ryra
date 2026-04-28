@@ -12,14 +12,14 @@ service = "immich"
 [[tests.steps]]
 action = "http"
 name = "immich-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
+url = "http://127.0.0.1:$PORT_HTTP/api/server/ping"
 service = "immich"
 poll = { interval = 5, attempts = 60 }
 timeout = 360
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/.local/share/ryra/immich"
+run = "test -d $HOME/services/immich"
 
 # Full SSO flow via caddy + authelia. Heavy test — immich build takes a
 # while so give it 900s.
@@ -53,7 +53,7 @@ service = "immich"
 [[tests.steps]]
 action = "http"
 name = "immich-http-ready"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/api/server/ping"
+url = "http://127.0.0.1:$PORT_HTTP/api/server/ping"
 service = "immich"
 poll = { interval = 5, attempts = 60 }
 timeout = 360
@@ -68,7 +68,7 @@ timeout = 120
 action = "shell"
 name = "create-admin"
 run = """
-PORT=$(grep RYRA_PORT_HTTP $HOME/.local/share/ryra/immich/.env | cut -d= -f2)
+PORT=$(grep PORT_HTTP $HOME/services/immich/.env | cut -d= -f2)
 curl -sf -X POST "http://127.0.0.1:$PORT/api/auth/admin-sign-up" \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@example.com","password":"testpassword123","name":"Admin"}' \

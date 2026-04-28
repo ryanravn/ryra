@@ -20,7 +20,7 @@ service = "nextcloud"
 [[tests.steps]]
 action = "http"
 name = "nextcloud-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/status.php"
+url = "http://127.0.0.1:$PORT_HTTP/status.php"
 service = "nextcloud"
 poll = { interval = 3, attempts = 80 }
 timeout = 360
@@ -38,7 +38,7 @@ timeout = 420
 [[tests.steps]]
 action = "shell"
 name = "data-dir-accessible"
-run = "test -d $HOME/.local/share/ryra/nextcloud/data"
+run = "test -d $HOME/services/nextcloud/data"
 
 # SMTP test — create a user with an email address, then fire `occ mail:test`
 # at them. Nextcloud routes that through the configured SMTP (inbucket)
@@ -62,7 +62,7 @@ service = "nextcloud"
 [[tests.steps]]
 action = "http"
 name = "nextcloud-responds"
-url = "http://127.0.0.1:$RYRA_PORT_HTTP/status.php"
+url = "http://127.0.0.1:$PORT_HTTP/status.php"
 service = "nextcloud"
 poll = { interval = 3, attempts = 80 }
 timeout = 360
