@@ -478,15 +478,15 @@ mod tests {
     #[test]
     fn remove_route_with_nested_braces() {
         let caddyfile = concat!(
-            "# Service-Source: registry/grafana\n",
-            "grafana.example.com {\n",
+            "# Service-Source: registry/myapp\n",
+            "myapp.example.com {\n",
             "    forward_auth host.containers.internal:9091 {\n",
             "        uri /api/authz/forward-auth\n",
             "    }\n",
             "    reverse_proxy host.containers.internal:3000\n",
             "}\n",
         );
-        let result = remove_route(caddyfile, "grafana");
+        let result = remove_route(caddyfile, "myapp");
         assert_eq!(result, "");
     }
 
@@ -494,7 +494,7 @@ mod tests {
     fn parse_domains_basic() {
         let caddyfile = concat!(
             "# Service-Source: registry/whoami\nwhoami.example.com {\n    reverse_proxy host.containers.internal:8080\n}\n\n",
-            "# Service-Source: registry/grafana\ngrafana.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n",
+            "# Service-Source: registry/myapp\nmyapp.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n",
         );
         let domains = parse_domains(caddyfile);
         assert_eq!(domains.len(), 2);
@@ -504,7 +504,7 @@ mod tests {
         );
         assert_eq!(
             domains[1],
-            ("grafana".to_string(), "grafana.example.com".to_string())
+            ("myapp".to_string(), "myapp.example.com".to_string())
         );
     }
 

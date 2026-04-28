@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::Capability;
 use crate::registry::service_def::AuthKind;
 
 /// Top-level preferences.toml configuration.
@@ -170,6 +171,11 @@ pub struct InstalledService {
     pub auth_kind: Option<AuthKind>,
     /// How this service is reachable.
     pub exposure: crate::Exposure,
+    /// Capabilities this service provides — the persisted snapshot of
+    /// `service.toml`'s `[capabilities] provides` taken at install time.
+    /// Empty for services whose service.toml didn't declare any (i.e.
+    /// most application services, all of which are pure consumers).
+    pub provides: Vec<Capability>,
     /// Whether the service was fully installed. Always `true` when
     /// reconstructed from the quadlet scan (a marker'd `.container`
     /// only exists for completed installs).

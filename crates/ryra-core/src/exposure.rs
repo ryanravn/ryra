@@ -28,8 +28,7 @@ pub enum Exposure {
     /// No public-facing URL. Service runs on `http://127.0.0.1:<port>`
     /// only — reachable from the host but nothing routes external
     /// traffic to it. Used for services that don't need a domain
-    /// (e.g. inbucket, prometheus when the user only hits them via
-    /// localhost).
+    /// (e.g. inbucket when the user only hits it via localhost).
     Loopback,
     /// LAN-only via Caddy at a `*.internal` hostname. Self-signed
     /// certs from Caddy's internal CA — useful on a single machine

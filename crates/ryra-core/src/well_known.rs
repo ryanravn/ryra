@@ -3,6 +3,15 @@
 //!
 //! Using an enum instead of string constants makes comparisons type-safe
 //! and ensures the compiler catches typos or missing match arms.
+//!
+//! Capability data is no longer here — every provider declares
+//! `[capabilities] provides = [...]` in its own `service.toml`, and
+//! installed services carry the persisted snapshot on
+//! [`crate::config::schema::InstalledService::provides`]. This enum
+//! survives only as a typed handle to the bundled providers' *names*,
+//! used by code paths that emit network names (`<svc>.network`),
+//! seed provider-specific config files (caddy's `tls.caddy`), or read
+//! their on-disk artifacts (authelia's `.env`).
 
 use crate::config::schema::Config;
 
@@ -15,7 +24,6 @@ pub enum WellKnownService {
     Caddy,
     Authelia,
     Inbucket,
-    Prometheus,
 }
 
 impl WellKnownService {
@@ -24,7 +32,6 @@ impl WellKnownService {
             Self::Caddy => "caddy",
             Self::Authelia => "authelia",
             Self::Inbucket => "inbucket",
-            Self::Prometheus => "prometheus",
         }
     }
 
@@ -34,7 +41,6 @@ impl WellKnownService {
             "caddy" => Some(Self::Caddy),
             "authelia" => Some(Self::Authelia),
             "inbucket" => Some(Self::Inbucket),
-            "prometheus" => Some(Self::Prometheus),
             _ => None,
         }
     }

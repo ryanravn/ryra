@@ -17,3 +17,6 @@ host_port = 8443
 [integrations]
 auth = []
 smtp = false
+
+[capabilities]
+provides = ["reverse-proxy"]

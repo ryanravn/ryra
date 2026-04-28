@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::Capability;
+
 /// A service definition from a registry's `services/<name>/service.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceDef {
@@ -23,6 +25,19 @@ pub struct ServiceDef {
     pub mappings: Mappings,
     #[serde(default)]
     pub integrations: IntegrationFlags,
+    /// Roles this service can play for *other* services. The dual of
+    /// [`IntegrationFlags`] (which describes what this service consumes).
+    /// Drives capability-based dispatch — see [`crate::capability`].
+    #[serde(default)]
+    pub capabilities: Capabilities,
+}
+
+/// Capability declarations on a service.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Capabilities {
+    /// Capabilities this service offers to other services.
+    #[serde(default)]
+    pub provides: Vec<Capability>,
 }
 
 /// System resource requirements for a service.
@@ -296,11 +311,6 @@ pub struct IntegrationFlags {
     pub oidc_callbacks: Vec<String>,
     #[serde(default = "default_true")]
     pub smtp: bool,
-    /// `true` means this service exposes Prometheus-format metrics at
-    /// `/metrics` on its primary (first `[[ports]]`) port. Picked up by
-    /// the prometheus service (if installed) via shared podman network.
-    #[serde(default)]
-    pub prometheus: bool,
 }
 
 impl Default for IntegrationFlags {
@@ -310,7 +320,6 @@ impl Default for IntegrationFlags {
             token_auth_method: TokenAuthMethod::default(),
             oidc_callbacks: vec![],
             smtp: true,
-            prometheus: false,
         }
     }
 }

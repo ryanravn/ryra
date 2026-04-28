@@ -20,3 +20,6 @@ container_port = 2500
 [integrations]
 auth = []
 smtp = false
+
+[capabilities]
+provides = ["smtp-relay"]

@@ -2,6 +2,7 @@
 //! that needs to know how a service was set up. Mirrors the data that used
 //! to live in `# Service-*` quadlet header comments.
 
+use crate::capability::Capability;
 use crate::error::{Error, Result};
 use crate::paths::metadata_path;
 use crate::registry::service_def::AuthKind;
@@ -20,6 +21,12 @@ pub struct Metadata {
     /// Auth kind: `oidc` if `--auth` was used, otherwise absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthKind>,
+    /// Capabilities the service provides — snapshotted from
+    /// `service.toml` at install time so [`crate::list_installed`] can
+    /// answer "is there an installed reverse proxy / OIDC provider /
+    /// SMTP relay / metrics scraper?" without re-reading the registry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provides: Vec<Capability>,
 }
 
 /// Load metadata.toml for an installed service. Returns `None` if the

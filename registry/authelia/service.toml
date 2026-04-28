@@ -78,6 +78,9 @@ value = "9091"
 auth = []
 smtp = true
 
+[capabilities]
+provides = ["oidc-provider", "forward-auth-provider"]
+
 [mappings.smtp]
 AUTHELIA_NOTIFIER_SMTP_ADDRESS = "{{smtp.security | authelia_scheme}}://{{smtp.host}}:{{smtp.port}}"
 AUTHELIA_NOTIFIER_SMTP_USERNAME = "{{smtp.username}}"

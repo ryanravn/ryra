@@ -1,6 +1,7 @@
 pub mod auth_bridge;
 pub mod authelia;
 pub mod caddy;
+pub mod capability;
 pub mod config;
 pub mod data;
 pub mod error;
@@ -9,7 +10,6 @@ pub mod generate;
 pub mod metadata;
 pub mod paths;
 pub mod plan;
-pub mod prometheus;
 pub mod registry;
 pub mod system;
 pub mod well_known;
@@ -22,6 +22,10 @@ use config::schema::InstalledService;
 use error::{Error, Result};
 use generate::GeneratedFile;
 
+pub use capability::{
+    Capability, any_installed_provider, find_installed_provider, installed_provides,
+    service_provides,
+};
 pub use exposure::{Exposure, is_public_url, is_tailscale_url};
 pub use metadata::{Metadata, load_metadata};
 pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root, service_home};
@@ -62,56 +66,53 @@ pub fn service_ref_from_installed(installed: &InstalledService) -> registry::res
 fn retroactive_network_joins(
     new_service: &str,
     quadlet_path: &std::path::Path,
-    repo_dir: Option<&std::path::Path>,
+    _repo_dir: Option<&std::path::Path>,
 ) -> Vec<Step> {
     let mut steps = Vec::new();
-    let is_caddy = WellKnownService::Caddy.matches(new_service);
-    let is_inbucket = WellKnownService::Inbucket.matches(new_service);
-    let is_prometheus = WellKnownService::Prometheus.matches(new_service);
-    if !is_caddy && !is_inbucket && !is_prometheus {
+    // Which join-relevant capability did the new service just become a
+    // provider of? `OidcProvider` doesn't trigger this — auth-aware
+    // services join its network at install time via the auth bridge,
+    // not retroactively.
+    let new_cap = if service_provides(new_service, Capability::ReverseProxy) {
+        Capability::ReverseProxy
+    } else if service_provides(new_service, Capability::SmtpRelay) {
+        Capability::SmtpRelay
+    } else {
         return steps;
-    }
+    };
 
     let installed = list_installed().unwrap_or_default();
     for svc in &installed {
-        if WellKnownService::Caddy.matches(&svc.name)
-            || WellKnownService::Inbucket.matches(&svc.name)
-            || WellKnownService::Prometheus.matches(&svc.name)
-        {
-            // Providers don't need to join themselves.
+        // Providers (of any capability) don't join themselves to other
+        // providers' networks via this path.
+        if !svc.provides.is_empty() {
             continue;
         }
-        let (network_name, should_join) = if is_caddy {
-            // caddy: services with a Caddy-routed URL want the proxy
-            // network. Tailscale-exposed services route via the host's
-            // tailscale serve, not Caddy, so they skip.
-            let wants_caddy = matches!(
-                svc.exposure,
-                Exposure::Internal { .. } | Exposure::Public { .. }
-            );
-            ("caddy".to_string(), wants_caddy)
-        } else if is_inbucket {
-            // inbucket: any already-installed service whose .env points
-            // SMTP at the "inbucket" hostname needs to reach it.
-            ("inbucket".to_string(), service_uses_inbucket(&svc.name))
-        } else {
-            // prometheus: services whose registry definition declares
-            // `[integrations].prometheus = true` join so prometheus can
-            // reach them via container DNS. Also write the scrape-target
-            // file for each one.
-            let svc_supports = repo_dir
-                .and_then(|rd| registry::find_service(rd, &svc.name).ok())
-                .map(|rs| rs.def.integrations.prometheus)
-                .unwrap_or(false);
-            if svc_supports
-                && let Some(rd) = repo_dir
-                && let Ok(rs) = registry::find_service(rd, &svc.name)
-                && let Ok(register_steps) =
-                    prometheus::register_scrape_target(&svc.name, &rs.def, true)
-            {
-                steps.extend(register_steps);
+        let (network_name, should_join) = match new_cap {
+            Capability::ReverseProxy => {
+                // Services with a routed URL want the proxy network.
+                // Tailscale-exposed services route via `tailscale serve`,
+                // not the reverse proxy, so they skip.
+                let wants_proxy = matches!(
+                    svc.exposure,
+                    Exposure::Internal { .. } | Exposure::Public { .. }
+                );
+                (new_service.to_string(), wants_proxy)
             }
-            ("prometheus".to_string(), svc_supports)
+            Capability::SmtpRelay => {
+                // Any already-installed service whose .env points SMTP at
+                // the relay's hostname needs to reach it.
+                (
+                    new_service.to_string(),
+                    service_uses_smtp_relay(&svc.name, new_service),
+                )
+            }
+            // Unreachable: `new_cap` was selected from the two cases
+            // above. Match exhaustively so a new join-relevant capability
+            // forces a compile error here.
+            Capability::OidcProvider | Capability::ForwardAuthProvider => {
+                continue;
+            }
         };
         if !should_join {
             continue;
@@ -168,11 +169,12 @@ fn retroactive_network_joins(
     steps
 }
 
-/// Heuristic: does this service's `.env` point SMTP at the inbucket container?
-/// Matches any line whose value is `inbucket` or `inbucket:<port>` — covers
-/// the common shape `SOMETHING_SMTP_HOST=inbucket` and variants like
-/// `FORGEJO__mailer__SMTP_ADDR=inbucket`.
-fn service_uses_inbucket(service_name: &str) -> bool {
+/// Heuristic: does this service's `.env` point SMTP at the given relay's
+/// container hostname? Matches any line whose value is `<relay>` or
+/// `<relay>:<port>` — covers the common shape
+/// `SOMETHING_SMTP_HOST=<relay>` and variants like
+/// `FORGEJO__mailer__SMTP_ADDR=<relay>`.
+fn service_uses_smtp_relay(service_name: &str, relay_host: &str) -> bool {
     let env_path = match service_home(service_name) {
         Ok(h) => h.join(".env"),
         Err(_) => return false,
@@ -181,12 +183,13 @@ fn service_uses_inbucket(service_name: &str) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
+    let with_port = format!("{relay_host}:");
     content.lines().any(|line| {
         let Some((_, value)) = line.split_once('=') else {
             return false;
         };
         let v = value.trim();
-        v == "inbucket" || v.starts_with("inbucket:")
+        v == relay_host || v.starts_with(&with_port)
     })
 }
 
@@ -208,10 +211,8 @@ fn resolve_extra_networks(
     authelia_installed: bool,
     caddy_installed: bool,
     inbucket_installed: bool,
-    prometheus_installed: bool,
     has_url: bool,
     has_smtp: bool,
-    has_prometheus: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
     if enable_auth && authelia_installed && !WellKnownService::Authelia.matches(service_name) {
@@ -223,14 +224,6 @@ fn resolve_extra_networks(
         has_smtp && inbucket_installed && !WellKnownService::Inbucket.matches(service_name);
     if joins_inbucket {
         networks.push(WellKnownService::Inbucket.to_string());
-    }
-    // Prometheus-supporting services join the prometheus network so
-    // prometheus can scrape them by container DNS on their primary port.
-    let joins_prometheus = has_prometheus
-        && prometheus_installed
-        && !WellKnownService::Prometheus.matches(service_name);
-    if joins_prometheus {
-        networks.push(WellKnownService::Prometheus.to_string());
     }
     let joins_caddy = (has_url || enable_auth || WellKnownService::Inbucket.matches(service_name))
         && caddy_installed
@@ -316,10 +309,12 @@ pub fn add_service(
         return Err(Error::AuthNotConfigured);
     }
 
-    // --auth requires native OIDC support; forward auth is no longer supported
+    // --auth requires native OIDC support; forward auth is no longer supported.
+    // The exception is the OIDC provider itself, which doesn't need to act as
+    // a client of itself.
     if enable_auth
         && reg_service.def.integrations.auth.is_empty()
-        && !WellKnownService::Authelia.matches(service_name)
+        && !capability::def_provides(&reg_service.def, Capability::OidcProvider)
     {
         return Err(Error::NoOidcSupport(service_name.to_string()));
     }
@@ -435,24 +430,23 @@ pub fn add_service(
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
-    // Authoritative: a marker'd `.container` for the well-known
-    // service means it's installed and ready to wire up. Single
-    // directory scan covers all four checks.
-    let installed_names = scan_managed_services().unwrap_or_default();
-    let any_match = |wk: WellKnownService| {
-        installed_names.iter().any(|n| wk.matches(n))
-    };
-    let authelia_installed = any_match(WellKnownService::Authelia);
-    let caddy_installed = any_match(WellKnownService::Caddy);
-    let inbucket_installed = any_match(WellKnownService::Inbucket);
-    let prometheus_installed = any_match(WellKnownService::Prometheus);
+    // Authoritative: capability presence in `list_installed` answers
+    // "is there a reverse-proxy / OIDC IdP / SMTP relay / metrics
+    // scraper installed?" without naming any specific provider.
+    let installed_now = list_installed().unwrap_or_default();
+    let authelia_installed =
+        find_installed_provider(&installed_now, Capability::OidcProvider).is_some();
+    let caddy_installed =
+        find_installed_provider(&installed_now, Capability::ReverseProxy).is_some();
+    let inbucket_installed =
+        find_installed_provider(&installed_now, Capability::SmtpRelay).is_some();
 
     // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
     // auth provider's domain). Pure — all filesystem writes are
     // emitted as Step::WriteFile below, not performed here.
-    let installed_now = list_installed().unwrap_or_default();
     let auth_bridge = auth_bridge::build(&auth_bridge::AuthBridgeParams {
         service_name,
+        service_provides: &reg_service.def.capabilities.provides,
         enable_auth,
         config: &config,
         installed: &installed_now,
@@ -474,10 +468,8 @@ pub fn add_service(
         authelia_installed,
         caddy_installed,
         inbucket_installed,
-        prometheus_installed,
         url.is_some(),
         has_smtp,
-        reg_service.def.integrations.prometheus,
     );
 
     let output = generate::generate_env(generate::GenerateEnvParams {
@@ -516,6 +508,7 @@ pub fn add_service(
         registry: registry_name.to_string(),
         url: url.map(str::to_string),
         auth: auth_kind.clone(),
+        provides: reg_service.def.capabilities.provides.clone(),
     };
 
     // Process quadlet bundle from registry
@@ -708,19 +701,9 @@ pub fn add_service(
         }
     }
 
-    // 9b. Register this service as a prometheus scrape target when both
-    // prometheus is installed and the service declares the integration.
-    // Writes a per-service JSON target file that prometheus's file_sd
-    // picks up automatically (no reload needed).
-    steps.extend(prometheus::register_scrape_target(
-        service_name,
-        &reg_service.def,
-        prometheus_installed,
-    )?);
-
-    // 9c. When a shared-network provider (caddy, inbucket, prometheus) is
-    // being installed, retroactively patch services that were installed
-    // before it so they can reach the new provider by container DNS.
+    // 9b. When a shared-network provider (caddy, inbucket) is being
+    // installed, retroactively patch services that were installed before
+    // it so they can reach the new provider by container DNS.
     // resolve_extra_networks only decides at install time; without this
     // step, services installed earlier remain isolated.
     steps.extend(retroactive_network_joins(
@@ -921,11 +904,6 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     {
         steps.extend(authelia::unregister_oidc_client(service_name)?);
     }
-
-    // Drop this service's prometheus scrape-target file (no-op if never
-    // registered — the file simply won't exist). Prometheus's file_sd
-    // reloader notices the deletion and drops the target.
-    steps.extend(prometheus::unregister_scrape_target(service_name)?);
 
     // Reload systemd after removing quadlet files
     steps.push(Step::DaemonReload);
@@ -1293,6 +1271,7 @@ fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService>
         ports,
         auth_kind,
         exposure,
+        provides: meta.provides,
         installed: true,
     })
 }
@@ -1335,9 +1314,6 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
             }
             if reg_svc.def.integrations.smtp {
                 supports.push("smtp".to_string());
-            }
-            if reg_svc.def.integrations.prometheus {
-                supports.push("prometheus".to_string());
             }
             SearchResult {
                 name: name.clone(),
@@ -1484,107 +1460,57 @@ mod tests {
     }
 
     // resolve_extra_networks positional args:
-    // (name, enable_auth, authelia_installed, caddy_installed, inbucket_installed,
-    //  prometheus_installed, has_url, has_smtp, has_prometheus)
+    // (name, enable_auth, authelia_installed, caddy_installed,
+    //  inbucket_installed, has_url, has_smtp)
 
     #[test]
     fn networks_empty_when_no_auth() {
-        let nets = resolve_extra_networks(
-            "whoami", false, false, false, false, false, false, false, false,
-        );
+        let nets = resolve_extra_networks("whoami", false, false, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_empty_when_auth_but_no_authelia() {
-        let nets = resolve_extra_networks(
-            "forgejo", true, false, false, false, false, false, false, false,
-        );
+        let nets = resolve_extra_networks("forgejo", true, false, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_authelia_when_auth_enabled() {
-        let nets = resolve_extra_networks(
-            "forgejo", true, true, false, false, false, false, false, false,
-        );
+        let nets = resolve_extra_networks("forgejo", true, true, false, false, false, false);
         assert_eq!(nets, vec!["authelia"]);
     }
 
     #[test]
     fn networks_auth_with_caddy_includes_both() {
-        let nets = resolve_extra_networks(
-            "forgejo", true, true, true, false, false, false, false, false,
-        );
+        let nets = resolve_extra_networks("forgejo", true, true, true, false, false, false);
         assert!(nets.contains(&"authelia".to_string()));
         assert!(nets.contains(&"caddy".to_string()));
     }
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks(
-            "authelia", true, true, false, false, false, false, false, false,
-        );
+        let nets = resolve_extra_networks("authelia", true, true, false, false, false, false);
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_smtp_joins_inbucket_without_caddy() {
         // Reaching inbucket for SMTP must NOT require caddy.
-        let nets = resolve_extra_networks(
-            "forgejo", false, false, false, true, false, false, true, false,
-        );
+        let nets = resolve_extra_networks("forgejo", false, false, false, true, false, true);
         assert_eq!(nets, vec!["inbucket"]);
     }
 
     #[test]
     fn networks_smtp_skips_inbucket_when_it_is_self() {
-        let nets = resolve_extra_networks(
-            "inbucket", false, false, false, true, false, false, true, false,
-        );
+        let nets = resolve_extra_networks("inbucket", false, false, false, true, false, true);
         assert!(!nets.contains(&"inbucket".to_string()));
     }
 
     #[test]
     fn networks_smtp_skips_inbucket_when_not_installed() {
-        let nets = resolve_extra_networks(
-            "forgejo", false, false, false, false, false, false, true, false,
-        );
+        let nets = resolve_extra_networks("forgejo", false, false, false, false, false, true);
         assert!(!nets.contains(&"inbucket".to_string()));
-    }
-
-    #[test]
-    fn networks_prometheus_joined_when_both_installed_and_supported() {
-        // Service supports prometheus AND prometheus is installed → joins network.
-        let nets = resolve_extra_networks(
-            "forgejo", false, false, false, false, true, false, false, true,
-        );
-        assert_eq!(nets, vec!["prometheus"]);
-    }
-
-    #[test]
-    fn networks_prometheus_skipped_when_not_installed() {
-        // Service supports prometheus but prometheus not installed → don't join.
-        let nets = resolve_extra_networks(
-            "forgejo", false, false, false, false, false, false, false, true,
-        );
-        assert!(!nets.contains(&"prometheus".to_string()));
-    }
-
-    #[test]
-    fn networks_prometheus_skipped_for_prometheus_itself() {
-        let nets = resolve_extra_networks(
-            "prometheus",
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            false,
-            true,
-        );
-        assert!(!nets.contains(&"prometheus".to_string()));
     }
 
     #[test]

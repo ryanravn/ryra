@@ -9,7 +9,10 @@ use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::{AuthKind, HttpsRequirement};
-use ryra_core::{REGISTRY_BUNDLED, Warning, WellKnownService};
+use ryra_core::{
+    Capability, REGISTRY_BUNDLED, Warning, WellKnownService, find_installed_provider,
+    service_provides,
+};
 
 use super::apply;
 use super::prompts;
@@ -68,7 +71,7 @@ pub async fn run(
     if acme.is_some()
         && services
             .iter()
-            .any(|s| WellKnownService::Caddy.matches(s))
+            .any(|s| service_provides(s, Capability::ReverseProxy))
     {
         super::sysctl_low_ports::offer_enable().await?;
     }
@@ -347,12 +350,11 @@ pub async fn run(
             ryra_core::Exposure::Tailscale { url: ts_url }
         } else if needs_https {
             if ryra_core::is_service_installed("caddy") {
-                let caddy_https_port = ryra_core::list_installed()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|s| WellKnownService::Caddy.matches(&s.name))
-                    .and_then(|s| s.ports.get("https").copied())
-                    .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
+                let installed_all = ryra_core::list_installed().unwrap_or_default();
+                let caddy_https_port =
+                    find_installed_provider(&installed_all, Capability::ReverseProxy)
+                        .and_then(|s| s.ports.get("https").copied())
+                        .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
                 let default_url = format!(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
@@ -396,7 +398,7 @@ pub async fn run(
         let need_caddy_for_public_url = url
             .is_some_and(ryra_core::is_public_url)
             && !caddy_already_installed
-            && !WellKnownService::Caddy.matches(service)
+            && !service_provides(service, Capability::ReverseProxy)
             && !tailscale_enabled
             && !dry_run;
         if need_caddy_for_public_url {
@@ -448,7 +450,10 @@ pub async fn run(
                     // from add_service so the user knows routing is on them.
                 }
             }
-        } else if acme.is_some() && caddy_already_installed && !WellKnownService::Caddy.matches(service) {
+        } else if acme.is_some()
+            && caddy_already_installed
+            && !service_provides(service, Capability::ReverseProxy)
+        {
             // --acme passed but Caddy is already installed — the snippet
             // is set; flipping mode means editing tls.caddy directly.
             // Warn but don't bail; let the install proceed.
@@ -594,10 +599,11 @@ pub async fn run(
             }
         }
 
-        // --acme only takes effect on first caddy install — after that
-        // tls.caddy is user-managed. Filter so it only flows when adding
-        // caddy (the top-level guard already rejects other combos).
-        let acme_for_service = if WellKnownService::Caddy.matches(service) {
+        // --acme only takes effect when first installing the reverse
+        // proxy itself — after that, the TLS snippet is user-managed.
+        // Filter so it only flows for the reverse-proxy service (the
+        // top-level guard already rejects other combos).
+        let acme_for_service = if service_provides(service, Capability::ReverseProxy) {
             acme
         } else {
             None
@@ -1591,10 +1597,8 @@ async fn prompt_exposure_for(
                 ))
                 .await?;
             }
-            let caddy_https_port = ryra_core::list_installed()
-                .unwrap_or_default()
-                .into_iter()
-                .find(|s| WellKnownService::Caddy.matches(&s.name))
+            let installed_all = ryra_core::list_installed().unwrap_or_default();
+            let caddy_https_port = find_installed_provider(&installed_all, Capability::ReverseProxy)
                 .and_then(|s| s.ports.get("https").copied())
                 .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
             Ok(ryra_core::Exposure::Internal {
@@ -1971,10 +1975,8 @@ fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -
     };
 
     // Find the port from the quadlet-derived InstalledService view.
-    let port = ryra_core::list_installed()
-        .unwrap_or_default()
-        .into_iter()
-        .find(|s| WellKnownService::Authelia.matches(&s.name))
+    let installed_all = ryra_core::list_installed().unwrap_or_default();
+    let port = find_installed_provider(&installed_all, Capability::OidcProvider)
         .and_then(|s| s.ports.values().next().copied())
         .unwrap_or(DEFAULT_AUTHELIA_PORT);
 
@@ -2024,8 +2026,8 @@ mod tests {
         assert!(!needs_https(HttpsRequirement::Never, false, None));
         // Even with --auth, a service that didn't opt into HTTPS stays HTTP.
         // This is the RFC 8252 loopback case: http://127.0.0.1 is a valid
-        // OIDC redirect_uri and most services (forgejo, grafana, etc.) work
-        // fine that way.
+        // OIDC redirect_uri and most services (forgejo, etc.) work fine
+        // that way.
         assert!(!needs_https(HttpsRequirement::Never, true, None));
         // Explicit http:// URL also stays HTTP.
         assert!(!needs_https(

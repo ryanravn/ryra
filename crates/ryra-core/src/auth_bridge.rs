@@ -12,10 +12,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::capability::{Capability, find_installed_provider};
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
 use crate::generate::GeneratedFile;
-use crate::{Step, WellKnownService};
+use crate::Step;
 
 /// System CA bundle locations probed in order. First hit wins.
 const SYSTEM_CA_PATHS: &[&str] = &[
@@ -39,6 +40,10 @@ pub struct AuthBridge {
 /// Inputs to [`build`].
 pub struct AuthBridgeParams<'a> {
     pub service_name: &'a str,
+    /// Capabilities declared by the currently-installing service. The
+    /// bridge skips itself when the caller is the OIDC provider or the
+    /// reverse proxy — those services don't consume themselves.
+    pub service_provides: &'a [Capability],
     pub enable_auth: bool,
     pub config: &'a Config,
     /// Snapshot of installed services. Production callers pass
@@ -64,30 +69,25 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     if !params.enable_auth {
         return Ok(None);
     }
-    if WellKnownService::Authelia.matches(params.service_name)
-        || WellKnownService::Caddy.matches(params.service_name)
+    // The bridge wires consumers to providers — providers themselves
+    // (the OIDC IdP, the reverse proxy) don't need it.
+    if params.service_provides.contains(&Capability::OidcProvider)
+        || params.service_provides.contains(&Capability::ReverseProxy)
     {
         return Ok(None);
     }
-    let authelia = params
-        .installed
-        .iter()
-        .find(|s| WellKnownService::Authelia.matches(&s.name));
-    let Some(authelia) = authelia else {
+    let Some(authelia) = find_installed_provider(params.installed, Capability::OidcProvider)
+    else {
         return Ok(None);
     };
-    // Bridge applies only when authelia is reachable via a Caddy-fronted
-    // *.internal hostname. Other exposures (Tailscale serve, user's
-    // external proxy on a public domain) mean another trust path is in
-    // play and ryra doesn't have matching client-side plumbing yet.
+    // Bridge applies only when the OIDC provider is reachable via a
+    // Caddy-fronted *.internal hostname. Other exposures (Tailscale serve,
+    // user's external proxy on a public domain) mean another trust path
+    // is in play and ryra doesn't have matching client-side plumbing yet.
     if !matches!(authelia.exposure, crate::Exposure::Internal { .. }) {
         return Ok(None);
     }
-    let caddy_installed = params
-        .installed
-        .iter()
-        .any(|s| WellKnownService::Caddy.matches(&s.name));
-    if !caddy_installed {
+    if find_installed_provider(params.installed, Capability::ReverseProxy).is_none() {
         return Ok(None);
     }
 
@@ -224,6 +224,18 @@ mod tests {
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
+    /// Capability list a known-by-name service in these tests provides.
+    /// Used to populate both `InstalledService::provides` and
+    /// `AuthBridgeParams::service_provides` without depending on the
+    /// bundled registry being available in tempdirs.
+    fn provides_for(name: &str) -> &'static [Capability] {
+        match name {
+            "authelia" => &[Capability::OidcProvider, Capability::ForwardAuthProvider],
+            "caddy" => &[Capability::ReverseProxy],
+            _ => &[],
+        }
+    }
+
     fn installed(name: &str, url: Option<&str>) -> InstalledService {
         let exposure = match url {
             Some(u) => crate::Exposure::from_url(u),
@@ -236,6 +248,7 @@ mod tests {
             ports: BTreeMap::new(),
             auth_kind: None,
             exposure,
+            provides: provides_for(name).to_vec(),
             installed: true,
         }
     }
@@ -274,6 +287,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: false,
             config: &cfg,
             installed: &installed,
@@ -289,6 +303,7 @@ mod tests {
         let (cfg, installed) = fixture(vec![installed("caddy", None)], None);
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -307,6 +322,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -328,6 +344,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "authelia",
+            service_provides: provides_for("authelia"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -353,6 +370,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -376,6 +394,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -397,6 +416,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "caddy",
+            service_provides: provides_for("caddy"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -423,6 +443,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -448,6 +469,7 @@ mod tests {
         );
         build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
@@ -486,6 +508,7 @@ mod tests {
         );
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
+            service_provides: provides_for("forgejo"),
             enable_auth: true,
             config: &cfg,
             installed: &installed,
