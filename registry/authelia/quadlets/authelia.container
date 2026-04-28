@@ -9,19 +9,19 @@ AutoUpdate=registry
 ContainerName=authelia
 Network=authelia.network
 PublishPort=${PORT_HTTP}:9091
-Volume=%h/services/authelia/config:/config:Z
+Volume=%h/.local/share/services/authelia/config:/config:Z
 Pull=missing
-EnvironmentFile=%h/services/authelia/.env
+EnvironmentFile=%h/.local/share/services/authelia/.env
 HealthCmd=wget -q --spider http://localhost:9091/api/health || exit 1
 
 [Service]
-EnvironmentFile=%h/services/authelia/.env
+EnvironmentFile=%h/.local/share/services/authelia/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPre=/bin/bash %h/services/authelia/configs/scripts/generate-config.sh
-ExecStartPre=/bin/bash %h/services/authelia/configs/scripts/generate-users.sh
-ExecStartPre=/bin/bash %h/services/authelia/configs/scripts/generate-oidc-rsa-key.sh
+ExecStartPre=/bin/bash %h/.local/share/services/authelia/configs/scripts/generate-config.sh
+ExecStartPre=/bin/bash %h/.local/share/services/authelia/configs/scripts/generate-users.sh
+ExecStartPre=/bin/bash %h/.local/share/services/authelia/configs/scripts/generate-oidc-rsa-key.sh
 
 [Install]
 WantedBy=default.target

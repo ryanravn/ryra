@@ -13,15 +13,15 @@ Network=forgejo.network
 PublishPort=${PORT_HTTP}:3000
 Volume=forgejo-data.volume:/data:U
 Pull=missing
-EnvironmentFile=%h/services/forgejo/.env
+EnvironmentFile=%h/.local/share/services/forgejo/.env
 HealthCmd=curl -sf http://localhost:3000/api/v1/settings/api || exit 1
 
 [Service]
-EnvironmentFile=%h/services/forgejo/.env
+EnvironmentFile=%h/.local/share/services/forgejo/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPost=/bin/bash %h/services/forgejo/configs/scripts/register-oidc.sh
+ExecStartPost=/bin/bash %h/.local/share/services/forgejo/configs/scripts/register-oidc.sh
 
 [Install]
 WantedBy=default.target

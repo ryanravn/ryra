@@ -10,14 +10,14 @@ ContainerName=supabase-auth
 Image=docker.io/supabase/gotrue:v2.186.0
 Network=supabase.network:alias=auth
 Pull=missing
-EnvironmentFile=%h/services/supabase/.env
+EnvironmentFile=%h/.local/share/services/supabase/.env
 HealthCmd=wget --no-verbose --tries=1 --spider http://localhost:9999/health
 HealthInterval=5s
 HealthTimeout=5s
 HealthRetries=3
 
 [Service]
-EnvironmentFile=%h/services/supabase/.env
+EnvironmentFile=%h/.local/share/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

@@ -20,11 +20,11 @@ PublishPort=${PORT_HTTP}:8080
 # it into /etc/nginx/conf.d/default.conf — mounting over that path directly
 # fails because the entrypoint insists on rewriting it. Our template uses
 # bare `$host` nginx variables, not `${VAR}`, so envsubst leaves them alone.
-Volume=%h/services/synapse/configs/element-nginx.conf:/etc/nginx/templates/default.conf.template:ro,Z
+Volume=%h/.local/share/services/synapse/configs/element-nginx.conf:/etc/nginx/templates/default.conf.template:ro,Z
 # Element's SPA loads /config.json on page load. Rendered by ExecStartPre
 # below since it needs the published port or the --url value.
-Volume=%h/services/synapse/configs/config.json:/app/config.json:ro,Z
-EnvironmentFile=%h/services/synapse/.env
+Volume=%h/.local/share/services/synapse/configs/config.json:/app/config.json:ro,Z
+EnvironmentFile=%h/.local/share/services/synapse/.env
 HealthCmd=wget -qO- http://localhost:8080 >/dev/null || exit 1
 HealthStartPeriod=10s
 HealthInterval=15s
@@ -33,11 +33,11 @@ HealthTimeout=5s
 Pull=missing
 
 [Service]
-EnvironmentFile=%h/services/synapse/.env
+EnvironmentFile=%h/.local/share/services/synapse/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPre=/bin/bash %h/services/synapse/configs/scripts/render-element-config.sh
+ExecStartPre=/bin/bash %h/.local/share/services/synapse/configs/scripts/render-element-config.sh
 
 [Install]
 WantedBy=default.target

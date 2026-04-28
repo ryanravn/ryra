@@ -27,7 +27,7 @@ pub struct VolumeRef {
 /// podman name (`systemd-<stem>`) and owning service.
 ///
 /// `known_services` is the set of service names from preferences.toml plus any
-/// service dir under `~/services/`. Pass both so we match
+/// service dir under `~/.local/share/services/`. Pass both so we match
 /// volumes of orphaned services (home dir exists, preferences.toml entry gone).
 pub fn parse_volume_quadlets(
     quadlet_dir: &Path,

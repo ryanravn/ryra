@@ -120,8 +120,8 @@ action = "shell"
 name = "configure-nginx"
 run = """
 set -e
-AUTH_PORT=$(grep '^PORT' $HOME/services/authelia/.env | head -1 | cut -d= -f2)
-VIK_PORT=$(grep '^PORT_HTTP' $HOME/services/vikunja/.env | cut -d= -f2)
+AUTH_PORT=$(grep '^PORT' $HOME/.local/share/services/authelia/.env | head -1 | cut -d= -f2)
+VIK_PORT=$(grep '^PORT_HTTP' $HOME/.local/share/services/vikunja/.env | cut -d= -f2)
 sudo tee /etc/nginx/conf.d/ryra-test.conf > /dev/null <<EOF
 # Authelia (and most OIDC providers) require X-Forwarded-Proto so it
 # can build correct issuer/authorize/token URLs for discovery. Without
@@ -183,7 +183,7 @@ name = "vikunja-env-has-external-urls"
 # fallback leaking through.
 run = """
 set -e
-ENV=$HOME/services/vikunja/.env
+ENV=$HOME/.local/share/services/vikunja/.env
 grep -q 'https://auth.test.local' $ENV
 grep -q 'https://vikunja.test.local' $ENV
 """

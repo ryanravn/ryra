@@ -29,7 +29,7 @@ timeout = 5
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/twenty"
+run = "test -d $HOME/.local/share/services/twenty"
 
 # SMTP via onboarding invite flow — the playwright spec walks the UI and
 # clicks Finish on the invite step. Mail delivery is async through bullmq

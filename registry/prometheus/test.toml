@@ -18,7 +18,7 @@ timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "targets-dir-created"
-run = "test -d $HOME/services/prometheus/targets"
+run = "test -d $HOME/.local/share/services/prometheus/targets"
 
 # Install prometheus + grafana, then verify prometheus is actually
 # collecting data — not just that the target is configured.

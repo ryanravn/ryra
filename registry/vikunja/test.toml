@@ -18,7 +18,7 @@ timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/vikunja"
+run = "test -d $HOME/.local/share/services/vikunja"
 timeout = 10
 
 # SMTP: register a user — Vikunja's mailer sends a confirmation email

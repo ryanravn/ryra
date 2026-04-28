@@ -45,7 +45,7 @@ pub struct AuthBridgeParams<'a> {
     /// [`crate::list_installed`]; tests construct synthetic data so
     /// they can drive the function without writing real quadlet files.
     pub installed: &'a [crate::config::schema::InstalledService],
-    /// Absolute path to the service's data dir (`~/services/<name>`).
+    /// Absolute path to the service's data dir (`~/.local/share/services/<name>`).
     pub service_data: &'a Path,
 }
 

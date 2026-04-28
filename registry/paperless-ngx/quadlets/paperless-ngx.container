@@ -13,12 +13,12 @@ Network=paperless-ngx.network
 PublishPort=${PORT_HTTP}:8000
 Volume=paperless-ngx-data.volume:/usr/src/paperless/data:U
 Volume=paperless-ngx-media.volume:/usr/src/paperless/media:U
-EnvironmentFile=%h/services/paperless-ngx/.env
+EnvironmentFile=%h/.local/share/services/paperless-ngx/.env
 Pull=missing
 HealthCmd=curl -sf http://localhost:8000/ || exit 1
 
 [Service]
-EnvironmentFile=%h/services/paperless-ngx/.env
+EnvironmentFile=%h/.local/share/services/paperless-ngx/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

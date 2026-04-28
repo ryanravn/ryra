@@ -189,7 +189,7 @@ fn url_for(svc: &ServiceData, installed: Option<&InstalledService>) -> String {
 }
 
 /// What's actually on disk for this service: "home" if the service
-/// bind-mounts into `~/services/<svc>/`, "N volume(s)" for
+/// bind-mounts into `~/.local/share/services/<svc>/`, "N volume(s)" for
 /// podman named volumes, or both joined with ` + `.
 fn storage_label(svc: &ServiceData, home: &str) -> String {
     let mut parts: Vec<String> = Vec::new();

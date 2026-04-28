@@ -33,7 +33,7 @@ timeout = 5
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/forgejo"
+run = "test -d $HOME/.local/share/services/forgejo"
 
 # SMTP delivery via inbucket. Caddy is required so that inbucket + forgejo
 # share a podman network and can resolve each other by container name.
@@ -122,7 +122,7 @@ service = "forgejo"
 [[tests.steps]]
 action = "shell"
 name = "oidc-registered"
-run = """FORGEJO_PORT=$(grep PORT_HTTP $HOME/services/forgejo/.env | cut -d= -f2)
+run = """FORGEJO_PORT=$(grep PORT_HTTP $HOME/.local/share/services/forgejo/.env | cut -d= -f2)
 for i in $(seq 1 60); do
   curl -sf http://127.0.0.1:$FORGEJO_PORT/user/login 2>/dev/null | grep -q 'oauth2/Authelia' && exit 0
   sleep 2

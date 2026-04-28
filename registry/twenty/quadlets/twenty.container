@@ -16,7 +16,7 @@ Network=twenty.network
 PublishPort=${PORT_HTTP}:3000
 Volume=twenty-data.volume:/app/docker-data:Z
 Pull=missing
-EnvironmentFile=%h/services/twenty/.env
+EnvironmentFile=%h/.local/share/services/twenty/.env
 HealthCmd=curl -sf http://localhost:3000/healthz || exit 1
 HealthStartPeriod=60s
 HealthInterval=30s
@@ -24,7 +24,7 @@ HealthRetries=5
 HealthTimeout=5s
 
 [Service]
-EnvironmentFile=%h/services/twenty/.env
+EnvironmentFile=%h/.local/share/services/twenty/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=600

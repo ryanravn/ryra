@@ -18,7 +18,7 @@ timeout = 330
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/paperless-ngx"
+run = "test -d $HOME/.local/share/services/paperless-ngx"
 timeout = 10
 
 # SMTP via Django's built-in `sendtestemail` management command —

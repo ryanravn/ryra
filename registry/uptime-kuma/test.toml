@@ -18,4 +18,4 @@ timeout = 60
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/uptime-kuma"
+run = "test -d $HOME/.local/share/services/uptime-kuma"

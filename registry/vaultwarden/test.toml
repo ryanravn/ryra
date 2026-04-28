@@ -43,15 +43,15 @@ service = "vaultwarden"
 [[tests.steps]]
 action = "shell"
 name = "data-dir-exists"
-run = "test -d $HOME/services/vaultwarden"
+run = "test -d $HOME/.local/share/services/vaultwarden"
 [[tests.steps]]
 action = "shell"
 name = "smtp-host-rendered"
-run = "grep -q 'SMTP_HOST=localhost' $HOME/services/vaultwarden/.env"
+run = "grep -q 'SMTP_HOST=localhost' $HOME/.local/share/services/vaultwarden/.env"
 [[tests.steps]]
 action = "shell"
 name = "smtp-from-rendered"
-run = "grep -q 'SMTP_FROM=noreply@example.com' $HOME/services/vaultwarden/.env"
+run = "grep -q 'SMTP_FROM=noreply@example.com' $HOME/.local/share/services/vaultwarden/.env"
 
 # SMTP delivery via vaultwarden's /admin/test/smtp endpoint. ADMIN_TOKEN
 # is set so /admin becomes reachable — otherwise vaultwarden hides it.

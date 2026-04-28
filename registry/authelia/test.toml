@@ -27,7 +27,7 @@ poll = { interval = 2, attempts = 15 }
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/authelia"
+run = "test -d $HOME/.local/share/services/authelia"
 
 # SMTP: install with --smtp=inbucket, trigger a password-reset email,
 # poll inbucket until the mail arrives for the admin account.

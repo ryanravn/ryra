@@ -3,7 +3,7 @@ title: Configuration
 description: Set up DNS, SSL, SMTP, and authentication for your services.
 ---
 
-Ryra stores its global configuration at `~/.config/ryra/config.toml`. You can view and edit it with `ryra config`.
+Ryra stores its global configuration at `~/.config/services/preferences.toml`. You can view and edit it with `ryra config`.
 
 ## Reverse proxy (Caddy)
 

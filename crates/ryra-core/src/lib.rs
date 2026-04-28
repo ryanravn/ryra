@@ -82,15 +82,20 @@ pub(crate) fn home_dir() -> Result<PathBuf> {
 }
 
 /// Root directory holding every installed service's home dir:
-/// `~/services/`. Sits at the top of `$HOME` (not under `.local/share/`)
-/// because services are first-class artifacts a sysadmin should be able
-/// to find at a glance — `ls ~/services/` is the discoverable equivalent
-/// of looking in `/srv/` on a system-wide setup.
+/// `~/.local/share/services/`. The directory name is `services/` (not
+/// `ryra/`) because the deployments are the user's — ryra is just the
+/// scaffolding tool that puts them there. Wiping `~/.local/share/services/`,
+/// `~/.config/services/`, and the ryra-managed quadlets in
+/// `~/.config/containers/systemd/` removes ryra's footprint completely.
 pub fn service_data_root() -> Result<std::path::PathBuf> {
-    Ok(home_dir()?.join("services"))
+    let base = match dirs::data_dir() {
+        Some(d) => d,
+        None => home_dir()?.join(".local").join("share"),
+    };
+    Ok(base.join("services"))
 }
 
-/// Data directory for a service: ~/services/<name>
+/// Data directory for a service: `~/.local/share/services/<name>`
 pub fn service_home(service_name: &str) -> Result<PathBuf> {
     Ok(service_data_root()?.join(service_name))
 }

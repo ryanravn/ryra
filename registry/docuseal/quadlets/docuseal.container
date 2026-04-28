@@ -12,8 +12,8 @@ PublishPort=${PORT_HTTP}:3000
 # DocuSeal stores SQLite db, uploaded PDFs, signed outputs, and a secret
 # encryption key under /data. Bind mount so the data survives container
 # replacement and is inspectable from the host.
-Volume=%h/services/docuseal/data:/data:Z,U
-EnvironmentFile=%h/services/docuseal/.env
+Volume=%h/.local/share/services/docuseal/data:/data:Z,U
+EnvironmentFile=%h/.local/share/services/docuseal/.env
 HealthCmd=wget -qO- http://localhost:3000/up >/dev/null || exit 1
 HealthStartPeriod=30s
 HealthInterval=15s
@@ -22,7 +22,7 @@ HealthTimeout=5s
 Pull=missing
 
 [Service]
-EnvironmentFile=%h/services/docuseal/.env
+EnvironmentFile=%h/.local/share/services/docuseal/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

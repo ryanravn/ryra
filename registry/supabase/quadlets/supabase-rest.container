@@ -11,10 +11,10 @@ Image=docker.io/postgrest/postgrest:v14.8
 Network=supabase.network:alias=rest
 Exec=postgrest
 Pull=missing
-EnvironmentFile=%h/services/supabase/.env
+EnvironmentFile=%h/.local/share/services/supabase/.env
 
 [Service]
-EnvironmentFile=%h/services/supabase/.env
+EnvironmentFile=%h/.local/share/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

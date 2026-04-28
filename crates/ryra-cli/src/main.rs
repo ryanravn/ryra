@@ -62,7 +62,7 @@ enum Command {
         /// to register with that email for renewal notices, or `--acme` alone to
         /// register anonymously. Without this flag, Caddy uses its internal CA
         /// (self-signed). After first install, edit
-        /// `~/services/caddy/config/tls.caddy` directly to switch to
+        /// `~/.local/share/services/caddy/config/tls.caddy` directly to switch to
         /// wildcards, Cloudflare DNS-01, BYO certs, etc.
         #[arg(long, value_name = "EMAIL", num_args = 0..=1, default_missing_value = "")]
         acme: Option<String>,

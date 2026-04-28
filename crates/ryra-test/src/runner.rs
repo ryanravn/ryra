@@ -98,7 +98,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
     if !failed {
         for service in services {
             let port_cmd = format!(
-                "grep PORT $HOME/services/{service}/.env 2>/dev/null | cut -d= -f2"
+                "grep PORT $HOME/.local/share/services/{service}/.env 2>/dev/null | cut -d= -f2"
             );
             if let Ok(out) = vm.exec(&port_cmd).await {
                 for port in out.stdout.trim().lines() {
@@ -307,7 +307,7 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
         DiscoveredTest::Simple { setup, .. } => {
             if setup.services.len() == 1 {
                 Ok(load_env_shell(&format!(
-                    "$HOME/services/{}/.env",
+                    "$HOME/.local/share/services/{}/.env",
                     setup.services[0]
                 )))
             } else if setup.services.len() > 1 {
@@ -320,7 +320,7 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
                         "while IFS='=' read -r key val; do \
                          case \"$key\" in \"\"|\\#*) continue ;; esac; \
                          export {prefix}__$key=\"$val\"; \
-                         done < $HOME/services/{service}/.env"
+                         done < $HOME/.local/share/services/{service}/.env"
                     ));
                 }
                 Ok(lines.join(" && "))
@@ -409,14 +409,14 @@ async fn run_browser_step(
     // Per-file safe .env load — same rationale as load_env_shell(): raw
     // `.` would choke on values with whitespace (supabase `DB_AFTER_*`, etc.)
     let env_loop = format!(
-        "for __f in $HOME/services/*/.env; do \
+        "for __f in $HOME/.local/share/services/*/.env; do \
            [ -f \"$__f\" ] && {loader}; \
          done",
         loader = load_env_shell("\"$__f\"")
     );
     let cmd = format!(
         "{env_loop} && \
-         DEST=\"$HOME/services/test-reports/{test_name_esc}/playwright\" && \
+         DEST=\"$HOME/.local/share/services/test-reports/{test_name_esc}/playwright\" && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
          if [ ! -d node_modules ]; then \
@@ -452,7 +452,7 @@ async fn run_browser_step(
             .join(test_name)
             .join("playwright");
         let remote_dir =
-            format!("/home/ryra/services/test-reports/{test_name}/playwright");
+            format!("/home/ryra/.local/share/services/test-reports/{test_name}/playwright");
         if let Err(e) = vm.fetch_dir(&remote_dir, &local_dir).await {
             eprintln!("warning: failed to fetch playwright report: {e:#}");
         }
@@ -610,9 +610,9 @@ pub async fn run_lifecycle_test(
                 // URL uses double quotes so shell variables expand.
                 let url_esc = url.replace('"', r#"\""#);
                 let env_source = match service {
-                    Some(svc) => load_env_shell(&format!("$HOME/services/{svc}/.env")),
+                    Some(svc) => load_env_shell(&format!("$HOME/.local/share/services/{svc}/.env")),
                     None => format!(
-                        "for __f in $HOME/services/*/.env; do [ -f \"$__f\" ] && {}; done",
+                        "for __f in $HOME/.local/share/services/*/.env; do [ -f \"$__f\" ] && {}; done",
                         load_env_shell("\"$__f\"")
                     ),
                 };
@@ -710,8 +710,8 @@ pub async fn run_lifecycle_test(
                     None => String::new(),
                 };
                 let cmd = format!(
-                    "INBUCKET_PORT=$(grep PORT_HTTP $HOME/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
-                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/services/inbucket/.env'; exit 2; }}; \
+                    "INBUCKET_PORT=$(grep PORT_HTTP $HOME/.local/share/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
+                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/.local/share/services/inbucket/.env'; exit 2; }}; \
                      BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
                      [ -n \"$BODY\" ] && [ \"$BODY\" != '[]' ]{contains_check}"
                 );
@@ -923,7 +923,7 @@ async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str])
         }
 
         // Env file
-        let cmd = format!("cat $HOME/services/{svc}/.env 2>&1 | grep PORT || true");
+        let cmd = format!("cat $HOME/.local/share/services/{svc}/.env 2>&1 | grep PORT || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {

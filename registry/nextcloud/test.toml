@@ -38,7 +38,7 @@ timeout = 420
 [[tests.steps]]
 action = "shell"
 name = "data-dir-accessible"
-run = "test -d $HOME/services/nextcloud/data"
+run = "test -d $HOME/.local/share/services/nextcloud/data"
 
 # SMTP test — create a user with an email address, then fire `occ mail:test`
 # at them. Nextcloud routes that through the configured SMTP (inbucket)

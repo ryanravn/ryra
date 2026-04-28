@@ -10,14 +10,14 @@ ContainerName=nextcloud-redis
 Network=nextcloud.network:alias=redis
 Volume=nextcloud-redis-data.volume:/data:U
 Pull=missing
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 HealthCmd=redis-cli ping | grep -q PONG
 HealthStartPeriod=5s
 HealthInterval=10s
 HealthRetries=5
 
 [Service]
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=120

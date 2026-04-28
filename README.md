@@ -42,14 +42,14 @@ Run `ryra search` to browse the full list with install status.
 
 - Containers run under your user with rootless Podman. Ryra is a stateless CLI — no background process.
 - systemd owns the lifecycle via Podman quadlets. `systemctl --user` and `journalctl --user` work as normal.
-- Service data lives in `~/.local/share/ryra/<name>/`. `ryra remove` preserves it by default; `--purge` wipes it.
+- Service data lives in `~/.local/share/services/<name>/`. `ryra remove` preserves it by default; `--purge` wipes it.
 - The registry is plain TOML in `registry/`, one directory per service. Fork, edit, contribute back — no plugin system.
 - Caddy and Authelia are services themselves, added the same way as anything else, only needed if you want HTTPS / SSO.
 - E2E tests run in ephemeral QEMU VMs — fresh Debian or Fedora install, SSH in, run `ryra add`, assert.
 
 ## How it works
 
-1. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, generates a quadlet at `~/.config/containers/systemd/<service>.container`, writes a `.env` with any secrets, and asks systemd to start it. The first `ryra add` also creates `~/.config/ryra/ryra.toml` and offers to enable `loginctl linger` so services survive logout.
+1. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, generates a quadlet at `~/.config/containers/systemd/<service>.container`, writes a `.env` with any secrets, and asks systemd to start it. The first `ryra add` also creates `~/.config/services/preferences.toml` and offers to enable `loginctl linger` so services survive logout.
 2. **`--url <public-url>`** records where the service will be reachable. If Caddy is installed, Ryra also adds a site block routing that hostname to the container. If you run your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale Funnel, …), Ryra leaves the routing alone and just uses the URL to populate OIDC callbacks and email links.
 3. **`--auth`** registers an OIDC client with the auth provider and either (a) injects credentials into the service's native OIDC config, or (b) puts Authelia's forward-auth in front of the service via Caddy.
 
@@ -57,10 +57,10 @@ Run `ryra search` to browse the full list with install status.
 
 | Path | What |
 |---|---|
-| `~/.config/ryra/ryra.toml` | Ryra's own config |
+| `~/.config/services/preferences.toml` | Ryra's own config |
 | `~/.config/containers/systemd/<svc>.container` | Generated quadlet |
-| `~/.local/share/ryra/<svc>/` | Service data + `.env` |
-| `~/.local/share/ryra/caddy/config/Caddyfile` | Routing config |
+| `~/.local/share/services/<svc>/` | Service data + `.env` |
+| `~/.local/share/services/caddy/config/Caddyfile` | Routing config |
 
 ## Managing services
 

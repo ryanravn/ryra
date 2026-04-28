@@ -33,7 +33,7 @@ timeout = 20
 [[tests.steps]]
 action = "shell"
 name = "homeserver-yaml-rendered"
-run = "test -f $HOME/services/synapse/data/homeserver.yaml"
+run = "test -f $HOME/.local/share/services/synapse/data/homeserver.yaml"
 timeout = 10
 
 # OIDC browser flow — Element loads via Caddy on chat.internal, Synapse

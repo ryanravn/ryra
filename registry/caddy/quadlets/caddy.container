@@ -12,18 +12,18 @@ PublishPort=${PORT_HTTP}:${PORT_HTTP}
 PublishPort=${PORT_HTTPS}:${PORT_HTTPS}
 Volume=caddy-data.volume:/data:U
 Volume=caddy-config-state.volume:/config:U
-Volume=%h/services/caddy/config:/etc/caddy:Z
+Volume=%h/.local/share/services/caddy/config:/etc/caddy:Z
 Pull=missing
-EnvironmentFile=%h/services/caddy/.env
+EnvironmentFile=%h/.local/share/services/caddy/.env
 HealthCmd=caddy version || exit 1
 
 [Service]
-EnvironmentFile=%h/services/caddy/.env
+EnvironmentFile=%h/.local/share/services/caddy/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300
-ExecStartPre=/bin/bash %h/services/caddy/configs/scripts/seed-caddyfile.sh
-ExecStartPost=-/bin/bash %h/services/caddy/configs/scripts/export-root-ca.sh
+ExecStartPre=/bin/bash %h/.local/share/services/caddy/configs/scripts/seed-caddyfile.sh
+ExecStartPost=-/bin/bash %h/.local/share/services/caddy/configs/scripts/export-root-ca.sh
 
 [Install]
 WantedBy=default.target

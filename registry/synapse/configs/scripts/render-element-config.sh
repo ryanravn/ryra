@@ -5,7 +5,7 @@
 ## element-nginx.conf). With --url, SERVICE_EXTERNAL_URL overrides.
 set -euo pipefail
 
-SERVICE_HOME="${SERVICE_HOME:-$HOME/services/synapse}"
+SERVICE_HOME="${SERVICE_HOME:-$HOME/.local/share/services/synapse}"
 CONFIGS="$SERVICE_HOME/configs"
 
 # Pick the external URL Element should advertise. SERVICE_EXTERNAL_URL is

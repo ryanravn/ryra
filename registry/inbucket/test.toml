@@ -21,4 +21,4 @@ timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/inbucket"
+run = "test -d $HOME/.local/share/services/inbucket"

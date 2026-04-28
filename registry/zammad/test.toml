@@ -31,7 +31,7 @@ timeout = 5
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/zammad"
+run = "test -d $HOME/.local/share/services/zammad"
 [[tests.steps]]
 action = "shell"
 name = "autowizard-created-admin"

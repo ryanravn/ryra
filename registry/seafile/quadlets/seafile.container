@@ -10,19 +10,19 @@ Image=docker.io/seafileltd/seafile-mc:13.0.20
 ContainerName=seafile
 Network=seafile.network
 PublishPort=${PORT_HTTP}:80
-Volume=%h/services/seafile/shared:/shared:Z
+Volume=%h/.local/share/services/seafile/shared:/shared:Z
 Pull=missing
-EnvironmentFile=%h/services/seafile/.env
+EnvironmentFile=%h/.local/share/services/seafile/.env
 HealthCmd=curl -sf http://localhost:80/ || exit 1
 
 [Service]
-EnvironmentFile=%h/services/seafile/.env
+EnvironmentFile=%h/.local/share/services/seafile/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=900
-ExecStartPost=/bin/bash %h/services/seafile/configs/scripts/inject-oauth.sh
-ExecStartPost=/bin/bash %h/services/seafile/configs/scripts/inject-smtp.sh
-ExecStartPost=/bin/bash %h/services/seafile/configs/scripts/restart-seahub.sh
+ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/inject-oauth.sh
+ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/inject-smtp.sh
+ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/restart-seahub.sh
 
 [Install]
 WantedBy=default.target

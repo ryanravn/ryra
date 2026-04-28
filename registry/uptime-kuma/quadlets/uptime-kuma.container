@@ -10,11 +10,11 @@ AutoUpdate=registry
 PublishPort=${PORT_HTTP}:3001
 Volume=uptime-kuma-data.volume:/app/data:U
 Pull=missing
-EnvironmentFile=%h/services/uptime-kuma/.env
+EnvironmentFile=%h/.local/share/services/uptime-kuma/.env
 HealthCmd=curl -sf http://localhost:3001/api/entry-page || exit 1
 
 [Service]
-EnvironmentFile=%h/services/uptime-kuma/.env
+EnvironmentFile=%h/.local/share/services/uptime-kuma/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

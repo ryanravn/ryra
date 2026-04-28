@@ -424,7 +424,7 @@ pub async fn run(
             // Warn but don't bail; let the install proceed.
             eprintln!(
                 "\nNote: --acme is ignored — caddy is already installed.\n  \
-                 Edit ~/services/caddy/config/tls.caddy to switch TLS mode.\n"
+                 Edit ~/.local/share/services/caddy/config/tls.caddy to switch TLS mode.\n"
             );
         }
 
@@ -886,7 +886,7 @@ pub async fn run(
                 let snippet_path = snippet_pathbuf
                     .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "~/services/caddy/config/tls.caddy".to_string());
+                    .unwrap_or_else(|| "~/.local/share/services/caddy/config/tls.caddy".to_string());
                 // Read tls.caddy from disk and report what's actually in
                 // effect — not what `--acme` asked for. This matters when a
                 // pre-existing snippet was preserved across re-installs
@@ -1619,7 +1619,7 @@ async fn prompt_exposure_for(
             } else {
                 eprintln!(
                     "  Note: caddy is already installed — using its existing TLS mode.\n  \
-                     Edit ~/services/caddy/config/tls.caddy to switch to Let's Encrypt."
+                     Edit ~/.local/share/services/caddy/config/tls.caddy to switch to Let's Encrypt."
                 );
             }
             Ok(ryra_core::Exposure::Public { url })
@@ -1932,7 +1932,7 @@ fn warn_untrusted_service(
 }
 
 /// Try to configure auth from an already-installed authelia instance.
-/// The .env is user-readable under ~/services/authelia/.env.
+/// The .env is user-readable under ~/.local/share/services/authelia/.env.
 fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
     let env_path = ryra_core::service_home(WellKnownService::Authelia.as_str())?.join(".env");
     let env_content = match std::fs::read_to_string(&env_path) {

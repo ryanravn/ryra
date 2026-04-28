@@ -5,7 +5,7 @@
 ## time environment or secrets change.
 set -euo pipefail
 
-SERVICE_HOME="${SERVICE_HOME:-$HOME/services/synapse}"
+SERVICE_HOME="${SERVICE_HOME:-$HOME/.local/share/services/synapse}"
 CONFIGS="$SERVICE_HOME/configs"
 DATA="$SERVICE_HOME/data"
 

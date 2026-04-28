@@ -20,14 +20,14 @@ pub enum ServiceStatus {
 pub struct ServiceData {
     pub service: String,
     pub status: ServiceStatus,
-    /// `~/services/<service>/` — may not exist if only volumes remain.
+    /// `~/.local/share/services/<service>/` — may not exist if only volumes remain.
     pub home_dir: PathBuf,
     /// Top-level children of `home_dir` classified as data (not ephemeral).
     pub data_paths: Vec<PathBuf>,
     pub volumes: Vec<volumes::VolumeRef>,
 }
 
-/// Top-level dirs under `~/services/` that are NOT services —
+/// Top-level dirs under `~/.local/share/services/` that are NOT services —
 /// written by ryra itself for tooling (e.g. test reports). Skip them so
 /// `ryra data ls` doesn't surface them as orphan services.
 const NON_SERVICE_DIRS: &[&str] = &["test-reports"];

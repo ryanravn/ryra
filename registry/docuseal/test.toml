@@ -21,7 +21,7 @@ timeout = 120
 [[tests.steps]]
 action = "shell"
 name = "sqlite-db-initialised"
-run = "test -s $HOME/services/docuseal/data/docuseal/db.sqlite3"
+run = "test -s $HOME/.local/share/services/docuseal/data/docuseal/db.sqlite3"
 timeout = 30
 
 # SMTP: `rails runner` triggers a mail through the app's configured

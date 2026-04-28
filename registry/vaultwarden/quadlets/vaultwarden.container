@@ -9,11 +9,11 @@ Image=docker.io/vaultwarden/server:1.35.4
 PublishPort=${PORT_HTTP}:80
 Volume=vaultwarden-data.volume:/data:U
 Pull=missing
-EnvironmentFile=%h/services/vaultwarden/.env
+EnvironmentFile=%h/.local/share/services/vaultwarden/.env
 HealthCmd=curl -sf http://localhost:80/alive || exit 1
 
 [Service]
-EnvironmentFile=%h/services/vaultwarden/.env
+EnvironmentFile=%h/.local/share/services/vaultwarden/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

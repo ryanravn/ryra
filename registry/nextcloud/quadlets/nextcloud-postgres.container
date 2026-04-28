@@ -10,14 +10,14 @@ ContainerName=nextcloud-postgres
 Network=nextcloud.network:alias=postgres
 Volume=nextcloud-db-data.volume:/var/lib/postgresql/data:U
 Pull=missing
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1
 HealthStartPeriod=10s
 HealthInterval=10s
 HealthRetries=5
 
 [Service]
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

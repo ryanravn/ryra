@@ -81,9 +81,9 @@ timeout = 360
 action = "shell"
 name = "immich-oauth-configured"
 run = """
-PORT=$(grep PORT_HTTP $HOME/services/immich/.env | cut -d= -f2)
-EMAIL=$(grep INIT_IMMICH_ADMIN_EMAIL $HOME/services/immich/.env | cut -d= -f2)
-PASS=$(grep INIT_IMMICH_ADMIN_PASSWORD $HOME/services/immich/.env | cut -d= -f2)
+PORT=$(grep PORT_HTTP $HOME/.local/share/services/immich/.env | cut -d= -f2)
+EMAIL=$(grep INIT_IMMICH_ADMIN_EMAIL $HOME/.local/share/services/immich/.env | cut -d= -f2)
+PASS=$(grep INIT_IMMICH_ADMIN_PASSWORD $HOME/.local/share/services/immich/.env | cut -d= -f2)
 python3 -c "
 import json, urllib.request
 url = 'http://127.0.0.1:' + '$PORT'

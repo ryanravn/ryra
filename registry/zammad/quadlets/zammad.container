@@ -18,16 +18,16 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=5s
 Pull=missing
-EnvironmentFile=%h/services/zammad/.env
+EnvironmentFile=%h/.local/share/services/zammad/.env
 
 [Service]
-EnvironmentFile=%h/services/zammad/.env
+EnvironmentFile=%h/.local/share/services/zammad/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=600
-ExecStartPost=/bin/bash %h/services/zammad/configs/scripts/run-autowizard.sh
-ExecStartPost=/bin/bash %h/services/zammad/configs/scripts/configure-oidc.sh
-ExecStartPost=/bin/bash %h/services/zammad/configs/scripts/configure-smtp.sh
+ExecStartPost=/bin/bash %h/.local/share/services/zammad/configs/scripts/run-autowizard.sh
+ExecStartPost=/bin/bash %h/.local/share/services/zammad/configs/scripts/configure-oidc.sh
+ExecStartPost=/bin/bash %h/.local/share/services/zammad/configs/scripts/configure-smtp.sh
 
 [Install]
 WantedBy=default.target

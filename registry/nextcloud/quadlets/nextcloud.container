@@ -12,22 +12,22 @@ ContainerName=nextcloud
 Network=nextcloud.network
 PublishPort=${PORT_HTTP}:80
 Volume=nextcloud-app.volume:/var/www/html:U
-Volume=%h/services/nextcloud/data:/var/www/html/data:Z
+Volume=%h/.local/share/services/nextcloud/data:/var/www/html/data:Z
 Pull=missing
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 HealthCmd=curl -sf http://localhost/status.php || exit 1
 HealthStartPeriod=120s
 HealthInterval=30s
 HealthRetries=5
 
 [Service]
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=900
-ExecStartPost=/bin/bash %h/services/nextcloud/configs/scripts/configure-background-jobs.sh
-ExecStartPost=/bin/bash %h/services/nextcloud/configs/scripts/configure-smtp.sh
-ExecStartPost=/bin/bash %h/services/nextcloud/configs/scripts/configure-oidc.sh
+ExecStartPost=/bin/bash %h/.local/share/services/nextcloud/configs/scripts/configure-background-jobs.sh
+ExecStartPost=/bin/bash %h/.local/share/services/nextcloud/configs/scripts/configure-smtp.sh
+ExecStartPost=/bin/bash %h/.local/share/services/nextcloud/configs/scripts/configure-oidc.sh
 
 [Install]
 WantedBy=default.target

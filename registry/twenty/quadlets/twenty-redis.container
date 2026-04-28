@@ -15,10 +15,10 @@ HealthInterval=30s
 HealthRetries=5
 HealthTimeout=3s
 Pull=missing
-EnvironmentFile=%h/services/twenty/.env
+EnvironmentFile=%h/.local/share/services/twenty/.env
 
 [Service]
-EnvironmentFile=%h/services/twenty/.env
+EnvironmentFile=%h/.local/share/services/twenty/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

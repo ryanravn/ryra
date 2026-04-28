@@ -11,10 +11,10 @@ Image=docker.io/supabase/studio:2026.04.08-sha-205cbe7
 Network=supabase.network:alias=studio
 Environment=PORT=3000
 Pull=missing
-EnvironmentFile=%h/services/supabase/.env
+EnvironmentFile=%h/.local/share/services/supabase/.env
 
 [Service]
-EnvironmentFile=%h/services/supabase/.env
+EnvironmentFile=%h/.local/share/services/supabase/.env
 Restart=always
 RestartSec=10
 TimeoutStartSec=300

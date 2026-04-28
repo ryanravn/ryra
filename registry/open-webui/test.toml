@@ -19,7 +19,7 @@ timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"
-run = "test -d $HOME/services/open-webui"
+run = "test -d $HOME/.local/share/services/open-webui"
 timeout = 10
 
 # OIDC browser flow. Ups RAM to 2048 — open-webui + authelia + caddy

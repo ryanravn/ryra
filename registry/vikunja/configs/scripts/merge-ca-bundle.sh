@@ -2,8 +2,8 @@
 # Prepare CA bundle and /etc/hosts for vikunja container.
 # Runs as ExecStartPre — must not fail or the service won't start.
 # All operations are best-effort with explicit error handling.
-SERVICE_HOME="${SERVICE_HOME:-$HOME/services/vikunja}"
-CADDY_CA="$HOME/services/caddy-root-ca.crt"
+SERVICE_HOME="${SERVICE_HOME:-$HOME/.local/share/services/vikunja}"
+CADDY_CA="$HOME/.local/share/services/caddy-root-ca.crt"
 MERGED="$SERVICE_HOME/ca-bundle.crt"
 HOSTS="$SERVICE_HOME/hosts"
 

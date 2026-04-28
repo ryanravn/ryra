@@ -33,9 +33,9 @@ action = "shell"
 name = "remove-preserves-data"
 run = """set -e
 ryra remove vikunja -y
-test -d ~/services/vikunja
+test -d ~/.local/share/services/vikunja
 # .env must be gone (ephemeral)
-! test -f ~/services/vikunja/.env
+! test -f ~/.local/share/services/vikunja/.env
 # The podman volumes must still exist
 podman volume exists systemd-vikunja-db
 podman volume exists systemd-vikunja-files
@@ -57,7 +57,7 @@ action = "shell"
 name = "purge-cleans-up"
 run = """set -e
 ryra remove vikunja --purge -y
-! test -d ~/services/vikunja
+! test -d ~/.local/share/services/vikunja
 ! podman volume exists systemd-vikunja-db
 ! podman volume exists systemd-vikunja-files
 """

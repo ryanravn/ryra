@@ -11,17 +11,17 @@ AutoUpdate=registry
 ContainerName=nextcloud-cron
 Network=nextcloud.network
 Volume=nextcloud-app.volume:/var/www/html:U
-Volume=%h/services/nextcloud/data:/var/www/html/data:Z
+Volume=%h/.local/share/services/nextcloud/data:/var/www/html/data:Z
 Exec=/cron.sh
 Pull=missing
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 HealthCmd=pgrep -f cron.sh > /dev/null || exit 1
 HealthStartPeriod=30s
 HealthInterval=60s
 HealthRetries=3
 
 [Service]
-EnvironmentFile=%h/services/nextcloud/.env
+EnvironmentFile=%h/.local/share/services/nextcloud/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=300

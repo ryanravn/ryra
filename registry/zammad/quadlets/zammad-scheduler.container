@@ -12,10 +12,10 @@ Network=zammad.network
 Volume=zammad-storage.volume:/opt/zammad/storage:U
 Exec=zammad-scheduler
 Pull=missing
-EnvironmentFile=%h/services/zammad/.env
+EnvironmentFile=%h/.local/share/services/zammad/.env
 
 [Service]
-EnvironmentFile=%h/services/zammad/.env
+EnvironmentFile=%h/.local/share/services/zammad/.env
 Restart=always
 RestartSec=5
 TimeoutStartSec=600

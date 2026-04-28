@@ -20,14 +20,18 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
     if !yes && !dry_run {
         if super::is_interactive() {
             println!("This will:");
-            println!("  - Stop and remove all installed services");
+            println!(
+                "  - Stop and remove all installed services (quadlets in ~/.config/containers/systemd/ + podman volumes)"
+            );
+            println!("  - Delete service data in ~/.local/share/services/");
+            println!("  - Delete ryra config in ~/.config/services/");
             if tailnet_count > 0 {
                 let plural = if tailnet_count == 1 { "" } else { "s" };
                 println!(
                     "  - Remove {tailnet_count} service{plural} from your tailnet (deregister via Tailscale Admin API)"
                 );
             }
-            println!("  - Delete all ryra state and configuration");
+            println!("  - Remove the local Caddy CA cert from your trust store (if present)");
             println!();
 
             let input: String = Input::new()

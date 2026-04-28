@@ -81,7 +81,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 - Core returns typed results describing what needs to happen; CLI decides whether to apply or print
 - All services run under the invoking user's rootless podman (`systemctl --user`)
 - Quadlet files go to `~/.config/containers/systemd/`
-- Service data goes to `~/.local/share/ryra/<name>/`
+- Service data goes to `~/.local/share/services/<name>/`
 - `service_home()` and `quadlet_dir()` return `Result<PathBuf>` — they error if `$HOME` is unset rather than silently falling back to `/tmp`
 - Warns if running as root
 - Registry contributors: read `docs/registry/conventions.md` before adding or modifying a service. It covers the pre/post-hook decision rule, the auth-is-additive idiom, the "runnable without ryra" invariant, and canonical health-check values.
@@ -121,9 +121,9 @@ When `ryra add <service> --auth` is called:
 
 ### Pre-start and post-start scripts
 
-Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/ryra/<service>/configs/scripts/<script>.sh`.
+Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/services/<service>/configs/scripts/<script>.sh`.
 
-The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$RYRA_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$RYRA_SERVICE_HOME` (pointing to `~/.local/share/ryra/<service>/`).
+The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$RYRA_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$RYRA_SERVICE_HOME` (pointing to `~/.local/share/services/<service>/`).
 
 ### Template variables for auth
 
