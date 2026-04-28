@@ -5,6 +5,7 @@ StartLimitBurst=3
 
 [Container]
 Image=docker.io/library/mariadb:10.11
+AutoUpdate=registry
 ContainerName=seafile-mariadb
 Network=seafile.network:alias=mariadb
 Volume=seafile-db-data.volume:/var/lib/mysql:U

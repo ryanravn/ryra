@@ -5,6 +5,7 @@ StartLimitBurst=3
 
 [Container]
 Image=docker.io/library/redis:7-alpine
+AutoUpdate=registry
 ContainerName=twenty-redis
 Network=twenty.network:alias=redis
 Exec=redis-server --maxmemory-policy noeviction

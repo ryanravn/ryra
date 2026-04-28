@@ -5,6 +5,7 @@ StartLimitBurst=3
 
 [Container]
 Image=docker.io/library/postgres:16-alpine
+AutoUpdate=registry
 ContainerName=synapse-db
 Network=synapse.network:alias=db
 Volume=synapse-db.volume:/var/lib/postgresql/data:U

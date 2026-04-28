@@ -5,6 +5,7 @@ StartLimitBurst=3
 
 [Container]
 Image=docker.io/library/postgres:16-alpine
+AutoUpdate=registry
 ContainerName=twenty-postgres
 Network=twenty.network:alias=db
 Volume=twenty-db-data.volume:/var/lib/postgresql/data:U

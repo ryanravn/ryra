@@ -5,6 +5,7 @@ StartLimitBurst=3
 
 [Container]
 Image=docker.io/library/redis:7-alpine
+AutoUpdate=registry
 ContainerName=nextcloud-redis
 Network=nextcloud.network:alias=redis
 Volume=nextcloud-redis-data.volume:/data:U

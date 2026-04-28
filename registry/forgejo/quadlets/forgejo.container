@@ -7,6 +7,7 @@ After=forgejo-postgres.service
 
 [Container]
 Image=codeberg.org/forgejo/forgejo:11
+AutoUpdate=registry
 ContainerName=forgejo
 Network=forgejo.network
 PublishPort=${PORT_HTTP}:3000
