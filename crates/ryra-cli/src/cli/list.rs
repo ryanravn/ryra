@@ -51,8 +51,12 @@ pub fn run(all: bool, long: bool) -> Result<()> {
 
     // Lookup the InstalledService entry for each visible service (if any —
     // removed services won't have one). Drives URL + port derivation.
-    let by_name: HashMap<&str, &InstalledService> = config
-        .services
+    // Reads via `list_installed()` so quadlet headers are the source of
+    // truth: even when preferences.toml is missing or stale, services
+    // still show their full URL/exposure/auth via the metadata stamped
+    // on the main `.container` file at install time.
+    let installed_full = ryra_core::list_installed().unwrap_or_default();
+    let by_name: HashMap<&str, &InstalledService> = installed_full
         .iter()
         .map(|s| (s.name.as_str(), s))
         .collect();

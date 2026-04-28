@@ -171,6 +171,19 @@ impl Exposure {
         matches!(self, Exposure::Tailscale { .. })
     }
 
+    /// Stable string form of the variant, for embedding in
+    /// `# Service-Exposure:` quadlet headers and reading them back.
+    /// Mirrors the snake_case names used by serde's `tag = "kind"`
+    /// representation so the two stay in lockstep.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Exposure::Loopback => "loopback",
+            Exposure::Internal { .. } => "internal",
+            Exposure::Tailscale { .. } => "tailscale",
+            Exposure::Public { .. } => "public",
+        }
+    }
+
     /// Classify a user-supplied URL string into the corresponding
     /// Exposure variant. `*.internal` → `Internal`, `*.ts.net` →
     /// `Tailscale`, anything else → `Public`. Used by the CLI when a
@@ -865,6 +878,19 @@ pub fn add_service(
         })
         .collect();
 
+    // Build provenance metadata that gets embedded as `# Service-*`
+    // headers in the main container file. This is what makes the
+    // quadlet directory authoritative for "what's installed and how
+    // is it wired" — every field a future `ryra list` needs to
+    // reconstruct the install can be read back from these comments.
+    let auth_kind_string = auth_kind.as_ref().map(|a| a.to_string());
+    let metadata = generate::bundle::ServiceMetadata {
+        registry: registry_name,
+        url,
+        exposure_kind: exposure.kind_str(),
+        auth_kind: auth_kind_string.as_deref(),
+    };
+
     // Process quadlet bundle from registry
     let bundle =
         generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
@@ -876,6 +902,7 @@ pub fn add_service(
             podman_args: &podman_args,
             extra_exec_start_pre: &extra_exec_start_pre,
             port_vars: &port_vars,
+            metadata: Some(&metadata),
         })?;
 
     // Generate warnings
@@ -1156,13 +1183,24 @@ pub enum RemoveMode {
 /// Remove a service: update state, return cleanup steps.
 pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResult> {
     let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
+    let config = config::load_or_default(&paths.config_file)?;
 
-    let installed = config
+    // Prefer the preferences entry (carries the canonical exposure
+    // variant + ports), but fall back to reconstructing from the
+    // quadlet's `# Service-*` headers when preferences has drifted.
+    // Without this, `ryra remove` on a drifted-but-installed service
+    // would incorrectly bail with ServiceNotInstalled.
+    let installed_owned: InstalledService = match config
         .services
         .iter()
         .find(|s| s.name == service_name)
-        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+        .cloned()
+    {
+        Some(s) => s,
+        None => build_installed_from_quadlet(service_name)
+            .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?,
+    };
+    let installed = &installed_owned;
 
     // Stop all units belonging to this service (main + sidecars).
     // Quadlet files named {service_name}.ext or {service_name}-sidecar.ext.
@@ -1170,7 +1208,17 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
     let mut has_named_volumes = false;
-    let all_names: Vec<&str> = config.services.iter().map(|s| s.name.as_str()).collect();
+    // Union preferences + quadlet scan so the "is foo-bar a sibling
+    // service?" prefix check catches drifted entries too.
+    let scanned = scan_managed_services().unwrap_or_default();
+    let mut name_pool: Vec<String> =
+        config.services.iter().map(|s| s.name.clone()).collect();
+    for n in scanned {
+        if !name_pool.contains(&n) {
+            name_pool.push(n);
+        }
+    }
+    let all_names: Vec<&str> = name_pool.iter().map(|s| s.as_str()).collect();
 
     // Disable the Tailscale Service before tearing the host port down.
     // Always emit when the service was tailscale-enabled — the API
@@ -1602,28 +1650,112 @@ pub fn scan_managed_services() -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// List installed services. Reads metadata from `preferences.toml`,
-/// then unions in any service whose `.container` file is on disk but
-/// missing from preferences (drift recovery — those entries appear with
-/// minimal metadata). The quadlet scan is authoritative for presence;
-/// preferences supplies URL/exposure/auth that aren't easily derivable
-/// from quadlet content alone.
+/// Build a full [`InstalledService`] for a single service from its
+/// quadlet metadata headers + `.env` file. Returns `None` if the main
+/// `.container` file isn't present or doesn't carry the
+/// `# Service-Source:` marker (i.e. ryra didn't install it).
+///
+/// This is what makes the quadlet directory authoritative: every field
+/// the consumer needs (name, registry, URL, exposure, auth, ports) is
+/// derived from on-disk artifacts ryra itself stamped at install time.
+fn build_installed_from_quadlet(service_name: &str) -> Option<InstalledService> {
+    let main_path = quadlet_dir().ok()?.join(format!("{service_name}.container"));
+    let content = std::fs::read_to_string(&main_path).ok()?;
+
+    let mut registry = String::new();
+    let mut url: Option<String> = None;
+    let mut exposure_kind: Option<String> = None;
+    let mut auth_kind: Option<registry::service_def::AuthKind> = None;
+    let mut found_marker = false;
+
+    for line in content.lines().take(16) {
+        let trimmed = line.trim();
+        if trimmed.strip_prefix("# Service-Source: registry/")
+            == Some(service_name)
+        {
+            found_marker = true;
+        } else if let Some(v) = trimmed.strip_prefix("# Service-Registry: ") {
+            registry = v.to_string();
+        } else if let Some(v) = trimmed.strip_prefix("# Service-Url: ") {
+            url = Some(v.to_string());
+        } else if let Some(v) = trimmed.strip_prefix("# Service-Exposure: ") {
+            exposure_kind = Some(v.to_string());
+        } else if let Some(v) = trimmed.strip_prefix("# Service-Auth: ") {
+            auth_kind = match v {
+                "oidc" => Some(registry::service_def::AuthKind::Oidc),
+                _ => None,
+            };
+        }
+    }
+    if !found_marker {
+        return None;
+    }
+
+    // Reconstruct exposure from the kind + url combo. Loopback is the
+    // explicit "no URL" variant; the others all carry their URL.
+    let exposure = match (exposure_kind.as_deref(), url.as_deref()) {
+        (Some("internal"), Some(u)) => Exposure::Internal { url: u.to_string() },
+        (Some("public"), Some(u)) => Exposure::Public { url: u.to_string() },
+        (Some("tailscale"), Some(u)) => Exposure::Tailscale { url: u.to_string() },
+        _ => Exposure::Loopback,
+    };
+
+    // Ports come from the `.env` file ryra writes alongside the quadlet
+    // — `PORT_<NAME>=<value>` lines map back to the BTreeMap keyed by
+    // lowercase name. Missing `.env` is treated as empty (still a valid
+    // install — services without published ports legitimately omit it).
+    let ports = service_home(service_name)
+        .ok()
+        .and_then(|home| std::fs::read_to_string(home.join(".env")).ok())
+        .map(|env| {
+            env.lines()
+                .filter_map(|l| {
+                    let l = l.trim();
+                    if l.is_empty() || l.starts_with('#') {
+                        return None;
+                    }
+                    let (key, val) = l.split_once('=')?;
+                    let name = key.strip_prefix("PORT_")?.to_lowercase();
+                    let port = val.trim_matches(|c: char| c == '"' || c == '\'').parse::<u16>().ok()?;
+                    Some((name, port))
+                })
+                .collect::<std::collections::BTreeMap<String, u16>>()
+        })
+        .unwrap_or_default();
+
+    Some(InstalledService {
+        name: service_name.to_string(),
+        version: "0.1.0".to_string(),
+        repo: registry,
+        ports,
+        auth_kind,
+        exposure,
+        installed: true,
+    })
+}
+
+/// List installed services. **Quadlet directory is the source of
+/// truth** — every service whose main `.container` file carries our
+/// marker is reconstructed from its on-disk headers + `.env`. The
+/// preferences file is only consulted as a fallback for entries the
+/// scan can't see (e.g. partially-rolled-out installs from older
+/// ryra versions before metadata headers landed).
 pub fn list_installed() -> Result<Vec<InstalledService>> {
+    let names = scan_managed_services().unwrap_or_default();
+    let mut out: Vec<InstalledService> = names
+        .iter()
+        .filter_map(|n| build_installed_from_quadlet(n))
+        .collect();
+
+    // Compatibility: preferences.toml services that weren't found via
+    // scan (stale entry, or pre-marker installs). Without this, a
+    // bookkeeping entry without an actual quadlet would silently
+    // disappear from `ryra list -a`, making cleanup harder.
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
-    let mut out = config.services.clone();
-    let on_disk = scan_managed_services().unwrap_or_default();
-    for name in on_disk {
-        if !out.iter().any(|s| s.name == name) {
-            out.push(InstalledService {
-                name,
-                version: String::new(),
-                repo: String::new(),
-                ports: std::collections::BTreeMap::new(),
-                auth_kind: None,
-                exposure: Exposure::Loopback,
-                installed: true,
-            });
+    for svc in config.services {
+        if !out.iter().any(|s| s.name == svc.name) {
+            out.push(svc);
         }
     }
     Ok(out)

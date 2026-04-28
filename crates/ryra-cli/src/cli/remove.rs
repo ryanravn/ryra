@@ -98,10 +98,20 @@ async fn remove_one(
     skip_prompt: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let is_installed = config
+    // A service counts as installed if EITHER preferences.toml lists it
+    // OR its main `.container` file is present with our marker. The
+    // latter handles the drift case (preferences wiped but services
+    // still on disk) so `ryra remove` can clean them up properly
+    // instead of bailing with the misleading "use --purge" hint.
+    let in_prefs = config
         .services
         .iter()
         .any(|s| s.name == service && s.installed);
+    let on_disk = ryra_core::scan_managed_services()
+        .ok()
+        .map(|names| names.iter().any(|n| n == service))
+        .unwrap_or(false);
+    let is_installed = in_prefs || on_disk;
 
     if is_installed {
         let mode = if purge {
