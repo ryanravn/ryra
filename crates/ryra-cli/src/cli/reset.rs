@@ -41,9 +41,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
             }
             if volume_count > 0 {
                 let plural = if volume_count == 1 { "" } else { "s" };
-                println!(
-                    "  - Remove {volume_count} legacy podman volume{plural} (from pre-bind-mount installs)"
-                );
+                println!("  - Remove {volume_count} podman named volume{plural}");
             }
             println!("  - Remove the local Caddy CA cert from your trust store (if present)");
             println!();
