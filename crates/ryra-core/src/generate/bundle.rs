@@ -3,28 +3,6 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use crate::generate::GeneratedFile;
 
-/// Provenance + wiring metadata embedded as `# Service-*` comment
-/// headers in the main `.container` file at install time. These let
-/// callers reconstruct an installed-service view (name, URL, exposure,
-/// auth wiring) by scanning the quadlet directory alone — no
-/// `preferences.toml` lookup required. Sidecar containers
-/// (`<svc>-db.container`, etc.) only get the bare `# Service-Source:`
-/// marker; the wiring lines belong on the main file.
-pub struct ServiceMetadata<'a> {
-    /// Registry the service definition came from, e.g. `default` or
-    /// a user-defined name from `ryra registry add`.
-    pub registry: &'a str,
-    /// Public URL (`--url`) if the user supplied one — `None` for
-    /// loopback installs. Already includes scheme + port.
-    pub url: Option<&'a str>,
-    /// String form of [`crate::Exposure`]:
-    /// `loopback` | `internal` | `public` | `tailscale`.
-    pub exposure_kind: &'a str,
-    /// Auth kind chosen at install time (`oidc` | `forward-auth`),
-    /// `None` if the service was installed without `--auth`.
-    pub auth_kind: Option<&'a str>,
-}
-
 /// Parameters for [`process_quadlet_bundle`].
 pub struct ProcessBundleParams<'a> {
     pub service_dir: &'a Path,
@@ -39,11 +17,6 @@ pub struct ProcessBundleParams<'a> {
     /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
     /// values because systemd doesn't expand EnvironmentFile vars in directives.
     pub port_vars: &'a [(String, String)],
-    /// Metadata embedded as `# Service-*` headers on the main container
-    /// file. `None` is allowed for callers that don't yet wire it
-    /// through (test fixtures, for instance) — without it, scanners
-    /// fall back to minimal defaults.
-    pub metadata: Option<&'a ServiceMetadata<'a>>,
 }
 
 /// Result of processing a quadlet bundle from the registry.
@@ -261,23 +234,11 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
         // `ryra remove` and `ryra list` can tell registry-managed files
         // from hand-written ones. The marker format matches the one
         // used in Caddyfile site blocks and /etc/hosts entries.
-        // Sidecars (e.g. forgejo-db.container) get the marker only;
-        // the main container also gets `# Service-*` wiring headers so
-        // the quadlet directory is the single source of truth for
-        // every installed service's URL, exposure, auth, and registry.
+        // Wiring details (exposure / url / auth / registry) live in the
+        // service's metadata.toml — this comment carries provenance only.
         let is_main_container =
             file_name == format!("{}.container", params.service_name);
-        let mut header = format!("# Service-Source: registry/{}\n", params.service_name);
-        if is_main_container && let Some(meta) = params.metadata {
-            header.push_str(&format!("# Service-Registry: {}\n", meta.registry));
-            header.push_str(&format!("# Service-Exposure: {}\n", meta.exposure_kind));
-            if let Some(url) = meta.url {
-                header.push_str(&format!("# Service-Url: {url}\n"));
-            }
-            if let Some(auth) = meta.auth_kind {
-                header.push_str(&format!("# Service-Auth: {auth}\n"));
-            }
-        }
+        let header = format!("# Service-Source: registry/{}\n", params.service_name);
         content = header + &content;
 
         // Only inject networks/volumes into .container files
@@ -542,7 +503,6 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_vars: &[],
-            metadata: None,
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("quadlets/ directory not found"));
@@ -577,7 +537,6 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_vars: &[],
-            metadata: None,
         };
 
         let bundle = process_quadlet_bundle(&params)
@@ -626,7 +585,6 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_vars: &[],
-            metadata: None,
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));

@@ -100,6 +100,47 @@ pub fn service_home(service_name: &str) -> Result<PathBuf> {
     Ok(service_data_root()?.join(service_name))
 }
 
+/// Per-install metadata file: `~/.local/share/services/<name>/metadata.toml`.
+/// Stores the install-time decisions (registry, exposure, url, auth) so
+/// later commands can reconstruct the install without scraping comments.
+pub fn metadata_path(service_name: &str) -> Result<PathBuf> {
+    Ok(service_home(service_name)?.join("metadata.toml"))
+}
+
+/// Per-install record. Written at `ryra add` time, read by every
+/// command that needs to know how a service was set up. Mirrors the
+/// data that used to live in `# Service-*` quadlet header comments.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Metadata {
+    pub registry: String,
+    /// Exposure variant: `loopback` | `internal` | `public` | `tailscale`.
+    pub exposure: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Auth kind: `oidc` if `--auth` was used, otherwise absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+}
+
+/// Load metadata.toml for an installed service. Returns `None` if the
+/// file doesn't exist (service not installed via this ryra version, or
+/// uninstalled), `Err` if it exists but can't be parsed.
+pub fn load_metadata(service_name: &str) -> Result<Option<Metadata>> {
+    let path = metadata_path(service_name)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|source| Error::FileRead {
+        path: path.clone(),
+        source,
+    })?;
+    let meta: Metadata = toml::from_str(&content).map_err(|source| Error::TomlParse {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(Some(meta))
+}
+
 /// Quadlet directory: ~/.config/containers/systemd
 pub fn quadlet_dir() -> Result<PathBuf> {
     let base = match dirs::config_dir() {
@@ -176,10 +217,10 @@ impl Exposure {
         matches!(self, Exposure::Tailscale { .. })
     }
 
-    /// Stable string form of the variant, for embedding in
-    /// `# Service-Exposure:` quadlet headers and reading them back.
-    /// Mirrors the snake_case names used by serde's `tag = "kind"`
-    /// representation so the two stay in lockstep.
+    /// Stable string form of the variant, for the `exposure` field in
+    /// `metadata.toml` and reading it back. Mirrors the snake_case names
+    /// used by serde's `tag = "kind"` representation so the two stay in
+    /// lockstep.
     pub fn kind_str(&self) -> &'static str {
         match self {
             Exposure::Loopback => "loopback",
@@ -888,17 +929,15 @@ pub fn add_service(
         })
         .collect();
 
-    // Build provenance metadata that gets embedded as `# Service-*`
-    // headers in the main container file. This is what makes the
-    // quadlet directory authoritative for "what's installed and how
-    // is it wired" — every field a future `ryra list` needs to
-    // reconstruct the install can be read back from these comments.
-    let auth_kind_string = auth_kind.as_ref().map(|a| a.to_string());
-    let metadata = generate::bundle::ServiceMetadata {
-        registry: registry_name,
-        url,
-        exposure_kind: exposure.kind_str(),
-        auth_kind: auth_kind_string.as_deref(),
+    // Build install metadata persisted to `metadata.toml` in service_home.
+    // This is what makes service state authoritative for "what's installed
+    // and how is it wired" — every field a future `ryra list` needs to
+    // reconstruct the install reads back from this file.
+    let install_metadata = Metadata {
+        registry: registry_name.to_string(),
+        exposure: exposure.kind_str().to_string(),
+        url: url.map(str::to_string),
+        auth: auth_kind.as_ref().map(|a| a.to_string()),
     };
 
     // Process quadlet bundle from registry
@@ -911,7 +950,6 @@ pub fn add_service(
             podman_args: &podman_args,
             extra_exec_start_pre: &extra_exec_start_pre,
             port_vars: &port_vars,
-            metadata: Some(&metadata),
         })?;
 
     // Generate warnings
@@ -999,6 +1037,15 @@ pub fn add_service(
 
     // 5. Write .env file
     steps.push(Step::WriteFile(output.env_file));
+
+    // 5b. Write metadata.toml — install record (registry, exposure, url,
+    // auth) used by `ryra list` / `remove` / `status` to reconstruct the
+    // install. World-readable mode (atomic_write picks 0o644 by name).
+    let metadata_content = toml::to_string_pretty(&install_metadata)?;
+    steps.push(Step::WriteFile(GeneratedFile {
+        path: metadata_path(service_name)?,
+        content: metadata_content,
+    }));
 
     // 6. Create bind mount directories (must exist before container starts)
     for dir in &bundle.bind_mount_dirs {
@@ -1201,7 +1248,7 @@ pub enum RemoveMode {
 pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResult> {
     // Reconstruct the InstalledService view from the quadlet's
     // `# Service-*` headers — that's the source of truth now.
-    let installed_owned = build_installed_from_quadlet(service_name)
+    let installed_owned = build_installed_from_metadata(service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
     let installed = &installed_owned;
 
@@ -1621,55 +1668,26 @@ pub fn scan_managed_services() -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// Build a full [`InstalledService`] for a single service from its
-/// quadlet metadata headers + `.env` file. Returns `None` if the main
-/// `.container` file isn't present or doesn't carry the
-/// `# Service-Source:` marker (i.e. ryra didn't install it).
-///
-/// This is what makes the quadlet directory authoritative: every field
-/// the consumer needs (name, registry, URL, exposure, auth, ports) is
-/// derived from on-disk artifacts ryra itself stamped at install time.
-fn build_installed_from_quadlet(service_name: &str) -> Option<InstalledService> {
-    let main_path = quadlet_dir().ok()?.join(format!("{service_name}.container"));
-    let content = std::fs::read_to_string(&main_path).ok()?;
+/// Build a full [`InstalledService`] from `metadata.toml` + `.env`.
+/// Returns `None` if metadata.toml is missing — that's the signal that
+/// either the service was never installed or it was installed by a
+/// pre-metadata.toml ryra (in which case the caller should treat it as
+/// not-installed and let the user reinstall).
+fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService> {
+    let meta = load_metadata(service_name).ok().flatten()?;
 
-    let mut registry = String::new();
-    let mut url: Option<String> = None;
-    let mut exposure_kind: Option<String> = None;
-    let mut auth_kind: Option<registry::service_def::AuthKind> = None;
-    let mut found_marker = false;
-
-    for line in content.lines().take(16) {
-        let trimmed = line.trim();
-        if trimmed.strip_prefix("# Service-Source: registry/")
-            == Some(service_name)
-        {
-            found_marker = true;
-        } else if let Some(v) = trimmed.strip_prefix("# Service-Registry: ") {
-            registry = v.to_string();
-        } else if let Some(v) = trimmed.strip_prefix("# Service-Url: ") {
-            url = Some(v.to_string());
-        } else if let Some(v) = trimmed.strip_prefix("# Service-Exposure: ") {
-            exposure_kind = Some(v.to_string());
-        } else if let Some(v) = trimmed.strip_prefix("# Service-Auth: ") {
-            auth_kind = match v {
-                "oidc" => Some(registry::service_def::AuthKind::Oidc),
-                _ => None,
-            };
-        }
-    }
-    if !found_marker {
-        return None;
-    }
-
-    // Reconstruct exposure from the kind + url combo. Loopback is the
-    // explicit "no URL" variant; the others all carry their URL.
-    let exposure = match (exposure_kind.as_deref(), url.as_deref()) {
-        (Some("internal"), Some(u)) => Exposure::Internal { url: u.to_string() },
-        (Some("public"), Some(u)) => Exposure::Public { url: u.to_string() },
-        (Some("tailscale"), Some(u)) => Exposure::Tailscale { url: u.to_string() },
+    // Loopback is the no-URL variant; everything else carries one.
+    let exposure = match (meta.exposure.as_str(), meta.url.as_deref()) {
+        ("internal", Some(u)) => Exposure::Internal { url: u.to_string() },
+        ("public", Some(u)) => Exposure::Public { url: u.to_string() },
+        ("tailscale", Some(u)) => Exposure::Tailscale { url: u.to_string() },
         _ => Exposure::Loopback,
     };
+
+    let auth_kind = meta.auth.as_deref().and_then(|s| match s {
+        "oidc" => Some(registry::service_def::AuthKind::Oidc),
+        _ => None,
+    });
 
     // Ports come from the `.env` file ryra writes alongside the quadlet
     // — `PORT_<NAME>=<value>` lines map back to the BTreeMap keyed by
@@ -1697,7 +1715,7 @@ fn build_installed_from_quadlet(service_name: &str) -> Option<InstalledService> 
     Some(InstalledService {
         name: service_name.to_string(),
         version: "0.1.0".to_string(),
-        repo: registry,
+        repo: meta.registry,
         ports,
         auth_kind,
         exposure,
@@ -1715,7 +1733,7 @@ pub fn list_installed() -> Result<Vec<InstalledService>> {
     let names = scan_managed_services().unwrap_or_default();
     let out: Vec<InstalledService> = names
         .iter()
-        .filter_map(|n| build_installed_from_quadlet(n))
+        .filter_map(|n| build_installed_from_metadata(n))
         .collect();
     Ok(out)
 }
@@ -1769,7 +1787,7 @@ pub struct SearchResult {
 
 /// Get test definitions for an installed service by reading its `test.toml`.
 pub async fn service_tests(service_name: &str) -> Result<ServiceTestInfo> {
-    let installed = build_installed_from_quadlet(service_name)
+    let installed = build_installed_from_metadata(service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
     let service_ref = service_ref_from_installed(&installed);
