@@ -44,11 +44,12 @@ test("full OIDC login through Authelia creates a Zammad session", async ({ brows
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
-  // 1. Visit Zammad — the SPA routes to #/login. Wait for the login route
-  //    to be reached before interacting, otherwise the click can land
-  //    before Vue has attached handlers.
+  // 1. Visit Zammad and wait for the SSO button to render. On a freshly
+  //    booted instance the Vue SPA can take 30s+ to bootstrap and decide
+  //    the user is unauthenticated — waiting on the button itself is more
+  //    reliable than `waitForURL("#login")` because the URL transits
+  //    several hash routes during hydration on slow hosts.
   await page.goto(`${ZAMMAD_URL}/`, { timeout: 30_000 });
-  await page.waitForURL((url) => url.hash.startsWith("#login"), { timeout: 20_000 });
   await page.waitForLoadState("networkidle");
 
   // 2. Click the SSO button. Zammad renders it with class
@@ -56,7 +57,7 @@ test("full OIDC login through Authelia creates a Zammad session", async ({ brows
   //    is enabled. Label comes from `auth_openid_connect_credentials.display_name`.
   //    Use Promise.all with waitForURL so we don't race past the redirect.
   const sso = page.locator("button.auth-provider--openid-connect");
-  await expect(sso).toBeVisible({ timeout: 15_000 });
+  await expect(sso).toBeVisible({ timeout: 60_000 });
   await Promise.all([
     page.waitForURL((url) => url.hostname === "auth.internal", { timeout: 30_000 }),
     sso.click(),
