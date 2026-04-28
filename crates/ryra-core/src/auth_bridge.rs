@@ -123,7 +123,7 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
         }
     }
     if let Ok(caddy_ca) = std::fs::read_to_string(&ca_cert_host) {
-        bundle.push_str("\n# ryra-caddy-ca\n");
+        bundle.push_str("\n# services-caddy-ca\n");
         bundle.push_str(&caddy_ca);
     }
     steps.push(Step::WriteFile(GeneratedFile {

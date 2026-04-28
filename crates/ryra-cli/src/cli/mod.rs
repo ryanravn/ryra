@@ -55,17 +55,17 @@ struct CaCertTarget {
 const CA_TARGETS: &[CaCertTarget] = &[
     // Fedora / RHEL
     CaCertTarget {
-        cert_path: "/etc/pki/ca-trust/source/anchors/ryra-caddy-ca.crt",
+        cert_path: "/etc/pki/ca-trust/source/anchors/services-caddy-ca.crt",
         update_cmd: "update-ca-trust",
     },
     // Arch Linux
     CaCertTarget {
-        cert_path: "/etc/ca-certificates/trust-source/anchors/ryra-caddy-ca.crt",
+        cert_path: "/etc/ca-certificates/trust-source/anchors/services-caddy-ca.crt",
         update_cmd: "update-ca-trust",
     },
     // Debian / Ubuntu
     CaCertTarget {
-        cert_path: "/usr/local/share/ca-certificates/ryra-caddy-ca.crt",
+        cert_path: "/usr/local/share/ca-certificates/services-caddy-ca.crt",
         update_cmd: "update-ca-certificates",
     },
 ];
@@ -73,7 +73,7 @@ const CA_TARGETS: &[CaCertTarget] = &[
 /// The nickname used for ryra's Caddy CA in every NSS database (user NSS for
 /// Chromium and every Firefox profile). Keeping it symmetric on install and
 /// uninstall means `remove` / `reset` can always locate and drop the cert.
-pub const CADDY_CA_NICKNAME: &str = "ryra-caddy-ca";
+pub const CADDY_CA_NICKNAME: &str = "services-caddy-ca";
 
 /// `~/.pki/nssdb` — the Chromium-family (Chrome, Edge, Brave, Opera, Vivaldi)
 /// per-user cert store. Returns `None` if `$HOME` is unset.

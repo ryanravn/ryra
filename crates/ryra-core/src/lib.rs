@@ -1087,7 +1087,7 @@ pub fn add_service(
     ));
 
     // 9d. Caddy: seed the user-owned `tls.caddy` snippet on first install.
-    // Site blocks emit `import ryra_tls`; this file defines that snippet.
+    // Site blocks emit `import services_tls`; this file defines that snippet.
     // After first write ryra never touches it — users edit it directly
     // for Cloudflare DNS-01, wildcards, BYO certs, plain HTTP for Tunnel,
     // anything Caddy supports. seed-caddyfile.sh defensively recreates

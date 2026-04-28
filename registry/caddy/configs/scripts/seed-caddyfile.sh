@@ -20,7 +20,7 @@ PORT_HTTPS="${PORT_HTTPS:-8443}"
 # `import tls.caddy` would fail and the container wouldn't start.
 if [ ! -f "$TLS_SNIPPET" ]; then
 	cat > "$TLS_SNIPPET" <<'EOF'
-(ryra_tls) {
+(services_tls) {
 	tls internal
 }
 EOF
