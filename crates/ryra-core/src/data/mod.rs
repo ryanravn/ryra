@@ -6,7 +6,6 @@ pub mod volumes;
 
 use std::path::{Path, PathBuf};
 
-use crate::config::schema::Config;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,25 +33,22 @@ pub struct ServiceData {
 const NON_SERVICE_DIRS: &[&str] = &["test-reports"];
 
 /// Walk every ryra-visible service and return one `ServiceData` per service.
-pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
+pub fn enumerate_all() -> Result<Vec<ServiceData>> {
     let home_root = crate::service_data_root()?;
     let quadlet = crate::quadlet_dir()?;
 
-    // Collect candidate service names: installed ones + any service whose
-    // `.container` carries our `# Service-Source:` marker + any dir under
-    // the data root. The quadlet scan is what catches drift — if
-    // preferences.toml was wiped but the service is still on disk, the
-    // marker proves ryra installed it and `ryra list` should still show it.
-    let mut names: std::collections::BTreeSet<String> =
-        config.services.iter().map(|s| s.name.clone()).collect();
+    // Candidate service names: every quadlet with our `# Service-Source:`
+    // marker + every dir under the data root. The marker scan is the
+    // authoritative source for "installed"; data-root dirs catch
+    // orphan data (services that were removed in Preserve mode and
+    // still have a home dir or volumes lying around).
     let managed_via_marker: std::collections::HashSet<String> =
         crate::scan_managed_services()
             .unwrap_or_default()
             .into_iter()
             .collect();
-    for n in &managed_via_marker {
-        names.insert(n.clone());
-    }
+    let mut names: std::collections::BTreeSet<String> =
+        managed_via_marker.iter().cloned().collect();
     if home_root.is_dir() {
         let entries = std::fs::read_dir(&home_root).map_err(|source| Error::FileRead {
             path: home_root.clone(),
@@ -99,12 +95,13 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
 
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        let status = match config.services.iter().find(|s| s.name == name) {
-            Some(s) if s.installed => ServiceStatus::Installed,
-            // Preferences entry missing but a marker'd quadlet is on
-            // disk → the service is installed; preferences just drifted.
-            _ if managed_via_marker.contains(&name) => ServiceStatus::Installed,
-            _ => ServiceStatus::Orphan,
+        // Marker present → installed. Marker absent but home dir or
+        // volumes still around → orphan (typically left by a Preserve
+        // mode `ryra remove`, awaiting `--purge`).
+        let status = if managed_via_marker.contains(&name) {
+            ServiceStatus::Installed
+        } else {
+            ServiceStatus::Orphan
         };
         let home_dir = home_root.join(&name);
         let data_paths = if home_dir.exists() {
@@ -142,7 +139,7 @@ pub fn enumerate_all(config: &Config) -> Result<Vec<ServiceData>> {
 /// `known_services` hint to match `systemd-<svc>-data` against and those
 /// volumes end up unattributed. Looking up by name dodges that because
 /// the name itself seeds the owner match.
-pub fn enumerate_service(config: &Config, name: &str) -> Result<Option<ServiceData>> {
+pub fn enumerate_service(name: &str) -> Result<Option<ServiceData>> {
     let home_root = crate::service_data_root()?;
     let quadlet = crate::quadlet_dir()?;
     let home_dir = home_root.join(name);
@@ -172,9 +169,10 @@ pub fn enumerate_service(config: &Config, name: &str) -> Result<Option<ServiceDa
         return Ok(None);
     }
 
-    let status = match config.services.iter().find(|s| s.name == name) {
-        Some(s) if s.installed => ServiceStatus::Installed,
-        _ => ServiceStatus::Orphan,
+    let status = if crate::is_service_installed(name) {
+        ServiceStatus::Installed
+    } else {
+        ServiceStatus::Orphan
     };
 
     Ok(Some(ServiceData {

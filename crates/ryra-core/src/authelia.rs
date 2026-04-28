@@ -216,8 +216,8 @@ pub fn register_oidc_client(
     // Ensure Caddy routes requests for the authelia domain so that OIDC
     // discovery goes through Caddy's TLS termination (authelia needs the
     // X-Forwarded-Proto/Host headers for issuer validation).
-    if let Some(domain) = config
-        .services
+    let installed = crate::list_installed().unwrap_or_default();
+    if let Some(domain) = installed
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name))
         .and_then(|s| s.exposure.url())

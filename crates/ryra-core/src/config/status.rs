@@ -44,13 +44,13 @@ impl StatusInfo {
                     name: format!("{} ({})", auth.provider_name(), auth.url()),
                 },
             },
-            services: config
-                .services
-                .iter()
+            services: crate::list_installed()
+                .unwrap_or_default()
+                .into_iter()
                 .map(|s| ServiceInfo {
-                    name: s.name.clone(),
+                    name: s.name,
                     url: s.exposure.url().map(|u| u.to_string()),
-                    ports: s.ports.clone(),
+                    ports: s.ports,
                     installed: s.installed,
                 })
                 .collect(),

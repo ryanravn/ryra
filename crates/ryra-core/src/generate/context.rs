@@ -94,16 +94,13 @@ pub fn build_context(
     // auth.* — per-service OIDC credentials (when user chose to enable auth)
     if let (Some(_), Some(auth)) = (auth_kind, &config.auth) {
         let auth_base_url = auth.url().to_string();
-        let caddy_installed = config
-            .services
-            .iter()
-            .any(|s| crate::WellKnownService::Caddy.matches(&s.name) && s.installed);
+        let installed_for_auth = crate::list_installed().unwrap_or_default();
+        let caddy_installed = crate::is_service_installed("caddy");
         // auth.external_url — browser-accessible URL.
         // Uses the stored URL from the auth provider's installed record if available.
         // When Caddy is installed, ensures the URL includes Caddy's HTTPS port
         // so it matches the issuer in authelia's OIDC discovery response.
-        let mut external_url = config
-            .services
+        let mut external_url = installed_for_auth
             .iter()
             .find(|s| s.name == auth.provider_name())
             .and_then(|s| s.exposure.url())
@@ -153,8 +150,11 @@ pub fn build_context(
         );
     }
 
-    // services.* — cross-service references from installed services
-    for installed in &config.services {
+    // services.* — cross-service references from installed services.
+    // Sourced from the quadlet directory (the source of truth for
+    // installed services + their wiring), not preferences.toml.
+    let _ = config; // formerly read installed list from here; now via scan
+    for installed in crate::list_installed().unwrap_or_default() {
         let name = &installed.name;
 
         // services.<name>.port.<port_name> — from stored port mappings

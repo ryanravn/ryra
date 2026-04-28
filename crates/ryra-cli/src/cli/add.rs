@@ -156,8 +156,8 @@ pub async fn run(
         // A fresh `ryra add` would silently inherit them — surprising when
         // the user wants a clean state. Surface it here so they choose.
         if !dry_run
-            && !config.services.iter().any(|s| s.name == service)
-            && let Some(orphan) = ryra_core::data::enumerate_service(&config, service)?
+            && !ryra_core::is_service_installed(service)
+            && let Some(orphan) = ryra_core::data::enumerate_service(service)?
             && orphan.status == ryra_core::data::ServiceStatus::Orphan
             && (!orphan.volumes.is_empty() || !orphan.data_paths.is_empty())
         {
@@ -228,11 +228,7 @@ pub async fn run(
                         true
                     }
                     prompts::SmtpSetupChoice::Inbucket => {
-                        let inbucket_installed = config
-                            .services
-                            .iter()
-                            .any(|s| WellKnownService::Inbucket.matches(&s.name));
-                        if !inbucket_installed {
+                        if !ryra_core::is_service_installed("inbucket") {
                             println!("\nInstalling inbucket...\n");
                             Box::pin(run(
                                 &[WellKnownService::Inbucket.to_string()],
@@ -320,14 +316,10 @@ pub async fn run(
             println!("→ Using {ts_url} (Tailscale)");
             ryra_core::Exposure::Tailscale { url: ts_url }
         } else if needs_https {
-            let caddy_installed = config
-                .services
-                .iter()
-                .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-            if caddy_installed {
-                let caddy_https_port = config
-                    .services
-                    .iter()
+            if ryra_core::is_service_installed("caddy") {
+                let caddy_https_port = ryra_core::list_installed()
+                    .unwrap_or_default()
+                    .into_iter()
                     .find(|s| WellKnownService::Caddy.matches(&s.name))
                     .and_then(|s| s.ports.get("https").copied())
                     .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
@@ -345,7 +337,7 @@ pub async fn run(
                 };
                 ryra_core::Exposure::from_url(&chosen)
             } else if interactive && !dry_run {
-                let chosen = prompt_exposure_for(service, &config, will_install_authelia).await?;
+                let chosen = prompt_exposure_for(service, will_install_authelia).await?;
                 // Reload after potential Caddy install inside the prompt.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
                 chosen
@@ -370,10 +362,7 @@ pub async fn run(
         // but the URL wouldn't actually route anywhere — the user would
         // have to know to add Caddy first, which the previous flow
         // forced and most people forget.
-        let caddy_already_installed = config
-            .services
-            .iter()
-            .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+        let caddy_already_installed = ryra_core::is_service_installed("caddy");
         let need_caddy_for_public_url = url
             .is_some_and(ryra_core::is_public_url)
             && !caddy_already_installed
@@ -625,17 +614,18 @@ pub async fn run(
                 }
                 println!("{service} has leftover state — cleaning up before retry...");
 
-                // `remove_service` requires a config entry, so only use it
-                // for the partial-install case. For the orphan case the
-                // config entry is gone; fall back to `orphan_purge_steps`.
-                let cleanup_cfg = ryra_core::config::load_or_default(&paths.config_file)?;
-                if cleanup_cfg.services.iter().any(|s| s.name == service) {
+                // `remove_service` reconstructs metadata from the
+                // quadlet headers when available — use it whenever the
+                // marker'd `.container` is on disk. For pure-orphan
+                // state (data only, no quadlet) fall back to the
+                // orphan-purge path.
+                if ryra_core::is_service_installed(service) {
                     let remove_result =
                         ryra_core::remove_service(service, ryra_core::RemoveMode::Purge)?;
                     apply::execute_all(&remove_result.steps).await?;
                     ryra_core::finalize_remove(service)?;
                 } else {
-                    let svc_data = ryra_core::data::enumerate_service(&cleanup_cfg, service)?
+                    let svc_data = ryra_core::data::enumerate_service(service)?
                         .ok_or_else(|| {
                             anyhow::anyhow!(
                                 "internal: ServiceIncomplete for '{service}' but no state found"
@@ -824,8 +814,6 @@ pub async fn run(
                 }
                 return Err(e);
             }
-
-            ryra_core::mark_installed(service)?;
 
             // Trust Caddy's self-signed CA, and register the service's
             // hostname in /etc/hosts for browser access. Only fires for
@@ -1532,7 +1520,6 @@ async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
 /// neither `--url` nor `--tailscale` was given.
 async fn prompt_exposure_for(
     service: &str,
-    config: &Config,
     auth_will_inherit: bool,
 ) -> Result<ryra_core::Exposure> {
     let items = &[
@@ -1559,11 +1546,7 @@ async fn prompt_exposure_for(
             // allocated HTTPS port. Match the planner's `installed`-aware
             // check — a stale `installed = false` entry from a killed
             // previous install must not count as ready.
-            let caddy_installed = config
-                .services
-                .iter()
-                .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-            if !caddy_installed {
+            if !ryra_core::is_service_installed("caddy") {
                 println!("\nInstalling caddy (self-signed LAN mode)...\n");
                 Box::pin(run(
                     &[WellKnownService::Caddy.to_string()],
@@ -1578,12 +1561,9 @@ async fn prompt_exposure_for(
                 ))
                 .await?;
             }
-            let config = ryra_core::config::load_or_default(
-                &ryra_core::config::ConfigPaths::resolve()?.config_file,
-            )?;
-            let caddy_https_port = config
-                .services
-                .iter()
+            let caddy_https_port = ryra_core::list_installed()
+                .unwrap_or_default()
+                .into_iter()
                 .find(|s| WellKnownService::Caddy.matches(&s.name))
                 .and_then(|s| s.ports.get("https").copied())
                 .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
@@ -1616,11 +1596,7 @@ async fn prompt_exposure_for(
             let url: String = Input::new()
                 .with_prompt(format!("Public URL for '{service}'"))
                 .interact_text()?;
-            let caddy_installed = config
-                .services
-                .iter()
-                .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-            if !caddy_installed {
+            if !ryra_core::is_service_installed("caddy") {
                 let email: String = Input::new()
                     .with_prompt("Email for Let's Encrypt (optional — for renewal notices, press Enter to skip)")
                     .allow_empty(true)
@@ -1673,11 +1649,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
 
     match provider {
         SmtpProvider::Inbucket => {
-            let inbucket_installed = config
-                .services
-                .iter()
-                .any(|s| WellKnownService::Inbucket.matches(&s.name));
-            if !inbucket_installed {
+            if !ryra_core::is_service_installed("inbucket") {
                 println!("\nInstalling inbucket...\n");
                 Box::pin(run(
                     &[WellKnownService::Inbucket.to_string()],
@@ -1733,10 +1705,7 @@ async fn ensure_dependencies(auth: bool, tailscale: bool, interactive: bool) -> 
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
     let needs_authelia = auth
-        && !config
-            .services
-            .iter()
-            .any(|s| WellKnownService::Authelia.matches(&s.name))
+        && !ryra_core::is_service_installed("authelia")
         && config.auth.is_none();
 
     if !needs_authelia {
@@ -1782,11 +1751,7 @@ async fn ensure_auth_for_add(
         prompts::AuthSetupChoice::External(_) => Ok(true),
         prompts::AuthSetupChoice::InstallAuthelia => {
             // Check if authelia is already installed but auth wasn't configured
-            let authelia_installed = config
-                .services
-                .iter()
-                .any(|s| WellKnownService::Authelia.matches(&s.name));
-            if authelia_installed {
+            if ryra_core::is_service_installed("authelia") {
                 println!();
                 println!("Authelia is already installed — configuring auth...");
                 if try_configure_auth_from_installed(config, paths)? {
@@ -1975,12 +1940,11 @@ fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -
         Err(_) => return Ok(false),
     };
 
-    // Find the port from the installed service record
-    let service = config
-        .services
-        .iter()
-        .find(|s| WellKnownService::Authelia.matches(&s.name));
-    let port = service
+    // Find the port from the quadlet-derived InstalledService view.
+    let port = ryra_core::list_installed()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|s| WellKnownService::Authelia.matches(&s.name))
         .and_then(|s| s.ports.values().next().copied())
         .unwrap_or(DEFAULT_AUTHELIA_PORT);
 

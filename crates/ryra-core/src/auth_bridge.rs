@@ -41,6 +41,10 @@ pub struct AuthBridgeParams<'a> {
     pub service_name: &'a str,
     pub enable_auth: bool,
     pub config: &'a Config,
+    /// Snapshot of installed services. Production callers pass
+    /// [`crate::list_installed`]; tests construct synthetic data so
+    /// they can drive the function without writing real quadlet files.
+    pub installed: &'a [crate::config::schema::InstalledService],
     /// Absolute path to the service's data dir (`~/services/<name>`).
     pub service_data: &'a Path,
 }
@@ -66,8 +70,7 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
         return Ok(None);
     }
     let authelia = params
-        .config
-        .services
+        .installed
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name));
     let Some(authelia) = authelia else {
@@ -81,10 +84,9 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
         return Ok(None);
     }
     let caddy_installed = params
-        .config
-        .services
+        .installed
         .iter()
-        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
+        .any(|s| WellKnownService::Caddy.matches(&s.name));
     if !caddy_installed {
         return Ok(None);
     }
@@ -238,12 +240,18 @@ mod tests {
         }
     }
 
-    fn config_with(services: Vec<InstalledService>, auth: Option<AuthCredentials>) -> Config {
-        Config {
-            services,
+    /// Build a (Config, installed-list) pair so tests can drive `build()`
+    /// without writing real quadlet files. The `services` list is now
+    /// passed alongside `config`, not embedded in it.
+    fn fixture(
+        services: Vec<InstalledService>,
+        auth: Option<AuthCredentials>,
+    ) -> (Config, Vec<InstalledService>) {
+        let cfg = Config {
             auth,
             ..Config::default()
-        }
+        };
+        (cfg, services)
     }
 
     fn write_paths(bridge: &AuthBridge) -> Vec<&Path> {
@@ -260,7 +268,7 @@ mod tests {
     #[test]
     fn returns_none_when_auth_disabled() -> TestResult {
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![installed("authelia", Some("https://auth.internal"))],
             None,
         );
@@ -268,6 +276,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: false,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -277,11 +286,12 @@ mod tests {
     #[test]
     fn returns_none_when_authelia_not_installed() -> TestResult {
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(vec![installed("caddy", None)], None);
+        let (cfg, installed) = fixture(vec![installed("caddy", None)], None);
         let out = build(&AuthBridgeParams {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -291,7 +301,7 @@ mod tests {
     #[test]
     fn returns_none_when_caddy_not_installed() -> TestResult {
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![installed("authelia", Some("https://auth.internal"))],
             None,
         );
@@ -299,6 +309,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -308,7 +319,7 @@ mod tests {
     #[test]
     fn returns_none_for_authelia_itself() -> TestResult {
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![
                 installed("authelia", Some("https://auth.internal")),
                 installed("caddy", None),
@@ -319,6 +330,7 @@ mod tests {
             service_name: "authelia",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -332,7 +344,7 @@ mod tests {
         // construct that bridge — runtime OIDC across containers is the
         // user's responsibility for non-Caddy deployments.
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![
                 installed("authelia", Some("https://auth.test.local")),
                 installed("caddy", None),
@@ -343,6 +355,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -354,7 +367,7 @@ mod tests {
         // Defensive: a URL that fails to parse or lacks a host shouldn't
         // crash the builder — it should bail cleanly.
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![
                 installed("authelia", Some("not-a-url")),
                 installed("caddy", None),
@@ -365,6 +378,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -374,7 +388,7 @@ mod tests {
     #[test]
     fn returns_none_for_caddy_itself() -> TestResult {
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![
                 installed("authelia", Some("https://auth.internal")),
                 installed("caddy", None),
@@ -385,6 +399,7 @@ mod tests {
             service_name: "caddy",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());
@@ -399,7 +414,7 @@ mod tests {
         let service_data = tmp.path().join("forgejo");
         std::fs::create_dir_all(&service_data)?;
 
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![
                 installed("authelia", Some("https://auth.internal")),
                 installed("caddy", None),
@@ -410,6 +425,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: &service_data,
         })?;
         assert!(out.is_some());
@@ -423,7 +439,7 @@ mod tests {
     }
 
     fn build_forgejo_bridge(service_data: &Path, authelia_url: Option<&str>) -> Result<AuthBridge> {
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![
                 installed("authelia", authelia_url),
                 installed("caddy", None),
@@ -434,6 +450,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data,
         })?
         .ok_or_else(|| {
@@ -463,7 +480,7 @@ mod tests {
         // can't tell if the deployment is Caddy-local or something else, so
         // it bails rather than guessing.
         let tmp = tempfile::tempdir()?;
-        let cfg = config_with(
+        let (cfg, installed) = fixture(
             vec![installed("authelia", None), installed("caddy", None)],
             None,
         );
@@ -471,6 +488,7 @@ mod tests {
             service_name: "forgejo",
             enable_auth: true,
             config: &cfg,
+            installed: &installed,
             service_data: tmp.path(),
         })?;
         assert!(out.is_none());

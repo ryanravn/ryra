@@ -5,9 +5,7 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
 pub fn run(all: bool, long: bool) -> Result<()> {
-    let paths = ryra_core::config::ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
-    let mut svcs = enumerate_all(&config)?;
+    let mut svcs = enumerate_all()?;
 
     // Fast path when there's literally nothing to show. Short-circuits
     // the status probe + volume sizing.

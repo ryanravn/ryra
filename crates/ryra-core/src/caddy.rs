@@ -113,11 +113,7 @@ pub fn ensure_auth_provider_routed(
     auth_container_port: u16,
     quadlet_dir: &Path,
 ) -> Result<Vec<Step>> {
-    let caddy_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-    if !caddy_installed {
+    if !crate::is_service_installed("caddy") {
         return Ok(Vec::new());
     }
 

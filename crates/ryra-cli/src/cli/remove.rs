@@ -1,7 +1,6 @@
 use anyhow::Result;
 use dialoguer::Input;
 use ryra_core::Step;
-use ryra_core::config::schema::Config;
 use ryra_core::data::{ServiceData, ServiceStatus};
 
 use super::apply;
@@ -15,7 +14,6 @@ pub async fn run(
     purge: bool,
 ) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
 
     // `--orphans` purges every orphan service (leftover data with no
     // config entry). Never touches installed services. `--purge` is
@@ -24,7 +22,7 @@ pub async fn run(
     // sweeps every orphan. `ryra reset` remains distinct — it
     // additionally wipes ryra's own config, CAs, and registry caches.
     let (targets, effective_purge) = if orphans {
-        let names: Vec<String> = ryra_core::data::enumerate_all(&config)?
+        let names: Vec<String> = ryra_core::data::enumerate_all()?
             .into_iter()
             .filter(|s| matches!(s.status, ServiceStatus::Orphan))
             .map(|s| s.service)
@@ -33,17 +31,12 @@ pub async fn run(
             println!("No orphan data to purge.");
             return Ok(());
         }
-        confirm_bulk(&names, true, yes, dry_run, &config)?;
+        confirm_bulk(&names, true, yes, dry_run)?;
         (names, true)
     } else if all {
-        let mut names: Vec<String> = config
-            .services
-            .iter()
-            .filter(|s| s.installed)
-            .map(|s| s.name.clone())
-            .collect();
+        let mut names: Vec<String> = ryra_core::scan_managed_services()?;
         if purge {
-            for svc in ryra_core::data::enumerate_all(&config)? {
+            for svc in ryra_core::data::enumerate_all()? {
                 if matches!(svc.status, ServiceStatus::Orphan) && !names.contains(&svc.service) {
                     names.push(svc.service);
                 }
@@ -54,7 +47,7 @@ pub async fn run(
             return Ok(());
         }
         names.sort();
-        confirm_bulk(&names, purge, yes, dry_run, &config)?;
+        confirm_bulk(&names, purge, yes, dry_run)?;
         (names, purge)
     } else {
         (services.to_vec(), purge)
@@ -83,7 +76,7 @@ pub async fn run(
     };
 
     for service in &targets {
-        remove_one(&config, service, effective_purge, skip_prompt, dry_run).await?;
+        remove_one(service, effective_purge, skip_prompt, dry_run).await?;
     }
     Ok(())
 }
@@ -92,26 +85,14 @@ pub async fn run(
 /// deregisters via `remove_service`) and the "orphan + purge" path
 /// (wipes leftover home dir + volumes directly).
 async fn remove_one(
-    config: &ryra_core::config::schema::Config,
     service: &str,
     purge: bool,
     skip_prompt: bool,
     dry_run: bool,
 ) -> Result<()> {
-    // A service counts as installed if EITHER preferences.toml lists it
-    // OR its main `.container` file is present with our marker. The
-    // latter handles the drift case (preferences wiped but services
-    // still on disk) so `ryra remove` can clean them up properly
-    // instead of bailing with the misleading "use --purge" hint.
-    let in_prefs = config
-        .services
-        .iter()
-        .any(|s| s.name == service && s.installed);
-    let on_disk = ryra_core::scan_managed_services()
-        .ok()
-        .map(|names| names.iter().any(|n| n == service))
-        .unwrap_or(false);
-    let is_installed = in_prefs || on_disk;
+    // Quadlet directory is the source of truth: if the marker'd
+    // `.container` is present, the service is installed.
+    let is_installed = ryra_core::is_service_installed(service);
 
     if is_installed {
         let mode = if purge {
@@ -127,7 +108,7 @@ async fn remove_one(
         // inference — enumerate_service would return None even though
         // the volumes still exist on disk.
         let preserved = if matches!(mode, ryra_core::RemoveMode::Preserve) {
-            preserved_items(config, service)
+            preserved_items(service)
         } else {
             Vec::new()
         };
@@ -160,7 +141,7 @@ async fn remove_one(
     // --purge has nothing to do (the service is already deregistered).
     // Tell the user how to finish cleanup.
     if !purge {
-        let svc = ryra_core::data::enumerate_service(config, service)?;
+        let svc = ryra_core::data::enumerate_service(service)?;
         if svc.is_some() {
             anyhow::bail!(
                 "'{service}' is already removed but still has data. Run `ryra remove {service} --purge` to wipe it."
@@ -170,7 +151,7 @@ async fn remove_one(
     }
 
     // Orphan + --purge: purge its leftover data.
-    let svc = ryra_core::data::enumerate_service(config, service)?
+    let svc = ryra_core::data::enumerate_service(service)?
         .ok_or_else(|| anyhow::anyhow!("no service or leftover data for '{service}'"))?;
     let steps = ryra_core::orphan_purge_steps(&svc);
     if steps.is_empty() {
@@ -248,8 +229,8 @@ fn prompt_installed(
 /// behind: classified data paths under the home dir plus any podman
 /// named volumes. Returns an empty vec for services that live entirely
 /// in their `.env`/config.
-fn preserved_items(config: &Config, service: &str) -> Vec<String> {
-    let Ok(Some(svc)) = ryra_core::data::enumerate_service(config, service) else {
+fn preserved_items(service: &str) -> Vec<String> {
+    let Ok(Some(svc)) = ryra_core::data::enumerate_service(service) else {
         return Vec::new();
     };
     let mut items: Vec<String> = svc
@@ -292,7 +273,6 @@ fn confirm_bulk(
     purge: bool,
     yes: bool,
     dry_run: bool,
-    config: &Config,
 ) -> Result<()> {
     if yes || dry_run {
         return Ok(());
@@ -305,16 +285,14 @@ fn confirm_bulk(
         println!("  {n}");
     }
     println!();
+    let installed = ryra_core::list_installed().unwrap_or_default();
     let tailnet_count = names
         .iter()
         .filter(|n| {
-            config
-                .services
-                .iter()
-                .any(|s| {
-                    &s.name == *n
-                        && matches!(s.exposure, ryra_core::Exposure::Tailscale { .. })
-                })
+            installed.iter().any(|s| {
+                &s.name == *n
+                    && matches!(s.exposure, ryra_core::Exposure::Tailscale { .. })
+            })
         })
         .count();
     if tailnet_count > 0 {

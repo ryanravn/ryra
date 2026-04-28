@@ -235,11 +235,13 @@ pub fn is_public_url(url: &str) -> bool {
         || host.ends_with(".ts.net"))
 }
 
-/// Look up Caddy's HTTPS port from the installed service record.
-pub(crate) fn caddy_https_port(config: &Config) -> u16 {
-    config
-        .services
-        .iter()
+/// Look up Caddy's HTTPS port. Reads from the quadlet scan (which
+/// reconstructs ports from the service's `.env` file), falling back
+/// to the default when caddy isn't installed yet.
+pub(crate) fn caddy_https_port(_config: &Config) -> u16 {
+    list_installed()
+        .unwrap_or_default()
+        .into_iter()
         .find(|s| WellKnownService::Caddy.matches(&s.name))
         .and_then(|s| s.ports.get("https").copied())
         .unwrap_or(DEFAULT_CADDY_HTTPS_PORT)
@@ -424,7 +426,6 @@ pub fn service_ref_from_installed(installed: &InstalledService) -> registry::res
 /// patched service's OTHER networks is unchanged.
 fn retroactive_network_joins(
     new_service: &str,
-    config: &config::schema::Config,
     quadlet_path: &std::path::Path,
     repo_dir: Option<&std::path::Path>,
 ) -> Vec<Step> {
@@ -436,10 +437,8 @@ fn retroactive_network_joins(
         return steps;
     }
 
-    for svc in &config.services {
-        if !svc.installed {
-            continue;
-        }
+    let installed = list_installed().unwrap_or_default();
+    for svc in &installed {
         if WellKnownService::Caddy.matches(&svc.name)
             || WellKnownService::Inbucket.matches(&svc.name)
             || WellKnownService::Prometheus.matches(&svc.name)
@@ -488,8 +487,10 @@ fn retroactive_network_joins(
         // and restart each unit so podman recreates the container with the
         // new network. Restarting only the primary unit doesn't cascade to
         // subunits — their containers would keep running on the old network.
+        let installed_names_owned: Vec<String> =
+            installed.iter().map(|s| s.name.clone()).collect();
         let all_service_names: Vec<&str> =
-            config.services.iter().map(|s| s.name.as_str()).collect();
+            installed_names_owned.iter().map(|s| s.as_str()).collect();
         let marker = format!("Network={network_name}.network");
         let mut units_to_restart: Vec<String> = Vec::new();
         let Ok(entries) = std::fs::read_dir(quadlet_path) else {
@@ -636,13 +637,10 @@ pub fn add_service(
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
 
-    if let Some(existing) = config.services.iter().find(|s| s.name == service_name) {
-        if existing.installed {
-            return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
-        }
-        // installed: false — the CLI should clean up via remove_service +
-        // finalize_remove before calling add_service again.
-        return Err(Error::ServiceIncomplete(service_name.to_string()));
+    // Quadlet directory is the source of truth: a marker'd `.container`
+    // means the service is already installed.
+    if is_service_installed(service_name) {
+        return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
     }
 
     // No config entry, but preserved volumes or a lingering home dir from
@@ -652,7 +650,7 @@ pub fn add_service(
     // skips reinit, so a new password in .env just restart-loops on auth
     // failures. Surface the same way as an incomplete install; the CLI's
     // existing purge-and-retry recovery handles it.
-    if data::enumerate_service(&config, service_name)?.is_some() {
+    if data::enumerate_service(service_name)?.is_some() {
         return Err(Error::ServiceIncomplete(service_name.to_string()));
     }
 
@@ -668,7 +666,7 @@ pub fn add_service(
         .def
         .requires
         .iter()
-        .filter(|r| !config.services.iter().any(|s| s.name == r.service))
+        .filter(|r| !is_service_installed(&r.service))
         .map(|r| r.service.as_str())
         .collect();
     if !missing_requires.is_empty() {
@@ -737,7 +735,7 @@ pub fn add_service(
             let in_use = port_in_use(p.container_port);
             if privileged || claimed_in_service || in_use {
                 let allocated =
-                    system::port::allocate_port_excluding(&config, &claimed, port_in_use)?;
+                    system::port::allocate_port_excluding(&claimed, port_in_use)?;
                 let reason = if privileged {
                     "port is privileged (requires root)".to_string()
                 } else if claimed_in_service {
@@ -802,30 +800,27 @@ pub fn add_service(
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
-    let authelia_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Authelia.matches(&s.name));
-    let caddy_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Caddy.matches(&s.name) && s.installed);
-    let inbucket_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Inbucket.matches(&s.name) && s.installed);
-    let prometheus_installed = config
-        .services
-        .iter()
-        .any(|s| WellKnownService::Prometheus.matches(&s.name) && s.installed);
+    // Authoritative: a marker'd `.container` for the well-known
+    // service means it's installed and ready to wire up. Single
+    // directory scan covers all four checks.
+    let installed_names = scan_managed_services().unwrap_or_default();
+    let any_match = |wk: WellKnownService| {
+        installed_names.iter().any(|n| wk.matches(n))
+    };
+    let authelia_installed = any_match(WellKnownService::Authelia);
+    let caddy_installed = any_match(WellKnownService::Caddy);
+    let inbucket_installed = any_match(WellKnownService::Inbucket);
+    let prometheus_installed = any_match(WellKnownService::Prometheus);
 
     // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
     // auth provider's domain). Pure — all filesystem writes are
     // emitted as Step::WriteFile below, not performed here.
+    let installed_now = list_installed().unwrap_or_default();
     let auth_bridge = auth_bridge::build(&auth_bridge::AuthBridgeParams {
         service_name,
         enable_auth,
         config: &config,
+        installed: &installed_now,
         service_data: &home_dir,
     })?;
 
@@ -1082,7 +1077,6 @@ pub fn add_service(
     // step, services installed earlier remain isolated.
     steps.extend(retroactive_network_joins(
         service_name,
-        &config,
         &quadlet_path,
         Some(repo_dir),
     ));
@@ -1182,24 +1176,10 @@ pub enum RemoveMode {
 
 /// Remove a service: update state, return cleanup steps.
 pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResult> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_or_default(&paths.config_file)?;
-
-    // Prefer the preferences entry (carries the canonical exposure
-    // variant + ports), but fall back to reconstructing from the
-    // quadlet's `# Service-*` headers when preferences has drifted.
-    // Without this, `ryra remove` on a drifted-but-installed service
-    // would incorrectly bail with ServiceNotInstalled.
-    let installed_owned: InstalledService = match config
-        .services
-        .iter()
-        .find(|s| s.name == service_name)
-        .cloned()
-    {
-        Some(s) => s,
-        None => build_installed_from_quadlet(service_name)
-            .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?,
-    };
+    // Reconstruct the InstalledService view from the quadlet's
+    // `# Service-*` headers — that's the source of truth now.
+    let installed_owned = build_installed_from_quadlet(service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
     let installed = &installed_owned;
 
     // Stop all units belonging to this service (main + sidecars).
@@ -1208,16 +1188,10 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
     let mut has_named_volumes = false;
-    // Union preferences + quadlet scan so the "is foo-bar a sibling
-    // service?" prefix check catches drifted entries too.
-    let scanned = scan_managed_services().unwrap_or_default();
-    let mut name_pool: Vec<String> =
-        config.services.iter().map(|s| s.name.clone()).collect();
-    for n in scanned {
-        if !name_pool.contains(&n) {
-            name_pool.push(n);
-        }
-    }
+    // Quadlet directory scan is authoritative — captures every
+    // ryra-managed service so the "is foo-bar a sibling service?"
+    // prefix check (used to scope file removal) sees every install.
+    let name_pool = scan_managed_services().unwrap_or_default();
     let all_names: Vec<&str> = name_pool.iter().map(|s| s.as_str()).collect();
 
     // Disable the Tailscale Service before tearing the host port down.
@@ -1373,72 +1347,47 @@ pub struct RecordPendingParams<'a> {
 
 /// Record a service as pending installation (installed: false).
 /// Called BEFORE executing steps so that partial failures are recoverable.
+/// Persist install-time scaffolding to `preferences.toml`. This is now
+/// the only side-effect — quadlet headers track the install itself,
+/// preferences just remembers cross-cutting defaults so the next
+/// `ryra add --auth` doesn't have to re-prompt for the OIDC issuer.
 pub fn record_pending(params: RecordPendingParams<'_>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     paths.ensure_dirs()?;
     let mut config = config::load_or_default(&paths.config_file)?;
 
-    let ports: BTreeMap<String, u16> = params.allocated_ports.iter().cloned().collect();
-
-    config.services.push(InstalledService {
-        name: params.service_name.to_string(),
-        version: "0.1.0".to_string(),
-        repo: params.registry_name.to_string(),
-        ports,
-        auth_kind: params.auth_kind,
-        exposure: params.exposure.clone(),
-        installed: false,
-    });
-
-    // Auto-configure [auth] when an auth provider is installed
+    // Auto-configure [auth] when an auth provider is installed so
+    // future `ryra add <svc> --auth` calls know where to wire the
+    // OIDC client. The `services` array is not touched — quadlet
+    // headers are the source of truth for what's installed.
     if WellKnownService::Authelia.matches(params.service_name) {
         config.auth = Some(authelia::auth_config(
             params.allocated_ports,
             params.exposure.url(),
         )?);
+        config::save_config(&paths.config_file, &config)?;
     }
 
-    config::save_config(&paths.config_file, &config)?;
-
     Ok(())
 }
 
-/// Mark a pending service as fully installed.
-/// Called AFTER all steps have executed successfully.
-pub fn mark_installed(service_name: &str) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-    let mut config = config::load_config(&paths.config_file)?;
-
-    let service = config
-        .services
-        .iter_mut()
-        .find(|s| s.name == service_name)
-        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
-
-    service.installed = true;
-    config::save_config(&paths.config_file, &config)?;
-
-    Ok(())
-}
-
+/// Drop the cached `[auth]` block when the auth provider is removed —
+/// otherwise a later `ryra add <svc> --auth` thinks auth is still
+/// configured and skips the auto-install path, then bombs out trying
+/// to register an OIDC client against a non-existent authelia config.
+/// The function name is preserved for caller compatibility; quadlet
+/// removal is what actually finalises the install state.
 pub fn finalize_remove(service_name: &str) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = config::load_or_default(&paths.config_file)?;
 
-    config.services.retain(|s| s.name != service_name);
-
-    // If we just removed the auth provider, drop the cached `[auth]` block
-    // too — otherwise a later `ryra add <svc> --auth` thinks auth is still
-    // configured and skips the auto-install path, then bombs out trying to
-    // register an OIDC client against a non-existent authelia config file.
     if WellKnownService::Authelia.matches(service_name)
         && let Some(auth) = &config.auth
         && auth.provider_name() == "authelia"
     {
         config.auth = None;
+        config::save_config(&paths.config_file, &config)?;
     }
-
-    config::save_config(&paths.config_file, &config)?;
 
     Ok(())
 }
@@ -1469,44 +1418,24 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
 
 /// Reset ryra: tear down all services, infrastructure, and config.
 pub fn reset() -> Result<ResetResult> {
-    let paths = ConfigPaths::resolve()?;
-    let config = match config::load_config(&paths.config_file) {
-        Ok(c) => Some(c),
-        Err(Error::ConfigNotFound(_)) => None,
-        Err(e) => return Err(e),
-    };
-
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
 
-    // Build the authoritative set of ryra-managed service names by
-    // unioning preferences.toml entries with marker scan results — this
-    // catches drift cases where preferences was wiped but services are
-    // still on disk (they remain ryra-managed, so reset must reach them).
-    let prefs_names: Vec<String> = config
-        .as_ref()
-        .map(|c| c.services.iter().map(|s| s.name.clone()).collect())
-        .unwrap_or_default();
-    let scanned_names = scan_managed_services().unwrap_or_default();
-    let mut managed_names: Vec<String> = prefs_names.clone();
-    for n in &scanned_names {
-        if !managed_names.contains(n) {
-            managed_names.push(n.clone());
-        }
-    }
+    // Quadlet directory scan is the source of truth for ryra-managed
+    // services — every install stamps a marker comment on the main
+    // `.container`, so this catches every install regardless of the
+    // state of `preferences.toml`.
+    let managed_names = scan_managed_services().unwrap_or_default();
 
     // 0. Disable every Tailscale Service before tearing services down.
     // `TailscaleDisable` stops `tailscale serve --service=svc:<X>` and
     // deletes the admin-side service definition via the API, so the
     // tailnet is clean after reset and the next install gets bare
-    // hostnames.
-    if let Some(ref config) = config {
-        for service in &config.services {
-            if matches!(service.exposure, Exposure::Tailscale { .. }) {
-                steps.push(Step::TailscaleDisable {
-                    service: service.name.clone(),
-                });
-            }
+    // hostnames. Read exposure from the quadlet headers so this still
+    // works after the services array goes away.
+    for svc in list_installed().unwrap_or_default() {
+        if matches!(svc.exposure, Exposure::Tailscale { .. }) {
+            steps.push(Step::TailscaleDisable { service: svc.name });
         }
     }
 
@@ -1603,6 +1532,16 @@ pub fn status() -> config::status::RyraStatus {
         paths.config_file,
         &config,
     ))
+}
+
+/// True if the named service is ryra-managed and currently installed,
+/// determined by scanning the quadlet directory for a marker'd
+/// `.container`. Cheap (one directory read + a few file head reads),
+/// uses the same source of truth as [`list_installed`].
+pub fn is_service_installed(name: &str) -> bool {
+    scan_managed_services()
+        .map(|names| names.iter().any(|n| n == name))
+        .unwrap_or(false)
 }
 
 /// Scan the user's quadlet directory for ryra-managed services. A
@@ -1742,30 +1681,15 @@ fn build_installed_from_quadlet(service_name: &str) -> Option<InstalledService> 
 /// ryra versions before metadata headers landed).
 pub fn list_installed() -> Result<Vec<InstalledService>> {
     let names = scan_managed_services().unwrap_or_default();
-    let mut out: Vec<InstalledService> = names
+    let out: Vec<InstalledService> = names
         .iter()
         .filter_map(|n| build_installed_from_quadlet(n))
         .collect();
-
-    // Compatibility: preferences.toml services that weren't found via
-    // scan (stale entry, or pre-marker installs). Without this, a
-    // bookkeeping entry without an actual quadlet would silently
-    // disappear from `ryra list -a`, making cleanup harder.
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_or_default(&paths.config_file)?;
-    for svc in config.services {
-        if !out.iter().any(|s| s.name == svc.name) {
-            out.push(svc);
-        }
-    }
     Ok(out)
 }
 
 /// Search available services in a repo, optionally filtered by query.
 pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<SearchResult>> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_or_default(&paths.config_file)?;
-
     let available = registry::list_available(repo_dir)?;
 
     let results = available
@@ -1780,7 +1704,7 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
         })
         .map(|reg_svc| {
             let name = &reg_svc.def.service.name;
-            let installed = config.services.iter().any(|s| s.name == *name);
+            let installed = is_service_installed(name);
             let mut supports = Vec::new();
             for kind in &reg_svc.def.integrations.auth {
                 supports.push(kind.to_string());
@@ -1813,16 +1737,10 @@ pub struct SearchResult {
 
 /// Get test definitions for an installed service by reading its `test.toml`.
 pub async fn service_tests(service_name: &str) -> Result<ServiceTestInfo> {
-    let paths = ConfigPaths::resolve()?;
-    let config = config::load_config(&paths.config_file)?;
-
-    let installed = config
-        .services
-        .iter()
-        .find(|s| s.name == service_name)
+    let installed = build_installed_from_quadlet(service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
 
-    let service_ref = service_ref_from_installed(installed);
+    let service_ref = service_ref_from_installed(&installed);
     let repo_dir = resolve_registry_dir(&service_ref).await?;
 
     let test_toml_path = repo_dir.join(service_name).join("test.toml");
