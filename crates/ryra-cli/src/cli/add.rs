@@ -147,6 +147,13 @@ pub async fn run(
         let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
         let service = service_ref.service_name();
 
+        // Bail before prompts — the same check fires deeper in
+        // `ryra_core::add_service`, but only after SMTP / auth prompts have
+        // already burned the user's time. Surface it up-front instead.
+        if !dry_run && ryra_core::is_service_installed(service) {
+            bail!("service {service} is already installed");
+        }
+
         // Load config once — previous iterations or ensure_dependencies may have
         // modified it on disk (e.g., installing caddy or authelia).
         let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
