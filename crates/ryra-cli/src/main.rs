@@ -174,6 +174,8 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Diagnose environment + install state and report issues with fixes
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -263,6 +265,7 @@ async fn main() -> anyhow::Result<()> {
             purge,
         } => cli::remove::run(services, all, orphans, yes, dry_run, purge).await?,
         Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
+        Command::Doctor => cli::doctor::run()?,
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {

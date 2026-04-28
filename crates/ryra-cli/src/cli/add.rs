@@ -75,14 +75,37 @@ pub async fn run(
 
     let preflight_paths = ryra_core::config::ConfigPaths::resolve()?;
     let preflight_config = ryra_core::config::load_or_default(&preflight_paths.config_file)?;
-    if let Err(e) = ryra_core::system::preflight::check(&preflight_config) {
-        bail!("preflight check failed:\n\n{e}");
+    let issues = ryra_core::system::doctor::check_all(&preflight_config);
+    let blockers: Vec<&ryra_core::system::doctor::Issue> = issues
+        .iter()
+        .filter(|i| i.severity() == ryra_core::system::doctor::Severity::Blocker)
+        .collect();
+    if !blockers.is_empty() {
+        let rendered = blockers
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        bail!("ryra doctor reports blockers:\n\n{rendered}");
+    }
+    // Surface non-blocking issues but don't gate the install — `ryra
+    // doctor` is the place to see the full list with fixes.
+    if issues.iter().any(|i| {
+        matches!(
+            i.severity(),
+            ryra_core::system::doctor::Severity::Warning
+                | ryra_core::system::doctor::Severity::Info
+        )
+    }) {
+        eprintln!("Note: `ryra doctor` reports issues — run it to see them.");
     }
 
     // --tailscale check fires here so a missing CLI / unlogged tailnet
-    // surfaces before any service planning.
+    // surfaces before any service planning. Stays separate from the
+    // unified doctor view because tailscale issues are only relevant
+    // when the user explicitly opts into the tailscale path.
     if tailscale
-        && let Err(e) = ryra_core::system::preflight::check_tailscale_runtime()
+        && let Err(e) = ryra_core::system::doctor::check_tailscale_runtime()
     {
         bail!("--tailscale flag passed but {e}");
     }
@@ -1585,7 +1608,7 @@ async fn prompt_exposure_for(
             // Tailscale: same path as `--tailscale` flag — preflight,
             // ensure auth key, derive `https://<service>.<tailnet>/`.
             // Failures bail rather than save partial state.
-            if let Err(e) = ryra_core::system::preflight::check_tailscale_runtime() {
+            if let Err(e) = ryra_core::system::doctor::check_tailscale_runtime() {
                 bail!("Tailscale not ready:\n\n{e}");
             }
             ensure_tailscale_admin_token(true).await?;
