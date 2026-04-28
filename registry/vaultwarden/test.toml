@@ -32,13 +32,13 @@ service = "vaultwarden"
 [[tests.steps]]
 action = "http"
 name = "http-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "vaultwarden"
 poll = { interval = 2, attempts = 10 }
 [[tests.steps]]
 action = "http"
 name = "alive-endpoint"
-url = "http://127.0.0.1:$PORT_HTTP/alive"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/alive"
 service = "vaultwarden"
 [[tests.steps]]
 action = "shell"

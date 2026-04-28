@@ -12,7 +12,7 @@ service = "open-webui"
 [[tests.steps]]
 action = "http"
 name = "open-webui-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "open-webui"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
@@ -55,7 +55,7 @@ service = "open-webui"
 [[tests.steps]]
 action = "http"
 name = "open-webui-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "open-webui"
 poll = { interval = 2, attempts = 30 }
 timeout = 90

@@ -11,7 +11,7 @@ service = "uptime-kuma"
 [[tests.steps]]
 action = "http"
 name = "http-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "uptime-kuma"
 poll = { interval = 2, attempts = 20 }
 timeout = 60

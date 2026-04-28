@@ -123,7 +123,7 @@ When `ryra add <service> --auth` is called:
 
 Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/services/<service>/configs/scripts/<script>.sh`.
 
-The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$SERVICE_HOME` (pointing to `~/.local/share/services/<service>/`).
+The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$SERVICE_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$SERVICE_HOME` (pointing to `~/.local/share/services/<service>/`).
 
 ### Template variables for auth
 

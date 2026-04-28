@@ -13,7 +13,7 @@ After=synapse-homeserver.service
 Image=docker.io/vectorim/element-web:v1.12.15
 ContainerName=synapse
 Network=synapse.network
-PublishPort=${PORT_HTTP}:8080
+PublishPort=${SERVICE_PORT_HTTP}:8080
 # Custom nginx config serves Element static files AND path-routes /_matrix and
 # /_synapse to the homeserver container, so the browser sees a single origin.
 # Mounted as the nginx-docker template so the image's entrypoint can envsubst

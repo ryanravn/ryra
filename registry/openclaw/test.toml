@@ -11,7 +11,7 @@ service = "openclaw"
 [[tests.steps]]
 action = "http"
 name = "http-responds"
-url = "http://127.0.0.1:$PORT_GATEWAY"
+url = "http://127.0.0.1:$SERVICE_PORT_GATEWAY"
 service = "openclaw"
 poll = { interval = 2, attempts = 30 }
 timeout = 90

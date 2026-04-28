@@ -12,7 +12,7 @@ service = "twenty"
 [[tests.steps]]
 action = "http"
 name = "twenty-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "twenty"
 poll = { interval = 5, attempts = 60 }
 timeout = 300

@@ -11,7 +11,7 @@ service = "paperless-ngx"
 [[tests.steps]]
 action = "http"
 name = "paperless-ngx-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "paperless-ngx"
 poll = { interval = 5, attempts = 60 }
 timeout = 330
@@ -42,7 +42,7 @@ service = "paperless-ngx"
 [[tests.steps]]
 action = "http"
 name = "paperless-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "paperless-ngx"
 poll = { interval = 2, attempts = 45 }
 timeout = 180
@@ -100,7 +100,7 @@ action = "http"
 # top — pushing total startup well past 90s. The previous 60s poll
 # window was racing the inherent migration cost.
 name = "paperless-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "paperless-ngx"
 poll = { interval = 5, attempts = 60 }
 timeout = 330

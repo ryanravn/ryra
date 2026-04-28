@@ -9,8 +9,8 @@ After=supabase-db.service
 ContainerName=supabase-supavisor
 Image=docker.io/supabase/supavisor:2.7.4
 Network=supabase.network:alias=supavisor
-PublishPort=${PORT_POSTGRES}:5432
-PublishPort=${PORT_POOLER}:6543
+PublishPort=${SERVICE_PORT_POSTGRES}:5432
+PublishPort=${SERVICE_PORT_POOLER}:6543
 Volume=%h/.local/share/services/supabase/configs/pooler/pooler.exs:/etc/pooler/pooler.exs:ro,z
 Entrypoint=/bin/sh
 Exec=-c "export DATABASE_URL=ecto://supabase_admin:$$POSTGRES_PASSWORD@db:$$POSTGRES_PORT/_supabase && /app/bin/migrate && /app/bin/supavisor eval \"$$(cat /etc/pooler/pooler.exs)\" && /app/bin/server"

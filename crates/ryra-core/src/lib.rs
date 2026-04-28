@@ -926,7 +926,7 @@ pub fn add_service(
         .iter()
         .map(|(name, port)| {
             (
-                format!("PORT_{}", name.to_uppercase()),
+                format!("SERVICE_PORT_{}", name.to_uppercase()),
                 port.to_string(),
             )
         })
@@ -1690,9 +1690,10 @@ fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService>
     });
 
     // Ports come from the `.env` file ryra writes alongside the quadlet
-    // — `PORT_<NAME>=<value>` lines map back to the BTreeMap keyed by
-    // lowercase name. Missing `.env` is treated as empty (still a valid
-    // install — services without published ports legitimately omit it).
+    // — `SERVICE_PORT_<NAME>=<value>` lines map back to the BTreeMap
+    // keyed by lowercase name. Missing `.env` is treated as empty (still
+    // a valid install — services without published ports legitimately
+    // omit it).
     let ports = service_home(service_name)
         .ok()
         .and_then(|home| std::fs::read_to_string(home.join(".env")).ok())
@@ -1704,7 +1705,7 @@ fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService>
                         return None;
                     }
                     let (key, val) = l.split_once('=')?;
-                    let name = key.strip_prefix("PORT_")?.to_lowercase();
+                    let name = key.strip_prefix("SERVICE_PORT_")?.to_lowercase();
                     let port = val.trim_matches(|c: char| c == '"' || c == '\'').parse::<u16>().ok()?;
                     Some((name, port))
                 })

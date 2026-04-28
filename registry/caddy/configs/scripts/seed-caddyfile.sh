@@ -11,8 +11,8 @@ TLS_SNIPPET="$CADDY_CONFIG/tls.caddy"
 # ports Caddy itself binds to inside the container. Defaults match
 # service.toml's high-port fallbacks so this script still works if the
 # env var is somehow unset.
-PORT_HTTP="${PORT_HTTP:-8080}"
-PORT_HTTPS="${PORT_HTTPS:-8443}"
+PORT_HTTP="${SERVICE_PORT_HTTP:-8080}"
+PORT_HTTPS="${SERVICE_PORT_HTTPS:-8443}"
 
 # Defensive fallback only — `ryra add caddy` writes tls.caddy with the
 # right contents (LAN default or --acme email) before starting Caddy.
@@ -36,7 +36,7 @@ fi
 cat > "$CADDYFILE" <<EOF
 import tls.caddy
 
-:${PORT_HTTP} {
+:${SERVICE_PORT_HTTP} {
 	respond 404
 }
 EOF

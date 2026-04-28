@@ -11,7 +11,7 @@ service = "prometheus"
 [[tests.steps]]
 action = "http"
 name = "ready"
-url = "http://127.0.0.1:$PORT_HTTP/-/ready"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/-/ready"
 service = "prometheus"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
@@ -52,7 +52,7 @@ name = "prometheus-has-grafana-samples"
 # grafana:3000 was successfully scraped (parsed as prometheus format).
 # `up{service="grafana"}` would be satisfied by a failing scrape too;
 # this metric guarantees end-to-end data collection.
-url = "http://127.0.0.1:$PORT_HTTP/api/v1/query?query=grafana_build_info"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/api/v1/query?query=grafana_build_info"
 service = "prometheus"
 contains = "\"service\":\"grafana\""
 poll = { interval = 3, attempts = 30 }

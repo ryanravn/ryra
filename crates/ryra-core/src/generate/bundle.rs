@@ -13,7 +13,7 @@ pub struct ProcessBundleParams<'a> {
     pub podman_args: &'a [String],
     /// Extra ExecStartPre commands to inject into [Service] section.
     pub extra_exec_start_pre: &'a [String],
-    /// Port variable expansions (e.g., `PORT_HTTP` → `8080`).
+    /// Port variable expansions (e.g., `SERVICE_PORT_HTTP` → `8080`).
     /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
     /// values because systemd doesn't expand EnvironmentFile vars in directives.
     pub port_vars: &'a [(String, String)],
@@ -257,7 +257,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
                     );
                 }
             }
-            // Expand ${PORT_*} in PublishPort lines — systemd doesn't
+            // Expand ${SERVICE_PORT_*} in PublishPort lines — systemd doesn't
             // expand EnvironmentFile vars in quadlet directives.
             for (var, val) in params.port_vars {
                 content = content.replace(&format!("${{{var}}}"), val);

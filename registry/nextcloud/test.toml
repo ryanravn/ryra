@@ -20,7 +20,7 @@ service = "nextcloud"
 [[tests.steps]]
 action = "http"
 name = "nextcloud-responds"
-url = "http://127.0.0.1:$PORT_HTTP/status.php"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/status.php"
 service = "nextcloud"
 poll = { interval = 3, attempts = 80 }
 timeout = 360
@@ -62,7 +62,7 @@ service = "nextcloud"
 [[tests.steps]]
 action = "http"
 name = "nextcloud-responds"
-url = "http://127.0.0.1:$PORT_HTTP/status.php"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/status.php"
 service = "nextcloud"
 poll = { interval = 3, attempts = 80 }
 timeout = 360

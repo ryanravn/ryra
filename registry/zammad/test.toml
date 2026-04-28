@@ -14,7 +14,7 @@ service = "zammad"
 [[tests.steps]]
 action = "http"
 name = "zammad-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "zammad"
 poll = { interval = 5, attempts = 60 }
 timeout = 300
@@ -84,7 +84,7 @@ timeout = 300
 [[tests.steps]]
 action = "http"
 name = "zammad-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "zammad"
 poll = { interval = 3, attempts = 60 }
 timeout = 300

@@ -21,7 +21,7 @@ service = "authelia"
 [[tests.steps]]
 action = "http"
 name = "health-check"
-url = "http://127.0.0.1:$PORT_HTTP/api/health"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/api/health"
 service = "authelia"
 poll = { interval = 2, attempts = 15 }
 [[tests.steps]]

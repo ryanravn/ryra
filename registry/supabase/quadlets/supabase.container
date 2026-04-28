@@ -10,8 +10,8 @@ Wants=supabase-supavisor.service
 ContainerName=supabase-kong
 Image=docker.io/kong/kong:3.9.1
 Network=supabase.network:alias=kong
-PublishPort=${PORT_HTTP}:8000
-PublishPort=${PORT_HTTPS}:8443
+PublishPort=${SERVICE_PORT_HTTP}:8000
+PublishPort=${SERVICE_PORT_HTTPS}:8443
 Volume=%h/.local/share/services/supabase/configs/api/kong.yml:/home/kong/temp.yml:ro,z
 Volume=%h/.local/share/services/supabase/configs/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro,z
 Environment="KONG_NGINX_PROXY_PROXY_BUFFERS=64 160k"

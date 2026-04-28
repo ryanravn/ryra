@@ -11,22 +11,22 @@ service = "supabase"
 [[tests.steps]]
 action = "shell"
 name = "api-ready"
-run = ". $HOME/.local/share/services/supabase/.env && for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://localhost:$PORT_HTTP/ | grep -q '[0-9]' && exit 0; sleep 2; done; exit 1"
+run = ". $HOME/.local/share/services/supabase/.env && for i in $(seq 1 60); do curl -so /dev/null -w '%{http_code}' http://localhost:$SERVICE_PORT_HTTP/ | grep -q '[0-9]' && exit 0; sleep 2; done; exit 1"
 timeout = 150
 [[tests.steps]]
 action = "shell"
 name = "auth-health"
-run = ". $HOME/.local/share/services/supabase/.env && for i in $(seq 1 30); do curl -sf -H \"apikey: $ANON_KEY\" http://localhost:$PORT_HTTP/auth/v1/health | grep -q GoTrue && exit 0; sleep 2; done; exit 1"
+run = ". $HOME/.local/share/services/supabase/.env && for i in $(seq 1 30); do curl -sf -H \"apikey: $ANON_KEY\" http://localhost:$SERVICE_PORT_HTTP/auth/v1/health | grep -q GoTrue && exit 0; sleep 2; done; exit 1"
 timeout = 90
 [[tests.steps]]
 action = "shell"
 name = "signup-works"
-run = ". $HOME/.local/share/services/supabase/.env && curl -sf -X POST -H \"apikey: $ANON_KEY\" -H \"Content-Type: application/json\" -d '{\"email\":\"e2e@example.com\",\"password\":\"testpassword123\"}' http://localhost:$PORT_HTTP/auth/v1/signup | grep access_token"
+run = ". $HOME/.local/share/services/supabase/.env && curl -sf -X POST -H \"apikey: $ANON_KEY\" -H \"Content-Type: application/json\" -d '{\"email\":\"e2e@example.com\",\"password\":\"testpassword123\"}' http://localhost:$SERVICE_PORT_HTTP/auth/v1/signup | grep access_token"
 timeout = 30
 [[tests.steps]]
 action = "shell"
 name = "rest-responds"
-run = ". $HOME/.local/share/services/supabase/.env && curl -sf -H \"apikey: $ANON_KEY\" -H \"Authorization: Bearer $ANON_KEY\" http://localhost:$PORT_HTTP/rest/v1/"
+run = ". $HOME/.local/share/services/supabase/.env && curl -sf -H \"apikey: $ANON_KEY\" -H \"Authorization: Bearer $ANON_KEY\" http://localhost:$SERVICE_PORT_HTTP/rest/v1/"
 timeout = 30
 
 # SMTP via GoTrue's recovery email endpoint. Heavy stack — requires ~4.5 GB
@@ -51,7 +51,7 @@ service = "supabase"
 [[tests.steps]]
 action = "http"
 name = "supabase-auth-healthy"
-url = "http://127.0.0.1:$PORT_HTTP/auth/v1/health"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/auth/v1/health"
 service = "supabase"
 headers = { apikey = "$ANON_KEY" }
 poll = { interval = 5, attempts = 72 }
@@ -60,7 +60,7 @@ timeout = 420
 action = "http"
 name = "create-user"
 method = "post"
-url = "http://127.0.0.1:$PORT_HTTP/auth/v1/signup"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/auth/v1/signup"
 service = "supabase"
 headers = { apikey = "$ANON_KEY" }
 body = '{"email":"smtptest@example.com","password":"Testing-Smtp-123!"}'
@@ -69,7 +69,7 @@ timeout = 30
 action = "http"
 name = "trigger-recovery-email"
 method = "post"
-url = "http://127.0.0.1:$PORT_HTTP/auth/v1/recover"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/auth/v1/recover"
 service = "supabase"
 headers = { apikey = "$ANON_KEY" }
 body = '{"email":"smtptest@example.com"}'

@@ -6,7 +6,7 @@ StartLimitBurst=3
 [Container]
 ContainerName=grafana
 Image=docker.io/grafana/grafana:11.3.1
-PublishPort=${PORT_HTTP}:3000
+PublishPort=${SERVICE_PORT_HTTP}:3000
 Volume=%h/.local/share/services/grafana/data:/var/lib/grafana:Z,U
 Volume=%h/.local/share/services/grafana/configs/provisioning:/etc/grafana/provisioning:Z,ro
 Pull=missing

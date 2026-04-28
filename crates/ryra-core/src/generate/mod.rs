@@ -114,11 +114,12 @@ fn build_env_file(
     // Expose service home path so scripts can reference it
     lines.push(format!("SERVICE_HOME={}", home_dir.display()));
 
-    // Expose each [[ports]] entry as PORT_<NAME> with its resolved
-    // host port. Caller passes the per-port mapping computed in
-    // `add_service` so multi-port services get distinct values.
+    // Expose each [[ports]] entry as SERVICE_PORT_<NAME> with its
+    // resolved host port. The SERVICE_ prefix matches SERVICE_HOME and
+    // makes ryra-emitted vars visually distinct from service-specific
+    // ones (which carry their own naming, e.g. POSTGRES_PASSWORD).
     for (name, port) in resolved_ports {
-        let var_name = format!("PORT_{}", name.to_uppercase());
+        let var_name = format!("SERVICE_PORT_{}", name.to_uppercase());
         lines.push(format!("{var_name}={port}"));
     }
 

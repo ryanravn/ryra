@@ -605,7 +605,7 @@ pub async fn run_lifecycle_test(
             } => {
                 let step_name = http_name.as_deref().unwrap_or(url);
                 println!("{p}  http: {step_name}...");
-                // Source service .env files for variable expansion ($PORT_HTTP etc.),
+                // Source service .env files for variable expansion ($SERVICE_PORT_HTTP etc.),
                 // follow redirects (-L), skip TLS verification (-k) for self-signed certs.
                 // URL uses double quotes so shell variables expand.
                 let url_esc = url.replace('"', r#"\""#);
@@ -710,7 +710,7 @@ pub async fn run_lifecycle_test(
                     None => String::new(),
                 };
                 let cmd = format!(
-                    "INBUCKET_PORT=$(grep PORT_HTTP $HOME/.local/share/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
+                    "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP $HOME/.local/share/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
                      [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/.local/share/services/inbucket/.env'; exit 2; }}; \
                      BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
                      [ -n \"$BODY\" ] && [ \"$BODY\" != '[]' ]{contains_check}"

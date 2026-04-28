@@ -11,7 +11,7 @@ service = "caddy"
 [[tests.steps]]
 action = "shell"
 name = "responds-on-http-port"
-run = ". $HOME/.local/share/services/caddy/.env && for i in $(seq 1 10); do CODE=$(curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$PORT_HTTP 2>/dev/null) && echo \"$CODE\" | grep -qE '200|404' && exit 0; sleep 1; done; exit 1"
+run = ". $HOME/.local/share/services/caddy/.env && for i in $(seq 1 10); do CODE=$(curl -so /dev/null -w '%{http_code}' http://127.0.0.1:$SERVICE_PORT_HTTP 2>/dev/null) && echo \"$CODE\" | grep -qE '200|404' && exit 0; sleep 1; done; exit 1"
 [[tests.steps]]
 action = "shell"
 name = "data-dir-created"

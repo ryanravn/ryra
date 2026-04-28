@@ -12,21 +12,21 @@ service = "synapse"
 [[tests.steps]]
 action = "http"
 name = "element-responds"
-url = "http://127.0.0.1:$PORT_HTTP"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP"
 service = "synapse"
 poll = { interval = 2, attempts = 45 }
 timeout = 120
 [[tests.steps]]
 action = "http"
 name = "synapse-client-versions"
-url = "http://127.0.0.1:$PORT_HTTP/_matrix/client/versions"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/_matrix/client/versions"
 service = "synapse"
 poll = { interval = 2, attempts = 45 }
 timeout = 120
 [[tests.steps]]
 action = "http"
 name = "element-config-json"
-url = "http://127.0.0.1:$PORT_HTTP/config.json"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/config.json"
 service = "synapse"
 poll = { interval = 2, attempts = 5 }
 timeout = 20

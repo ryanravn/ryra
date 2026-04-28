@@ -154,7 +154,7 @@ pub enum StepDef {
         poll: Option<PollConfig>,
     },
     /// HTTP request step. Sends a request and checks the response status code.
-    /// The URL supports shell variable expansion (e.g., `$PORT_HTTP`)
+    /// The URL supports shell variable expansion (e.g., `$SERVICE_PORT_HTTP`)
     /// after sourcing service `.env` files. Follows redirects automatically.
     Http {
         #[serde(default)]

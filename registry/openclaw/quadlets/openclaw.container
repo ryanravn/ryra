@@ -6,7 +6,7 @@ StartLimitBurst=3
 [Container]
 ContainerName=openclaw
 Image=ghcr.io/openclaw/openclaw:2026.3.13-1
-PublishPort=${PORT_GATEWAY}:18789
+PublishPort=${SERVICE_PORT_GATEWAY}:18789
 Volume=%h/.local/share/services/openclaw/config:/home/node/.openclaw:Z,U
 Exec=sh -c "echo '{\"gateway\":{\"mode\":\"local\",\"bind\":\"lan\",\"auth\":{\"mode\":\"token\",\"token\":\"'\"$OPENCLAW_GATEWAY_TOKEN\"'\"},\"controlUi\":{\"dangerouslyAllowHostHeaderOriginFallback\":true}}}' > /home/node/.openclaw/openclaw.json && exec node openclaw.mjs gateway --allow-unconfigured"
 Pull=missing

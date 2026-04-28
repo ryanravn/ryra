@@ -86,7 +86,7 @@ service = "authelia"
 [[steps]]
 action = "http"
 name = "authelia-ready"
-url = "http://127.0.0.1:$PORT_HTTP/api/health"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/api/health"
 service = "authelia"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
@@ -104,7 +104,7 @@ service = "vikunja"
 [[steps]]
 action = "http"
 name = "vikunja-ready"
-url = "http://127.0.0.1:$PORT_HTTP/"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/"
 service = "vikunja"
 poll = { interval = 2, attempts = 30 }
 timeout = 90
