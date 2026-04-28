@@ -315,20 +315,12 @@ mod tailscale_services {
                 changed = true;
             }
         }
-        let approvers = acl
-            .as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("ACL root is not an object"))?
-            .entry("autoApprovers")
-            .or_insert_with(|| serde_json::json!({}));
-        let services = approvers
-            .as_object_mut()
-            .ok_or_else(|| anyhow::anyhow!("autoApprovers is not an object"))?
-            .entry("services")
-            .or_insert_with(|| serde_json::json!({}));
-        if services.get(SERVICE_TAG).is_none() {
-            services[SERVICE_TAG] = serde_json::json!([HOST_TAG]);
-            changed = true;
-        }
+        // Note: per-service `autoApprovers.services["svc:<name>"]` entries
+        // are written by `enable()` at definition time, not here.
+        // Tailscale's ACL schema for service auto-approval keys on the
+        // service name itself, not on a tag — a tag-based key here is
+        // silently ignored, which used to silently break the auto-
+        // approval flow for every install.
         if changed {
             let new_body = serde_json::to_string(&acl)?;
             let (code, body) = curl(
@@ -340,7 +332,7 @@ mod tailscale_services {
             if code != 200 {
                 bail!("write ACL failed (HTTP {code}): {body}");
             }
-            println!("  Tailscale: ACL updated (added {HOST_TAG} + {SERVICE_TAG} + auto-approval)");
+            println!("  Tailscale: ACL updated (added {HOST_TAG} + {SERVICE_TAG} tagOwners)");
         }
 
         // 2. Tag the local host if not already tagged.
@@ -441,36 +433,81 @@ mod tailscale_services {
             bail!("define service svc:{service} failed (HTTP {code}): {resp}");
         }
 
-        // Advertise the service from this host. Match the existing
-        // sudo policy: try `sudo -n` first; if interactive and that
-        // fails, fall through to interactive `sudo`.
+        // Add a per-service auto-approver so the host's `tailscale serve`
+        // advertisement auto-approves without an admin click.
+        // `autoApprovers.services` keys on the service name itself, not on
+        // a tag — a tag-based key (which an earlier version wrote in
+        // `ensure_setup`) is silently ignored. Idempotent: skips the
+        // ACL write when the entry is already present from a prior run.
+        ensure_service_autoapprover(key, service)?;
+
+        // Advertise the service from this host. Try `sudo -n` first to
+        // avoid prompting when the cache is fresh; on a TTY, fall back
+        // to interactive sudo (which prompts for the password).
+        //
+        // Both stdout and stderr are inherited so the user sees what
+        // happens — the previous suppress-everything-and-trust-exit-codes
+        // pattern silently swallowed real failures (sudo password
+        // required, tag not propagated, etc.) leaving the install with
+        // a working URL line printed at the end but no actual route.
         let target = format!("http://127.0.0.1:{host_port}");
         let svc_arg = format!("--service=svc:{service}");
-        let status = Command::new("sudo")
-            .args(["-n", "tailscale", "serve", &svc_arg, "--https=443", &target])
+        let serve_cmd =
+            || format!("sudo tailscale serve --bg {svc_arg} --https=443 {target}");
+
+        let mut status = Command::new("sudo")
+            .args(["-n", "tailscale", "serve", "--bg", &svc_arg, "--https=443", &target])
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .status();
-        let success = matches!(status, Ok(s) if s.success());
-        if !success {
+            .stderr(Stdio::null())
+            .status()
+            .with_context(|| "failed to spawn sudo")?;
+        if !status.success() {
             use std::io::IsTerminal;
-            if std::io::stdin().is_terminal() {
-                println!();
-                println!("  Configuring `tailscale serve` (sudo may prompt for your password):");
-                let s = Command::new("sudo")
-                    .args(["tailscale", "serve", &svc_arg, "--https=443", &target])
-                    .status();
-                if !matches!(s, Ok(s) if s.success()) {
-                    println!();
-                    println!("  Run this manually to finish exposing the service:");
-                    println!("    sudo tailscale serve {svc_arg} --https=443 {target}");
-                }
-            } else {
-                println!();
-                println!("  Run this manually to finish exposing the service (requires sudo):");
-                println!("    sudo tailscale serve {svc_arg} --https=443 {target}");
+            if !std::io::stdin().is_terminal() {
+                bail!(
+                    "tailscale serve requires sudo and stdin is not a TTY.\n\
+                     Run manually: {}",
+                    serve_cmd()
+                );
+            }
+            println!();
+            println!("  Configuring `tailscale serve` (sudo may prompt for your password)…");
+            status = Command::new("sudo")
+                .args(["tailscale", "serve", "--bg", &svc_arg, "--https=443", &target])
+                .status()
+                .with_context(|| "failed to spawn sudo")?;
+        }
+        if !status.success() {
+            bail!(
+                "sudo tailscale serve failed (exit {}). Run manually:\n  {}",
+                status.code().unwrap_or(-1),
+                serve_cmd()
+            );
+        }
+
+        // Verify: tailscale's exit code from `serve` is reportedly
+        // unreliable in some edge cases (config file races, tag
+        // propagation timing) — confirm the local config now lists our
+        // service before claiming success. Fail loud rather than letting
+        // the install print "running at https://…" pointing at nothing.
+        let verify = Command::new("sudo")
+            .args(["-n", "tailscale", "serve", "status", "--json"])
+            .output();
+        if let Ok(out) = verify
+            && out.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if !stdout.contains(&format!("svc:{service}")) {
+                bail!(
+                    "tailscale serve completed but svc:{service} is not in the local serve config.\n\
+                     Inspect with `sudo tailscale serve status`; reapply with:\n  {}",
+                    serve_cmd()
+                );
             }
         }
+        // Best-effort verify — when sudo -n fails between commands we
+        // can't confirm. The non-zero check above is the load-bearing
+        // safety net for the common failure modes.
         Ok(())
     }
 
@@ -502,6 +539,87 @@ mod tailscale_services {
         } else {
             eprintln!("  Note: deleting svc:{service} returned HTTP {code}; check admin UI");
         }
+
+        // Drop the per-service autoApprover entry so the ACL doesn't
+        // accumulate stale `svc:foo: [tag:ryra-host]` rows. Best-effort:
+        // any failure here is logged, not fatal.
+        let _ = remove_service_autoapprover(key, service);
+        Ok(())
+    }
+
+    /// Idempotently add `autoApprovers.services["svc:<service>"] =
+    /// ["tag:ryra-host"]` to the tailnet ACL. Reads, mutates, writes
+    /// back only when the entry is missing.
+    fn ensure_service_autoapprover(key: &str, service: &str) -> Result<()> {
+        let svc_key = format!("svc:{service}");
+        let (code, body) = curl(
+            "GET",
+            "https://api.tailscale.com/api/v2/tailnet/-/acl",
+            key,
+            None,
+        )?;
+        if code != 200 {
+            bail!("read ACL failed (HTTP {code}): {body}");
+        }
+        let mut acl: serde_json::Value = serde_json::from_str(&body)
+            .with_context(|| format!("ACL JSON parse: {body}"))?;
+        let services = acl
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("ACL root is not an object"))?
+            .entry("autoApprovers")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("autoApprovers is not an object"))?
+            .entry("services")
+            .or_insert_with(|| serde_json::json!({}));
+        if services.get(&svc_key).is_some() {
+            return Ok(());
+        }
+        services[&svc_key] = serde_json::json!([HOST_TAG]);
+        let new_body = serde_json::to_string(&acl)?;
+        let (code, body) = curl(
+            "POST",
+            "https://api.tailscale.com/api/v2/tailnet/-/acl",
+            key,
+            Some(&new_body),
+        )?;
+        if code != 200 {
+            bail!("write ACL (auto-approver for {svc_key}) failed (HTTP {code}): {body}");
+        }
+        Ok(())
+    }
+
+    /// Best-effort removal of `autoApprovers.services["svc:<service>"]`.
+    /// No-op when the key is absent or the ACL can't be read.
+    fn remove_service_autoapprover(key: &str, service: &str) -> Result<()> {
+        let svc_key = format!("svc:{service}");
+        let (code, body) = curl(
+            "GET",
+            "https://api.tailscale.com/api/v2/tailnet/-/acl",
+            key,
+            None,
+        )?;
+        if code != 200 {
+            return Ok(());
+        }
+        let mut acl: serde_json::Value = serde_json::from_str(&body)?;
+        let services_obj = acl
+            .get_mut("autoApprovers")
+            .and_then(|a| a.get_mut("services"))
+            .and_then(|s| s.as_object_mut());
+        let Some(services) = services_obj else {
+            return Ok(());
+        };
+        if services.remove(&svc_key).is_none() {
+            return Ok(());
+        }
+        let new_body = serde_json::to_string(&acl)?;
+        let _ = curl(
+            "POST",
+            "https://api.tailscale.com/api/v2/tailnet/-/acl",
+            key,
+            Some(&new_body),
+        )?;
         Ok(())
     }
 }
