@@ -1,7 +1,10 @@
 [Unit]
 Description=Authelia SSO server
-StartLimitIntervalSec=60
-StartLimitBurst=3
+# Disable systemd's start rate limit. ryra restarts authelia on every
+# `--auth` install/remove (client registration mutates configuration.yml),
+# so a normal multi-service session can fire 4–5 restarts in under a
+# minute. RestartSec=5 still rate-limits crash loops to 12/min.
+StartLimitIntervalSec=0
 
 [Container]
 Image=docker.io/authelia/authelia:4.39
