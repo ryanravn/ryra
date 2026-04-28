@@ -887,22 +887,22 @@ pub fn image_shared_store_dir() -> Result<PathBuf> {
 }
 
 /// Base directory for VM work dirs (disk images, keys, logs).
-/// Uses ~/.cache/ryra-e2e/vms/ instead of /tmp so we don't fill
+/// Uses ~/.cache/ryra-vm/vms/ instead of /tmp so we don't fill
 /// up a RAM-backed tmpfs with multi-GB qcow2 COW disks.
 fn vm_work_base_dir() -> Result<PathBuf> {
     Ok(cache_base_dir()?.join("vms"))
 }
 
-/// Shared cache root for all ryra-e2e artifacts.
+/// Shared cache root for all ryra-vm artifacts.
 fn cache_base_dir() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("could not determine cache directory (is $HOME set?)")?;
-    Ok(base.join("ryra-e2e"))
+    Ok(base.join("ryra-vm"))
 }
 
 /// Ensure a container image is cached in the shared store for VM sharing.
 ///
 /// Flow: pull → save to tar (intermediate) → load into shared overlay store.
-/// The shared store at ~/.cache/ryra-e2e/image-store/ is mounted into VMs
+/// The shared store at ~/.cache/ryra-vm/image-store/ is mounted into VMs
 /// via 9p and used as an `additionalimagestores` entry, making images
 /// available instantly without per-image `podman load`.
 ///

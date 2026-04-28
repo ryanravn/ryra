@@ -140,7 +140,7 @@ pub struct SnapshotFiles {
 /// Cache directory for downloaded images.
 fn cache_dir() -> Result<PathBuf> {
     let base = dirs::cache_dir().context("could not determine cache directory (is $HOME set?)")?;
-    Ok(base.join("ryra-e2e"))
+    Ok(base.join("ryra-vm"))
 }
 
 /// Ensure the base cloud image, prepared image, and EFI firmware are available.
@@ -183,7 +183,8 @@ pub async fn ensure_image(
     // Build prepared image if it doesn't exist
     if !prepared_path.exists() {
         println!("Preparing base image (installing packages — this is a one-time operation)...");
-        println!("  Serial log: /tmp/ryra-prepare-base/serial.log");
+        let serial_log = cache_dir()?.join("prepare-base").join("serial.log");
+        println!("  Serial log: {}", serial_log.display());
         prepare_image(
             distro,
             &raw_path,
