@@ -577,7 +577,19 @@ pub fn add_service(
         steps.push(Step::Symlink { link, target });
     }
 
-    // 3b. Tailscale Services — when `--tailscale` was used, the host's
+    // 3b. Write metadata.toml — install record (registry, exposure, url,
+    // auth) used by `ryra list` / `remove` / `status` to reconstruct the
+    // install. Emitted *before* any step that can fail remotely (Tailscale
+    // API calls, image pulls) so a partial install can still be torn down
+    // by `remove_service` — which relies on metadata.toml to identify the
+    // install. World-readable mode (atomic_write picks 0o644 by name).
+    let metadata_content = toml::to_string_pretty(&install_metadata)?;
+    steps.push(Step::WriteFile(GeneratedFile {
+        path: metadata_path(service_name)?,
+        content: metadata_content,
+    }));
+
+    // 3c. Tailscale Services — when `--tailscale` was used, the host's
     // existing tailscaled advertises the service at
     // `https://<name>.<tailnet>.ts.net` (TailVIP-routed). One-time
     // `TailscaleSetup` ensures ACL tags + auto-approval are in place;
@@ -608,15 +620,6 @@ pub fn add_service(
 
     // 5. Write .env file
     steps.push(Step::WriteFile(output.env_file));
-
-    // 5b. Write metadata.toml — install record (registry, exposure, url,
-    // auth) used by `ryra list` / `remove` / `status` to reconstruct the
-    // install. World-readable mode (atomic_write picks 0o644 by name).
-    let metadata_content = toml::to_string_pretty(&install_metadata)?;
-    steps.push(Step::WriteFile(GeneratedFile {
-        path: metadata_path(service_name)?,
-        content: metadata_content,
-    }));
 
     // 6. Create bind mount directories (must exist before container starts)
     for dir in &bundle.bind_mount_dirs {
