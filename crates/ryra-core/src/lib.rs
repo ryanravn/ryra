@@ -1027,12 +1027,32 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Steps to purge leftover data/volumes for an orphan service — one with
-/// data on disk but no config entry (e.g., after `ryra remove <svc>` in
-/// default Preserve mode). Unlike `remove_service`, this doesn't require
-/// the service to be in `preferences.toml`.
+/// Steps to purge leftover data/volumes for an orphan service — one
+/// with data on disk but no live install (e.g., after `ryra remove
+/// <svc>` in default Preserve mode, or after a partial install where
+/// the quadlets landed but `metadata.toml` never did). Unlike
+/// `remove_service`, this doesn't require an install record to exist.
 pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
     let mut steps = Vec::new();
+
+    // Quadlet symlinks in `~/.config/containers/systemd/`. Present for
+    // partial installs (`ryra add` errored mid-flight) — the home dir
+    // removal below would otherwise leave dangling symlinks pointing
+    // at a deleted directory.
+    if let Ok(qdir) = quadlet_dir()
+        && let Ok(entries) = std::fs::read_dir(&qdir)
+    {
+        for entry in entries.flatten() {
+            let target = match std::fs::read_link(entry.path()) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if target.starts_with(&svc.home_dir) {
+                steps.push(Step::RemoveFile(entry.path()));
+            }
+        }
+    }
+
     for path in &svc.data_paths {
         if path.is_dir() {
             steps.push(Step::RemoveDir(path.clone()));
@@ -1047,6 +1067,14 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
         steps.push(Step::RemoveVolume {
             name: v.name.clone(),
         });
+    }
+    // After unlinking quadlets, daemon-reload so systemd drops the
+    // generated unit references. No-op when no symlinks were unlinked.
+    if steps
+        .iter()
+        .any(|s| matches!(s, Step::RemoveFile(p) if p.extension().is_some_and(|e| e == "container" || e == "network" || e == "volume")))
+    {
+        steps.push(Step::DaemonReload);
     }
     steps
 }
@@ -1178,13 +1206,22 @@ pub fn status() -> config::status::RyraStatus {
     ))
 }
 
-/// True if the named service is ryra-managed and currently installed,
-/// determined by scanning the quadlet directory for a marker'd
-/// `.container`. Cheap (one directory read + a few file head reads),
-/// uses the same source of truth as [`list_installed`].
+/// True if the named service is ryra-managed and *fully* installed —
+/// the marker'd `.container` is present AND `metadata.toml` exists.
+/// A partial install (quadlets written but the install plan errored
+/// before metadata.toml landed) is treated as not-installed so that
+/// `ryra remove <svc> --purge` routes through the orphan-cleanup path
+/// instead of failing with "service is not installed". Same source of
+/// truth as [`list_installed`].
 pub fn is_service_installed(name: &str) -> bool {
-    scan_managed_services()
+    let has_quadlet = scan_managed_services()
         .map(|names| names.iter().any(|n| n == name))
+        .unwrap_or(false);
+    if !has_quadlet {
+        return false;
+    }
+    metadata_path(name)
+        .map(|p| p.exists())
         .unwrap_or(false)
 }
 
