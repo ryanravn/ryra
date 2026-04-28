@@ -670,8 +670,14 @@ pub fn add_service(
                 .first()
                 .map(|p| p.container_port)
                 .unwrap_or(80);
+            let primary_quadlet = reg_service
+                .service_dir
+                .join("quadlets")
+                .join(format!("{service_name}.container"));
+            let target_host = caddy::primary_container_name(&primary_quadlet, service_name);
             let block = caddy::render_site_block(&caddy::CaddySiteParams {
                 service_name: service_name.to_string(),
+                target_host,
                 domain: domain.to_string(),
                 container_port,
                 https_port: caddy_https_port(&config),

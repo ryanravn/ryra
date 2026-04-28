@@ -157,8 +157,15 @@ pub fn ensure_auth_provider_routed(
         source,
     })?;
     if !caddyfile.contains(&format!("# Service-Source: registry/{auth_service}")) {
+        // The auth provider's primary container DNS name. For Authelia
+        // today this matches the service name, but go through the same
+        // resolver so a future provider with a non-default ContainerName
+        // (or a multi-container layout) just works.
+        let target_host =
+            primary_container_name(&caddy_quadlet_link.with_file_name(format!("{auth_service}.container")), auth_service.as_str());
         let block = render_site_block(&CaddySiteParams {
             service_name: auth_service.to_string(),
+            target_host,
             domain: auth_domain.to_string(),
             container_port: auth_container_port,
             https_port: crate::caddy_https_port(config),
@@ -195,8 +202,16 @@ pub fn ensure_auth_provider_routed(
 
 /// Parameters for generating a Caddy site block.
 pub struct CaddySiteParams {
+    /// Registry service name. Used as the `# Service-Source: registry/<name>`
+    /// marker so [`add_route`] / [`remove_route`] can locate the block.
     pub service_name: String,
     pub domain: String,
+    /// Container DNS name caddy reverse-proxies to. Often equals
+    /// `service_name`, but multi-container services declare a different
+    /// `ContainerName=` for their primary container (e.g. immich's main
+    /// container is `immich-server`, not `immich`). See
+    /// [`primary_container_name`] for the resolution helper.
+    pub target_host: String,
     /// Container port the service listens on (used with container DNS name).
     pub container_port: u16,
     /// Caddy's HTTPS listen port (from the installed caddy service's port map).
@@ -221,13 +236,32 @@ pub fn render_site_block(params: &CaddySiteParams) -> String {
     } else {
         block.push_str("    import services_tls\n");
     }
-    // Use the container name on caddy's shared network for direct communication.
+    // Use the primary container's DNS name on caddy's shared network.
     block.push_str(&format!(
         "    reverse_proxy {}:{}\n",
-        params.service_name, params.container_port
+        params.target_host, params.container_port
     ));
     block.push_str("}\n");
     block
+}
+
+/// Read the `ContainerName=` directive from a quadlet file. Returns
+/// `fallback` if the file can't be read or the directive is absent —
+/// quadlets without `ContainerName=` are named after the unit by default
+/// and that default matches the service name in ryra's convention.
+pub fn primary_container_name(quadlet_path: &std::path::Path, fallback: &str) -> String {
+    let Ok(content) = std::fs::read_to_string(quadlet_path) else {
+        return fallback.to_string();
+    };
+    for line in content.lines() {
+        if let Some(rest) = line.trim().strip_prefix("ContainerName=") {
+            let name = rest.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    fallback.to_string()
 }
 
 /// Add or replace a service's block in the Caddyfile content.
@@ -335,6 +369,7 @@ mod tests {
     fn render_basic_block() {
         let params = CaddySiteParams {
             service_name: "whoami".to_string(),
+            target_host: "whoami".to_string(),
             domain: "whoami.example.com".to_string(),
             container_port: 8080,
             https_port: 8443,
@@ -349,11 +384,62 @@ mod tests {
     }
 
     #[test]
+    fn render_block_with_distinct_target_host() {
+        // Multi-container services declare a primary ContainerName=
+        // different from the service name (e.g. immich's main container
+        // is `immich-server`). The Service-Source marker must stay
+        // service-named so add_route/remove_route locate the block, but
+        // the reverse_proxy target must use the actual container name.
+        let params = CaddySiteParams {
+            service_name: "immich".to_string(),
+            target_host: "immich-server".to_string(),
+            domain: "immich.internal".to_string(),
+            container_port: 2283,
+            https_port: 8443,
+        };
+        let block = render_site_block(&params);
+        assert!(block.contains("# Service-Source: registry/immich\n"));
+        assert!(block.contains("    reverse_proxy immich-server:2283"));
+        assert!(!block.contains("reverse_proxy immich:"));
+    }
+
+    #[test]
+    fn primary_container_name_reads_directive() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("immich.container");
+        std::fs::write(
+            &path,
+            "[Container]\nImage=docker.io/immich/server\nContainerName=immich-server\nNetwork=immich.network\n",
+        )?;
+        assert_eq!(primary_container_name(&path, "immich"), "immich-server");
+        Ok(())
+    }
+
+    #[test]
+    fn primary_container_name_falls_back_when_directive_absent() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("whoami.container");
+        std::fs::write(
+            &path,
+            "[Container]\nImage=docker.io/whoami\nNetwork=whoami.network\n",
+        )?;
+        assert_eq!(primary_container_name(&path, "whoami"), "whoami");
+    Ok(())
+    }
+
+    #[test]
+    fn primary_container_name_falls_back_when_file_missing() {
+        let missing = std::path::Path::new("/nonexistent/missing.container");
+        assert_eq!(primary_container_name(missing, "fallback"), "fallback");
+    }
+
+    #[test]
     fn render_internal_domain_keeps_tls_internal() {
         // *.internal hosts can't get LE certs, so they must bypass the
         // user-owned snippet (which may have been flipped to ACME mode).
         let params = CaddySiteParams {
             service_name: "authelia".to_string(),
+            target_host: "authelia".to_string(),
             domain: "auth.internal".to_string(),
             container_port: 9091,
             https_port: 8443,
@@ -422,6 +508,7 @@ mod tests {
     fn render_block_custom_https_port() {
         let params = CaddySiteParams {
             service_name: "app".to_string(),
+            target_host: "app".to_string(),
             domain: "app.example.com".to_string(),
             container_port: 3000,
             https_port: 9443,
