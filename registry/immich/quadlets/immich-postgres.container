@@ -7,7 +7,7 @@ StartLimitBurst=3
 Image=ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
 ContainerName=immich-postgres
 Network=immich.network:alias=postgres
-Volume=immich-db-data.volume:/var/lib/postgresql/data:U
+Volume=%h/.local/share/services/immich/db-data:/var/lib/postgresql/data:Z,U
 HealthCmd=pg_isready -d ${DB_DATABASE_NAME} -U ${DB_USERNAME}
 HealthStartPeriod=30s
 HealthInterval=30s

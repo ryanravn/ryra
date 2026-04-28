@@ -7,7 +7,7 @@ StartLimitBurst=3
 Image=docker.io/library/postgres:17.9-alpine
 ContainerName=zammad-postgres
 Network=zammad.network:alias=postgres
-Volume=zammad-postgres-data.volume:/var/lib/postgresql/data:U
+Volume=%h/.local/share/services/zammad/postgres-data:/var/lib/postgresql/data:Z,U
 HealthCmd=pg_isready -d ${POSTGRES_DB} -U ${POSTGRES_USER}
 HealthStartPeriod=30s
 HealthInterval=30s

@@ -8,7 +8,7 @@ Image=docker.io/library/postgres:17-alpine
 AutoUpdate=registry
 ContainerName=nextcloud-postgres
 Network=nextcloud.network:alias=postgres
-Volume=nextcloud-db-data.volume:/var/lib/postgresql/data:U
+Volume=%h/.local/share/services/nextcloud/db-data:/var/lib/postgresql/data:Z,U
 Pull=missing
 EnvironmentFile=%h/.local/share/services/nextcloud/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1

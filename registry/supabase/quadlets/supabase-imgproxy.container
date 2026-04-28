@@ -9,7 +9,7 @@ After=supabase-network.service
 ContainerName=supabase-imgproxy
 Image=docker.io/darthsim/imgproxy:v3.30.1
 Network=supabase.network:alias=imgproxy
-Volume=supabase-storage-data.volume:/var/lib/storage:ro
+Volume=%h/.local/share/services/supabase/storage-data:/var/lib/storage:Z,ro
 Pull=missing
 EnvironmentFile=%h/.local/share/services/supabase/.env
 HealthCmd=imgproxy health

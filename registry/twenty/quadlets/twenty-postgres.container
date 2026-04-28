@@ -8,7 +8,7 @@ Image=docker.io/library/postgres:16-alpine
 AutoUpdate=registry
 ContainerName=twenty-postgres
 Network=twenty.network:alias=db
-Volume=twenty-db-data.volume:/var/lib/postgresql/data:U
+Volume=%h/.local/share/services/twenty/db-data:/var/lib/postgresql/data:Z,U
 Pull=missing
 EnvironmentFile=%h/.local/share/services/twenty/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-twenty} || exit 1

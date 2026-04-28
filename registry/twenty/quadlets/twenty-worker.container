@@ -10,7 +10,7 @@ Image=docker.io/twentycrm/twenty:v1.23.1
 ContainerName=twenty-worker
 Network=twenty.network
 Exec=yarn worker:prod
-Volume=twenty-data.volume:/app/docker-data:Z
+Volume=%h/.local/share/services/twenty/data:/app/docker-data:Z
 Pull=missing
 EnvironmentFile=%h/.local/share/services/twenty/.env
 Environment=DISABLE_DB_MIGRATIONS=true

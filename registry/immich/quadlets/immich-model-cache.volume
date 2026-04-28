@@ -1,4 +1,0 @@
-[Unit]
-Description=Immich machine learning model cache
-
-[Volume]

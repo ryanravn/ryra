@@ -1,4 +1,0 @@
-[Unit]
-Description=Prometheus TSDB data
-
-[Volume]

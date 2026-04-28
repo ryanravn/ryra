@@ -1,4 +1,0 @@
-[Unit]
-Description=Nextcloud application data (PHP, config, custom_apps, themes)
-
-[Volume]

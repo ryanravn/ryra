@@ -10,7 +10,7 @@ Network=prometheus.network
 PublishPort=${PORT_HTTP}:9090
 Volume=%h/.local/share/services/prometheus/configs/prometheus.yml:/etc/prometheus/prometheus.yml:Z,ro
 Volume=%h/.local/share/services/prometheus/targets:/etc/prometheus/targets:Z,ro
-Volume=prometheus-data.volume:/prometheus:U
+Volume=%h/.local/share/services/prometheus/data:/prometheus:Z,U
 Exec=--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles --web.enable-lifecycle
 Pull=missing
 EnvironmentFile=%h/.local/share/services/prometheus/.env

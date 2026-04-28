@@ -9,7 +9,7 @@ StartLimitBurst=3
 Image=ghcr.io/zammad/zammad:7.0.1-0019
 ContainerName=zammad-railsserver
 Network=zammad.network:alias=railsserver
-Volume=zammad-storage.volume:/opt/zammad/storage:U
+Volume=%h/.local/share/services/zammad/storage:/opt/zammad/storage:Z,U
 Exec=zammad-railsserver
 HealthCmd=curl -sf http://localhost:3000/api/v1/monitoring/health_check?token=zammad || exit 1
 HealthStartPeriod=120s

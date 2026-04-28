@@ -1,4 +1,0 @@
-[Unit]
-Description=Seafile database data
-
-[Volume]

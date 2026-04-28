@@ -1,4 +1,0 @@
-[Unit]
-Description=Caddy config state
-
-[Volume]

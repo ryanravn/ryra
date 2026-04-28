@@ -1,4 +1,0 @@
-[Unit]
-Description=Grafana data
-
-[Volume]

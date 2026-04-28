@@ -7,7 +7,7 @@ StartLimitBurst=3
 Image=docker.io/library/elasticsearch:9.3.3
 ContainerName=zammad-elasticsearch
 Network=zammad.network:alias=elasticsearch
-Volume=zammad-es-data.volume:/usr/share/elasticsearch/data:U
+Volume=%h/.local/share/services/zammad/es-data:/usr/share/elasticsearch/data:Z,U
 Environment=discovery.type=single-node
 Environment=xpack.security.enabled=false
 Environment=ES_JAVA_OPTS=-Xms512m -Xmx512m

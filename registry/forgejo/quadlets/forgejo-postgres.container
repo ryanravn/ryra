@@ -8,7 +8,7 @@ Image=docker.io/library/postgres:17-alpine
 AutoUpdate=registry
 ContainerName=forgejo-postgres
 Network=forgejo.network:alias=postgres
-Volume=forgejo-db-data.volume:/var/lib/postgresql/data:U
+Volume=%h/.local/share/services/forgejo/db-data:/var/lib/postgresql/data:Z,U
 Pull=missing
 EnvironmentFile=%h/.local/share/services/forgejo/.env
 HealthCmd=pg_isready -U ${POSTGRES_USER:-postgres} || exit 1

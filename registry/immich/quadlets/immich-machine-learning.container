@@ -7,7 +7,7 @@ StartLimitBurst=3
 Image=ghcr.io/immich-app/immich-machine-learning:v2.7.4
 ContainerName=immich-machine-learning
 Network=immich.network:alias=machine-learning
-Volume=immich-model-cache.volume:/cache:U
+Volume=%h/.local/share/services/immich/model-cache:/cache:Z,U
 HealthCmd=python3 -c 'import requests; requests.get("http://localhost:3003/ping")' || exit 1
 HealthStartPeriod=60s
 HealthInterval=30s

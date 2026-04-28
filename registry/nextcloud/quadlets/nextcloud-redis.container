@@ -8,7 +8,7 @@ Image=docker.io/library/redis:7-alpine
 AutoUpdate=registry
 ContainerName=nextcloud-redis
 Network=nextcloud.network:alias=redis
-Volume=nextcloud-redis-data.volume:/data:U
+Volume=%h/.local/share/services/nextcloud/redis-data:/data:Z,U
 Pull=missing
 EnvironmentFile=%h/.local/share/services/nextcloud/.env
 HealthCmd=redis-cli ping | grep -q PONG

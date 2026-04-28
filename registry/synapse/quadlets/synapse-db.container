@@ -8,7 +8,7 @@ Image=docker.io/library/postgres:16-alpine
 AutoUpdate=registry
 ContainerName=synapse-db
 Network=synapse.network:alias=db
-Volume=synapse-db.volume:/var/lib/postgresql/data:U
+Volume=%h/.local/share/services/synapse/db:/var/lib/postgresql/data:Z,U
 EnvironmentFile=%h/.local/share/services/synapse/.env
 # Synapse recommends C-collation UTF8 to avoid index-ordering bugs. Quadlet
 # parses Environment= by whitespace, so the value must be double-quoted.
