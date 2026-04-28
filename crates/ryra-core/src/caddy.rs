@@ -123,16 +123,29 @@ pub fn ensure_auth_provider_routed(
     // Caddy is installed, so caddy.container must exist — a missing or
     // unreadable file here means something has gone wrong that we should
     // surface, not swallow (OIDC discovery silently breaks otherwise).
-    let caddy_quadlet = quadlet_dir.join("caddy.container");
-    let content = std::fs::read_to_string(&caddy_quadlet).map_err(|source| Error::FileRead {
-        path: caddy_quadlet.clone(),
-        source,
+    //
+    // The path under quadlet_dir is a symlink ryra installs pointing at
+    // the real file in service_home. Read through the symlink for content,
+    // but write to the resolved target — Step::WriteFile refuses to
+    // clobber symlinks, and we don't want to convert this one to a
+    // regular file (the symlink is what systemd-quadlet looks up).
+    let caddy_quadlet_link = quadlet_dir.join("caddy.container");
+    let content =
+        std::fs::read_to_string(&caddy_quadlet_link).map_err(|source| Error::FileRead {
+            path: caddy_quadlet_link.clone(),
+            source,
+        })?;
+    let caddy_quadlet_target = std::fs::canonicalize(&caddy_quadlet_link).map_err(|source| {
+        Error::FileRead {
+            path: caddy_quadlet_link.clone(),
+            source,
+        }
     })?;
     let network_spec = format!("{auth_service}:alias={auth_domain}");
     if !content.contains(&format!("alias={auth_domain}")) {
         let updated = inject_networks(&content, &[network_spec]);
         steps.push(Step::WriteFile(GeneratedFile {
-            path: caddy_quadlet,
+            path: caddy_quadlet_target,
             content: updated,
         }));
         need_caddy_restart = true;
