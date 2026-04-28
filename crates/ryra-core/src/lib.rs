@@ -1515,15 +1515,24 @@ pub fn finalize_reset() -> Result<()> {
     Ok(())
 }
 
-/// Get the current status of the ryra installation.
+/// Get the current status of the ryra installation. Considers ryra
+/// "initialized" when EITHER a marker'd quadlet is on disk OR a
+/// `preferences.toml` exists — quadlets are the source of truth for
+/// installed services, but a preferences-only state (e.g. an SMTP relay
+/// configured before any service install) still counts.
 pub fn status() -> config::status::RyraStatus {
     let paths = match ConfigPaths::resolve() {
         Ok(p) => p,
         Err(_) => return config::status::RyraStatus::NotInitialized,
     };
 
+    let has_quadlets = scan_managed_services()
+        .map(|n| !n.is_empty())
+        .unwrap_or(false);
+
     let config = match config::load_config(&paths.config_file) {
         Ok(c) => c,
+        Err(Error::ConfigNotFound(_)) if has_quadlets => config::schema::Config::default(),
         Err(Error::ConfigNotFound(_)) => return config::status::RyraStatus::NotInitialized,
         Err(e) => return config::status::RyraStatus::Error(e.to_string()),
     };
