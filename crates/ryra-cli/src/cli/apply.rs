@@ -317,7 +317,7 @@ mod tailscale_services {
         }
         let approvers = acl
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow::anyhow!("ACL root is not an object"))?
             .entry("autoApprovers")
             .or_insert_with(|| serde_json::json!({}));
         let services = approvers

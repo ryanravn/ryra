@@ -67,6 +67,12 @@ pub enum Issue {
     /// `loginctl --user enable-linger` hasn't been run, so user-level
     /// services don't survive logout / reboot.
     LingerNotEnabled,
+    /// Couldn't read the quadlet symlink farm or service data root to
+    /// detect drift — usually a permissions problem on
+    /// `~/.config/containers/systemd/` or `~/.local/share/services/`.
+    /// Surfaced rather than swallowed so the user knows their install
+    /// state isn't being checked.
+    IntegrityScanFailed { error: String },
 }
 
 impl Issue {
@@ -80,6 +86,7 @@ impl Issue {
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
             Issue::MissingMetadata { .. } => Severity::Info,
+            Issue::IntegrityScanFailed { .. } => Severity::Warning,
         }
     }
 }
@@ -176,6 +183,15 @@ impl fmt::Display for Issue {
                      \n\
                      Fix:\n  \
                        loginctl enable-linger",
+                )
+            }
+            Issue::IntegrityScanFailed { error } => {
+                write!(
+                    f,
+                    "couldn't scan installed services to check for drift: {error}\n\
+                     Fix the underlying error (commonly a permissions problem on \
+                     ~/.config/containers/systemd/ or ~/.local/share/services/) so \
+                     `ryra doctor` can verify install state.",
                 )
             }
         }
@@ -295,7 +311,12 @@ fn check_install_integrity() -> Vec<Issue> {
             let resolved = if target.is_absolute() {
                 target.clone()
             } else {
-                path.parent().map(|p| p.join(&target)).unwrap_or(target.clone())
+                // `path` came from read_dir on `quadlet`, so it always has a
+                // parent. The else-arm only fires if a future caller hands us
+                // a rootless path — skip rather than join against an empty
+                // base and report a phantom dangling symlink.
+                let Some(parent) = path.parent() else { continue };
+                parent.join(&target)
             };
             if !resolved.starts_with(&data_root) {
                 continue;
@@ -312,7 +333,15 @@ fn check_install_integrity() -> Vec<Issue> {
     // Orphan quadlet files: real .container/.network/.volume in service home
     // with no matching symlink in quadlet dir, plus missing metadata.toml
     // for marker'd installs.
-    let managed = crate::scan_managed_services().unwrap_or_default();
+    let managed = match crate::scan_managed_services() {
+        Ok(m) => m,
+        Err(e) => {
+            out.push(Issue::IntegrityScanFailed {
+                error: e.to_string(),
+            });
+            return out;
+        }
+    };
     for svc in &managed {
         let Ok(home) = crate::service_home(svc) else {
             continue;
@@ -338,15 +367,16 @@ fn check_install_integrity() -> Vec<Issue> {
                 }
                 let symlink = quadlet.join(&name);
                 let symlink_ok = std::fs::read_link(&symlink)
-                    .map(|t| {
-                        let resolved = if t.is_absolute() {
-                            t
+                    .ok()
+                    .and_then(|t| {
+                        if t.is_absolute() {
+                            Some(t)
                         } else {
-                            symlink.parent().map(|p| p.join(&t)).unwrap_or_default()
-                        };
-                        resolved == path
+                            // symlink = quadlet.join(name) — always has a parent.
+                            symlink.parent().map(|p| p.join(&t))
+                        }
                     })
-                    .unwrap_or(false);
+                    .is_some_and(|resolved| resolved == path);
                 if !symlink_ok {
                     out.push(Issue::OrphanQuadletFile { path });
                 }
@@ -375,6 +405,8 @@ fn parse_subid_range(path: &'static str, user: &str, missing: &mut Vec<&'static 
             continue;
         }
         let _start = parts.next();
+        // A malformed count falls through as 0, which then trips
+        // SubidRangeTooSmall — same actionable fix command as a missing range.
         let count = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
         return count;
     }
