@@ -27,16 +27,43 @@ if [ -f "$CADDY_CA" ]; then
   podman exec forgejo sh -c "cat /tmp/caddy-ca.crt >> /etc/ssl/certs/ca-certificates.crt" 2>/dev/null || true
 fi
 
+# Upsert the auth source. `forgejo admin auth add-oauth` always creates a
+# new row, so a naïve add on every container start would accumulate
+# duplicate "Authelia" entries. List existing sources, find the one named
+# "Authelia", and route to update-oauth (with --id) when it already exists.
+#
+# `auth list` prints a tab/space-padded table: ID, Name, Type, Enabled.
+# `awk -F'\t'` and a literal "Authelia" Name match keeps the parser
+# tolerant to padding tweaks across forgejo versions.
+#
 # Exit 0 intentionally: ExecStartPost failure would cause systemd to
 # kill the service. Log the error for debugging instead.
-echo "Registering OIDC provider..."
-podman exec -u git forgejo forgejo admin auth add-oauth \
-  --name "Authelia" \
-  --provider "openidConnect" \
-  --key "$OIDC_CLIENT_ID" \
-  --secret "$OIDC_CLIENT_SECRET" \
-  --auto-discover-url "$OIDC_DISCOVERY_URL" \
-  --custom-auth-url "$OIDC_AUTH_URL" \
-  --custom-token-url "$OIDC_TOKEN_URL" \
-  --custom-profile-url "$OIDC_PROFILE_URL" \
-  --scopes "openid email profile" 2>&1 || echo "OIDC registration failed (will retry on next restart)"
+EXISTING_ID=$(podman exec -u git forgejo forgejo admin auth list 2>/dev/null \
+  | awk -F'\t' 'NR>1 && $2=="Authelia" {print $1; exit}')
+
+if [ -n "${EXISTING_ID:-}" ]; then
+  echo "Updating OIDC provider (id=$EXISTING_ID)..."
+  podman exec -u git forgejo forgejo admin auth update-oauth \
+    --id "$EXISTING_ID" \
+    --name "Authelia" \
+    --provider "openidConnect" \
+    --key "$OIDC_CLIENT_ID" \
+    --secret "$OIDC_CLIENT_SECRET" \
+    --auto-discover-url "$OIDC_DISCOVERY_URL" \
+    --custom-auth-url "$OIDC_AUTH_URL" \
+    --custom-token-url "$OIDC_TOKEN_URL" \
+    --custom-profile-url "$OIDC_PROFILE_URL" \
+    --scopes "openid email profile" 2>&1 || echo "OIDC update failed (will retry on next restart)"
+else
+  echo "Registering OIDC provider..."
+  podman exec -u git forgejo forgejo admin auth add-oauth \
+    --name "Authelia" \
+    --provider "openidConnect" \
+    --key "$OIDC_CLIENT_ID" \
+    --secret "$OIDC_CLIENT_SECRET" \
+    --auto-discover-url "$OIDC_DISCOVERY_URL" \
+    --custom-auth-url "$OIDC_AUTH_URL" \
+    --custom-token-url "$OIDC_TOKEN_URL" \
+    --custom-profile-url "$OIDC_PROFILE_URL" \
+    --scopes "openid email profile" 2>&1 || echo "OIDC registration failed (will retry on next restart)"
+fi
