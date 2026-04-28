@@ -9,6 +9,7 @@ After=supabase-db.service supabase-rest.service supabase-imgproxy.service
 ContainerName=supabase-storage
 Image=docker.io/supabase/storage-api:v1.48.26
 Network=supabase.network:alias=storage
+Volume=supabase-storage-data.volume:/var/lib/storage:U
 Environment=PORT=5000
 Pull=missing
 EnvironmentFile=%h/.local/share/services/supabase/.env

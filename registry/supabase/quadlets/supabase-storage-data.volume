@@ -1,0 +1,4 @@
+[Unit]
+Description=Supabase Storage uploads
+
+[Volume]
