@@ -49,7 +49,7 @@ Run `ryra search` to browse the full list with install status.
 
 ## How it works
 
-1. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, generates a quadlet at `~/.config/containers/systemd/<service>.container`, writes a `.env` with any secrets, and asks systemd to start it. The first `ryra add` also creates `~/.config/services/preferences.toml` and offers to enable `loginctl linger` so services survive logout.
+1. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, writes a quadlet + `.env` + `metadata.toml` to `~/.local/share/services/<service>/`, drops a symlink at `~/.config/containers/systemd/<service>.container` so systemd-quadlet finds it, and asks systemd to start it. The first `ryra add` also creates `~/.config/services/preferences.toml` and offers to enable `loginctl linger` so services survive logout.
 2. **`--url <public-url>`** records where the service will be reachable. If Caddy is installed, Ryra also adds a site block routing that hostname to the container. If you run your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale Funnel, …), Ryra leaves the routing alone and just uses the URL to populate OIDC callbacks and email links.
 3. **`--auth`** registers an OIDC client with the auth provider and either (a) injects credentials into the service's native OIDC config, or (b) puts Authelia's forward-auth in front of the service via Caddy.
 
@@ -57,15 +57,17 @@ Run `ryra search` to browse the full list with install status.
 
 | Path | What |
 |---|---|
-| `~/.config/services/preferences.toml` | Ryra's own config |
-| `~/.config/containers/systemd/<svc>.container` | Generated quadlet |
-| `~/.local/share/services/<svc>/` | Service data + `.env` |
-| `~/.local/share/services/caddy/config/Caddyfile` | Routing config |
+| `~/.local/share/services/<svc>/` | Everything for one service: quadlets, `.env`, `metadata.toml`, configs, bind-mounted runtime data |
+| `~/.config/containers/systemd/<svc>.container` | Symlink → the real quadlet in the service's folder, so systemd-quadlet finds it |
+| `~/.config/services/preferences.toml` | Ryra's own config (default SMTP relay, auth provider, etc.) |
+
+`tar czf services.tar.gz --dereference ~/.local/share/services/` captures every service's full state in one shot.
 
 ## Managing services
 
 ```sh
 ryra list                        # installed services + orphans
+ryra doctor                      # diagnose env + install state, surface fixes
 ryra remove nextcloud            # stop + deregister, keep data
 ryra remove nextcloud --purge    # also wipe the data dir and volumes
 ryra remove -a                   # remove everything, preserve data

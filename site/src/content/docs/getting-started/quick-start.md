@@ -11,6 +11,14 @@ This guide walks you through deploying your first service on a fresh server.
 curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
 ```
 
+Verify your environment is wired up correctly:
+
+```bash
+ryra doctor
+```
+
+It checks subuid/subgid for rootless Podman, loginctl linger, and any drift in installed services. Fixes are printed inline.
+
 ## 2. Deploy a service
 
 Let's start with Vaultwarden, a Bitwarden-compatible password manager:
