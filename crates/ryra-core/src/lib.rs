@@ -259,6 +259,13 @@ pub(crate) fn caddy_https_port(_config: &Config) -> u16 {
 pub enum Step {
     /// Write a file.
     WriteFile(GeneratedFile),
+    /// Create a symlink at `link` pointing to `target`. Idempotent: if
+    /// `link` already exists (whether as a file, dir, or symlink), it's
+    /// removed first. Used to satisfy systemd's fixed quadlet path
+    /// (`~/.config/containers/systemd/<svc>.container`) while keeping
+    /// the real file alongside the rest of the service's data in
+    /// `~/.local/share/services/<svc>/`.
+    Symlink { link: PathBuf, target: PathBuf },
     /// Reload systemd for the current user.
     DaemonReload,
     /// Start a service under the current user's systemd.
@@ -308,6 +315,9 @@ impl Step {
     pub fn to_command(&self) -> String {
         match self {
             Step::WriteFile(file) => format!("write {}", file.path.display()),
+            Step::Symlink { link, target } => {
+                format!("ln -sf {} {}", target.display(), link.display())
+            }
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
@@ -896,7 +906,6 @@ pub fn add_service(
         generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
             service_dir: &reg_service.service_dir,
             service_name,
-            quadlet_dir: &quadlet_path,
             extra_networks: &extra_networks,
             extra_volumes: &extra_volumes,
             podman_args: &podman_args,
@@ -945,9 +954,18 @@ pub fn add_service(
         });
     }
 
-    // 3. Write quadlet files from bundle
+    // 3. Write quadlet files from bundle (real files live in service_home)
+    //    and symlink each one into the systemd-mandated quadlet path so
+    //    quadlet's generator finds them on daemon-reload.
     for file in bundle.quadlet_files {
+        let link = file
+            .path
+            .file_name()
+            .map(|n| quadlet_path.join(n))
+            .ok_or_else(|| Error::Bundle(format!("invalid quadlet path: {}", file.path.display())))?;
+        let target = file.path.clone();
         steps.push(Step::WriteFile(file));
+        steps.push(Step::Symlink { link, target });
     }
 
     // 3b. Tailscale Services — when `--tailscale` was used, the host's

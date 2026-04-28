@@ -49,6 +49,23 @@ async fn execute(step: &Step) -> Result<()> {
             .with_context(|| format!("failed to write {}", file.path.display()))?;
             Ok(())
         }
+        Step::Symlink { link, target } => {
+            // Idempotent: clear any existing entry at `link` before relinking.
+            // Need symlink_metadata so we don't traverse a broken symlink and
+            // mistakenly think it's missing.
+            if std::fs::symlink_metadata(link).is_ok()
+                && let Err(e) = std::fs::remove_file(link)
+            {
+                bail!("failed to clear existing entry at {}: {e}", link.display());
+            }
+            if let Some(parent) = link.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            std::os::unix::fs::symlink(target, link)
+                .with_context(|| format!("failed to symlink {} -> {}", link.display(), target.display()))?;
+            Ok(())
+        }
         Step::DaemonReload => run_cmd("systemctl", &["--user", "daemon-reload"]),
         Step::StartService { unit } => {
             // Retry once on failure — the first start after daemon-reload can

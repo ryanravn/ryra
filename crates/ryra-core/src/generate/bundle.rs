@@ -29,7 +29,6 @@ pub struct ServiceMetadata<'a> {
 pub struct ProcessBundleParams<'a> {
     pub service_dir: &'a Path,
     pub service_name: &'a str,
-    pub quadlet_dir: &'a Path,
     pub extra_networks: &'a [String],
     pub extra_volumes: &'a [String],
     /// Extra args passed via `PodmanArgs=` in the quadlet.
@@ -231,6 +230,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     }
 
     let mut quadlet_files = Vec::new();
+    let service_home = crate::service_home(params.service_name)?;
 
     let entries = std::fs::read_dir(&quadlets_dir).map_err(|source| Error::FileRead {
         path: quadlets_dir.clone(),
@@ -303,8 +303,10 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             }
         }
 
+        // Real files live under service_home; the caller emits Step::Symlink
+        // afterwards to expose them at the systemd-mandated quadlet path.
         quadlet_files.push(GeneratedFile {
-            path: params.quadlet_dir.join(file_name.as_ref()),
+            path: service_home.join(file_name.as_ref()),
             content,
         });
     }
@@ -321,8 +323,6 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
 
     let images = extract_images(&quadlet_files);
     let bind_mount_dirs = extract_bind_mount_dirs(&quadlet_files)?;
-
-    let service_home = crate::service_home(params.service_name)?;
     let config_files = process_configs(params.service_dir, &service_home)?;
     let files = collect_files(params.service_dir, &service_home)?;
 
@@ -537,7 +537,6 @@ mod tests {
         let params = ProcessBundleParams {
             service_dir: Path::new("/nonexistent"),
             service_name: "test",
-            quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
             extra_networks: &[],
             extra_volumes: &[],
             podman_args: &[],
@@ -570,12 +569,9 @@ mod tests {
         )
         .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
-        let quadlet_dir = Path::new("/home/user/.config/containers/systemd");
-
         let params = ProcessBundleParams {
             service_dir: &service_dir,
             service_name: "myservice",
-            quadlet_dir,
             extra_networks: &["caddy".to_string()],
             extra_volumes: &[],
             podman_args: &[],
@@ -625,7 +621,6 @@ mod tests {
         let params = ProcessBundleParams {
             service_dir: &service_dir,
             service_name: "empty",
-            quadlet_dir: Path::new("/home/user/.config/containers/systemd"),
             extra_networks: &[],
             extra_volumes: &[],
             podman_args: &[],
