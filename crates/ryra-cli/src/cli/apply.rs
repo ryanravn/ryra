@@ -405,18 +405,38 @@ mod tailscale_services {
         let ts = token()?;
         let key = &ts.admin_api_key;
 
-        // PUT (create or update) the service. Tagging it with
-        // SERVICE_TAG makes the autoApprover entry kick in so the
-        // host's advertisement auto-approves.
-        let body = format!(
-            r#"{{"name":"svc:{service}","tags":["{SERVICE_TAG}"],"ports":["tcp:443"]}}"#
+        // Tailscale's PUT endpoint creates a fresh service when none
+        // exists (auto-assigning IPv4 + IPv6) but treats subsequent PUTs
+        // as updates that *require* the addrs field with both addresses.
+        // GET first so a re-run after a partial install (or any update)
+        // preserves the existing addrs instead of failing with
+        // "addrs must contain 2 elements".
+        let url = format!(
+            "https://api.tailscale.com/api/v2/tailnet/-/services/svc:{service}"
         );
-        let (code, resp) = curl(
-            "PUT",
-            &format!("https://api.tailscale.com/api/v2/tailnet/-/services/svc:{service}"),
-            key,
-            Some(&body),
-        )?;
+        let (get_code, get_body) = curl("GET", &url, key, None)?;
+        let body = match get_code {
+            200 => {
+                let existing: serde_json::Value = serde_json::from_str(&get_body)
+                    .with_context(|| format!("service GET JSON: {get_body}"))?;
+                let addrs = existing
+                    .get("addrs")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!([]));
+                serde_json::json!({
+                    "name": format!("svc:{service}"),
+                    "tags": [SERVICE_TAG],
+                    "ports": ["tcp:443"],
+                    "addrs": addrs,
+                })
+                .to_string()
+            }
+            404 => format!(
+                r#"{{"name":"svc:{service}","tags":["{SERVICE_TAG}"],"ports":["tcp:443"]}}"#
+            ),
+            _ => bail!("check service svc:{service} failed (HTTP {get_code}): {get_body}"),
+        };
+        let (code, resp) = curl("PUT", &url, key, Some(&body))?;
         if code != 200 {
             bail!("define service svc:{service} failed (HTTP {code}): {resp}");
         }
