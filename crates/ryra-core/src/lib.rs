@@ -1035,22 +1035,43 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
 pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
     let mut steps = Vec::new();
 
-    // Quadlet symlinks in `~/.config/containers/systemd/`. Present for
-    // partial installs (`ryra add` errored mid-flight) — the home dir
-    // removal below would otherwise leave dangling symlinks pointing
-    // at a deleted directory.
+    // Quadlet files in `~/.config/containers/systemd/` belonging to
+    // this service. Mirrors `remove_service`'s sweep — filename match
+    // via `quadlet_belongs_to` catches both regular files and
+    // symlinks, so a re-`ryra add` after purge starts clean instead
+    // of seeing a leftover `.volume` and re-prompting about orphan data.
+    let mut had_quadlet = false;
     if let Ok(qdir) = quadlet_dir()
+        && qdir.is_dir()
         && let Ok(entries) = std::fs::read_dir(&qdir)
     {
+        let name_pool = scan_managed_services().unwrap_or_default();
+        let all_names: Vec<&str> = name_pool.iter().map(|s| s.as_str()).collect();
         for entry in entries.flatten() {
-            let target = match std::fs::read_link(entry.path()) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            if target.starts_with(&svc.home_dir) {
-                steps.push(Step::RemoveFile(entry.path()));
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            if !quadlet_belongs_to(&name, &svc.service, &all_names) {
+                continue;
             }
+            // Stop generated units before removing files so the
+            // upcoming daemon-reload unloads them cleanly instead of
+            // leaving "loaded: not-found, active (exited)" entries.
+            if name.ends_with(".container") {
+                let unit = name.trim_end_matches(".container").to_string();
+                steps.push(Step::StopService { unit });
+            } else if name.ends_with(".network") {
+                let unit = format!("{}-network", name.trim_end_matches(".network"));
+                steps.push(Step::StopService { unit });
+            } else if name.ends_with(".volume") {
+                let unit = format!("{}-volume", name.trim_end_matches(".volume"));
+                steps.push(Step::StopService { unit });
+            }
+            steps.push(Step::RemoveFile(entry.path()));
+            had_quadlet = true;
         }
+    }
+    if had_quadlet {
+        steps.push(Step::DaemonReload);
     }
 
     for path in &svc.data_paths {
@@ -1067,14 +1088,6 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
         steps.push(Step::RemoveVolume {
             name: v.name.clone(),
         });
-    }
-    // After unlinking quadlets, daemon-reload so systemd drops the
-    // generated unit references. No-op when no symlinks were unlinked.
-    if steps
-        .iter()
-        .any(|s| matches!(s, Step::RemoveFile(p) if p.extension().is_some_and(|e| e == "container" || e == "network" || e == "volume")))
-    {
-        steps.push(Step::DaemonReload);
     }
     steps
 }
