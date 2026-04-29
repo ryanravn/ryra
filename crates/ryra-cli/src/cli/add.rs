@@ -865,6 +865,24 @@ pub async fn run(
             let home_dir = ryra_core::service_home(service)?;
             if let Some(ref url) = result.url {
                 println!("\n{service} is running at {url}");
+                // Tailnet URLs route via Tailscale Service VIPs, which a
+                // host advertising the service can't reach back through —
+                // tailscaled doesn't add a route to its own service VIPs.
+                // Without this nudge the user installs, opens the URL in
+                // their browser on the same machine, gets a hang, and
+                // assumes the install is broken.
+                if ryra_core::is_tailscale_url(url) {
+                    let primary_loopback = result
+                        .allocated_ports
+                        .first()
+                        .map(|(_, p)| format!("http://127.0.0.1:{p}"));
+                    println!(
+                        "  Note: tailnet URLs only resolve from *other* devices on your tailnet."
+                    );
+                    if let Some(loopback) = primary_loopback {
+                        println!("        On this host, use {loopback} instead.");
+                    }
+                }
             } else {
                 println!("\n{service} is running.");
             }
