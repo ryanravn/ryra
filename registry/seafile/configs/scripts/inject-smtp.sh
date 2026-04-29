@@ -30,7 +30,9 @@ DEFAULT_FROM_EMAIL = '$SMTP_FROM'
 SERVER_EMAIL = '$SMTP_FROM'
 EOF
 
-grep -q seahub_settings_smtp "$CONF/seahub_settings.py" || \
+if ! grep -q seahub_settings_smtp "$CONF/seahub_settings.py"; then
   echo "exec(open('/shared/seafile/conf/seahub_settings_smtp.py').read())" >> "$CONF/seahub_settings.py"
+  touch "$CONF/.seahub-restart-needed"
+fi
 
 echo "SMTP config injected into seahub_settings.py"

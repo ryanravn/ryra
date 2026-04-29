@@ -29,7 +29,11 @@ OAUTH_SCOPE = ["openid", "profile", "email"]
 OAUTH_ATTRIBUTE_MAP = {"email": (True, "contact_email"), "name": (False, "name"), "sub": (False, "uid")}
 EOF
 
-grep -q seahub_settings_oauth "$CONF/seahub_settings.py" || \
+if ! grep -q seahub_settings_oauth "$CONF/seahub_settings.py"; then
   echo "exec(open('/shared/seafile/conf/seahub_settings_oauth.py').read())" >> "$CONF/seahub_settings.py"
+  # Tell restart-seahub.sh that start.py started seahub without these
+  # settings loaded — a one-shot restart is required this boot.
+  touch "$CONF/.seahub-restart-needed"
+fi
 
 echo "OAuth config injected into seahub_settings.py"
