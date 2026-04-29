@@ -868,19 +868,24 @@ pub async fn run(
                 // Tailnet URLs route via Tailscale Service VIPs, which a
                 // host advertising the service can't reach back through —
                 // tailscaled doesn't add a route to its own service VIPs.
-                // Without this nudge the user installs, opens the URL in
-                // their browser on the same machine, gets a hang, and
-                // assumes the install is broken.
+                // Without this nudge the user opens the URL in their
+                // browser on the same machine, gets a hang, and assumes
+                // the install is broken. The loopback fallback is HTTP
+                // only — services that mandate HTTPS (vaultwarden,
+                // authelia) won't accept it, so we flag that too.
                 if ryra_core::is_tailscale_url(url) {
-                    let primary_loopback = result
-                        .allocated_ports
-                        .first()
-                        .map(|(_, p)| format!("http://127.0.0.1:{p}"));
                     println!(
-                        "  Note: tailnet URLs only resolve from *other* devices on your tailnet."
+                        "  Note: tailnet URLs don't loop back to this host. From other"
                     );
-                    if let Some(loopback) = primary_loopback {
-                        println!("        On this host, use {loopback} instead.");
+                    println!("        tailnet devices, the URL above works (HTTPS via Tailscale).");
+                    if let Some((_, p)) = result.allocated_ports.first() {
+                        println!(
+                            "        Locally on this host: http://127.0.0.1:{p} (HTTP only —"
+                        );
+                        println!(
+                            "        services that require HTTPS won't accept it; reinstall"
+                        );
+                        println!("        without --tailscale for Caddy-local HTTPS at *.internal).");
                     }
                 }
             } else {
