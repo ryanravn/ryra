@@ -508,7 +508,69 @@ mod tailscale_services {
         // Best-effort verify — when sudo -n fails between commands we
         // can't confirm. The non-zero check above is the load-bearing
         // safety net for the common failure modes.
+
+        // Local config OK ≠ control plane approved. tailscaled (≤1.96.x)
+        // sometimes saves the new advertisement to local prefs without
+        // pushing it to the coordination server, so the autoApprover never
+        // fires and the URL silently routes nowhere. Confirm the device
+        // shows up in `Self.CapMap."service-host"` for svc:<service>
+        // before we declare the install good.
+        verify_control_plane_approval(service)?;
+
         Ok(())
+    }
+
+    /// Poll `tailscale status --json` until `Self.CapMap."service-host"`
+    /// lists `svc:<service>` with non-empty IPs. The `service-host` cap
+    /// is the control plane's own record of approved Service Hosts —
+    /// presence here is what makes the tailnet route traffic to us.
+    fn verify_control_plane_approval(service: &str) -> Result<()> {
+        let svc_key = format!("svc:{service}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut announced = false;
+        loop {
+            let out = Command::new("sudo")
+                .args(["-n", "tailscale", "status", "--json"])
+                .output();
+            if let Ok(o) = out
+                && o.status.success()
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(
+                    &String::from_utf8_lossy(&o.stdout),
+                )
+                && v.pointer("/Self/CapMap/service-host")
+                    .and_then(|sh| sh.as_array())
+                    .is_some_and(|arr| {
+                        arr.iter().any(|entry| {
+                            entry
+                                .as_object()
+                                .and_then(|o| o.get(&svc_key))
+                                .and_then(|ips| ips.as_array())
+                                .is_some_and(|ips| !ips.is_empty())
+                        })
+                    })
+            {
+                return Ok(());
+            }
+            if std::time::Instant::now() > deadline {
+                bail!(
+                    "tailscale serve advertised svc:{service} locally, but the control plane \
+                     hasn't approved this host within 20s.\n\
+                     \n\
+                     The autoApprover ACL entry is in place — this is tailscaled sometimes \
+                     failing to push prefs updates to the coordination server. A daemon \
+                     restart forces a re-sync:\n\
+                     \n  sudo systemctl restart tailscaled\n\
+                     \n\
+                     Then re-run `ryra add {service} ...` (or wait ~10s and confirm with \
+                     `sudo tailscale status --json | jq '.Self.CapMap[\"service-host\"]'`)."
+                );
+            }
+            if !announced {
+                println!("  Waiting for control-plane approval of svc:{service}…");
+                announced = true;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
     }
 
     /// Stop advertising and delete the service definition. Idempotent:
