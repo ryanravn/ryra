@@ -64,8 +64,14 @@ value = "seahub_db"
 # --- Seafile server config ---
 
 [[env]]
+# Seafile builds frontend asset URLs by concatenating SCHEME + HOSTNAME
+# + path. Hardcoding `:service.port` emits `https://<host>:10001/media/…`,
+# but the local container publish port isn't reachable from the tailnet
+# or Caddy — the public route terminates on :443 (or caddy_https_port).
+# Use external_authority so the port is included only when the URL has
+# an explicit one; fall back to 127.0.0.1:<port> for the no-URL case.
 name = "SEAFILE_SERVER_HOSTNAME"
-value = "{{service.domain | default('127.0.0.1')}}:{{service.port}}"
+value = "{{service.external_authority | default('127.0.0.1:' ~ service.port)}}"
 
 [[env]]
 name = "SEAFILE_SERVER_PROTOCOL"

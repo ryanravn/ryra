@@ -164,6 +164,29 @@ mod tests {
     }
 
     #[test]
+    fn concat_with_default_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        // Pattern used by services like seafile to fall back to a
+        // composed loopback authority when --url isn't set:
+        //   {{ service.external_authority | default('127.0.0.1:' ~ service.port) }}
+        // Locks in minijinja's `~` string-concat operator so a future
+        // crate upgrade can't silently break the fallback.
+        let mut ctx = BTreeMap::new();
+        ctx.insert("service.port".into(), "10001".into());
+        let tpl = "{{ service.external_authority | default('127.0.0.1:' ~ service.port) }}";
+
+        // No external_authority → fallback applies and concatenates.
+        assert_eq!(render(tpl, &ctx)?, "127.0.0.1:10001");
+
+        // external_authority set → fallback ignored.
+        ctx.insert(
+            "service.external_authority".into(),
+            "seafile.example.com".into(),
+        );
+        assert_eq!(render(tpl, &ctx)?, "seafile.example.com");
+        Ok(())
+    }
+
+    #[test]
     fn strict_mode_rejects_undefined_top_level() {
         let ctx = BTreeMap::new();
         let err = render("{{ bogus_top_level }}", &ctx);
