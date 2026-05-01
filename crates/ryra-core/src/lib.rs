@@ -1095,7 +1095,6 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
 /// Reset ryra: tear down all services, infrastructure, and config.
 pub fn reset() -> Result<ResetResult> {
     let mut steps = Vec::new();
-    let mut volume_names = Vec::new();
 
     // Quadlet directory scan is the source of truth for ryra-managed
     // services — every install stamps a marker comment on the main
@@ -1152,7 +1151,6 @@ pub fn reset() -> Result<ResetResult> {
                 steps.push(Step::StopService {
                     unit: format!("{vol}-volume"),
                 });
-                volume_names.push(format!("systemd-{vol}"));
             }
             steps.push(Step::RemoveFile(entry.path()));
         }
@@ -1161,19 +1159,28 @@ pub fn reset() -> Result<ResetResult> {
     // 2. Reload user systemd after removing quadlets
     steps.push(Step::DaemonReload);
 
-    // 3. Remove podman volumes
-    for vol_name in volume_names {
-        steps.push(Step::RemoveVolume { name: vol_name });
+    // 3. Remove podman volumes for every ryra-visible service — installed
+    // and orphaned. `enumerate_all` walks both the quadlet markers and the
+    // data root, so volumes left behind by a `ryra remove --preserve`
+    // (which drops the quadlet but keeps the named volume) get swept up
+    // here too.
+    let mut seen_volumes = std::collections::BTreeSet::new();
+    for svc in data::enumerate_all().unwrap_or_default() {
+        for vol in svc.volumes {
+            if seen_volumes.insert(vol.name.clone()) {
+                steps.push(Step::RemoveVolume { name: vol.name });
+            }
+        }
     }
 
-    // 4. Remove service data directories — every ryra-managed service,
-    // whether known via preferences or via marker scan.
-    for name in &managed_names {
-        if let Ok(data_dir) = service_home(name)
-            && data_dir.exists()
-        {
-            steps.push(Step::RemoveDir(data_dir));
-        }
+    // 4. Nuke the entire service data root in one shot. The user-facing
+    // reset prompt promises "Delete ~/.local/share/services/", so the
+    // implementation must match — sweeping managed dirs, orphan dirs
+    // (left by `--preserve` removes), the top-level caddy-root-ca.crt,
+    // and any other ryra-written tooling state living under that root.
+    let data_root = service_data_root()?;
+    if data_root.exists() {
+        steps.push(Step::RemoveDir(data_root));
     }
 
     Ok(ResetResult { steps })
