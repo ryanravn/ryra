@@ -36,6 +36,21 @@ pub fn tailnet_suffix(node_dns_name: &str) -> Option<String> {
     lower.split_once('.').map(|(_, rest)| rest.to_string())
 }
 
+/// The local node's short hostname as Tailscale knows it (e.g.
+/// `debian` from `debian.cobbler-tuna.ts.net`). Used to scope per-host
+/// Tailscale Service names — `svc:vikunja-debian` instead of bare
+/// `svc:vikunja` — so two ryra hosts on the same tailnet can each run
+/// their own copy of a service without colliding on the global svc
+/// namespace, and `ryra reset` on one host doesn't tear down the
+/// other's registration.
+///
+/// Tailscale already enforces uniqueness across the tailnet
+/// (duplicates get `-1`/`-2` suffixes), so the resulting svc name is
+/// guaranteed unique by construction.
+pub fn self_short_hostname() -> Option<String> {
+    self_dns_name().and_then(|name| name.split_once('.').map(|(host, _)| host.to_string()))
+}
+
 /// The local node's Tailscale MagicDNS name (e.g.
 /// `debian.cobbler-tuna.ts.net`) if `tailscale` is installed and the
 /// node is logged in. Returns `None` for any failure mode — the caller

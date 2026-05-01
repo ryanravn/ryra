@@ -64,6 +64,24 @@ impl Exposure {
         matches!(self, Exposure::Tailscale { .. })
     }
 
+    /// For Tailscale exposures, the Tailscale Service name (the part
+    /// after `svc:` — i.e. the first DNS label of the URL host). With
+    /// per-host scoping this is `<service>-<host>` (e.g.
+    /// `vikunja-debian`). Used by remove/reset paths to address the
+    /// admin-API service definition without re-deriving the host from
+    /// `tailscale status` (the URL was captured at install time, so
+    /// renaming the host post-install doesn't break teardown).
+    pub fn tailscale_svc_name(&self) -> Option<String> {
+        let url = match self {
+            Exposure::Tailscale { url } => url,
+            _ => return None,
+        };
+        url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+            .and_then(|h| h.split_once('.').map(|(label, _)| label.to_string()))
+    }
+
     /// Stable string form of the variant, for the `exposure` field in
     /// `metadata.toml` and reading it back. Mirrors the snake_case names
     /// used by serde's `tag = "kind"` representation so the two stay in

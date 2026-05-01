@@ -50,15 +50,23 @@ pub enum Step {
     /// reads current state via API and only writes diffs.
     TailscaleSetup,
     /// Define a Tailscale Service via the admin API and advertise it
-    /// from the host: `sudo tailscale serve --service=svc:<service>
+    /// from the host: `sudo tailscale serve --service=svc:<svc_name>
     /// --https=443 http://127.0.0.1:<host_port>`. The service gets
     /// `tag:ryra-service` (matches the autoApprover) so the host's
     /// advertisement auto-approves with no manual UI clicks.
-    TailscaleEnable { service: String, host_port: u16 },
+    ///
+    /// `svc_name` is the part after `svc:` — already host-scoped at
+    /// planning time (`<service>-<host>`) so two ryra hosts on the
+    /// same tailnet can run independent copies of a service without
+    /// colliding on the global Tailscale Service namespace.
+    TailscaleEnable { svc_name: String, host_port: u16 },
     /// Stop advertising a Tailscale Service on this host and delete
     /// its definition via the admin API. Used in `ryra remove --purge`
-    /// and `ryra reset` for tailscale-enabled services.
-    TailscaleDisable { service: String },
+    /// and `ryra reset` for tailscale-enabled services. `svc_name`
+    /// matches the value used at install time (recovered from the
+    /// stored Tailscale URL so a hostname change post-install doesn't
+    /// break teardown).
+    TailscaleDisable { svc_name: String },
 }
 
 impl Step {
@@ -88,13 +96,13 @@ impl Step {
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
             Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),
             Step::TailscaleEnable {
-                service,
+                svc_name,
                 host_port,
             } => format!(
-                "tailscale serve --service=svc:{service} --https=443 http://127.0.0.1:{host_port}"
+                "tailscale serve --service=svc:{svc_name} --https=443 http://127.0.0.1:{host_port}"
             ),
-            Step::TailscaleDisable { service } => {
-                format!("tailscale serve --service=svc:{service} off + delete service")
+            Step::TailscaleDisable { svc_name } => {
+                format!("tailscale serve --service=svc:{svc_name} off + delete service")
             }
         }
     }

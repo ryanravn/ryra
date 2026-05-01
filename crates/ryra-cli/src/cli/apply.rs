@@ -229,10 +229,10 @@ async fn execute(step: &Step) -> Result<()> {
         }
         Step::TailscaleSetup => tailscale_services::ensure_setup(),
         Step::TailscaleEnable {
-            service,
+            svc_name,
             host_port,
-        } => tailscale_services::enable(service, *host_port),
-        Step::TailscaleDisable { service } => tailscale_services::disable(service),
+        } => tailscale_services::enable(svc_name, *host_port),
+        Step::TailscaleDisable { svc_name } => tailscale_services::disable(svc_name),
     }
 }
 
@@ -390,10 +390,14 @@ mod tailscale_services {
     }
 
     /// Define the service via API (tagged for auto-approval), then run
-    /// `tailscale serve --service=svc:<name> --https=443
+    /// `tailscale serve --service=svc:<svc_name> --https=443
     /// http://127.0.0.1:<host_port>`. Sudo-optional via the apply
     /// path's existing `sudo -n` policy.
-    pub fn enable(service: &str, host_port: u16) -> Result<()> {
+    ///
+    /// `svc_name` is the part after `svc:` — already host-scoped at
+    /// planning time (`<service>-<host>`). See `Step::TailscaleEnable`
+    /// for why scoping happens upstream.
+    pub fn enable(svc_name: &str, host_port: u16) -> Result<()> {
         let ts = token()?;
         let key = &ts.admin_api_key;
 
@@ -404,7 +408,7 @@ mod tailscale_services {
         // preserves the existing addrs instead of failing with
         // "addrs must contain 2 elements".
         let url = format!(
-            "https://api.tailscale.com/api/v2/tailnet/-/services/svc:{service}"
+            "https://api.tailscale.com/api/v2/tailnet/-/services/svc:{svc_name}"
         );
         let (get_code, get_body) = curl("GET", &url, key, None)?;
         let body = match get_code {
@@ -416,7 +420,7 @@ mod tailscale_services {
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!([]));
                 serde_json::json!({
-                    "name": format!("svc:{service}"),
+                    "name": format!("svc:{svc_name}"),
                     "tags": [SERVICE_TAG],
                     "ports": ["tcp:443"],
                     "addrs": addrs,
@@ -424,13 +428,13 @@ mod tailscale_services {
                 .to_string()
             }
             404 => format!(
-                r#"{{"name":"svc:{service}","tags":["{SERVICE_TAG}"],"ports":["tcp:443"]}}"#
+                r#"{{"name":"svc:{svc_name}","tags":["{SERVICE_TAG}"],"ports":["tcp:443"]}}"#
             ),
-            _ => bail!("check service svc:{service} failed (HTTP {get_code}): {get_body}"),
+            _ => bail!("check service svc:{svc_name} failed (HTTP {get_code}): {get_body}"),
         };
         let (code, resp) = curl("PUT", &url, key, Some(&body))?;
         if code != 200 {
-            bail!("define service svc:{service} failed (HTTP {code}): {resp}");
+            bail!("define service svc:{svc_name} failed (HTTP {code}): {resp}");
         }
 
         // Add a per-service auto-approver so the host's `tailscale serve`
@@ -439,7 +443,7 @@ mod tailscale_services {
         // a tag — a tag-based key (which an earlier version wrote in
         // `ensure_setup`) is silently ignored. Idempotent: skips the
         // ACL write when the entry is already present from a prior run.
-        ensure_service_autoapprover(key, service)?;
+        ensure_service_autoapprover(key, svc_name)?;
 
         // Advertise the service from this host. Try `sudo -n` first to
         // avoid prompting when the cache is fresh; on a TTY, fall back
@@ -451,7 +455,7 @@ mod tailscale_services {
         // required, tag not propagated, etc.) leaving the install with
         // a working URL line printed at the end but no actual route.
         let target = format!("http://127.0.0.1:{host_port}");
-        let svc_arg = format!("--service=svc:{service}");
+        let svc_arg = format!("--service=svc:{svc_name}");
         let serve_cmd =
             || format!("sudo tailscale serve --bg {svc_arg} --https=443 {target}");
 
@@ -497,9 +501,9 @@ mod tailscale_services {
             && out.status.success()
         {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            if !stdout.contains(&format!("svc:{service}")) {
+            if !stdout.contains(&format!("svc:{svc_name}")) {
                 bail!(
-                    "tailscale serve completed but svc:{service} is not in the local serve config.\n\
+                    "tailscale serve completed but svc:{svc_name} is not in the local serve config.\n\
                      Inspect with `sudo tailscale serve status`; reapply with:\n  {}",
                     serve_cmd()
                 );
@@ -513,19 +517,19 @@ mod tailscale_services {
         // sometimes saves the new advertisement to local prefs without
         // pushing it to the coordination server, so the autoApprover never
         // fires and the URL silently routes nowhere. Confirm the device
-        // shows up in `Self.CapMap."service-host"` for svc:<service>
+        // shows up in `Self.CapMap."service-host"` for svc:<svc_name>
         // before we declare the install good.
-        verify_control_plane_approval(service)?;
+        verify_control_plane_approval(svc_name)?;
 
         Ok(())
     }
 
     /// Poll `tailscale status --json` until `Self.CapMap."service-host"`
-    /// lists `svc:<service>` with non-empty IPs. The `service-host` cap
+    /// lists `svc:<svc_name>` with non-empty IPs. The `service-host` cap
     /// is the control plane's own record of approved Service Hosts —
     /// presence here is what makes the tailnet route traffic to us.
-    fn verify_control_plane_approval(service: &str) -> Result<()> {
-        let svc_key = format!("svc:{service}");
+    fn verify_control_plane_approval(svc_name: &str) -> Result<()> {
+        let svc_key = format!("svc:{svc_name}");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut announced = false;
         loop {
@@ -553,7 +557,7 @@ mod tailscale_services {
             }
             if std::time::Instant::now() > deadline {
                 bail!(
-                    "tailscale serve advertised svc:{service} locally, but the control plane \
+                    "tailscale serve advertised svc:{svc_name} locally, but the control plane \
                      hasn't approved this host within 20s.\n\
                      \n\
                      The autoApprover ACL entry is in place — this is tailscaled sometimes \
@@ -561,12 +565,12 @@ mod tailscale_services {
                      restart forces a re-sync:\n\
                      \n  sudo systemctl restart tailscaled\n\
                      \n\
-                     Then re-run `ryra add {service} ...` (or wait ~10s and confirm with \
+                     Then re-run `ryra add ...` (or wait ~10s and confirm with \
                      `sudo tailscale status --json | jq '.Self.CapMap[\"service-host\"]'`)."
                 );
             }
             if !announced {
-                println!("  Waiting for control-plane approval of svc:{service}…");
+                println!("  Waiting for control-plane approval of svc:{svc_name}…");
                 announced = true;
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
@@ -576,13 +580,13 @@ mod tailscale_services {
     /// Stop advertising and delete the service definition. Idempotent:
     /// either step failing is logged but doesn't fail the disable
     /// (e.g. service already deleted, host already not advertising).
-    pub fn disable(service: &str) -> Result<()> {
+    pub fn disable(svc_name: &str) -> Result<()> {
         let ts = token()?;
         let key = &ts.admin_api_key;
 
         // Stop advertising. Errors here are usually "wasn't advertising
         // anyway" — fine to ignore.
-        let svc_arg = format!("--service=svc:{service}");
+        let svc_arg = format!("--service=svc:{svc_name}");
         let _ = Command::new("sudo")
             .args(["-n", "tailscale", "serve", &svc_arg, "off"])
             .stdout(Stdio::null())
@@ -592,28 +596,28 @@ mod tailscale_services {
         // Delete from tailnet. 404 is fine (already gone).
         let (code, _resp) = curl(
             "DELETE",
-            &format!("https://api.tailscale.com/api/v2/tailnet/-/services/svc:{service}"),
+            &format!("https://api.tailscale.com/api/v2/tailnet/-/services/svc:{svc_name}"),
             key,
             None,
         )?;
         if code == 200 || code == 404 {
-            println!("  Tailscale: removed svc:{service} from tailnet");
+            println!("  Tailscale: removed svc:{svc_name} from tailnet");
         } else {
-            eprintln!("  Note: deleting svc:{service} returned HTTP {code}; check admin UI");
+            eprintln!("  Note: deleting svc:{svc_name} returned HTTP {code}; check admin UI");
         }
 
         // Drop the per-service autoApprover entry so the ACL doesn't
         // accumulate stale `svc:foo: [tag:ryra-host]` rows. Best-effort:
         // any failure here is logged, not fatal.
-        let _ = remove_service_autoapprover(key, service);
+        let _ = remove_service_autoapprover(key, svc_name);
         Ok(())
     }
 
-    /// Idempotently add `autoApprovers.services["svc:<service>"] =
+    /// Idempotently add `autoApprovers.services["svc:<svc_name>"] =
     /// ["tag:ryra-host"]` to the tailnet ACL. Reads, mutates, writes
     /// back only when the entry is missing.
-    fn ensure_service_autoapprover(key: &str, service: &str) -> Result<()> {
-        let svc_key = format!("svc:{service}");
+    fn ensure_service_autoapprover(key: &str, svc_name: &str) -> Result<()> {
+        let svc_key = format!("svc:{svc_name}");
         let (code, body) = curl(
             "GET",
             "https://api.tailscale.com/api/v2/tailnet/-/acl",
@@ -651,10 +655,10 @@ mod tailscale_services {
         Ok(())
     }
 
-    /// Best-effort removal of `autoApprovers.services["svc:<service>"]`.
+    /// Best-effort removal of `autoApprovers.services["svc:<svc_name>"]`.
     /// No-op when the key is absent or the ACL can't be read.
-    fn remove_service_autoapprover(key: &str, service: &str) -> Result<()> {
-        let svc_key = format!("svc:{service}");
+    fn remove_service_autoapprover(key: &str, svc_name: &str) -> Result<()> {
+        let svc_key = format!("svc:{svc_name}");
         let (code, body) = curl(
             "GET",
             "https://api.tailscale.com/api/v2/tailnet/-/acl",

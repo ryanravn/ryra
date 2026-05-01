@@ -599,9 +599,23 @@ pub fn add_service(
     if tailscale_enabled
         && let Some(port) = host_port
     {
+        // Scope the Tailscale Service name by host (`<service>-<host>`)
+        // — Tailscale Services are global per tailnet, so without the
+        // suffix two ryra machines that both `ryra add vikunja --tailscale`
+        // would silently stomp each other's registration. The svc_name
+        // falls out of the exposure URL (built by `derive_tailscale_url`
+        // with the host suffix) — keeping URL as the single source of
+        // truth means `metadata.toml` round-trips and remove paths
+        // recover the same name without re-shelling tailscale.
+        let svc_name = exposure.tailscale_svc_name().ok_or_else(|| {
+            Error::InvalidServiceRef(format!(
+                "tailscale exposure for '{service_name}' has a malformed URL — \
+                 expected `https://<service>-<host>.<tailnet>.ts.net/`"
+            ))
+        })?;
         steps.push(Step::TailscaleSetup);
         steps.push(Step::TailscaleEnable {
-            service: service_name.to_string(),
+            svc_name,
             host_port: port,
         });
     }
@@ -838,10 +852,15 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     // Always emit when the service was tailscale-enabled — the API
     // delete is idempotent and `tailscale serve --service=svc:X off`
     // is fine to run on a service that's already cleared.
-    if matches!(installed.exposure, Exposure::Tailscale { .. }) {
-        steps.push(Step::TailscaleDisable {
-            service: service_name.to_string(),
-        });
+    //
+    // svc_name comes from the stored exposure URL (the `<service>-<host>`
+    // first label) — pulling it from the URL captured at install time
+    // means a hostname change post-install doesn't break teardown. If
+    // the URL is malformed, skip the step rather than blocking the
+    // whole removal — a stale tailnet entry is a smaller harm than a
+    // service that won't uninstall.
+    if let Some(svc_name) = installed.exposure.tailscale_svc_name() {
+        steps.push(Step::TailscaleDisable { svc_name });
     }
 
     if quadlet_path.is_dir()
@@ -1109,8 +1128,8 @@ pub fn reset() -> Result<ResetResult> {
     // hostnames. Read exposure from the quadlet headers so this still
     // works after the services array goes away.
     for svc in list_installed().unwrap_or_default() {
-        if matches!(svc.exposure, Exposure::Tailscale { .. }) {
-            steps.push(Step::TailscaleDisable { service: svc.name });
+        if let Some(svc_name) = svc.exposure.tailscale_svc_name() {
+            steps.push(Step::TailscaleDisable { svc_name });
         }
     }
 
