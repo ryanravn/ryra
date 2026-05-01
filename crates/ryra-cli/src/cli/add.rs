@@ -8,7 +8,7 @@ use ryra_core::caddy::AcmeMode;
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
-use ryra_core::registry::service_def::{AuthKind, HttpsRequirement};
+use ryra_core::registry::service_def::{AuthKind, HttpsRequirement, ServiceKind};
 use ryra_core::{
     Capability, REGISTRY_BUNDLED, Warning, WellKnownService, find_installed_provider,
     service_provides,
@@ -339,9 +339,19 @@ pub async fn run(
         //   2. --tailscale → derive `<service>.<tailnet>.ts.net`
         //   3. Caddy installed + needs_https → auto-derive `*.internal`
         //   4. interactive prompt (Self-signed / Tailscale / Public+LE /
-        //      External) when needs_https and Caddy isn't installed
-        //   5. Loopback — service runs on plain http://127.0.0.1:<port>
+        //      External) when needs_https and Caddy isn't installed —
+        //      Loopback isn't offered because the service rejects HTTP.
+        //   5. interactive prompt for any user-facing app (kind=application)
+        //      that doesn't require HTTPS — same options plus Loopback as
+        //      the default. Surfaces tailscale/public exposure for services
+        //      like vikunja that work fine over HTTP but the user might
+        //      still want on a tailnet.
+        //   6. Loopback — service runs on plain http://127.0.0.1:<port>
+        //      (non-interactive default, and the choice for infrastructure
+        //      services like inbucket that aren't user-facing).
         // Clap's `conflicts_with = "url"` on --tailscale means 1+2 don't collide.
+        let is_user_facing_app =
+            matches!(reg_service.def.service.kind, ServiceKind::Application);
         let exposure: ryra_core::Exposure = if let Some(u) = url {
             ryra_core::Exposure::from_url(u)
         } else if tailscale {
@@ -369,7 +379,8 @@ pub async fn run(
                 };
                 ryra_core::Exposure::from_url(&chosen)
             } else if interactive && !dry_run {
-                let chosen = prompt_exposure_for(service, will_install_authelia).await?;
+                let chosen =
+                    prompt_exposure_for(service, will_install_authelia, false).await?;
                 // Reload after potential Caddy install inside the prompt.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
                 chosen
@@ -380,6 +391,12 @@ pub async fn run(
                      local HTTPS."
                 );
             }
+        } else if is_user_facing_app && interactive && !dry_run {
+            let chosen = prompt_exposure_for(service, false, true).await?;
+            // Reload — picking Self-signed / Public+LE installs Caddy, which
+            // mutates config on disk.
+            config = ryra_core::config::load_or_default(&paths.config_file)?;
+            chosen
         } else {
             ryra_core::Exposure::Loopback
         };
@@ -1575,18 +1592,30 @@ async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
 /// the typed [`Exposure`] decision after applying any side-effects the
 /// choice implies (installing Caddy, running tailscale preflight, etc.).
 ///
-/// Called from the per-service URL resolver when needs_https is true and
-/// neither `--url` nor `--tailscale` was given.
+/// Called from the per-service URL resolver in two cases:
+///   * `needs_https = true` and neither `--url` nor `--tailscale` was
+///     given: `allow_loopback = false`, default = Self-signed.
+///   * `kind = Application` without an HTTPS requirement: surfaces the
+///     same exposure choices (so users can put e.g. vikunja on a tailnet)
+///     with `allow_loopback = true`, default = Loopback.
 async fn prompt_exposure_for(
     service: &str,
     auth_will_inherit: bool,
+    allow_loopback: bool,
 ) -> Result<ryra_core::Exposure> {
-    let items = &[
+    // Keep Loopback as option 0 when allowed so default-Enter preserves
+    // the previous "no exposure prompt" behavior. The match arms below
+    // adjust their indices via `loopback_offset` to absorb the shift.
+    let mut items: Vec<&str> = Vec::with_capacity(5);
+    if allow_loopback {
+        items.push("Local only — http://127.0.0.1 on this machine (no proxy)");
+    }
+    items.extend_from_slice(&[
         "Self-signed (LAN) — Caddy local CA at *.internal (browsers warn unless trusted)",
         "Tailscale — exposed on your tailnet (publicly-trusted cert)",
         "Public + Let's Encrypt — Caddy issues real certs (DNS + Caddy reachable from the internet)",
         "External — I have my own reverse proxy (Cloudflare Tunnel, nginx, etc.)",
-    ];
+    ]);
     if auth_will_inherit {
         println!(
             "(authelia will inherit this choice — install it separately first if you need a different exposure)"
@@ -1594,11 +1623,15 @@ async fn prompt_exposure_for(
     }
     let selection = dialoguer::Select::new()
         .with_prompt(format!("How will '{service}' be reachable?"))
-        .items(items)
+        .items(&items)
         .default(0)
         .interact()?;
 
-    match selection {
+    let loopback_offset: usize = if allow_loopback { 1 } else { 0 };
+    if allow_loopback && selection == 0 {
+        return Ok(ryra_core::Exposure::Loopback);
+    }
+    match selection - loopback_offset {
         0 => {
             // Self-signed (LAN): install Caddy in default mode if it isn't
             // already there, then derive the *.internal URL using its

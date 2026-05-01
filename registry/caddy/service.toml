@@ -3,6 +3,7 @@ name = "caddy"
 description = "Caddy - automatic HTTPS reverse proxy"
 url = "https://caddyserver.com"
 architecture = ["amd64", "arm64"]
+kind = "infrastructure"
 
 [[ports]]
 name = "http"
