@@ -2,7 +2,7 @@
 
 [ryra.dev](https://ryra.dev) · [Docs](https://ryra.dev/docs) · [Install](#install)
 
-**Self-host Supabase, Immich, Forgejo, Jellyfin, Vaultwarden and a dozen more — one command per service.**
+**Self-host Supabase, Immich, Forgejo, Nextcloud, Vaultwarden and a dozen more — one command per service.**
 
 Ryra is a CLI for running self-hosted services on a single Linux box. Each `ryra add <service>` pulls a container image, writes a systemd quadlet, starts the service under rootless Podman, and — if you want it — wires up HTTPS via Caddy and SSO via Authelia. No daemon.
 
@@ -30,11 +30,10 @@ Ryra pulls the image, prompts for any API keys or passwords the service needs, g
 |-|-|-|
 | **OpenClaw** — AI assistant gateway | **Open WebUI** — LLM frontend | **Supabase** — backend-as-a-service |
 | **Immich** — photos | **Uptime Kuma** — monitoring | **Caddy** — reverse proxy |
-| **Vaultwarden** — password vault | **Jellyfin** — media server | **Twenty** — CRM |
-| **Paperless-ngx** — docs | **Authelia** — SSO/OIDC | **Ente** — E2E photos |
-| **Postgres** — database | **Seafile** — file sync | **DocuSeal** — e-signatures |
+| **Vaultwarden** — password vault | **Nextcloud** — files & collaboration | **Twenty** — CRM |
+| **Paperless-ngx** — docs | **Authelia** — SSO/OIDC | **Zammad** — helpdesk |
+| **Seafile** — file sync | **DocuSeal** — e-signatures | **Forgejo** — git forge |
 | **Synapse** — Matrix chat | **Vikunja** — tasks | **Inbucket** — dev SMTP |
-| **Forgejo** — git forge | | |
 
 Run `ryra search` to browse the full list with install status.
 
