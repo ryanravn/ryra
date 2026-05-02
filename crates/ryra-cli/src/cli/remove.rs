@@ -1,5 +1,5 @@
 use anyhow::Result;
-use dialoguer::Input;
+use dialoguer::{Confirm, Input};
 use ryra_core::Step;
 use ryra_core::data::{ServiceData, ServiceStatus};
 
@@ -95,20 +95,31 @@ async fn remove_one(
     let is_installed = ryra_core::is_service_installed(service);
 
     if is_installed {
-        let mode = if purge {
+        // Snapshot what preserve-mode would leave behind BEFORE anything
+        // runs. After finalize_remove the service entry is gone and the
+        // home dir may be gone too, which breaks volume→service owner
+        // inference — enumerate_service would return None even though
+        // the volumes still exist on disk.
+        let preserved_snapshot = preserved_items(service);
+
+        // Without --purge, if there's actually data on disk and we can
+        // prompt, offer to upgrade to purge instead of leaving the user
+        // to re-run with --purge.
+        let effective_purge = purge
+            || (!skip_prompt
+                && !preserved_snapshot.is_empty()
+                && super::is_interactive()
+                && ask_purge_upgrade(service, &preserved_snapshot)?);
+
+        let mode = if effective_purge {
             ryra_core::RemoveMode::Purge
         } else {
             ryra_core::RemoveMode::Preserve
         };
         let result = ryra_core::remove_service(service, mode)?;
 
-        // Snapshot what preserve-mode will leave behind BEFORE anything
-        // runs. After finalize_remove the service entry is gone and the
-        // home dir may be gone too, which breaks volume→service owner
-        // inference — enumerate_service would return None even though
-        // the volumes still exist on disk.
         let preserved = if matches!(mode, ryra_core::RemoveMode::Preserve) {
-            preserved_items(service)
+            preserved_snapshot
         } else {
             Vec::new()
         };
@@ -137,22 +148,28 @@ async fn remove_one(
         return Ok(());
     }
 
-    // Not installed — treat as orphan. `ryra remove <orphan>` without
-    // --purge has nothing to do (the service is already deregistered).
-    // Tell the user how to finish cleanup.
+    // Not installed — orphan path. Without --purge there's nothing to do
+    // (the service is already deregistered) but if leftover data exists
+    // and we can prompt, offer to wipe it instead of erroring out.
+    let svc = ryra_core::data::enumerate_service(service)?;
     if !purge {
-        let svc = ryra_core::data::enumerate_service(service)?;
-        if svc.is_some() {
-            anyhow::bail!(
-                "'{service}' is already removed but still has data. Run `ryra remove {service} --purge` to wipe it."
-            );
+        match &svc {
+            None => anyhow::bail!("no service named '{service}'"),
+            Some(s) => {
+                if skip_prompt || !super::is_interactive() {
+                    anyhow::bail!(
+                        "'{service}' is already removed but still has data. Run `ryra remove {service} --purge` to wipe it."
+                    );
+                }
+                if !ask_orphan_purge_upgrade(s)? {
+                    return Ok(());
+                }
+            }
         }
-        anyhow::bail!("no service named '{service}'");
     }
 
-    // Orphan + --purge: purge its leftover data.
-    let svc = ryra_core::data::enumerate_service(service)?
-        .ok_or_else(|| anyhow::anyhow!("no service or leftover data for '{service}'"))?;
+    // Orphan + purge: purge its leftover data.
+    let svc = svc.ok_or_else(|| anyhow::anyhow!("no service or leftover data for '{service}'"))?;
     let steps = ryra_core::orphan_purge_steps(&svc);
     if steps.is_empty() {
         println!("{service}: nothing to purge.");
@@ -174,6 +191,45 @@ async fn remove_one(
         println!("\n{service} purged.");
     }
     Ok(())
+}
+
+/// Without `--purge`, ryra preserves data and points users at
+/// `--purge` to wipe it later. Surfacing the option here saves a
+/// re-run when they wanted it gone in the first place. The
+/// type-the-name confirm still gates the destruction.
+fn ask_purge_upgrade(service: &str, preserved: &[String]) -> Result<bool> {
+    println!("'{service}' has data that would be preserved:");
+    for line in preserved {
+        println!("  {line}");
+    }
+    let upgrade = Confirm::new()
+        .with_prompt("Also delete this data?")
+        .default(false)
+        .interact()?;
+    println!();
+    Ok(upgrade)
+}
+
+/// Same idea for orphan data: rather than bail with "re-run with
+/// --purge", offer the upgrade in-place. The type-the-name confirm in
+/// `prompt_orphan` still gates the destruction.
+fn ask_orphan_purge_upgrade(svc: &ServiceData) -> Result<bool> {
+    println!("'{}' is already removed but still has data:", svc.service);
+    for p in &svc.data_paths {
+        println!("  {}", p.display());
+    }
+    if svc.home_dir.exists() && !svc.data_paths.iter().any(|p| p == &svc.home_dir) {
+        println!("  {}", svc.home_dir.display());
+    }
+    for v in &svc.volumes {
+        println!("  volume:{}", v.name);
+    }
+    let upgrade = Confirm::new()
+        .with_prompt("Wipe this data?")
+        .default(false)
+        .interact()?;
+    println!();
+    Ok(upgrade)
 }
 
 fn prompt_installed(
