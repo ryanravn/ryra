@@ -26,8 +26,8 @@ name = "installed-shows-in-list"
 run = "ryra list -a | grep -E '^vikunja\\s+(running|stopped)'"
 timeout = 30
 
-# Data-preserving remove (no --purge): service home dir and podman
-# volumes must both survive.
+# Data-preserving remove (no --purge): service home dir and bind-mount
+# data directories must both survive.
 [[steps]]
 action = "shell"
 name = "remove-preserves-data"
@@ -36,9 +36,9 @@ ryra remove vikunja -y
 test -d ~/.local/share/services/vikunja
 # .env must be gone (ephemeral)
 ! test -f ~/.local/share/services/vikunja/.env
-# The podman volumes must still exist
-podman volume exists systemd-vikunja-db
-podman volume exists systemd-vikunja-files
+# Bind-mount data directories must still exist
+test -d ~/.local/share/services/vikunja/db
+test -d ~/.local/share/services/vikunja/files
 """
 timeout = 60
 
@@ -50,16 +50,14 @@ name = "orphan-shows-in-list"
 run = "ryra list -a | grep -E '^vikunja\\s+removed'"
 timeout = 30
 
-# `ryra remove vikunja --purge -y` on an orphan must wipe home dir +
-# volumes.
+# `ryra remove vikunja --purge -y` on an orphan must wipe the entire
+# service home directory (which contains the bind-mounted data dirs).
 [[steps]]
 action = "shell"
 name = "purge-cleans-up"
 run = """set -e
 ryra remove vikunja --purge -y
 ! test -d ~/.local/share/services/vikunja
-! podman volume exists systemd-vikunja-db
-! podman volume exists systemd-vikunja-files
 """
 timeout = 60
 

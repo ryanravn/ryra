@@ -1,1 +1,154 @@
-/* No custom styles needed yet */
+/* Ryra brand palette, shared with the landing page. */
+:root {
+  --ryra-snow: #f4ede2;
+  --ryra-paper: #ede2d0;
+  --ryra-paper-2: #e3d4bc;
+  --ryra-cabin: #d97a3a;
+  --ryra-ember: #c25a2c;
+  --ryra-fjord: #0e2230;
+  --ryra-fjord-2: #143246;
+  --ryra-slate: #1d3e54;
+  --ryra-mist: #6b8497;
+  --ryra-ink: #1a1410;
+  --ryra-ink-2: #3a2e22;
+  --ryra-moss: #4a6b3e;
+
+  --ryra-serif: "Fraunces", Georgia, serif;
+  --ryra-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ryra-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Override Starlight typography globally */
+  --sl-font: var(--ryra-sans);
+  --sl-font-mono: var(--ryra-mono);
+
+  /* Accent: used everywhere Starlight calls out a colored element */
+  --sl-color-accent-low: color-mix(in oklab, var(--ryra-cabin) 16%, transparent);
+  --sl-color-accent: var(--ryra-cabin);
+  --sl-color-accent-high: var(--ryra-ember);
+}
+
+/* ─── Light theme ─── */
+:root[data-theme="light"] {
+  --sl-color-white: var(--ryra-ink);
+  --sl-color-gray-1: var(--ryra-ink);
+  --sl-color-gray-2: #2a2018;
+  --sl-color-gray-3: var(--ryra-ink-2);
+  --sl-color-gray-4: #5a4a3a;
+  --sl-color-gray-5: #806d5a;
+  --sl-color-gray-6: #a89880;
+  --sl-color-gray-7: var(--ryra-paper);
+  --sl-color-black: var(--ryra-snow);
+
+  --sl-color-text: var(--ryra-ink);
+  --sl-color-text-accent: var(--ryra-ember);
+  --sl-color-text-invert: var(--ryra-snow);
+
+  --sl-color-bg: var(--ryra-snow);
+  --sl-color-bg-nav: color-mix(in oklab, var(--ryra-snow) 82%, transparent);
+  --sl-color-bg-sidebar: color-mix(in oklab, var(--ryra-paper) 55%, transparent);
+  --sl-color-bg-inline-code: color-mix(in oklab, var(--ryra-ink) 7%, transparent);
+
+  --sl-color-hairline-light: color-mix(in oklab, var(--ryra-ink) 5%, transparent);
+  --sl-color-hairline: color-mix(in oklab, var(--ryra-ink) 10%, transparent);
+  --sl-color-hairline-shade: color-mix(in oklab, var(--ryra-ink) 15%, transparent);
+}
+
+/* ─── Dark theme: fjord palette ─── */
+:root[data-theme="dark"] {
+  --sl-color-white: var(--ryra-snow);
+  --sl-color-gray-1: var(--ryra-snow);
+  --sl-color-gray-2: #d8c8a8;
+  --sl-color-gray-3: #a8b8c5;
+  --sl-color-gray-4: #7a92a3;
+  --sl-color-gray-5: var(--ryra-mist);
+  --sl-color-gray-6: #4a6376;
+  --sl-color-gray-7: var(--ryra-slate);
+  --sl-color-black: var(--ryra-fjord);
+
+  --sl-color-text: #d6e4ee;
+  --sl-color-text-accent: var(--ryra-cabin);
+  --sl-color-text-invert: var(--ryra-fjord);
+
+  --sl-color-bg: var(--ryra-fjord);
+  --sl-color-bg-nav: color-mix(in oklab, var(--ryra-fjord) 82%, transparent);
+  --sl-color-bg-sidebar: color-mix(in oklab, var(--ryra-fjord-2) 55%, transparent);
+  --sl-color-bg-inline-code: color-mix(in oklab, var(--ryra-snow) 14%, transparent);
+
+  --sl-color-hairline-light: color-mix(in oklab, var(--ryra-snow) 7%, transparent);
+  --sl-color-hairline: color-mix(in oklab, var(--ryra-snow) 12%, transparent);
+  --sl-color-hairline-shade: color-mix(in oklab, var(--ryra-snow) 18%, transparent);
+
+  /* On the navy page, the terminal body matches the page color (matching
+     the landing aesthetic), so we lean on the gradient title bar, a
+     darker drop shadow, and a brighter border to make the frame legible. */
+  --ec-frm-frameBoxShdCssVal:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 30px 60px -20px rgba(0, 0, 0, 0.55),
+    0 8px 20px -8px rgba(0, 0, 0, 0.4);
+  --ec-brdCol: color-mix(in oklab, var(--ryra-snow) 12%, transparent);
+}
+
+/* ─── Headings: Fraunces, like the landing page ─── */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6),
+.content-panel :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--ryra-serif);
+  font-weight: 500;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+}
+
+.sl-markdown-content h1,
+.content-panel h1 {
+  font-weight: 500;
+  font-size: clamp(34px, 4vw, 46px);
+  line-height: 1.06;
+  letter-spacing: -0.025em;
+}
+
+.sl-markdown-content h2 {
+  font-size: clamp(24px, 2.4vw, 30px);
+  margin-top: 2.2em;
+}
+
+/* ─── Brand mark in the header ─── */
+.site-title,
+header [class*="site-title"] {
+  font-family: var(--ryra-serif);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ─── Inline code: match the landing's warm pill ─── */
+.sl-markdown-content code:not(pre code) {
+  font-size: 0.92em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--sl-color-hairline-light);
+}
+
+/* ─── Body copy: nicer wrapping ─── */
+.sl-markdown-content p,
+.sl-markdown-content li {
+  text-wrap: pretty;
+}
+
+/* ─── Cards (Starlight's <Card> component) ─── */
+.sl-markdown-content .card {
+  border-radius: 12px;
+  border-color: var(--sl-color-hairline);
+}
+
+/* ─── Terminal traffic-light dots ───
+   Match the landing terminal: real macOS red/yellow/green dots instead
+   of Expressive Code's monochrome SVG mask. */
+.expressive-code .frame.is-terminal .header::before {
+  width: 41px;
+  height: 11px;
+  background-color: transparent;
+  background-image:
+    radial-gradient(circle 5.5px at 5.5px 5.5px, #ff5f57 99%, transparent 100%),
+    radial-gradient(circle 5.5px at 20.5px 5.5px, #febc2e 99%, transparent 100%),
+    radial-gradient(circle 5.5px at 35.5px 5.5px, #28c840 99%, transparent 100%);
+  mask-image: none;
+  opacity: 1;
+}

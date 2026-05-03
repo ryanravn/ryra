@@ -1,5 +1,66 @@
 ---
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+
+interface Service {
+  name: string;
+  slug: string;
+  desc: string;
+  oidc?: boolean;
+  smtp?: boolean;
+}
+
+const groups: { title: string; items: Service[] }[] = [
+  {
+    title: "Files, photos, and collaboration",
+    items: [
+      { name: "Immich", slug: "immich", desc: "Self-hosted photo & video management with face recognition and timeline.", oidc: true },
+      { name: "Nextcloud", slug: "nextcloud", desc: "File sync, calendar, contacts, and collaboration suite.", oidc: true, smtp: true },
+      { name: "Seafile", slug: "seafile", desc: "Block-level file sync and share server.", oidc: true, smtp: true },
+      { name: "Paperless-ngx", slug: "paperless-ngx", desc: "Document management with OCR, auto-tagging, and full-text search.", oidc: true, smtp: true },
+    ],
+  },
+  {
+    title: "Productivity",
+    items: [
+      { name: "Forgejo", slug: "forgejo", desc: "Self-hosted Git forge: issues, PRs, packages, actions.", oidc: true, smtp: true },
+      { name: "Vikunja", slug: "vikunja", desc: "Tasks, kanban boards, and calendars.", oidc: true, smtp: true },
+      { name: "Twenty", slug: "twenty", desc: "Open-source CRM, a Salesforce alternative.", smtp: true },
+      { name: "Zammad", slug: "zammad", desc: "Helpdesk and ticketing with native OIDC.", oidc: true, smtp: true },
+      { name: "DocuSeal", slug: "docuseal", desc: "Open-source document signing, a DocuSign alternative.", smtp: true },
+    ],
+  },
+  {
+    title: "Identity and secrets",
+    items: [
+      { name: "Vaultwarden", slug: "vaultwarden", desc: "Lightweight Bitwarden-compatible password vault.", smtp: true },
+      { name: "Authelia", slug: "authelia", desc: "SSO and 2FA via OIDC. Auto-installs when a service uses --auth.", smtp: true },
+    ],
+  },
+  {
+    title: "Communication",
+    items: [
+      { name: "Synapse", slug: "synapse", desc: "Matrix homeserver bundled with the Element web client.", oidc: true },
+      { name: "Inbucket", slug: "inbucket", desc: "Disposable SMTP test server with a web UI, useful for development." },
+    ],
+  },
+  {
+    title: "AI",
+    items: [
+      { name: "OpenClaw", slug: "openclaw", desc: "Self-hosted AI assistant gateway." },
+      { name: "Open WebUI", slug: "open-webui", desc: "Self-hosted AI chat interface (supports Ollama, OpenAI, and more).", oidc: true },
+    ],
+  },
+  {
+    title: "Infrastructure",
+    items: [
+      { name: "Caddy", slug: "caddy", desc: "Reverse proxy with automatic HTTPS. Required for --url-based exposure." },
+      { name: "Supabase", slug: "supabase", desc: "Open-source Firebase alternative (Postgres, auth, storage, realtime).", smtp: true },
+      { name: "Uptime Kuma", slug: "uptime-kuma", desc: "Self-hosted monitoring and status pages." },
+    ],
+  },
+];
+
+const total = groups.reduce((acc, g) => acc + g.items.length, 0);
 ---
 
 <StarlightPage
@@ -10,9 +71,107 @@ import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
   }}
 >
   <p>
-    Ryra deploys services from a curated registry. Each service is a
-    pre-configured container definition with systemd integration built in.
+    Ryra ships a curated registry of {total} services, each defined by a
+    <code>service.toml</code> in <code>registry/&lt;name&gt;/</code>. Every
+    service is end-to-end tested in a fresh QEMU VM before release.
   </p>
 
-  <p>Service listing coming soon.</p>
+  <p>
+    Install any of them with:
+  </p>
+
+  <pre><code>ryra add &lt;name&gt;</code></pre>
+
+  <p>
+    Add <code>--url https://&lt;host&gt;</code> to publish through Caddy (or
+    your own reverse proxy), and <code>--auth</code> to wire SSO via Authelia.
+    The badges below show which services have native integrations. Anything
+    without an <strong>OIDC</strong> badge can still sit behind Authelia via
+    Caddy forward auth.
+  </p>
+
+  {groups.map((group) => (
+    <section style="margin: 2.4rem 0;">
+      <h2>{group.title}</h2>
+      <ul class="service-list">
+        {group.items.map((s) => (
+          <li class="service-row">
+            <div class="service-head">
+              <code class="service-name">{s.name}</code>
+              <span class="service-slug">ryra add {s.slug}</span>
+              <span class="service-badges">
+                {s.oidc && <span class="badge badge-oidc">OIDC</span>}
+                {s.smtp && <span class="badge badge-smtp">SMTP</span>}
+              </span>
+            </div>
+            <p class="service-desc">{s.desc}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))}
+
+  <hr />
+
+  <p>
+    <small>
+      Want a service that isn't here? Add a directory under <code>registry/</code>
+      with a <code>service.toml</code>, the quadlets it needs, and a test, then
+      open a PR. See <a href="https://github.com/ryanravn/ryra/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.
+    </small>
+  </p>
 </StarlightPage>
+
+<style>
+  .service-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.6rem;
+  }
+  .service-row {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    padding: 0.85rem 1rem;
+  }
+  .service-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+  .service-name {
+    font-weight: 600;
+    font-size: 1.05rem;
+    background: transparent;
+    padding: 0;
+  }
+  .service-slug {
+    font-family: var(--sl-font-mono);
+    font-size: 0.82rem;
+    color: var(--sl-color-gray-3);
+  }
+  .service-badges {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 0.35rem;
+  }
+  .badge {
+    font-family: var(--sl-font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    padding: 0.12rem 0.4rem;
+    border-radius: 0.3rem;
+    border: 1px solid currentColor;
+    text-transform: uppercase;
+  }
+  .badge-oidc { color: #d97a3a; }
+  .badge-smtp { color: #4a6b3e; }
+  .service-desc {
+    margin: 0.4rem 0 0;
+    color: var(--sl-color-gray-2);
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+</style>

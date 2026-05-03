@@ -59,4 +59,6 @@ To add SSO authentication to a service:
    ryra add forgejo --auth --url https://git.example.com
    ```
 
-Services with native OIDC support (Forgejo, Immich, Seafile) get OIDC configured automatically. Other services get Caddy forward auth via Authelia.
+Services with native OIDC support get an OIDC client registered with Authelia and the matching env vars injected at install time. Services without native OIDC get Caddy forward auth instead, so Authelia handles login at the proxy level.
+
+Run `ryra search` to see which services advertise `oidc` in the `SUPPORTS` column. As of v0.1.0 that includes Forgejo, Immich, Nextcloud, Open WebUI, Paperless-ngx, Seafile, Synapse, Vikunja, and Zammad.

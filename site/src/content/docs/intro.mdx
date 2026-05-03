@@ -1,0 +1,93 @@
+---
+title: Introduction
+description: What Ryra is and how it works.
+prev: false
+next:
+  label: Installation
+  link: /getting-started/installation/
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+Ryra is a CLI tool that deploys self-hosted services on a single Linux machine using **rootless Podman** and **systemd quadlets**.
+
+Instead of writing Docker Compose files, reverse proxy configs, and systemd units by hand, you run `ryra add <service>` and Ryra scaffolds everything from a curated registry of service definitions.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
+```
+
+<CardGrid>
+  <Card title="One command" icon="rocket">
+    `ryra add vaultwarden`. That's it. Ryra handles the container, systemd
+    unit, reverse proxy, and SSL.
+  </Card>
+  <Card title="Rootless by default" icon="approve-check">
+    Every service runs under your user with rootless Podman. No containers
+    running as root.
+  </Card>
+  <Card title="Native systemd" icon="setting">
+    Services are Podman quadlets managed by systemd, not a custom daemon. Use
+    `systemctl` and `journalctl` like you normally would.
+  </Card>
+  <Card title="Multi-distro" icon="linux">
+    Works on Debian, Fedora, and Arch. Detects your package manager and adapts
+    automatically.
+  </Card>
+</CardGrid>
+
+## How it works
+
+1. **You run a command** like `ryra add vaultwarden`
+2. Ryra reads `registry/<service>/service.toml`, allocates a port, and writes a systemd quadlet, `.env`, and `metadata.toml` to `~/.local/share/services/<service>/`
+3. **Rootless Podman** runs the container under your user (no root containers, no docker daemon)
+4. **A systemd quadlet** owns the container lifecycle, so `systemctl --user` and `journalctl --user` work as normal
+5. **Caddy** (optional) is configured as a reverse proxy with automatic HTTPS when you pass `--url`
+6. **Authelia** (optional) issues OIDC clients when you pass `--auth`
+
+Every service is isolated in its own container and systemd scope. If one service breaks, the others keep running.
+
+## Architecture
+
+- **`ryra-core`**: pure library that generates configs and returns typed steps
+- **`ryra-cli`**: thin shell that executes steps (writes files, runs systemctl)
+- **caddy**: optional reverse proxy with automatic HTTPS
+- **podman**: rootless containers for every service
+- **systemd**: manages everything via quadlet units and `loginctl` linger
+
+Service data lives under `~/.local/share/services/<name>/`. `tar czf services.tar.gz --dereference ~/.local/share/services/` captures every service's full state in one shot.
+
+## Available services
+
+Run `ryra search` to see the full list with install status. The current registry ships 18 services:
+
+| Service | Description |
+|---------|-------------|
+| **Immich** | Self-hosted photo & video management |
+| **Nextcloud** | File sync, calendar, contacts, collaboration |
+| **Seafile** | File sync and share server |
+| **Vaultwarden** | Lightweight Bitwarden-compatible password vault |
+| **Forgejo** | Self-hosted Git forge |
+| **Paperless-ngx** | Document management with OCR and full-text search |
+| **DocuSeal** | Open-source document signing |
+| **Twenty** | Open-source CRM (Salesforce alternative) |
+| **Zammad** | Helpdesk and ticketing with native OIDC |
+| **Vikunja** | Tasks, kanban boards, and calendars |
+| **Synapse** | Matrix homeserver + Element web client |
+| **Supabase** | Open-source Firebase alternative |
+| **OpenClaw** | Self-hosted AI assistant gateway |
+| **Open WebUI** | Self-hosted AI chat (Ollama, OpenAI, …) |
+| **Uptime Kuma** | Monitoring and status pages |
+| **Inbucket** | Disposable SMTP test server with web UI |
+| **Caddy** | Reverse proxy with automatic HTTPS |
+| **Authelia** | SSO and 2FA via OIDC |
+
+## What Ryra is not
+
+- **Not a PaaS**: there's no web UI, no dashboard, no multi-tenant abstractions. It's a CLI tool.
+- **Not multi-server**: Ryra manages one machine. For multiple servers, run independent instances.
+- **Not Docker**: Ryra uses Podman exclusively. No Docker daemon required.
+
+## License
+
+Ryra is licensed under [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html).

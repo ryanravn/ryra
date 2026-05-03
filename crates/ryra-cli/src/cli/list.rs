@@ -4,6 +4,8 @@ use anyhow::Result;
 use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
+use super::style;
+
 pub fn run(all: bool, long: bool) -> Result<()> {
     let mut svcs = enumerate_all()?;
 
@@ -94,9 +96,9 @@ fn print_short(
     println!("{:<name_w$} {:<8}  URL", "SERVICE", "STATUS");
     for svc in svcs {
         let installed = by_name.get(svc.service.as_str()).copied();
-        let status = status_label(svc, active);
+        let status = style::list_status(&svc.status, active.contains(&svc.service), 8);
         let url = url_for(svc, installed);
-        println!("{:<name_w$} {:<8}  {}", svc.service, status, url);
+        println!("{:<name_w$} {}  {}", svc.service, status, url);
     }
 }
 
@@ -131,7 +133,7 @@ fn print_long(
     );
     for svc in svcs {
         let installed = by_name.get(svc.service.as_str()).copied();
-        let status = status_label(svc, active);
+        let status = style::list_status(&svc.status, active.contains(&svc.service), 8);
         let url = url_for(svc, installed);
         let size = match compute_total(svc, &vol_sizes) {
             Size::Bytes(b) => human_size(b),
@@ -140,25 +142,9 @@ fn print_long(
         };
         let storage = storage_label(svc, home);
         println!(
-            "{:<name_w$} {:<8}  {:<url_w$}  {:<size_w$}  {}",
+            "{:<name_w$} {}  {:<url_w$}  {:<size_w$}  {}",
             svc.service, status, url, size, storage
         );
-    }
-}
-
-/// The three-state label shown in the STATUS column. Installed + active
-/// → running; installed + inactive → stopped; removed-but-data-preserved
-/// → removed.
-fn status_label(svc: &ServiceData, active: &HashSet<String>) -> &'static str {
-    match svc.status {
-        ServiceStatus::Installed => {
-            if active.contains(&svc.service) {
-                "running"
-            } else {
-                "stopped"
-            }
-        }
-        ServiceStatus::Orphan => "removed",
     }
 }
 

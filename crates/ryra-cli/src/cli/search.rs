@@ -1,6 +1,8 @@
 use anyhow::Result;
 use ryra_core::registry::resolve::ServiceRef;
 
+use super::style;
+
 pub async fn run(query: Option<&str>, registry: Option<&str>) -> Result<()> {
     let repo_dir = match registry {
         Some(name) => {
@@ -33,10 +35,20 @@ pub async fn run(query: Option<&str>, registry: Option<&str>) -> Result<()> {
 
     for svc in &results {
         let status = if svc.installed { "installed" } else { "" };
-        let supports = svc.supports.join(", ");
+        // Pad based on the un-colored visible width — ANSI escape sequences
+        // are zero-width on the terminal but inflate byte length, so a plain
+        // `{:<12}` over the colored string would skip padding entirely.
+        let supports_raw = svc.supports.join(", ");
+        let supports_styled = svc
+            .supports
+            .iter()
+            .map(|s| style::support_chip(s))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let pad = " ".repeat(12usize.saturating_sub(supports_raw.len()));
         println!(
-            "{:<20} {:<10} {:<12} {}",
-            svc.name, status, supports, svc.description
+            "{:<20} {:<10} {supports_styled}{pad} {}",
+            svc.name, status, svc.description
         );
     }
 

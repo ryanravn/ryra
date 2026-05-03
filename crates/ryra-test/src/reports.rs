@@ -36,7 +36,7 @@ pub fn save_run_results(results: &[ScenarioResult]) -> Result<()> {
     let passed = results.iter().filter(|r| r.passed()).count();
     let failed = results.len() - passed;
 
-    // Run-level summary.json — simple hand-written JSON (no serde_json dep).
+    // Run-level summary.json - simple hand-written JSON (no serde_json dep).
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str(&format!("  \"timestamp\": {timestamp},\n"));
@@ -89,8 +89,21 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
         display
     };
 
-    println!("\nResults: {display}/");
+    let passed = results.iter().filter(|r| r.passed()).count();
+    let failed = results.iter().filter(|r| matches!(r.outcome, Outcome::Failed(_))).count();
+    let total = results.len();
+
+    println!("\nResults: {passed}/{total} passed ({failed} failed)");
+    println!("  dir:     {display}/");
     println!("  summary: cat {display}/summary.json");
+
+    if failed > 0 {
+        println!("\n  Failed:");
+        for r in results.iter().filter(|r| matches!(r.outcome, Outcome::Failed(_))) {
+            println!("    - {}", r.name);
+        }
+    }
+
     for r in results {
         let status = match &r.outcome {
             Outcome::Passed => "PASS",
@@ -105,8 +118,8 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
         println!("    log:     cat {display}/{}/run.log", r.name);
         let playwright_index = dir.join(&r.name).join("playwright").join("index.html");
         if playwright_index.exists() {
-            // The trace viewer requires http:// — file:// can't load the trace
-            // zips — so surface the `show-report` command, not the path.
+            // The trace viewer requires http:// - file:// can't load the trace
+            // zips - so surface the `show-report` command, not the path.
             println!(
                 "    browser: cd registry/tests/browser && bunx playwright show-report {display}/{}/playwright",
                 r.name
@@ -115,7 +128,7 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
     }
 }
 
-/// Minimal JSON string escaping — enough for test names.
+/// Minimal JSON string escaping - enough for test names.
 fn escape_json(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }

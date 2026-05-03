@@ -1,0 +1,479 @@
+---
+// Clickable steps that swap the code panel. Vanilla JS: toggle .active and
+// the visible code block.
+
+interface Step {
+  title: string;
+  desc: string;
+  file: string;
+  code: string; // already-marked-up HTML; safe because it's authored here
+}
+
+const steps: Step[] = [
+  {
+    title: "Install",
+    desc: "One curl, one binary. No daemon, no runtime.",
+    file: "install.sh",
+    code: `<span class="k3"># Linux · Debian / Ubuntu / Fedora / Arch</span>
+<span class="k4">$</span><span class="k5"> curl -fsSL </span><span class="k2">https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh</span><span class="k5"> | sh</span>
+
+<span class="k3"># verify</span>
+<span class="k4">$</span><span class="k5"> ryra </span><span class="k1">--version</span>
+<span class="k5">ryra 0.1.0</span>
+
+<span class="k3"># browse the registry</span>
+<span class="k4">$</span><span class="k5"> ryra search</span>
+<span class="k5">SERVICE       SUPPORTS      DESCRIPTION</span>
+<span class="k5">────────────────────────────────────────────────</span>
+<span class="k5">forgejo       oidc, smtp    Self-hosted Git forge</span>
+<span class="k5">immich        oidc          Photo & video management</span>
+<span class="k5">nextcloud     oidc, smtp    Files & collaboration</span>
+<span class="k5">vaultwarden   smtp          Bitwarden-compatible vault</span>
+<span class="k5">…</span>`,
+  },
+  {
+    title: "Add a service",
+    desc: "Ryra prompts for the things that matter (SMTP, SSO) and writes the quadlet. No flags to memorise.",
+    file: "ryra add forgejo",
+    code: `<span class="k4">$</span><span class="k5"> ryra add forgejo</span>
+<span class="k1">→</span><span class="k5"> pulls codeberg.org/forgejo/forgejo:11</span>
+<span class="k1">→</span><span class="k5"> writes ~/.local/share/services/forgejo/forgejo.container</span>
+
+<span class="k3">? SMTP for outgoing email?</span><span class="k5"> (y/N) › </span><span class="k1">y</span>
+<span class="k3">?   Relay host ›</span><span class="k5"> smtp.fastmail.com</span>
+<span class="k3">?   Username ›</span><span class="k5"> user@example.com</span>
+<span class="k3">?   Password ›</span><span class="k5"> </span><span class="k2">********</span>
+
+<span class="k3">? Sign-on via Authelia (OIDC)?</span><span class="k5"> (y/N) › </span><span class="k1">y</span>
+<span class="k1">→</span><span class="k5"> registering OIDC client with authelia</span>
+<span class="k1">→</span><span class="k5"> injecting credentials into forgejo .env</span>
+
+<span class="k1">→</span><span class="k5"> starts forgejo on http://127.0.0.1:3000</span>
+
+<span class="k5">forgejo is running.</span>
+<span class="k5">  URL: http://127.0.0.1:3000</span>
+<span class="k5">  Sign in with the SSO button or admin/$INITIAL_PASSWORD.</span>`,
+  },
+  {
+    title: "It's just systemd + podman now",
+    desc: "Ryra is a generator, not a runtime. Once your service is up, the box looks like a sysadmin set it up by hand. No daemon, no agent, no traces.",
+    file: "after ryra",
+    code: `<span class="k3"># ryra has done its job. Everything that's running</span>
+<span class="k3"># is plain systemd + rootless podman.</span>
+
+<span class="k4">$</span><span class="k5"> systemctl --user status forgejo.service</span>
+<span class="k1">●</span><span class="k5"> forgejo.service - Forgejo</span>
+<span class="k5">     Active: </span><span class="k1">active (running)</span><span class="k5"> since Tue 14:22:18 CEST</span>
+
+<span class="k4">$</span><span class="k5"> journalctl --user -fu forgejo.service</span>
+<span class="k4">$</span><span class="k5"> podman logs systemd-forgejo</span>
+
+<span class="k3"># everything lives in plain files</span>
+<span class="k4">$</span><span class="k5"> ls ~/.local/share/services/forgejo/</span>
+<span class="k5">forgejo.container  .env  metadata.toml  data/</span>
+
+<span class="k3"># uninstall ryra. your services keep running.</span>
+<span class="k4">$</span><span class="k5"> rm /usr/local/bin/ryra</span>
+<span class="k4">$</span><span class="k5"> systemctl --user restart forgejo.service</span>
+<span class="k1">●</span><span class="k5"> forgejo.service - </span><span class="k1">active (running)</span><span class="k5">   ← still works.</span>`,
+  },
+];
+---
+
+<div class="qs-scroll" style={`--qs-step-count: ${steps.length}`}>
+  <div class="qs-stick">
+    <div class="qs-grid">
+      <div class="qs-steps" role="tablist">
+        {steps.map((s, i) => (
+          <button
+            class:list={["qs-step", { active: i === 0 }]}
+            data-step-index={i}
+            role="tab"
+            aria-selected={i === 0 ? "true" : "false"}
+          >
+            <span class="num">0{i + 1}</span>
+            <span>
+              <span class="title">{s.title}</span>
+              <span class="desc">{s.desc}</span>
+            </span>
+          </button>
+        ))}
+        <div class="qs-progress" aria-hidden="true">
+          <div class="qs-progress-bar" id="qs-progress-bar"></div>
+        </div>
+      </div>
+      <div class="qs-code">
+        <div class="qs-code-bar">
+          <span class="qs-tdot r"></span>
+          <span class="qs-tdot y"></span>
+          <span class="qs-tdot g"></span>
+          <span class="file" id="qs-file">{steps[0].file}</span>
+          <span class="qs-counter" id="qs-counter">step 1 / {steps.length}</span>
+        </div>
+        {steps.map((s, i) => (
+          <pre
+            class:list={["qs-code-body", { hidden: i !== 0 }]}
+            data-step-body={i}
+            set:html={s.code}
+          />
+        ))}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script define:vars={{ files: steps.map((s) => s.file), total: steps.length }}>
+  const buttons = document.querySelectorAll(".qs-step");
+  const bodies = document.querySelectorAll("[data-step-body]");
+  const fileEl = document.getElementById("qs-file");
+  const counterEl = document.getElementById("qs-counter");
+  const progressBar = document.getElementById("qs-progress-bar");
+  const scrollEl = document.querySelector(".qs-scroll");
+  const grid = document.querySelector(".qs-grid");
+
+  // Reduced-motion only suppresses the line-by-line typewriter reveal and
+  // the smooth-scroll on click. The pinned panel and step bucketing are
+  // *layout*, not motion, so they stay on regardless of the preference.
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Scroll-pinning only makes sense on screens wide enough that the steps
+  // and the code panel render side-by-side. On narrow layouts they stack,
+  // and forcing a sticky panel would lock half the screen for several
+  // viewport heights of scroll, which is hostile.
+  const scrollDriven = () =>
+    scrollEl !== null && window.matchMedia("(min-width: 981px)").matches;
+
+  // Wrap each code line in a span so we can fade them in one at a time.
+  bodies.forEach((body) => {
+    const lines = body.innerHTML.split("\n");
+    body.innerHTML = lines
+      .map((line) => `<span class="qs-line">${line}</span>`)
+      .join("\n");
+    body.dataset.animReady = "true";
+  });
+
+  let activeTimers = [];
+  let currentIdx = 0;
+  let hasEntered = false;
+
+  const stopAnimation = () => {
+    activeTimers.forEach(clearTimeout);
+    activeTimers = [];
+  };
+
+  const showAllLines = (body) => {
+    body.querySelectorAll(".qs-line").forEach((l) => l.classList.add("qs-line-shown"));
+  };
+
+  const delayFor = (lineEl) => {
+    const text = (lineEl.textContent || "").trimStart();
+    if (text.startsWith("$")) return 280;
+    return 70;
+  };
+
+  const animateStep = (idx) => {
+    stopAnimation();
+    const body = bodies[idx];
+    if (!body) return;
+    const lines = body.querySelectorAll(".qs-line");
+    if (reducedMotion) {
+      lines.forEach((l) => l.classList.add("qs-line-shown"));
+      return;
+    }
+    lines.forEach((l) => l.classList.remove("qs-line-shown"));
+    let delay = 0;
+    lines.forEach((line) => {
+      const t = setTimeout(() => line.classList.add("qs-line-shown"), delay);
+      activeTimers.push(t);
+      delay += delayFor(line);
+    });
+  };
+
+  const setActive = (idx, { animate = true } = {}) => {
+    if (idx === currentIdx) return;
+    currentIdx = idx;
+    buttons.forEach((b) => {
+      const on = Number(b.dataset.stepIndex) === idx;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    bodies.forEach((body) => {
+      body.classList.toggle("hidden", Number(body.dataset.stepBody) !== idx);
+    });
+    if (fileEl) fileEl.textContent = files[idx];
+    if (counterEl) counterEl.textContent = `step ${idx + 1} / ${total}`;
+    if (animate) animateStep(idx);
+  };
+
+  // ─── Scroll-driven mode ────────────────────────────────────────────
+  // The .qs-scroll wrapper is taller than the viewport (height set by CSS
+  // from the --qs-step-count custom prop). We turn the scroll position
+  // inside that wrapper into a 0..1 progress, then bucket it into N steps.
+  let rafQueued = false;
+  const computeProgress = () => {
+    if (!scrollEl) return 0;
+    const rect = scrollEl.getBoundingClientRect();
+    const scrollable = scrollEl.offsetHeight - window.innerHeight;
+    if (scrollable <= 0) return 0;
+    const scrolled = Math.max(0, Math.min(scrollable, -rect.top));
+    return scrolled / scrollable;
+  };
+
+  const onScroll = () => {
+    if (rafQueued) return;
+    rafQueued = true;
+    requestAnimationFrame(() => {
+      rafQueued = false;
+      if (!scrollDriven()) return;
+      const progress = computeProgress();
+      const idx = Math.max(0, Math.min(total - 1, Math.floor(progress * total)));
+      // Trigger the entry animation the first time the section is in view.
+      if (!hasEntered && idx === 0 && progress > 0) {
+        hasEntered = true;
+        animateStep(0);
+      }
+      setActive(idx);
+      if (progressBar) {
+        progressBar.style.transform = `scaleY(${progress})`;
+      }
+    });
+  };
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.stepIndex);
+      if (scrollDriven() && scrollEl) {
+        // Scroll the page so the floor() bucket lands inside this step.
+        // Aim slightly past the bucket boundary so a tiny scroll bounce
+        // doesn't kick us back to the previous step.
+        const scrollable = scrollEl.offsetHeight - window.innerHeight;
+        const targetProgress = Math.min(0.999, (idx + 0.4) / total);
+        const targetScroll = scrollable * targetProgress;
+        const wrapTop = scrollEl.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({
+          top: wrapTop + targetScroll,
+          behavior: reducedMotion ? "auto" : "smooth",
+        });
+      } else {
+        setActive(idx);
+      }
+    });
+  });
+
+  if (scrollDriven()) {
+    // Pre-populate non-active panels so they're never shown blank if the
+    // user scrolls into them faster than the animation can catch up.
+    bodies.forEach((body) => {
+      if (Number(body.dataset.stepBody) !== currentIdx) showAllLines(body);
+    });
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    requestAnimationFrame(onScroll);
+  } else if (reducedMotion || !("IntersectionObserver" in window)) {
+    bodies.forEach(showAllLines);
+  } else if (grid) {
+    // Non-scroll-driven (mobile / reduced motion off but narrow): keep the
+    // original behavior: animate step 0 once on entry, then click-driven.
+    bodies.forEach((body) => {
+      if (Number(body.dataset.stepBody) !== currentIdx) showAllLines(body);
+    });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !hasEntered) {
+            hasEntered = true;
+            animateStep(currentIdx);
+            observer.disconnect();
+          }
+        });
+      },
+      { threshold: 0.35 }
+    );
+    observer.observe(grid);
+  }
+</script>
+
+<style>
+  /* ─── Scroll-pin wrapper ───────────────────────────────────────────
+     The wrapper is tall enough that the sticky child holds for ~one
+     viewport per step before releasing. The scroll handler reads its
+     position and turns it into the active step. */
+  .qs-scroll {
+    position: relative;
+    /* base + one viewport per step. For 3 steps: 100vh + 210vh = 310vh,
+       leaving ~210vh of scrollable distance during which the panel is
+       pinned and steps advance. */
+    height: calc(100vh + var(--qs-step-count, 3) * 70vh);
+  }
+  .qs-stick {
+    position: sticky;
+    /* Clear the topbar (~52px) plus a touch of breathing room. */
+    top: 80px;
+  }
+  /* On narrow screens the layout stacks, so pinning would lock half the
+     page for several viewport heights of scroll. Fall back to plain
+     vertical flow with click-driven steps. */
+  @media (max-width: 980px) {
+    .qs-scroll { height: auto; }
+    .qs-stick { position: static; top: auto; }
+  }
+
+  .qs-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 50px;
+    align-items: start;
+  }
+  @media (max-width: 980px) {
+    .qs-grid {
+      grid-template-columns: 1fr;
+      gap: 30px;
+    }
+  }
+  .qs-steps {
+    display: grid;
+    gap: 6px;
+    position: relative;
+  }
+  /* Vertical scroll rail along the left of the steps column. The bar
+     scales from 0..1 as the user scrolls through the section. */
+  .qs-progress {
+    position: absolute;
+    left: -10px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .qs-progress-bar {
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(180deg, var(--cabin) 0%, var(--ember) 100%);
+    transform-origin: top;
+    transform: scaleY(0);
+    transition: transform 120ms linear;
+  }
+  @media (max-width: 980px) {
+    .qs-progress { display: none; }
+  }
+  .qs-step {
+    padding: 18px 20px;
+    border-radius: 10px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #c5b9a6;
+    transition:
+      background 0.15s ease,
+      border-color 0.15s ease;
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: 14px;
+    align-items: start;
+    text-align: left;
+    font-family: var(--sans);
+    font-size: 15px;
+    width: 100%;
+  }
+  .qs-step:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .qs-step.active {
+    background: rgba(217, 122, 58, 0.1);
+    border-color: color-mix(in oklab, var(--cabin) 35%, transparent);
+    color: var(--snow);
+  }
+  .qs-step .num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--cabin);
+    padding-top: 3px;
+  }
+  .qs-step .title {
+    font-family: var(--serif);
+    font-size: 19px;
+    font-weight: 500;
+    color: var(--snow);
+    display: block;
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+  .qs-step .desc {
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: #9d8f7c;
+    display: block;
+  }
+  .qs-step.active .desc {
+    color: #c5b9a6;
+  }
+
+  .qs-code {
+    background: #0a1620;
+    border-radius: 12px;
+    border: 1px solid #ffffff10;
+    overflow: hidden;
+    min-height: 380px;
+  }
+  .qs-code-bar {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    background: #08111a;
+    border-bottom: 1px solid #ffffff08;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: #6f8a9d;
+    gap: 10px;
+  }
+  .qs-tdot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .qs-tdot.r { background: #ff5f57; }
+  .qs-tdot.y { background: #febc2e; }
+  .qs-tdot.g { background: #28c840; }
+  .qs-code-bar .file {
+    color: #aac3d4;
+    margin-left: 8px;
+  }
+  .qs-counter {
+    margin-left: auto;
+    color: #6f8a9d;
+  }
+  .qs-code-body {
+    padding: 22px 24px;
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.65;
+    color: #d6e4ee;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .qs-code-body.hidden { display: none; }
+
+  /* Line-by-line reveal. The script wraps each line in `.qs-line` and sets
+     `data-anim-ready` on the body, so without JS the lines render as plain
+     inline text and stay visible. With JS, the active panel starts at
+     opacity 0 until `qs-line-shown` is added on a timer. */
+  .qs-code-body[data-anim-ready] :global(.qs-line) {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 220ms ease-out, transform 220ms ease-out;
+  }
+  .qs-code-body[data-anim-ready] :global(.qs-line.qs-line-shown) {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .qs-code-body :global(.k1) { color: #e0b770; }
+  .qs-code-body :global(.k2) { color: #d97a3a; }
+  .qs-code-body :global(.k3) { color: #7fb77a; }
+  .qs-code-body :global(.k4) { color: #8fb4d8; }
+  .qs-code-body :global(.k5) { color: #c5d4e0; }
+</style>

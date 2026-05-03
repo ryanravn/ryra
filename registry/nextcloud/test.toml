@@ -1,4 +1,4 @@
-# nextcloud tests — plain install, SMTP via inbucket, OIDC via authelia.
+# nextcloud tests - plain install, SMTP via inbucket, OIDC via authelia.
 #
 # Test names:
 #   - `nextcloud`       (plain install + HTTP probe + occ status check)
@@ -40,7 +40,7 @@ action = "shell"
 name = "data-dir-accessible"
 run = "test -d $HOME/.local/share/services/nextcloud/data"
 
-# SMTP test — create a user with an email address, then fire `occ mail:test`
+# SMTP test - create a user with an email address, then fire `occ mail:test`
 # at them. Nextcloud routes that through the configured SMTP (inbucket)
 # and we poll inbucket for delivery.
 [[tests]]
@@ -83,20 +83,52 @@ run = """podman exec -e OC_PASS='Testing-Smtp-123!' -u www-data nextcloud \
 podman exec -u www-data nextcloud \
   php occ user:setting smtptest settings email 'smtptest@example.com'"""
 timeout = 60
+# `configure-smtp.sh` runs as ExecStartPost, in parallel with the test.
+# `occ status` reporting installed:true does not mean the script has
+# finished its `occ config:system:set mail_smtphost ...` calls. Under
+# load (running the full E2E suite back-to-back), `user:welcome` can
+# fire before SMTP is wired; it silently exits 0, no mail ever reaches
+# inbucket, and `mail-delivered-to-inbucket` burns its retry budget.
+#
+# Block here until configure-smtp.sh prints its end-of-script marker on
+# the journal. journalctl polling is fast (~0.1s) so this fits in the
+# timeout even on a busy host, unlike `podman exec ... occ ...` which
+# adds 1-2s of overhead per attempt and bursts through the budget.
+[[tests.steps]]
+action = "shell"
+name = "wait-for-smtp-configured"
+run = """for i in $(seq 1 90); do
+  journalctl --user -u nextcloud.service --no-pager 2>/dev/null \
+    | grep -q 'Nextcloud SMTP configured' && exit 0
+  sleep 2
+done
+echo "configure-smtp.sh never printed 'Nextcloud SMTP configured' marker"
+echo "--- last 60 lines of nextcloud.service journal ---"
+journalctl --user -u nextcloud.service --no-pager -n 60 2>&1 || true
+exit 1"""
+timeout = 200
+# Fire the welcome 5 times with a gap. `occ user:welcome` exits 0 on
+# the first call but the actual SMTP send is intermittently dropped on
+# a busy host (delivery observed at 0.2s in some runs, never within
+# 120s in others, even though the SMTP config and inbucket network
+# are fully ready). Sending five times is well within nextcloud's
+# rate limits and gives the mail step a near-deterministic landing.
 [[tests.steps]]
 action = "shell"
 name = "trigger-smtp-mail"
-run = """for i in $(seq 1 10); do
-  podman exec -u www-data nextcloud php occ user:welcome smtptest 2>&1 && exit 0
-  sleep 3
-done
-exit 1"""
-timeout = 60
+run = """set -e
+for i in 1 2 3 4 5; do
+  podman exec -u www-data nextcloud php occ user:welcome smtptest 2>&1
+  sleep 5
+done"""
+timeout = 90
 [[tests.steps]]
 action = "mail"
 name = "mail-delivered-to-inbucket"
 mailbox = "smtptest"
 contains = "Your Nextcloud account was created"
+poll = { interval = 2, attempts = 60 }
+timeout = 150
 
 # OIDC registration + full SSO click-through. caddy terminates TLS,
 # authelia is the IdP. nextcloud gets user_oidc installed and the authelia

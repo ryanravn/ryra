@@ -9,6 +9,7 @@ pub mod registry_cmd;
 pub mod remove;
 pub mod reset;
 pub mod search;
+pub mod style;
 pub mod sysctl_low_ports;
 pub mod test;
 
@@ -278,15 +279,16 @@ pub fn print_plan_header(steps: &[Step], service: &str, primary_url: Option<&str
         _ => None,
     });
 
+    let arrow = style::arrow();
     for image in &images {
-        println!("→ pulls {image}");
+        println!("{arrow} pulls {image}");
     }
     if let Some(p) = primary_quadlet {
-        println!("→ writes {}", tildify(p));
+        println!("{arrow} writes {}", tildify(p));
     }
     match primary_url {
-        Some(url) => println!("→ starts {service} on {url}"),
-        None => println!("→ starts {service}"),
+        Some(url) => println!("{arrow} starts {service} on {url}"),
+        None => println!("{arrow} starts {service}"),
     }
     println!();
 }

@@ -737,7 +737,8 @@ pub async fn run(
                         println!("  {port_name} port {original_port} → {assigned_port} ({reason})");
                     } else {
                         println!(
-                            "  WARNING: {port_name} port {original_port} → {assigned_port} ({reason})"
+                            "  {} {port_name} port {original_port} → {assigned_port} ({reason})",
+                            super::style::warning()
                         );
                     }
                 }
@@ -747,11 +748,12 @@ pub async fn run(
                     host_port,
                 } => {
                     println!(
-                        "  NOTE: --url was set for {service_name} but no bundled reverse proxy \
+                        "  {} --url was set for {service_name} but no bundled reverse proxy \
                          (Caddy) is installed. Ryra will template {url} into the service but \
                          won't configure routing — point your own reverse proxy (nginx, \
                          Cloudflare Tunnel, Tailscale Funnel, etc.) at 127.0.0.1:{host_port}, \
-                         or run `ryra add caddy` to let ryra handle it."
+                         or run `ryra add caddy` to let ryra handle it.",
+                        super::style::note()
                     );
                 }
                 Warning::RamBelowMinimum { .. } | Warning::RamBelowRecommended { .. } => {}
@@ -779,8 +781,9 @@ pub async fn run(
                         available_mb,
                     } => {
                         println!(
-                            "  WARNING: {service_name} requires at least {min_mb} MB RAM, \
-                         but this system has {available_mb} MB — service may fail to start"
+                            "  {} {service_name} requires at least {min_mb} MB RAM, \
+                         but this system has {available_mb} MB — service may fail to start",
+                            super::style::warning()
                         );
                     }
                     Warning::RamBelowRecommended {
@@ -789,8 +792,9 @@ pub async fn run(
                         available_mb,
                     } => {
                         println!(
-                            "  NOTE: {service_name} recommends {recommended_mb} MB RAM, \
-                         but this system has {available_mb} MB — performance may be degraded"
+                            "  {} {service_name} recommends {recommended_mb} MB RAM, \
+                         but this system has {available_mb} MB — performance may be degraded",
+                            super::style::note()
                         );
                     }
                     Warning::PortReassigned { .. } | Warning::UrlWithoutReverseProxy { .. } => {}
@@ -839,7 +843,7 @@ pub async fn run(
             super::print_plan_header(&result.steps, service, url_display.as_deref());
 
             if let Err(e) = apply::execute_all(&result.steps).await {
-                eprintln!("\nError during setup: {e}");
+                eprintln!("\n{} {e}", super::style::error_prefix("Error during setup:"));
                 eprintln!("Cleaning up partial installation...");
                 // Attempt cleanup so the user doesn't have to do it manually.
                 // If cleanup fails, fall back to telling the user how to do it.
@@ -1994,7 +1998,10 @@ fn warn_untrusted_service(
     }
 
     println!();
-    println!("  WARNING: {service} is from an external registry.");
+    println!(
+        "  {} {service} is from an external registry.",
+        super::style::warning()
+    );
     println!("  External services can run arbitrary code on your host.");
     if !scripts.is_empty() {
         println!();

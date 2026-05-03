@@ -28,7 +28,7 @@ fn run_overview() -> Result<()> {
             println!("ryra is not configured yet. Run `ryra add <service>` to get started.");
         }
         RyraStatus::Error(msg) => {
-            eprintln!("Error: {msg}");
+            eprintln!("{} {msg}", super::style::error_prefix("Error:"));
         }
         RyraStatus::Initialized(info) => print_overview(&info),
     }

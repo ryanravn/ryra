@@ -1,0 +1,918 @@
+---
+import Mountains from "../components/landing/Mountains.astro";
+import Terminal from "../components/landing/Terminal.astro";
+import Quickstart from "../components/landing/Quickstart.astro";
+
+const installCmd = "curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh";
+
+const features = [
+  {
+    icon: "compass",
+    tag: "01",
+    title: "Curated registry",
+    body: "Eighteen services pre-wired and E2E tested in QEMU. One ryra add immich and you're up. No compose files, no copy-paste configs, no glue scripts.",
+  },
+  {
+    icon: "lock",
+    tag: "02",
+    title: "Rootless by default",
+    body: "Containers run under your user, not root. No docker daemon, no privileged sockets, no sudo for day-to-day work.",
+  },
+  {
+    icon: "layers",
+    tag: "03",
+    title: "Idiomatic quadlets",
+    body: "Plain systemd unit files. systemctl --user and journalctl --user work as you'd expect. No bespoke runtime, no daemon.",
+  },
+  {
+    icon: "spark",
+    tag: "04",
+    title: "Tailnet-native",
+    body: "Expose services on your private Tailnet with HTTPS via tailscale cert. No public domain, no port forward, no DDNS. Or run on localhost. Or front it with Caddy. Pick per service.",
+  },
+  {
+    icon: "branch",
+    tag: "05",
+    title: "Backups in one tar",
+    body: "Every service's full state lives under ~/.local/share/services/. One tar czf and you've captured everything.",
+  },
+  {
+    icon: "key",
+    tag: "06",
+    title: "SSO across the stack",
+    body: "ryra add authelia once, then any service with native OIDC gets single-sign-on with --auth. Forgejo, Immich, Nextcloud, Open WebUI, Paperless-ngx, Seafile, Synapse, Vikunja, Zammad: nine of the eighteen, today.",
+  },
+];
+
+const principles = [
+  {
+    n: "/01",
+    title: "Plain text wins",
+    body: "Quadlets are systemd unit files. Anything that can read a file can read your stack: diff it, commit it, restore it from a snapshot.",
+  },
+  {
+    n: "/02",
+    title: "Boring is a feature",
+    body: "systemd is on every Linux box you own. podman is in every distro. Ryra just helps the two get along.",
+  },
+  {
+    n: "/03",
+    title: "You own the keys",
+    body: "No accounts. No telemetry. No remote control plane. Your services live on your machine, behind your door.",
+  },
+  {
+    n: "/04",
+    title: "Built in the open",
+    body: "AGPL-3.0. Built in public on GitHub. Issues from real users on real boxes, not a roadmap from a quarterly review.",
+  },
+];
+
+const stats = [
+  { v: "18", suffix: "", label: "Services in the registry, all E2E tested in QEMU." },
+  { v: "AGPL", suffix: "", label: "Free forever. Fork it, mirror it, ship it." },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ryra: self-host with one command per service</title>
+    <meta
+      name="description"
+      content="Ryra is a CLI for self-hosting on a single Linux box. One command per service: pulls the image, writes a systemd quadlet, runs under rootless podman."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="topbar-inner">
+        <a href="/" class="brand">
+          <svg class="mark" width="26" height="26" viewBox="0 0 32 32" fill="none">
+            <defs>
+              <linearGradient id="ryra-grad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#d97a3a" />
+                <stop offset="1" stop-color="#c25a2c" />
+              </linearGradient>
+            </defs>
+            <path d="M3 26 L13 10 L19 19 L22 15 L29 26 Z" fill="url(#ryra-grad)" />
+            <path d="M14.5 14 L17.5 14 L17.5 17 L14.5 17 Z" fill="#0e2230" />
+            <path d="M14 14 L16 12 L18 14 Z" fill="#0e2230" />
+          </svg>
+          Ryra
+        </a>
+        <nav class="nav">
+          <a href="#features">Features</a>
+          <a href="#sandbox">Sandbox</a>
+          <a href="#quickstart">Quickstart</a>
+          <a href="#why">Philosophy</a>
+        </nav>
+        <div class="topbar-right">
+          <a href="/intro/" class="docs-link">Docs</a>
+          <span class="pill"><span class="dot"></span>v0.1.0 · pre-release</span>
+          <a class="gh-btn" href="https://github.com/ryanravn/ryra" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path
+                d="M12 2a10 10 0 00-3.2 19.5c.5.1.7-.2.7-.5v-2c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.4 1.1 3 .8.1-.7.4-1.2.7-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 015 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0012 2z"
+              />
+            </svg>
+            GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <main>
+      <section class="hero">
+        <Mountains />
+        <div class="hero-inner">
+          <div>
+            <h1 class="headline">
+              Self-host your life or business with <em>Ryra</em>.
+            </h1>
+            <p class="lede">
+              Ryra is a CLI for running self-hosted services on a single Linux box. One <code>ryra add</code>
+              per service: pulls the image, writes a systemd quadlet, runs under rootless podman. Reach them
+              on localhost, on a public domain via Caddy, or over your private Tailnet. No port forward,
+              no DDNS. Add Authelia once and every OIDC-capable service gets SSO.
+            </p>
+            <div class="cta-row">
+              <button class="install" id="copy-install" type="button">
+                <span class="prompt">$</span>
+                <span class="install-cmd">{installCmd}</span>
+                <span class="copy">COPY</span>
+              </button>
+              <a href="#quickstart" class="cta cta-secondary">
+                See how it works
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
+              </a>
+            </div>
+            <div class="meta-row">
+              <div class="item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                Rootless podman
+              </div>
+              <div class="item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                No daemon
+              </div>
+            </div>
+          </div>
+          <Terminal />
+        </div>
+      </section>
+
+      <section class="bleed" id="features">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow">What it does</div>
+              <h2 class="section-title">One CLI. Eighteen services.</h2>
+            </div>
+            <p class="section-sub">
+              Ryra is a single Rust binary that turns the messy realities of self-hosting into clean,
+              scriptable systemd units. Six things it does well.
+            </p>
+          </div>
+          <div class="feat-grid">
+            {features.map((f) => (
+              <div class="feat">
+                {f.icon === "compass" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5L13 13l-4.5 2.5L11 11z"/></svg>
+                )}
+                {f.icon === "lock" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>
+                )}
+                {f.icon === "layers" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/><path d="M3 17l9 5 9-5" opacity="0.55"/></svg>
+                )}
+                {f.icon === "spark" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><path d="M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8" opacity="0.6"/></svg>
+                )}
+                {f.icon === "branch" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 8v8M6 14c4 0 6-1.5 6-5h4"/></svg>
+                )}
+                {f.icon === "heart" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 017-2.6A4 4 0 0119 10c0 5.6-7 10-7 10z"/></svg>
+                )}
+                {f.icon === "key" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M16 12v3M21 12v4"/></svg>
+                )}
+                <h3>{f.title}</h3>
+                <p>{f.body}</p>
+                <span class="badge">{f.tag}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section class="bleed sandbox" id="sandbox">
+        <div class="container">
+          <div class="sandbox-grid">
+            <div>
+              <div class="section-eyebrow">Try anything · break nothing</div>
+              <h2 class="section-title">Test your stack in a VM,<br />not on your box.</h2>
+              <p class="section-sub" style="margin-top: 22px;">
+                <code>ryra test</code> boots an ephemeral QEMU VM, installs whatever combination of
+                services you want, and runs assertions end to end. Wire Authelia + Caddy + Immich
+                + Nextcloud, prove SSO works across all four, throw the VM away. Your real machine
+                never sees the experiment until you're sure.
+              </p>
+              <ul class="sandbox-points">
+                <li>
+                  <strong>A safe sandbox for AI agents.</strong> Let Claude or Codex iterate on
+                  your stack: new services, quadlet tweaks, OIDC wiring, all inside a
+                  throwaway VM. Agents can break things until they don't, without ever touching
+                  your home server.
+                </li>
+                <li>
+                  <strong>The same engine that gates the registry.</strong> Every service ships
+                  only after it boots cleanly in this loop. The CI you run on your laptop is the
+                  CI that protects the project.
+                </li>
+                <li>
+                  <strong>Composable lifecycle tests.</strong> Chain services together (reverse
+                  proxy, auth provider, app) and verify the full picture, not just one container.
+                </li>
+              </ul>
+            </div>
+            <div class="sandbox-term-wrap">
+              <div class="sandbox-term">
+                <div class="sandbox-term-bar">
+                  <span class="tdot r"></span>
+                  <span class="tdot y"></span>
+                  <span class="tdot g"></span>
+                  <span class="sandbox-term-title">vm: fedora-43 · kvm</span>
+                </div>
+                <pre class="sandbox-term-body"><code><span class="t-prompt">$</span> <span class="t-cmd">ryra test immich-oidc --keep-alive</span>
+<span class="t-out">booting fedora-43 (qemu, kvm) ............ <span class="t-ok">ok</span></span>
+<span class="t-out">ssh ready on 127.0.0.1:2222</span>
+<span class="t-step">▸ ryra add caddy</span>
+<span class="t-step">▸ ryra add authelia --url https://auth.test.local</span>
+<span class="t-step">▸ ryra add immich --auth --url https://immich.test.local</span>
+<span class="t-out">probe https://immich.test.local .......... <span class="t-ok">200</span></span>
+<span class="t-out">browser oidc login flow .................. <span class="t-ok">ok</span></span>
+<span class="t-out">smtp delivery to inbucket ................ <span class="t-ok">ok</span></span>
+<span class="t-blank">&nbsp;</span>
+<span class="t-summary">✓ all assertions passed in 2m41s</span>
+<span class="t-comment"># vm kept alive: ssh -p 2222 ryra@127.0.0.1</span></code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="bleed quickstart" id="quickstart">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow" style="color: var(--cabin);">Quickstart</div>
+              <h2 class="section-title">Three steps. About three minutes.</h2>
+            </div>
+            <p class="section-sub">
+              From cold metal to a running service. Click through the steps. The panel on the right shows
+              what each one looks like.
+            </p>
+          </div>
+          <Quickstart />
+        </div>
+      </section>
+
+      <section class="bleed why" id="why">
+        <div class="container">
+          <div class="why-grid">
+            <div>
+              <div class="section-eyebrow">Why Ryra</div>
+              <h2 class="section-title">Your machine. Your services.<br />Your rules.</h2>
+              <p class="section-sub" style="margin-top: 22px;">
+                You don't need a hyperscaler to run a website, sync your files, or keep your photos. You need a
+                single Linux box, a few hours, and the right tools. Ryra is the right tools: opinionated where
+                it has to be, out of the way everywhere else.
+              </p>
+              <blockquote class="why-quote">
+                &ldquo;Run your own infrastructure. <span>Own your own life.</span>&rdquo;
+              </blockquote>
+            </div>
+            <div class="principles">
+              {principles.map((p) => (
+                <div class="principle">
+                  <span class="num">{p.n}</span>
+                  <div>
+                    <h4>{p.title}</h4>
+                    <p>{p.body}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="proof">
+        <div class="container">
+          <div class="proof-grid">
+            {stats.map((s) => (
+              <div class="stat">
+                <div class="v"><em>{s.v}</em>{s.suffix}</div>
+                <div class="l">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="brand brand-light">
+            <svg class="mark" width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="ryra-grad-footer" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#d97a3a" />
+                  <stop offset="1" stop-color="#c25a2c" />
+                </linearGradient>
+              </defs>
+              <path d="M3 26 L13 10 L19 19 L22 15 L29 26 Z" fill="url(#ryra-grad-footer)" />
+              <path d="M14.5 14 L17.5 14 L17.5 17 L14.5 17 Z" fill="#f4ede2" />
+              <path d="M14 14 L16 12 L18 14 Z" fill="#f4ede2" />
+            </svg>
+            Ryra
+          </div>
+          <p>A CLI for self-hosting on a single Linux box. AGPL-3.0, no telemetry, no accounts.</p>
+        </div>
+        <div>
+          <h5>Tool</h5>
+          <ul>
+            <li><a href="/getting-started/installation/">Install</a></li>
+            <li><a href="/services/">Services</a></li>
+            <li><a href="https://github.com/ryanravn/ryra/releases">Releases</a></li>
+            <li><a href="https://github.com/ryanravn/ryra">Source</a></li>
+          </ul>
+        </div>
+        <div>
+          <h5>Learn</h5>
+          <ul>
+            <li><a href="/intro/">Docs</a></li>
+            <li><a href="/getting-started/quick-start/">Quick start</a></li>
+            <li><a href="/guides/configuration/">Configuration</a></li>
+            <li><a href="/guides/exposure-modes/">Exposure modes</a></li>
+          </ul>
+        </div>
+        <div>
+          <h5>Community</h5>
+          <ul>
+            <li><a href="https://github.com/ryanravn/ryra">GitHub</a></li>
+            <li><a href="https://github.com/ryanravn/ryra/issues">Issues</a></li>
+            <li><a href="https://github.com/ryanravn/ryra/discussions">Discussions</a></li>
+            <li><a href="https://github.com/ryanravn/ryra/blob/main/CONTRIBUTING.md">Contribute</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-meta">
+        <span>© 2026 · Ryra contributors · AGPL-3.0</span>
+        <span>Built by self-hosters.</span>
+      </div>
+    </footer>
+
+    <script>
+      const btn = document.getElementById("copy-install");
+      if (btn) {
+        const cmdEl = btn.querySelector(".install-cmd");
+        const copyEl = btn.querySelector(".copy");
+        btn.addEventListener("click", async () => {
+          if (!cmdEl || !copyEl || !navigator.clipboard) return;
+          try {
+            await navigator.clipboard.writeText(cmdEl.textContent ?? "");
+            copyEl.textContent = "COPIED";
+            setTimeout(() => {
+              copyEl.textContent = "COPY";
+            }, 1400);
+          } catch {
+            // clipboard blocked, leave UI as-is
+          }
+        });
+      }
+    </script>
+
+    <style is:global>
+      :root {
+        --fjord: #0e2230;
+        --slate: #1d3e54;
+        --mist: #6b8497;
+        --snow: #f4ede2;
+        --paper: #ede2d0;
+        --cabin: #d97a3a;
+        --ember: #c25a2c;
+        --moss: #4a6b3e;
+        --pine: #2d4a3a;
+        --ink: #1a1410;
+        --ink-2: #3a2e22;
+
+        --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        --sans: "Inter", system-ui, sans-serif;
+        --serif: "Fraunces", Georgia, serif;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: var(--sans);
+        background: var(--snow);
+        color: var(--ink);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        /* `clip`, not `hidden`: hidden would make body a scroll container,
+           which breaks position: sticky for descendants. */
+        overflow-x: clip;
+      }
+      a { color: inherit; }
+      code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+        background: color-mix(in oklab, var(--ink) 6%, transparent);
+        padding: 1px 6px;
+        border-radius: 4px;
+      }
+    </style>
+
+    <style>
+      /* ─── Top bar ─── */
+      .topbar {
+        position: sticky; top: 0; z-index: 50;
+        backdrop-filter: blur(14px) saturate(140%);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
+        background: color-mix(in oklab, var(--snow) 78%, transparent);
+        border-bottom: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
+      }
+      .topbar-inner {
+        max-width: 1240px; margin: 0 auto;
+        padding: 14px 28px;
+        display: flex; align-items: center; gap: 28px;
+      }
+      .brand {
+        display: flex; align-items: center; gap: 10px;
+        font-family: var(--serif);
+        font-weight: 600; font-size: 22px;
+        letter-spacing: -0.01em;
+        text-decoration: none; color: inherit;
+      }
+      .brand .mark { width: 26px; height: 26px; }
+      .nav { display: flex; gap: 22px; margin-left: 12px; font-size: 14px; color: var(--ink-2); }
+      .nav a { text-decoration: none; opacity: 0.78; }
+      .nav a:hover { opacity: 1; color: var(--ember); }
+      .topbar-right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+      .docs-link {
+        text-decoration: none; font-size: 14px;
+        color: var(--ink-2); opacity: 0.78;
+        padding: 6px 4px;
+      }
+      .docs-link:hover { opacity: 1; color: var(--ember); }
+      .pill {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-family: var(--mono); font-size: 12px;
+        padding: 5px 10px; border-radius: 999px;
+        background: color-mix(in oklab, var(--cabin) 12%, transparent);
+        color: var(--ember);
+        border: 1px solid color-mix(in oklab, var(--cabin) 24%, transparent);
+      }
+      .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cabin); }
+      .gh-btn {
+        display: inline-flex; align-items: center; gap: 8px;
+        text-decoration: none;
+        padding: 8px 14px; border-radius: 8px;
+        background: var(--ink); color: var(--snow);
+        font-size: 14px; font-weight: 500;
+        border: 1px solid var(--ink);
+        transition: transform 0.15s ease;
+      }
+      .gh-btn:hover { transform: translateY(-1px); }
+
+      @media (max-width: 760px) {
+        .nav { display: none; }
+        .topbar-inner { padding: 12px 18px; gap: 12px; }
+        .pill { display: none; }
+      }
+
+      /* ─── Hero ─── */
+      .hero {
+        position: relative;
+        padding: 80px 28px 60px;
+        overflow: hidden;
+      }
+      .hero-inner {
+        max-width: 1240px; margin: 0 auto;
+        display: grid;
+        /* minmax(0, …) prevents the columns from growing past their fr ratio
+           when terminal lines or the chip are wider than the available space. */
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+        gap: 64px; align-items: center;
+      }
+      @media (max-width: 980px) {
+        .hero-inner { grid-template-columns: minmax(0, 1fr); gap: 40px; }
+      }
+      .eyebrow {
+        font-family: var(--mono); font-size: 12px;
+        color: var(--ember); letter-spacing: 0.08em;
+        text-transform: uppercase; margin-bottom: 18px;
+      }
+      h1.headline {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: clamp(44px, 6vw, 78px);
+        line-height: 0.98;
+        letter-spacing: -0.025em;
+        margin: 0 0 22px;
+        color: var(--ink);
+        text-wrap: balance;
+      }
+      h1.headline em {
+        font-style: italic;
+        color: var(--ember);
+        font-weight: 400;
+      }
+      .lede {
+        font-size: 19px; line-height: 1.55;
+        color: var(--ink-2);
+        max-width: 56ch;
+        text-wrap: pretty;
+        margin: 0 0 30px;
+      }
+      .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .cta {
+        display: inline-flex; align-items: center; gap: 10px;
+        padding: 14px 22px; border-radius: 10px;
+        font-weight: 500; font-size: 15px;
+        text-decoration: none; cursor: pointer;
+        border: none;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .cta-secondary {
+        background: var(--paper);
+        color: var(--ink);
+        border: 1px solid color-mix(in oklab, var(--ink) 18%, transparent);
+      }
+      .cta-secondary:hover {
+        background: color-mix(in oklab, var(--paper) 84%, var(--ink));
+        border-color: color-mix(in oklab, var(--ink) 28%, transparent);
+      }
+      .install {
+        font-family: var(--mono); font-size: 13.5px;
+        background: var(--ink);
+        color: var(--snow);
+        padding: 10px 14px;
+        border-radius: 8px;
+        display: inline-flex; align-items: center; gap: 12px;
+        cursor: pointer;
+        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--cabin));
+        max-width: 100%;
+        min-width: 0;
+        overflow: hidden;
+      }
+      .install .install-cmd {
+        flex: 1 1 auto;
+        min-width: 0;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .install .copy { flex: 0 0 auto; }
+      .install .prompt { flex: 0 0 auto; }
+      .install .prompt { color: var(--cabin); user-select: none; }
+      .install .copy {
+        font-size: 11px; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase;
+        border-left: 1px solid #ffffff22; padding-left: 12px; margin-left: 6px;
+      }
+      .install:hover .copy { opacity: 1; color: var(--cabin); }
+
+      .meta-row {
+        margin-top: 38px;
+        display: flex; gap: 26px; flex-wrap: wrap;
+        color: var(--ink-2); font-size: 13px;
+      }
+      .meta-row .item { display: flex; align-items: center; gap: 8px; }
+      .meta-row svg { color: var(--moss); }
+
+      /* ─── Sections ─── */
+      section.bleed { padding: 100px 28px; }
+      .container { max-width: 1240px; margin: 0 auto; }
+      .section-head {
+        display: flex; align-items: end; justify-content: space-between;
+        gap: 30px; margin-bottom: 50px; flex-wrap: wrap;
+      }
+      .section-eyebrow {
+        font-family: var(--mono); font-size: 12px;
+        color: var(--ember); letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      h2.section-title {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: clamp(34px, 4vw, 50px);
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+        margin: 12px 0 0;
+        max-width: 22ch;
+        text-wrap: balance;
+      }
+      .section-sub {
+        color: var(--ink-2); font-size: 17px; line-height: 1.55;
+        max-width: 44ch; text-wrap: pretty;
+      }
+
+      /* features grid */
+      .feat-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: color-mix(in oklab, var(--ink) 12%, transparent);
+        border: 1px solid color-mix(in oklab, var(--ink) 12%, transparent);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      @media (max-width: 900px) { .feat-grid { grid-template-columns: 1fr 1fr; } }
+      @media (max-width: 600px) { .feat-grid { grid-template-columns: 1fr; } }
+      .feat {
+        background: var(--snow);
+        padding: 32px 28px 30px;
+        display: flex; flex-direction: column; gap: 12px;
+        min-height: 220px;
+        position: relative;
+      }
+      .feat .icon {
+        width: 36px; height: 36px;
+        color: var(--ember);
+        margin-bottom: 4px;
+      }
+      .feat h3 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 22px;
+        margin: 0;
+        letter-spacing: -0.01em;
+        line-height: 1.15;
+      }
+      .feat p {
+        margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.55;
+      }
+      .feat .badge {
+        position: absolute; top: 18px; right: 18px;
+        font-family: var(--mono); font-size: 10px;
+        color: var(--mist); letter-spacing: 0.08em;
+      }
+
+      /* ─── Why section ─── */
+      .why {
+        background: var(--paper);
+        color: var(--ink);
+        position: relative;
+        overflow: hidden;
+        border-top: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
+        border-bottom: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
+      }
+      .why::before {
+        content: ""; position: absolute; inset: 0;
+        background:
+          radial-gradient(circle at 90% 20%, color-mix(in oklab, var(--cabin) 22%, transparent) 0%, transparent 40%),
+          radial-gradient(circle at 5% 90%, color-mix(in oklab, var(--moss) 18%, transparent) 0%, transparent 45%);
+        pointer-events: none;
+      }
+      .why .container { position: relative; }
+      .why-grid {
+        display: grid; grid-template-columns: 1.1fr 1fr;
+        gap: 80px; align-items: start;
+      }
+      @media (max-width: 980px) { .why-grid { grid-template-columns: 1fr; gap: 50px; } }
+      .why h2 { color: var(--ink); }
+      .why-quote {
+        font-family: var(--serif);
+        font-style: italic;
+        font-size: 28px; line-height: 1.3;
+        color: var(--ink);
+        border-left: 2px solid var(--ember);
+        padding: 6px 0 6px 22px;
+        margin: 36px 0 0;
+        text-wrap: pretty;
+        max-width: 22ch;
+      }
+      .why-quote span { color: var(--ember); font-style: normal; }
+      .principles { display: grid; gap: 28px; }
+      .principle {
+        display: grid; grid-template-columns: 36px 1fr;
+        gap: 18px; align-items: start;
+      }
+      .principle .num {
+        font-family: var(--mono); font-size: 12px; color: var(--ember);
+        letter-spacing: 0.05em; padding-top: 4px;
+      }
+      .principle h4 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 21px; margin: 0 0 6px;
+        letter-spacing: -0.01em;
+      }
+      .principle p {
+        margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.55;
+      }
+
+      /* ─── Sandbox / ryra test ─── */
+      .sandbox {
+        background: var(--snow);
+        border-top: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
+        position: relative;
+        overflow: hidden;
+      }
+      .sandbox::before {
+        content: ""; position: absolute; inset: 0;
+        background:
+          radial-gradient(circle at 95% 10%, color-mix(in oklab, var(--cabin) 14%, transparent) 0%, transparent 45%),
+          radial-gradient(circle at 0% 100%, color-mix(in oklab, var(--moss) 10%, transparent) 0%, transparent 50%);
+        pointer-events: none;
+      }
+      .sandbox .container { position: relative; }
+      .sandbox-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+        gap: 64px;
+        align-items: center;
+      }
+      @media (max-width: 980px) {
+        .sandbox-grid { grid-template-columns: 1fr; gap: 40px; }
+      }
+      .sandbox-points {
+        list-style: none;
+        padding: 0;
+        margin: 32px 0 0;
+        display: grid;
+        gap: 18px;
+      }
+      .sandbox-points li {
+        font-size: 15px;
+        line-height: 1.55;
+        color: var(--ink-2);
+        padding-left: 22px;
+        position: relative;
+      }
+      .sandbox-points li::before {
+        content: "›";
+        position: absolute; left: 0; top: 0;
+        color: var(--ember);
+        font-family: var(--mono);
+        font-weight: 600;
+      }
+      .sandbox-points strong {
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .sandbox-term-wrap {
+        position: relative;
+        min-width: 0;
+      }
+      .sandbox-term {
+        background: var(--fjord);
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid color-mix(in oklab, var(--fjord) 40%, var(--ink));
+        box-shadow:
+          0 1px 0 rgba(255, 255, 255, 0.05) inset,
+          0 30px 60px -20px rgba(14, 34, 48, 0.45),
+          0 8px 20px -8px rgba(14, 34, 48, 0.32);
+      }
+      .sandbox-term-bar {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 14px;
+        background: linear-gradient(180deg, #1a3a52 0%, #122c3e 100%);
+        border-bottom: 1px solid #00000040;
+      }
+      .sandbox-term-title {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: #8aa9bf;
+        letter-spacing: 0.05em;
+      }
+      .sandbox-term-body {
+        margin: 0;
+        padding: 22px 24px 24px;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        color: #d6e4ee;
+        overflow-x: auto;
+      }
+      .sandbox-term-body .t-prompt { color: var(--cabin); user-select: none; }
+      .sandbox-term-body .t-cmd { color: var(--snow); }
+      .sandbox-term-body .t-out { color: #9fbacb; display: block; }
+      .sandbox-term-body .t-step {
+        color: #d6e4ee;
+        display: block;
+      }
+      .sandbox-term-body .t-step::first-letter { color: var(--cabin); }
+      .sandbox-term-body .t-ok { color: #7fb77a; }
+      .sandbox-term-body .t-summary {
+        color: #7fb77a;
+        display: block;
+        font-weight: 500;
+      }
+      .sandbox-term-body .t-comment {
+        color: #5d7686;
+        display: block;
+        font-style: italic;
+      }
+      .sandbox-term-body .t-blank { display: block; line-height: 0.4; }
+
+      /* ─── Quickstart wrapper ─── */
+      .quickstart {
+        background: var(--ink);
+        color: var(--snow);
+        position: relative;
+        /* `clip` clips the decorative gradients without making this section
+           a scroll container — that would break position: sticky on the
+           Quickstart panel inside it. */
+        overflow: clip;
+      }
+      .quickstart::before {
+        content: ""; position: absolute; inset: 0;
+        background:
+          radial-gradient(circle at 80% 0%, rgba(217,122,58,0.22) 0%, transparent 45%),
+          radial-gradient(circle at 0% 100%, rgba(45,74,58,0.35) 0%, transparent 50%);
+      }
+      .quickstart .container { position: relative; }
+      .quickstart h2 { color: var(--snow); }
+      .quickstart .section-sub { color: #c5b9a6; }
+
+      /* ─── Stats / proof ─── */
+      .proof {
+        background: var(--snow);
+        border-top: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
+      }
+      .proof-grid {
+        display: grid; grid-template-columns: repeat(2, 1fr);
+        gap: 0;
+      }
+      @media (max-width: 800px) { .proof-grid { grid-template-columns: 1fr; } }
+      .stat {
+        padding: 36px 24px;
+        border-right: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
+        text-align: center;
+      }
+      .stat:last-child { border-right: none; }
+      .stat .v {
+        font-family: var(--serif); font-weight: 500;
+        font-size: 44px; line-height: 1;
+        letter-spacing: -0.02em;
+        color: var(--ink);
+      }
+      .stat .v em { color: var(--ember); font-style: normal; }
+      .stat .l {
+        font-size: 13px; color: var(--ink-2); margin-top: 8px;
+        line-height: 1.4;
+        max-width: 32ch;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      /* ─── Footer ─── */
+      footer {
+        padding: 60px 28px 36px;
+        background: var(--fjord);
+        color: var(--snow);
+        position: relative; overflow: hidden;
+      }
+      .footer-grid {
+        max-width: 1240px; margin: 0 auto;
+        display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr;
+        gap: 40px;
+        position: relative;
+      }
+      @media (max-width: 800px) { .footer-grid { grid-template-columns: 1fr 1fr; } }
+      .brand-light { color: var(--snow); }
+      footer h5 {
+        font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
+        text-transform: uppercase; color: #8aa9bf;
+        margin: 0 0 16px;
+      }
+      footer ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+      footer a { text-decoration: none; color: #c5d4e0; font-size: 14px; }
+      footer a:hover { color: var(--cabin); }
+      .footer-brand p {
+        color: #8aa9bf; font-size: 14px; line-height: 1.55; max-width: 30ch;
+        margin: 14px 0 0;
+      }
+      .footer-meta {
+        max-width: 1240px; margin: 50px auto 0;
+        padding-top: 24px; border-top: 1px solid #ffffff14;
+        display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+        font-family: var(--mono); font-size: 11.5px; color: #6f8a9d;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </body>
+</html>

@@ -5,7 +5,7 @@ ram = 1536
 # Prove ryra's --auth + --url templating works behind an operator-
 # supplied reverse proxy (nginx, Tailscale, Cloudflare Tunnel, …).
 # This variant exercises the OIDC pathway specifically, because that's
-# the most URL-sensitive part of the stack — issuer, callback, and
+# the most URL-sensitive part of the stack - issuer, callback, and
 # token endpoints all flow through the external hostname.
 #
 # Scope: config-time integration. Asserts that
@@ -14,12 +14,12 @@ ram = 1536
 #       the external issuer baked in,
 #   (c) vikunja's .env has the external URLs templated in its OIDC
 #       fields (no Caddy .internal fallback leaking through).
-# Full browser login through the proxy is intentionally out of scope —
+# Full browser login through the proxy is intentionally out of scope -
 # that additionally needs the nginx cert trusted inside service
 # containers, which is a separate feature (auth_bridge currently only
 # handles Caddy's self-signed CA).
 #
-# Service choice: vikunja — lightest OIDC-capable service (128 MB min).
+# Service choice: vikunja - lightest OIDC-capable service (128 MB min).
 
 [[steps]]
 action = "shell"
@@ -54,7 +54,7 @@ echo '127.0.0.1 auth.test.local vikunja.test.local' | sudo tee -a /etc/hosts > /
 """
 timeout = 180
 
-# No [tls] block needed — ryra's TlsConfig was removed in favour of
+# No [tls] block needed - ryra's TlsConfig was removed in favour of
 # per-service URL inspection. authelia is added below with explicit
 # `--url https://auth.test.local`, which both satisfies the `https =
 # "always"` requirement and tells ryra to template against the
@@ -79,7 +79,7 @@ timeout = 300
 action = "wait"
 service = "authelia"
 
-# `wait` only checks that the systemd unit is active — the container
+# `wait` only checks that the systemd unit is active - the container
 # may still be booting. Poll authelia's health endpoint directly on
 # its loopback port until it actually answers; otherwise the nginx
 # curl below races authelia's startup.
@@ -120,8 +120,10 @@ action = "shell"
 name = "configure-nginx"
 run = """
 set -e
-AUTH_PORT=$(grep '^PORT' $HOME/.local/share/services/authelia/.env | head -1 | cut -d= -f2)
-VIK_PORT=$(grep '^PORT_HTTP' $HOME/.local/share/services/vikunja/.env | cut -d= -f2)
+AUTH_PORT=$(grep '^SERVICE_PORT_HTTP=' $HOME/.local/share/services/authelia/.env | cut -d= -f2)
+VIK_PORT=$(grep '^SERVICE_PORT_HTTP=' $HOME/.local/share/services/vikunja/.env | cut -d= -f2)
+[ -n "$AUTH_PORT" ] || { echo 'AUTH_PORT empty: SERVICE_PORT_HTTP missing from authelia .env' >&2; exit 1; }
+[ -n "$VIK_PORT" ]  || { echo 'VIK_PORT empty: SERVICE_PORT_HTTP missing from vikunja .env'  >&2; exit 1; }
 sudo tee /etc/nginx/conf.d/ryra-test.conf > /dev/null <<EOF
 # Authelia (and most OIDC providers) require X-Forwarded-Proto so it
 # can build correct issuer/authorize/token URLs for discovery. Without
@@ -179,7 +181,7 @@ timeout = 30
 action = "shell"
 name = "vikunja-env-has-external-urls"
 # Prove ryra templated both --url (the service's own) and the auth
-# provider's external URL into vikunja's .env — no Caddy .internal
+# provider's external URL into vikunja's .env - no Caddy .internal
 # fallback leaking through.
 run = """
 set -e
