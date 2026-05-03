@@ -100,14 +100,37 @@
 .sl-markdown-content h1,
 .content-panel h1 {
   font-weight: 500;
-  font-size: clamp(34px, 4vw, 46px);
-  line-height: 1.06;
+  font-size: clamp(38px, 4.2vw, 52px);
+  line-height: 1.04;
   letter-spacing: -0.025em;
+  margin-bottom: 0.4em;
 }
 
 .sl-markdown-content h2 {
-  font-size: clamp(24px, 2.4vw, 30px);
-  margin-top: 2.2em;
+  font-size: clamp(26px, 2.6vw, 32px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin-top: 2.4em;
+  margin-bottom: 0.6em;
+}
+
+.sl-markdown-content h3 {
+  font-size: clamp(20px, 1.8vw, 22px);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  margin-top: 1.8em;
+  margin-bottom: 0.5em;
+}
+
+.sl-markdown-content h4 {
+  font-size: 18px;
+  line-height: 1.3;
+  margin-top: 1.5em;
+}
+
+/* Heading anchor link: subtle ember hint on hover, matching landing accents. */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) a[href^="#"]:hover {
+  color: var(--ryra-ember);
 }
 
 /* ─── Brand mark in the header ─── */
@@ -116,6 +139,14 @@ header [class*="site-title"] {
   font-family: var(--ryra-serif);
   font-weight: 600;
   letter-spacing: -0.01em;
+  font-size: 22px;
+}
+
+/* Docs header: same blurred snow chrome as the landing topbar. */
+header.header {
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border-bottom: 1px solid var(--sl-color-hairline);
 }
 
 /* ─── Inline code: match the landing's warm pill ─── */
@@ -130,12 +161,115 @@ header [class*="site-title"] {
 .sl-markdown-content p,
 .sl-markdown-content li {
   text-wrap: pretty;
+  line-height: 1.65;
+}
+
+/* Lede: the first paragraph after the page title gets the landing's
+   larger introductory voice. Targets the first paragraph that follows
+   the h1 (or, when there's no h1, the first paragraph of the article). */
+.sl-markdown-content > p:first-of-type,
+.sl-markdown-content h1 + p {
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--sl-color-gray-2);
+  max-width: 60ch;
+  margin-bottom: 1.6em;
+}
+
+/* Body strong: lift to the heading-color (ink in light, snow in dark)
+   so emphasized words pop, mirroring how the landing draws bolds. */
+.sl-markdown-content strong {
+  color: var(--sl-color-white);
+  font-weight: 600;
+}
+
+/* Inline links: ember accent with a soft underline that thickens on hover.
+   Matches the topbar's nav hover and the landing's link colour. */
+.sl-markdown-content a:not(.sl-anchor-link):not(.card a) {
+  color: var(--ryra-ember);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--ryra-ember) 38%, transparent);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 0.15s ease;
+}
+.sl-markdown-content a:not(.sl-anchor-link):not(.card a):hover {
+  text-decoration-color: var(--ryra-ember);
+}
+
+/* Blockquotes: Fraunces italic with the ember left rule, lifted from
+   the landing's `.why-quote`. */
+.sl-markdown-content blockquote {
+  border-left: 2px solid var(--ryra-ember);
+  padding: 6px 0 6px 22px;
+  margin: 1.6em 0;
+  font-family: var(--ryra-serif);
+  font-style: italic;
+  font-size: 21px;
+  line-height: 1.4;
+  color: var(--sl-color-white);
+  text-wrap: pretty;
+}
+.sl-markdown-content blockquote p {
+  margin: 0;
+}
+
+/* Horizontal rule: replace the heavy default with a hairline that fades
+   towards the edges, matching the section borders in the landing. */
+.sl-markdown-content hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--sl-color-hairline-shade) 18%,
+    var(--sl-color-hairline-shade) 82%,
+    transparent
+  );
+  margin: 3em auto;
+  max-width: 60%;
+}
+
+/* Tables: trim the default Starlight chrome; warmer cell padding and
+   subtler row separators. */
+.sl-markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5em 0;
+  font-size: 15px;
+}
+.sl-markdown-content thead th {
+  font-family: var(--ryra-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--sl-color-hairline);
+  font-weight: 600;
+}
+.sl-markdown-content tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  vertical-align: top;
+}
+.sl-markdown-content tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 /* ─── Cards (Starlight's <Card> component) ─── */
 .sl-markdown-content .card {
   border-radius: 12px;
   border-color: var(--sl-color-hairline);
+  padding: 22px;
+  background: color-mix(in oklab, var(--sl-color-bg) 92%, var(--ryra-paper));
+}
+.sl-markdown-content .card .title {
+  font-family: var(--ryra-serif);
+  font-weight: 500;
+  font-size: 19px;
+  letter-spacing: -0.01em;
 }
 
 /* ─── Terminal traffic-light dots ───

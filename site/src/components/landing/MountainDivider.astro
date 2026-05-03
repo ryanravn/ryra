@@ -1,0 +1,92 @@
+---
+// Section-to-section ridge divider. Place between two sections, pass
+// `fill` = next section's bg color, `from` = current section's bg color.
+// Sharp linear ridges with 1-2 peaks per variant.
+
+interface Props {
+  variant?: "a" | "b" | "c" | "d";
+  from?: string;
+  fill?: string;
+  height?: number;
+  flip?: boolean;
+}
+
+const {
+  variant = "a",
+  from = "transparent",
+  fill = "var(--snow)",
+  height = 90,
+  flip = false,
+} = Astro.props;
+
+// Single linear ridge per variant. viewBox is 0 0 1600 100; peaks reach
+// up to y=10-25 for drama, valleys sit at y=70-85. Plain L commands so
+// the silhouette is angular, not bulbous.
+const ridges: Record<string, string> = {
+  // a: one broad triangle peak right of center
+  a: "M0,80 L420,72 L820,18 L1180,68 L1600,76 L1600,100 L0,100 Z",
+  // b: two peaks — taller left, smaller right
+  b: "M0,82 L260,70 L560,12 L820,72 L1140,38 L1380,76 L1600,80 L1600,100 L0,100 Z",
+  // c: single sharp peak left of center
+  c: "M0,84 L320,78 L640,22 L1080,70 L1600,82 L1600,100 L0,100 Z",
+  // d: low and wide, two gentle bumps
+  d: "M0,88 L380,76 L780,58 L1100,72 L1380,52 L1600,82 L1600,100 L0,100 Z",
+};
+
+const ridge = ridges[variant];
+---
+
+<div
+  class:list={["mt-divider", { "mt-flip": flip }]}
+  aria-hidden="true"
+  style={`--mt-h: ${height}px; --mt-fill: ${fill}; --mt-from: ${from};`}
+>
+  <svg viewBox="0 0 1600 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <path d={ridge} />
+  </svg>
+</div>
+
+<style>
+  .mt-divider {
+    display: block;
+    width: 100%;
+    height: var(--mt-h);
+    line-height: 0;
+    pointer-events: none;
+    margin: 0;
+    padding: 0;
+    /* Bottom 1px is the fill colour to mask any sub-pixel hairline left
+       by the SVG ridge's anti-aliased bottom edge. preserveAspectRatio
+       stretches the path and the last row may end up partially
+       transparent, letting the `from` colour show as a thin line above
+       the next section. */
+    background:
+      linear-gradient(
+        to bottom,
+        var(--mt-from) 0,
+        var(--mt-from) calc(100% - 1px),
+        var(--mt-fill) calc(100% - 1px),
+        var(--mt-fill) 100%
+      );
+    position: relative;
+    z-index: 1;
+  }
+  .mt-divider svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    shape-rendering: geometricPrecision;
+  }
+  .mt-divider path {
+    fill: var(--mt-fill);
+  }
+  .mt-flip svg {
+    transform: scaleX(-1);
+  }
+
+  @media (max-width: 700px) {
+    .mt-divider {
+      height: calc(var(--mt-h) * 0.55);
+    }
+  }
+</style>

@@ -7,8 +7,7 @@
     <defs>
       <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#f4ede2" />
-        <stop offset="0.6" stop-color="#f4ede2" />
-        <stop offset="1" stop-color="#ede2d0" />
+        <stop offset="1" stop-color="#f4ede2" />
       </linearGradient>
       <linearGradient id="m1" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#cdd9e0" stop-opacity="0.55" />
@@ -69,6 +68,9 @@
     inset: 0;
     z-index: -1;
     pointer-events: none;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, black 0%, black 88%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 0%, black 88%, transparent 100%);
   }
   .mountains svg {
     width: 100%;

@@ -12,15 +12,15 @@
       <span class="tdot g"></span>
     </div>
     <div class="terminal-body" id="ryra-term">
-      <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra add immich</span></div>
+      <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra add immich --tailscale</span></div>
       <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/immich-server:v2.7.4</div>
       <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/postgres:14-vectorchord0.4.3</div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> pulls docker.io/valkey/valkey:9</div>
       <div class="term-out" data-step><span class="term-arrow">→</span> writes ~/.local/share/services/immich/immich.container</div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> starts immich on http://127.0.0.1:2283</div>
+      <div class="term-out" data-step><span class="term-arrow">→</span> provisioning HTTPS cert via tailscale</div>
+      <div class="term-out" data-step><span class="term-arrow">→</span> exposing https://immich.tail-cabin.ts.net (tailnet-only)</div>
       <div class="term-out term-blank" data-step>&nbsp;</div>
       <div class="term-out term-ok" data-step data-reveal-chip>immich is running.</div>
-      <div class="term-out" data-step>  URL: http://127.0.0.1:2283</div>
+      <div class="term-out" data-step>  URL: https://immich.tail-cabin.ts.net</div>
       <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra list</span></div>
       <div class="term-out" data-step style="padding-left: 0;">
         <table class="term-table">
@@ -30,12 +30,11 @@
           <tbody>
             <tr><td class="term-name">caddy</td><td class="term-up">running</td><td>http://127.0.0.1:8080</td></tr>
             <tr><td class="term-name">forgejo</td><td class="term-up">running</td><td>http://127.0.0.1:3000</td></tr>
-            <tr><td class="term-name">immich</td><td class="term-up">running</td><td>http://127.0.0.1:2283</td></tr>
-            <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>http://127.0.0.1:8222</td></tr>
+            <tr><td class="term-name">immich</td><td class="term-up">running</td><td>https://immich.tail-cabin.ts.net</td></tr>
+            <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>https://vault.tail-cabin.ts.net</td></tr>
           </tbody>
         </table>
       </div>
-      <div class="term-out term-comment" data-step># everything you run, you own.</div>
       <div class="term-line term-final" data-step><span class="term-prompt">$</span><span class="cursor"></span></div>
     </div>
   </div>
@@ -264,5 +263,11 @@
 
   @media (max-width: 720px) {
     .floating-chip { display: none; }
+  }
+  @media (max-width: 600px) {
+    /* Long image refs / URLs wrap on narrow viewports, taking up extra
+       vertical space. Bump the static min-height so the body still doesn't
+       grow during the animation cycle. */
+    .terminal-body { min-height: 668px; }
   }
 </style>

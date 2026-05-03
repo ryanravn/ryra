@@ -120,27 +120,36 @@ const steps: Step[] = [
       </div>
     </div>
   </div>
+  {/* Step anchors: stacked one-viewport-tall blocks. The IntersectionObserver
+      fires when each anchor crosses the viewport center, advancing the active
+      step. This is the standard scrollytelling pattern — no scroll math, no
+      rAF, no fragile event chains. */}
+  {steps.map((_, i) => (
+    <div class="qs-anchor" data-step-anchor={i} aria-hidden="true"></div>
+  ))}
 </div>
 
 <script define:vars={{ files: steps.map((s) => s.file), total: steps.length }}>
+  // Diagnostic: lets us confirm in DevTools that the new build is loaded.
+  console.log("[ryra/quickstart] init", { steps: total });
+
   const buttons = document.querySelectorAll(".qs-step");
   const bodies = document.querySelectorAll("[data-step-body]");
+  const anchors = document.querySelectorAll("[data-step-anchor]");
   const fileEl = document.getElementById("qs-file");
   const counterEl = document.getElementById("qs-counter");
   const progressBar = document.getElementById("qs-progress-bar");
   const scrollEl = document.querySelector(".qs-scroll");
-  const grid = document.querySelector(".qs-grid");
+  const stick = document.querySelector(".qs-stick");
 
   // Reduced-motion only suppresses the line-by-line typewriter reveal and
-  // the smooth-scroll on click. The pinned panel and step bucketing are
-  // *layout*, not motion, so they stay on regardless of the preference.
+  // smooth click-scroll. The pinned panel and step bucketing are *layout*,
+  // not motion, so they stay on regardless of the preference.
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  // Scroll-pinning only makes sense on screens wide enough that the steps
-  // and the code panel render side-by-side. On narrow layouts they stack,
-  // and forcing a sticky panel would lock half the screen for several
-  // viewport heights of scroll, which is hostile.
-  const scrollDriven = () =>
-    scrollEl !== null && window.matchMedia("(min-width: 981px)").matches;
+
+  // Pinning is enabled on every screen size. On narrow layouts the steps
+  // and code panel stack, so the sticky element is tall — CSS caps the code
+  // panel height in those cases so the full stick fits in the viewport.
 
   // Wrap each code line in a span so we can fade them in one at a time.
   bodies.forEach((body) => {
@@ -153,23 +162,19 @@ const steps: Step[] = [
 
   let activeTimers = [];
   let currentIdx = 0;
-  let hasEntered = false;
 
   const stopAnimation = () => {
     activeTimers.forEach(clearTimeout);
     activeTimers = [];
   };
-
   const showAllLines = (body) => {
     body.querySelectorAll(".qs-line").forEach((l) => l.classList.add("qs-line-shown"));
   };
-
   const delayFor = (lineEl) => {
     const text = (lineEl.textContent || "").trimStart();
     if (text.startsWith("$")) return 280;
     return 70;
   };
-
   const animateStep = (idx) => {
     stopAnimation();
     const body = bodies[idx];
@@ -188,7 +193,7 @@ const steps: Step[] = [
     });
   };
 
-  const setActive = (idx, { animate = true } = {}) => {
+  const setActive = (idx) => {
     if (idx === currentIdx) return;
     currentIdx = idx;
     buttons.forEach((b) => {
@@ -201,122 +206,118 @@ const steps: Step[] = [
     });
     if (fileEl) fileEl.textContent = files[idx];
     if (counterEl) counterEl.textContent = `step ${idx + 1} / ${total}`;
-    if (animate) animateStep(idx);
+    animateStep(idx);
   };
 
-  // ─── Scroll-driven mode ────────────────────────────────────────────
-  // The .qs-scroll wrapper is taller than the viewport (height set by CSS
-  // from the --qs-step-count custom prop). We turn the scroll position
-  // inside that wrapper into a 0..1 progress, then bucket it into N steps.
-  let rafQueued = false;
-  const computeProgress = () => {
-    if (!scrollEl) return 0;
-    const rect = scrollEl.getBoundingClientRect();
-    const scrollable = scrollEl.offsetHeight - window.innerHeight;
-    if (scrollable <= 0) return 0;
-    const scrolled = Math.max(0, Math.min(scrollable, -rect.top));
-    return scrolled / scrollable;
-  };
-
-  const onScroll = () => {
-    if (rafQueued) return;
-    rafQueued = true;
-    requestAnimationFrame(() => {
-      rafQueued = false;
-      if (!scrollDriven()) return;
-      const progress = computeProgress();
-      const idx = Math.max(0, Math.min(total - 1, Math.floor(progress * total)));
-      // Trigger the entry animation the first time the section is in view.
-      if (!hasEntered && idx === 0 && progress > 0) {
-        hasEntered = true;
-        animateStep(0);
-      }
-      setActive(idx);
-      if (progressBar) {
-        progressBar.style.transform = `scaleY(${progress})`;
-      }
+  // ─── Step changes via IntersectionObserver ───────────────────────────
+  // Each anchor is one viewport tall (CSS). We use rootMargin to collapse
+  // the observation root to a thin band at viewport center; whichever
+  // anchor crosses that band is the active step. No scroll math, no rAF.
+  if (anchors.length && "IntersectionObserver" in window) {
+    bodies.forEach((body) => {
+      if (Number(body.dataset.stepBody) !== 0) showAllLines(body);
     });
-  };
+    // Kick off step 0's reveal so the panel isn't empty on first paint.
+    // setActive(0) would bail on `idx === currentIdx`, so call animate
+    // directly. With reducedMotion, animateStep instantly shows all lines.
+    animateStep(0);
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Pick the most-visible anchor among those currently intersecting.
+        let best = null;
+        entries.forEach((e) => {
+          if (e.isIntersecting && (!best || e.intersectionRatio > best.intersectionRatio)) {
+            best = e;
+          }
+        });
+        if (best) {
+          const idx = Number(best.target.dataset.stepAnchor);
+          setActive(idx);
+        }
+      },
+      // A 4px-tall band at viewport center. 48% top + 48% bottom = 4% (~30px)
+      // band, generous enough for IO to fire reliably while still ensuring
+      // exactly one anchor occupies it at a time.
+      { rootMargin: "-48% 0px -48% 0px", threshold: [0, 0.5, 1] }
+    );
+    anchors.forEach((a) => observer.observe(a));
+
+    // Progress rail: still scroll-driven, but with a single observer + rAF.
+    if (progressBar && scrollEl) {
+      let rafQueued = false;
+      const updateBar = () => {
+        if (rafQueued) return;
+        rafQueued = true;
+        requestAnimationFrame(() => {
+          rafQueued = false;
+          const rect = scrollEl.getBoundingClientRect();
+          const scrollable = scrollEl.offsetHeight - window.innerHeight;
+          if (scrollable <= 0) return;
+          const scrolled = Math.max(0, Math.min(scrollable, -rect.top));
+          progressBar.style.transform = `scaleY(${scrolled / scrollable})`;
+        });
+      };
+      window.addEventListener("scroll", updateBar, { passive: true });
+      window.addEventListener("resize", updateBar, { passive: true });
+      updateBar();
+    }
+  } else {
+    // Narrow / no IntersectionObserver: pre-fill all panels and rely on
+    // click-driven step changes.
+    bodies.forEach(showAllLines);
+  }
 
   buttons.forEach((btn) => {
     btn.addEventListener("click", () => {
       const idx = Number(btn.dataset.stepIndex);
-      if (scrollDriven() && scrollEl) {
-        // Scroll the page so the floor() bucket lands inside this step.
-        // Aim slightly past the bucket boundary so a tiny scroll bounce
-        // doesn't kick us back to the previous step.
-        const scrollable = scrollEl.offsetHeight - window.innerHeight;
-        const targetProgress = Math.min(0.999, (idx + 0.4) / total);
-        const targetScroll = scrollable * targetProgress;
-        const wrapTop = scrollEl.getBoundingClientRect().top + window.scrollY;
-        window.scrollTo({
-          top: wrapTop + targetScroll,
-          behavior: reducedMotion ? "auto" : "smooth",
-        });
+      const anchor = anchors[idx];
+      if (anchor) {
+        // Scroll the page so the matching anchor lands in the center band.
+        const rect = anchor.getBoundingClientRect();
+        const target = rect.top + window.scrollY - window.innerHeight * 0.5 + rect.height * 0.5;
+        window.scrollTo({ top: target, behavior: reducedMotion ? "auto" : "smooth" });
       } else {
         setActive(idx);
       }
     });
   });
-
-  if (scrollDriven()) {
-    // Pre-populate non-active panels so they're never shown blank if the
-    // user scrolls into them faster than the animation can catch up.
-    bodies.forEach((body) => {
-      if (Number(body.dataset.stepBody) !== currentIdx) showAllLines(body);
-    });
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll, { passive: true });
-    requestAnimationFrame(onScroll);
-  } else if (reducedMotion || !("IntersectionObserver" in window)) {
-    bodies.forEach(showAllLines);
-  } else if (grid) {
-    // Non-scroll-driven (mobile / reduced motion off but narrow): keep the
-    // original behavior: animate step 0 once on entry, then click-driven.
-    bodies.forEach((body) => {
-      if (Number(body.dataset.stepBody) !== currentIdx) showAllLines(body);
-    });
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && !hasEntered) {
-            hasEntered = true;
-            animateStep(currentIdx);
-            observer.disconnect();
-          }
-        });
-      },
-      { threshold: 0.35 }
-    );
-    observer.observe(grid);
-  }
 </script>
 
 <style>
   /* ─── Scroll-pin wrapper ───────────────────────────────────────────
-     The wrapper is tall enough that the sticky child holds for ~one
-     viewport per step before releasing. The scroll handler reads its
-     position and turns it into the active step. */
+     The wrapper's total height = sticky panel's natural height + N
+     anchors, each one viewport tall. While the anchors scroll past
+     behind the sticky panel, IntersectionObserver advances the step. */
   .qs-scroll {
     position: relative;
-    /* base + one viewport per step. For 3 steps: 100vh + 210vh = 310vh,
-       leaving ~210vh of scrollable distance during which the panel is
-       pinned and steps advance. */
-    height: calc(100vh + var(--qs-step-count, 3) * 70vh);
   }
   .qs-stick {
     position: sticky;
-    /* Clear the topbar (~52px) plus a touch of breathing room. */
-    top: 80px;
+    /* Pin flush below the topbar (~52px) and fill the rest of the viewport.
+       Inside, the panel is flex-centered so the dark section background
+       breathes symmetrically above and below — much nicer than the panel
+       hugging the top with all the empty space pooled at the bottom. */
+    top: 52px;
+    min-height: calc(100vh - 52px);
+    display: flex;
+    align-items: center;
+    /* Sit on top of the anchors so they don't visually extend the panel. */
+    z-index: 1;
   }
-  /* On narrow screens the layout stacks, so pinning would lock half the
-     page for several viewport heights of scroll. Fall back to plain
-     vertical flow with click-driven steps. */
-  @media (max-width: 980px) {
-    .qs-scroll { height: auto; }
-    .qs-stick { position: static; top: auto; }
+  /* The grid was using its own align-items inside the old stick; reset so
+     the flex parent governs vertical placement. */
+  .qs-stick > .qs-grid {
+    width: 100%;
   }
-
+  /* Step anchors: stacked, one viewport per step. They take up real height
+     to give the sticky panel something to scroll past, but they're empty
+     and visually invisible. Step 0 is the default `currentIdx`, so until
+     anchor 1 reaches the center band, the first step stays active. */
+  .qs-anchor {
+    height: 90vh;
+    pointer-events: none;
+  }
   .qs-grid {
     display: grid;
     grid-template-columns: 1fr 1.4fr;
@@ -414,8 +415,14 @@ const steps: Step[] = [
     border-radius: 12px;
     border: 1px solid #ffffff10;
     overflow: hidden;
-    min-height: 380px;
+    /* Fixed height tall enough for the longest step's content (step 3,
+       18 lines) so the panel doesn't jump between steps. Wrapping
+       handles long URLs without horizontal scroll. */
+    height: 480px;
+    display: flex;
+    flex-direction: column;
   }
+  .qs-code-bar { flex: 0 0 auto; }
   .qs-code-bar {
     display: flex;
     align-items: center;
@@ -451,8 +458,14 @@ const steps: Step[] = [
     font-size: 13px;
     line-height: 1.65;
     color: #d6e4ee;
-    white-space: pre;
-    overflow-x: auto;
+    /* `pre-wrap` + `anywhere` lets long URLs wrap mid-string instead
+       of forcing a horizontal scrollbar. `overflow: hidden` clips any
+       residual overflow rather than adding a scrollbar. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow: hidden;
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .qs-code-body.hidden { display: none; }
 
@@ -476,4 +489,23 @@ const steps: Step[] = [
   .qs-code-body :global(.k3) { color: #7fb77a; }
   .qs-code-body :global(.k4) { color: #8fb4d8; }
   .qs-code-body :global(.k5) { color: #c5d4e0; }
+
+  /* ─── Mobile overrides ─────────────────────────────────────────────
+     Placed at the end of the stylesheet so they win on source order.
+     Astro's `:where()` scoping keeps specificity equal to the desktop
+     rules above; without later source order they'd lose the cascade. */
+  @media (max-width: 980px) {
+    .qs-stick { top: 64px; min-height: 0; display: block; }
+    .qs-anchor { height: 100vh; }
+    .qs-grid { gap: 14px; }
+    .qs-steps { gap: 4px; }
+    .qs-step { padding: 10px 14px; }
+    .qs-step .title { font-size: 16px; margin-bottom: 2px; }
+    .qs-step .desc { display: none; }
+    .qs-progress { display: none; }
+    /* Narrower viewport wraps more lines, so the code panel needs more
+       height. 580px fits step 1's wrapped install.sh without clipping. */
+    .qs-code { height: 580px; }
+    .qs-code-body { font-size: 11.5px; line-height: 1.55; padding: 16px 18px; }
+  }
 </style>

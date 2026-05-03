@@ -2,6 +2,7 @@
 import Mountains from "../components/landing/Mountains.astro";
 import Terminal from "../components/landing/Terminal.astro";
 import Quickstart from "../components/landing/Quickstart.astro";
+import MountainDivider from "../components/landing/MountainDivider.astro";
 
 const installCmd = "curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh";
 
@@ -101,16 +102,15 @@ const stats = [
                 <stop offset="1" stop-color="#c25a2c" />
               </linearGradient>
             </defs>
-            <path d="M3 26 L13 10 L19 19 L22 15 L29 26 Z" fill="url(#ryra-grad)" />
-            <path d="M14.5 14 L17.5 14 L17.5 17 L14.5 17 Z" fill="#0e2230" />
-            <path d="M14 14 L16 12 L18 14 Z" fill="#0e2230" />
+            <path d="M2,26 L12,4 L30,26 Z" fill="url(#ryra-grad)" />
+            <path d="M17,26 L17,21 L20,18 L23,21 L23,26 Z" fill="#0e2230" />
           </svg>
           Ryra
         </a>
         <nav class="nav">
           <a href="#features">Features</a>
-          <a href="#sandbox">Sandbox</a>
           <a href="#quickstart">Quickstart</a>
+          <a href="#sandbox">Sandbox</a>
           <a href="#why">Philosophy</a>
         </nav>
         <div class="topbar-right">
@@ -215,6 +215,26 @@ const stats = [
         </div>
       </section>
 
+      <MountainDivider variant="b" from="var(--snow)" fill="var(--ink)" height={120} />
+
+      <section class="bleed quickstart" id="quickstart">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow" style="color: var(--cabin);">Quickstart</div>
+              <h2 class="section-title">Three steps. About three minutes.</h2>
+            </div>
+            <p class="section-sub">
+              From cold metal to a running service. Click through the steps. The panel on the right shows
+              what each one looks like.
+            </p>
+          </div>
+          <Quickstart />
+        </div>
+      </section>
+
+      <MountainDivider variant="a" from="var(--ink)" fill="var(--snow)" height={120} />
+
       <section class="bleed sandbox" id="sandbox">
         <div class="container">
           <div class="sandbox-grid">
@@ -271,21 +291,7 @@ const stats = [
         </div>
       </section>
 
-      <section class="bleed quickstart" id="quickstart">
-        <div class="container">
-          <div class="section-head">
-            <div>
-              <div class="section-eyebrow" style="color: var(--cabin);">Quickstart</div>
-              <h2 class="section-title">Three steps. About three minutes.</h2>
-            </div>
-            <p class="section-sub">
-              From cold metal to a running service. Click through the steps. The panel on the right shows
-              what each one looks like.
-            </p>
-          </div>
-          <Quickstart />
-        </div>
-      </section>
+      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={120} />
 
       <section class="bleed why" id="why">
         <div class="container">
@@ -317,6 +323,8 @@ const stats = [
         </div>
       </section>
 
+      <MountainDivider variant="d" from="var(--paper)" fill="var(--snow)" height={90} flip />
+
       <section class="proof">
         <div class="container">
           <div class="proof-grid">
@@ -329,6 +337,8 @@ const stats = [
           </div>
         </div>
       </section>
+
+      <MountainDivider variant="a" from="var(--snow)" fill="var(--fjord)" height={110} />
     </main>
 
     <footer>
@@ -342,9 +352,8 @@ const stats = [
                   <stop offset="1" stop-color="#c25a2c" />
                 </linearGradient>
               </defs>
-              <path d="M3 26 L13 10 L19 19 L22 15 L29 26 Z" fill="url(#ryra-grad-footer)" />
-              <path d="M14.5 14 L17.5 14 L17.5 17 L14.5 17 Z" fill="#f4ede2" />
-              <path d="M14 14 L16 12 L18 14 Z" fill="#f4ede2" />
+              <path d="M2,26 L12,4 L30,26 Z" fill="url(#ryra-grad-footer)" />
+              <path d="M17,26 L17,21 L20,18 L23,21 L23,26 Z" fill="#f4ede2" />
             </svg>
             Ryra
           </div>
@@ -379,7 +388,7 @@ const stats = [
         </div>
       </div>
       <div class="footer-meta">
-        <span>© 2026 · Ryra contributors · AGPL-3.0</span>
+        <span>© 2026 · Erlend Ravn Ryan</span>
         <span>Built by self-hosters.</span>
       </div>
     </footer>
@@ -507,7 +516,11 @@ const stats = [
       .hero {
         position: relative;
         padding: 80px 28px 60px;
-        overflow: hidden;
+        /* No overflow:hidden — that would clip the Terminal's drop shadow
+           at the section boundary, which on mobile (where the terminal
+           sits at the bottom of the stacked layout) creates a hard line
+           between hero and the next section. The mountain SVG is already
+           constrained by its own absolutely-positioned wrapper. */
       }
       .hero-inner {
         max-width: 1240px; margin: 0 auto;
@@ -674,14 +687,12 @@ const stats = [
         color: var(--ink);
         position: relative;
         overflow: hidden;
-        border-top: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
-        border-bottom: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
       }
       .why::before {
         content: ""; position: absolute; inset: 0;
         background:
-          radial-gradient(circle at 90% 20%, color-mix(in oklab, var(--cabin) 22%, transparent) 0%, transparent 40%),
-          radial-gradient(circle at 5% 90%, color-mix(in oklab, var(--moss) 18%, transparent) 0%, transparent 45%);
+          radial-gradient(circle at 90% 35%, color-mix(in oklab, var(--cabin) 22%, transparent) 0%, transparent 32%),
+          radial-gradient(circle at 5% 65%, color-mix(in oklab, var(--moss) 18%, transparent) 0%, transparent 32%);
         pointer-events: none;
       }
       .why .container { position: relative; }
@@ -725,15 +736,14 @@ const stats = [
       /* ─── Sandbox / ryra test ─── */
       .sandbox {
         background: var(--snow);
-        border-top: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
         position: relative;
         overflow: hidden;
       }
       .sandbox::before {
         content: ""; position: absolute; inset: 0;
         background:
-          radial-gradient(circle at 95% 10%, color-mix(in oklab, var(--cabin) 14%, transparent) 0%, transparent 45%),
-          radial-gradient(circle at 0% 100%, color-mix(in oklab, var(--moss) 10%, transparent) 0%, transparent 50%);
+          radial-gradient(circle at 95% 30%, color-mix(in oklab, var(--cabin) 14%, transparent) 0%, transparent 35%),
+          radial-gradient(circle at 0% 70%, color-mix(in oklab, var(--moss) 10%, transparent) 0%, transparent 35%);
         pointer-events: none;
       }
       .sandbox .container { position: relative; }
@@ -805,7 +815,8 @@ const stats = [
         font-size: 13px;
         line-height: 1.7;
         color: #d6e4ee;
-        overflow-x: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
       .sandbox-term-body .t-prompt { color: var(--cabin); user-select: none; }
       .sandbox-term-body .t-cmd { color: var(--snow); }
@@ -841,8 +852,8 @@ const stats = [
       .quickstart::before {
         content: ""; position: absolute; inset: 0;
         background:
-          radial-gradient(circle at 80% 0%, rgba(217,122,58,0.22) 0%, transparent 45%),
-          radial-gradient(circle at 0% 100%, rgba(45,74,58,0.35) 0%, transparent 50%);
+          radial-gradient(circle at 80% 30%, rgba(217,122,58,0.22) 0%, transparent 35%),
+          radial-gradient(circle at 0% 70%, rgba(45,74,58,0.35) 0%, transparent 35%);
       }
       .quickstart .container { position: relative; }
       .quickstart h2 { color: var(--snow); }
@@ -851,7 +862,6 @@ const stats = [
       /* ─── Stats / proof ─── */
       .proof {
         background: var(--snow);
-        border-top: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
       }
       .proof-grid {
         display: grid; grid-template-columns: repeat(2, 1fr);
