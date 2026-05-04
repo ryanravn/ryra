@@ -66,6 +66,11 @@ const principles = [
     title: "Built in the open",
     body: "AGPL-3.0. Built in public on GitHub. Issues from real users on real boxes, not a roadmap from a quarterly review.",
   },
+  {
+    n: "/05",
+    title: "Like a friend set it up",
+    body: "Uninstall ryra and your services keep running. The registry is just a folder of quadlets and a bit of TOML, so fork it, point ryra at your own, ship whatever stack you want. No ryra-shaped hole when you walk away.",
+  },
 ];
 
 const stats = [
@@ -137,10 +142,10 @@ const stats = [
               Self-host your life or business with <em>Ryra</em>.
             </h1>
             <p class="lede">
-              Ryra is a CLI for running self-hosted services on a single Linux box. One <code>ryra add</code>
-              per service: pulls the image, writes a systemd quadlet, runs under rootless podman. Reach them
-              on localhost, on a public domain via Caddy, or over your private Tailnet. No port forward,
-              no DDNS. Add Authelia once and every OIDC-capable service gets SSO.
+              Ryra is a CLI for running self-hosted services on a single Linux machine. Type <code>ryra add</code>
+              and a service pulls its image, writes a systemd quadlet, and runs under rootless podman. Expose them
+              over your private Tailnet, on a public domain, or just keep them on your own machine. Services that
+              support OpenID Connect get automatic single sign-on, set up from a few questions ryra asks when you add them.
             </p>
             <div class="cta-row">
               <button class="install" id="copy-install" type="button">
@@ -870,10 +875,8 @@ const stats = [
       @media (max-width: 800px) { .proof-grid { grid-template-columns: 1fr; } }
       .stat {
         padding: 36px 24px;
-        border-right: 1px solid color-mix(in oklab, var(--ink) 8%, transparent);
         text-align: center;
       }
-      .stat:last-child { border-right: none; }
       .stat .v {
         font-family: var(--serif); font-weight: 500;
         font-size: 44px; line-height: 1;
