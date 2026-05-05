@@ -33,6 +33,19 @@ value = "true"
 name = "SEAFILE_MYSQL_DB_HOST"
 value = "mariadb"
 
+# Required by seafdav's seahub_db init (thirdpart/wsgidav/dc/seahub_db.py).
+# Without this, `os.environ.get('SEAFILE_MYSQL_DB_PORT')` returns None, the
+# in-code default never kicks in (`int(None)` raises before the second
+# `.get` default), the seahub session fails to initialize, and every
+# WebDAV request authenticated via `ENABLE_WEBDAV_SECRET` short-circuits
+# to 401 — silently, with no useful error in seafdav.log beyond a one-time
+# "Failed to init seahub db" warning at startup. Static value because the
+# in-container mariadb always listens on 3306 (the host port doesn't matter
+# to seafile — it talks to mariadb over the podman network).
+[[env]]
+name = "SEAFILE_MYSQL_DB_PORT"
+value = "3306"
+
 [[env]]
 name = "INIT_SEAFILE_MYSQL_ROOT_PASSWORD"
 value = "{{secret.mysql_root_password}}"
