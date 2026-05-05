@@ -66,19 +66,35 @@ pub struct DiffEntry {
     pub kind: DiffKind,
 }
 
+/// One env var the registry expects in `.env` that the user's `.env`
+/// doesn't have. By design env tracking is *append-only* — we never flag
+/// a present-but-different value as drift, and we never propose
+/// removing a key. Users may have manually edited values or added their
+/// own keys; clobbering those would be the larger harm.
+#[derive(Debug, Clone)]
+pub struct EnvAddition {
+    pub key: String,
+    pub value: String,
+}
+
 /// Result of comparing the registry's render to what's on disk.
 #[derive(Debug, Clone)]
 pub struct DiffResult {
     pub service: String,
     pub entries: Vec<DiffEntry>,
+    /// Static env vars the registry expects but the user's `.env` is
+    /// missing. Empty when the `.env` already covers everything tracked.
+    pub env_additions: Vec<EnvAddition>,
 }
 
 impl DiffResult {
-    /// True when nothing about the install would change.
+    /// True when nothing about the install would change — neither files
+    /// nor env vars.
     pub fn is_clean(&self) -> bool {
         self.entries
             .iter()
             .all(|e| matches!(e.kind, DiffKind::Unchanged))
+            && self.env_additions.is_empty()
     }
 
     /// Files the user hand-edited. Upgrade must refuse to overwrite these
@@ -92,10 +108,14 @@ impl DiffResult {
 }
 
 /// Reconstruct the planning inputs we stashed at install time and feed them
-/// back through `add_service` in upgrade mode. Returns the planned step list
-/// plus the planned-file content map (path → content) so the caller can hash
-/// without re-rendering.
-async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, String>)> {
+/// back through `add_service` in upgrade mode. Returns the planned step
+/// list, the planned-file content map (path → content), and the static
+/// env vars the registry currently expects in `.env` (parsed back out of
+/// the planned manifest's content — that path is the single source of
+/// truth for "what static envs does this service need").
+async fn replan(
+    service_name: &str,
+) -> Result<(AddResult, BTreeMap<PathBuf, String>, Vec<manifest::EnvEntry>)> {
     if !is_service_installed(service_name) {
         return Err(Error::ServiceNotInstalled(service_name.to_string()));
     }
@@ -151,12 +171,50 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
     )?;
 
     let mut planned: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let manifest_file = manifest::manifest_path(service_name)?;
+    let mut planned_envs: Vec<manifest::EnvEntry> = Vec::new();
     for step in &result.steps {
         if let Step::WriteFile(file) = step {
+            if file.path == manifest_file {
+                // Single source of truth for the registry's expected static
+                // envs: parse them back out of the manifest we just rendered.
+                // Avoids re-walking the service def with the same logic
+                // collect_static_envs uses inside `add_service`.
+                let (_, envs) = manifest::parse(&file.content)?;
+                planned_envs = envs;
+            }
             planned.insert(file.path.clone(), file.content.clone());
         }
     }
-    Ok((result, planned))
+    Ok((result, planned, planned_envs))
+}
+
+/// Parse the on-disk `.env` for a service into a key→value map. Lines
+/// without `=`, comments, and blanks are skipped. Returns an empty map if
+/// the file is absent — caller decides whether that's a soft error.
+fn read_existing_env_keys(service_name: &str) -> Result<BTreeMap<String, String>> {
+    let env_path = service_home(service_name)?.join(".env");
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    let content = match std::fs::read_to_string(&env_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(source) => {
+            return Err(Error::FileRead {
+                path: env_path,
+                source,
+            });
+        }
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            out.insert(k.trim().to_string(), v.to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// Parse `SERVICE_PORT_<NAME>=<port>` lines out of an installed service's
@@ -205,12 +263,29 @@ fn should_skip_path(path: &std::path::Path, manifest_file: &std::path::Path) -> 
 /// Compute the diff between the registry's render and what's on disk for an
 /// installed service.
 pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
-    let (_result, planned) = replan(service_name).await?;
+    let (_result, planned, planned_envs) = replan(service_name).await?;
     let manifest_file = manifest::manifest_path(service_name)?;
-    let manifest_entries = manifest::load(service_name)?.unwrap_or_default();
+    let (manifest_entries, _manifest_envs) =
+        manifest::load(service_name)?.unwrap_or_default();
     let manifest_by_path: BTreeMap<PathBuf, String> = manifest_entries
         .into_iter()
         .map(|e| (e.path, e.sha256))
+        .collect();
+
+    // Env additions: registry-expected static keys missing from the user's
+    // `.env`. Append-only — we ignore present-but-different values
+    // (could be a manual override) and never propose removals (could be
+    // a key the user added themselves that the registry happens not to
+    // ship). The registry-side list comes from the freshly-rendered
+    // manifest, not the on-disk one — that's the source of truth.
+    let existing_env = read_existing_env_keys(service_name)?;
+    let env_additions: Vec<EnvAddition> = planned_envs
+        .iter()
+        .filter(|p| !existing_env.contains_key(&p.key))
+        .map(|p| EnvAddition {
+            key: p.key.clone(),
+            value: p.value.clone(),
+        })
         .collect();
 
     let mut entries: Vec<DiffEntry> = Vec::new();
@@ -271,6 +346,7 @@ pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
     Ok(DiffResult {
         service: service_name.to_string(),
         entries,
+        env_additions,
     })
 }
 
@@ -292,8 +368,9 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
         }
     }
 
-    let (result, planned) = replan(service_name).await?;
+    let (result, planned, _planned_envs) = replan(service_name).await?;
     let manifest_file = manifest::manifest_path(service_name)?;
+    let env_file = service_home(service_name)?.join(".env");
 
     // Decide the backup directory once per upgrade run. Used whenever any
     // file would be overwritten *or* the existing service.manifest exists (the
@@ -405,6 +482,38 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
         steps.push(Step::RemoveFile(entry.path.clone()));
     }
 
+    // Env additions: append registry-required static env vars that the
+    // user's .env doesn't have. Append-only — we never rewrite the
+    // existing .env (that would clobber rotated secrets and any manual
+    // edits) and we never remove keys (the user might have added their
+    // own that the registry happens not to ship). The .env is
+    // intentionally NOT backed up: it only ever gains lines and the
+    // pre-existing content survives unchanged.
+    if !diff.env_additions.is_empty() {
+        let mut content = match std::fs::read_to_string(&env_file) {
+            Ok(c) => c,
+            // Service installed but .env missing? Treat the add as a
+            // fresh write — odd state, but the right one to recover to.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(source) => {
+                return Err(Error::FileRead {
+                    path: env_file.clone(),
+                    source,
+                });
+            }
+        };
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        for add in &diff.env_additions {
+            content.push_str(&format!("{}={}\n", add.key, add.value));
+        }
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: env_file,
+            content,
+        }));
+    }
+
     // Pick up the new quadlet by restarting. RestartService is enough to
     // re-read the env file, re-run ExecStartPre/Post, and pull in any new
     // ExecStartPost script (the seafile case).
@@ -513,8 +622,8 @@ pub fn revert_service(service_name: &str, at: Option<&str>) -> Result<RevertResu
     // revert. If either lock is absent, leave the delete set empty —
     // safest no-op for snapshots that pre-date this feature.
     let backup_manifest_file = absolute_to_backup_path(&snapshot.path, &manifest::manifest_path(service_name)?);
-    let backup_manifest_entries = read_manifest_at(&backup_manifest_file)?;
-    let current_manifest_entries = manifest::load(service_name)?.unwrap_or_default();
+    let (backup_manifest_entries, _) = read_manifest_at(&backup_manifest_file)?;
+    let (current_manifest_entries, _) = manifest::load(service_name)?.unwrap_or_default();
 
     let backup_manifest_set: BTreeSet<PathBuf> = backup_manifest_entries
         .iter()
@@ -634,9 +743,11 @@ fn absolute_to_backup_path(root: &std::path::Path, abs: &std::path::Path) -> Pat
 
 /// Read a manifest at the given path. Missing-file is treated as an empty
 /// list — pre-feature backups simply have no lock to reference.
-fn read_manifest_at(path: &std::path::Path) -> Result<Vec<manifest::ManifestEntry>> {
+fn read_manifest_at(
+    path: &std::path::Path,
+) -> Result<(Vec<manifest::ManifestEntry>, Vec<manifest::EnvEntry>)> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let content = std::fs::read_to_string(path).map_err(|source| Error::FileRead {
         path: path.to_path_buf(),

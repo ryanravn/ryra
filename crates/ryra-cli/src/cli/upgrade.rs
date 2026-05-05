@@ -136,6 +136,15 @@ fn print_summary(plans: &[UpgradeResult]) {
                 ),
             }
         }
+        for add in &plan.diff.env_additions {
+            println!(
+                "  {} env: {}={}  {}",
+                style("+").green().bold(),
+                add.key,
+                add.value,
+                style("appended to .env (registry-added)").green()
+            );
+        }
         // Surface the side effects the user is consenting to. Restart
         // means a brief downtime; backup path tells them where to look
         // if something goes sideways; the revert hint is the get-out-of-jail

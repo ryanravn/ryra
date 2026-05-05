@@ -34,8 +34,8 @@ pub use metadata::{Metadata, load_metadata};
 pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root, service_home};
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, Warning};
 pub use upgrade::{
-    BackupSnapshot, DiffEntry, DiffKind, DiffResult, RevertResult, UpgradeResult, diff_service,
-    list_backups, revert_service, upgrade_service,
+    BackupSnapshot, DiffEntry, DiffKind, DiffResult, EnvAddition, RevertResult, UpgradeResult,
+    diff_service, list_backups, revert_service, upgrade_service,
 };
 pub use well_known::WellKnownService;
 
@@ -832,9 +832,15 @@ pub fn add_service(
             });
         }
     }
+    // Static env vars — every registry-defined env whose template carries
+    // no `{{secret.*}}` or `{{auth.*}}` reference. Tracked so `ryra
+    // upgrade` can append registry-added env vars to the user's existing
+    // `.env` without re-rendering it (which would clobber rotated
+    // secrets). Append-only by design.
+    let manifest_envs = collect_static_envs(&reg_service.def, &output.ctx, enabled_groups)?;
     steps.push(Step::WriteFile(GeneratedFile {
         path: manifest_path_for_svc,
-        content: manifest::format(&manifest_entries),
+        content: manifest::format(&manifest_entries, &manifest_envs),
     }));
 
     // 10. Reload and start via systemd
@@ -1136,6 +1142,98 @@ pub fn finalize_remove(service_name: &str) -> Result<()> {
 /// <svc>` in default Preserve mode, or after a partial install where
 /// the quadlets landed but `metadata.toml` never did). Unlike
 /// `remove_service`, this doesn't require an install record to exist.
+/// Templates whose rendered value is "sensitive" — either because the
+/// value itself is a secret/credential, or because it rotates with each
+/// install (so tracking it as static produces false drift positives).
+/// Anything referencing one of these is excluded from the manifest.
+///
+/// Crucially this is *narrower* than "every {{auth.*}} reference":
+/// `{{auth.url}}`, `{{auth.issuer}}`, `{{auth.provider}}`, `{{auth.internal_url}}`
+/// are all stable per-install URLs/strings that the user benefits from
+/// having tracked (so a global authelia URL change is caught by diff).
+/// Only the credential pair `auth.client_id` + `auth.client_secret`
+/// rotate per install. Same for SMTP: `smtp.host`/`smtp.port`/`smtp.from`/
+/// `smtp.security` are tracked, only `smtp.username` and `smtp.password`
+/// are excluded.
+const SENSITIVE_TEMPLATE_REFS: &[&str] = &[
+    "{{secret.",
+    "{{auth.client_id",
+    "{{auth.client_secret",
+    "{{smtp.username",
+    "{{smtp.password",
+];
+
+fn is_static_template(value: &str) -> bool {
+    !SENSITIVE_TEMPLATE_REFS.iter().any(|s| value.contains(s))
+}
+
+/// Render every static env var the registry expects in `.env` for the
+/// service. "Static" means the template carries no reference to any
+/// rotating per-install value (see `SENSITIVE_TEMPLATE_REFS`).
+///
+/// Walks four sources, in the same order they're rendered into `.env` by
+/// `generate::generate_env`:
+///   1. `service_def.env` — top-level static entries.
+///   2. Each enabled `[[env_group]]` — opt-in bundles.
+///   3. `service_def.mappings.smtp` — only when SMTP is configured globally
+///      and the service opts in (`integrations.smtp`).
+///   4. `service_def.mappings.auth` — only when `--auth` was used.
+///
+/// Capturing 3 and 4 is what makes global-config drift visible: when the
+/// user reconfigures global SMTP / re-installs authelia, the per-service
+/// mapping values change, and tracking them lets `ryra diff` notice.
+fn collect_static_envs(
+    service_def: &registry::service_def::ServiceDef,
+    ctx: &BTreeMap<String, String>,
+    enabled_groups: &std::collections::BTreeSet<String>,
+) -> Result<Vec<manifest::EnvEntry>> {
+    let mut out: Vec<manifest::EnvEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let push = |name: &str,
+                    value_template: &str,
+                    out: &mut Vec<manifest::EnvEntry>,
+                    seen: &mut std::collections::HashSet<String>|
+     -> Result<()> {
+        if !is_static_template(value_template) {
+            return Ok(());
+        }
+        if !seen.insert(name.to_string()) {
+            return Ok(());
+        }
+        let value = generate::template::render(value_template, ctx)?;
+        out.push(manifest::EnvEntry {
+            key: name.to_string(),
+            value,
+        });
+        Ok(())
+    };
+    for env in &service_def.env {
+        push(&env.name, &env.value, &mut out, &mut seen)?;
+    }
+    for group in &service_def.env_groups {
+        if !enabled_groups.contains(&group.name) {
+            continue;
+        }
+        for env in &group.env {
+            push(&env.name, &env.value, &mut out, &mut seen)?;
+        }
+    }
+    // Mirror the gating from `generate::render_env_vars`: SMTP mappings
+    // only fire when smtp is configured globally; auth mappings only when
+    // --auth was used. ctx-key presence is a faithful proxy for both.
+    if service_def.integrations.smtp && ctx.contains_key("smtp.host") {
+        for (env_name, value_template) in &service_def.mappings.smtp {
+            push(env_name, value_template, &mut out, &mut seen)?;
+        }
+    }
+    if ctx.contains_key("auth.client_id") {
+        for (env_name, value_template) in &service_def.mappings.auth {
+            push(env_name, value_template, &mut out, &mut seen)?;
+        }
+    }
+    Ok(out)
+}
+
 pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
     let mut steps = Vec::new();
 
@@ -1589,6 +1687,39 @@ pub struct ServiceDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_template_filter_excludes_secrets_and_credentials() {
+        // Plain literal — tracked.
+        assert!(is_static_template("3306"));
+        assert!(is_static_template("mariadb"));
+        // Stable template references — tracked.
+        assert!(is_static_template("{{service.port}}"));
+        assert!(is_static_template("{{service.url}}"));
+        assert!(is_static_template("{{auth.url}}"));
+        assert!(is_static_template("{{auth.issuer}}"));
+        assert!(is_static_template("{{auth.provider}}"));
+        assert!(is_static_template("{{auth.internal_url}}"));
+        assert!(is_static_template("{{smtp.host}}"));
+        assert!(is_static_template("{{smtp.port}}"));
+        assert!(is_static_template("{{smtp.from}}"));
+        // Composite template: stable + stable — tracked.
+        assert!(is_static_template("{{service.url}}/oauth/callback"));
+
+        // Secrets — never tracked.
+        assert!(!is_static_template("{{secret.admin_password}}"));
+        assert!(!is_static_template("{{secret.jwt_key}}"));
+        // Per-install OIDC credentials — never tracked (rotates on auth provider reinstall).
+        assert!(!is_static_template("{{auth.client_id}}"));
+        assert!(!is_static_template("{{auth.client_secret}}"));
+        // SMTP credentials — never tracked.
+        assert!(!is_static_template("{{smtp.username}}"));
+        assert!(!is_static_template("{{smtp.password}}"));
+        // Composite templates carrying a sensitive ref must also be excluded.
+        assert!(!is_static_template(
+            "redis://:{{secret.redis_pw}}@host:6379"
+        ));
+    }
 
     #[test]
     fn tailscale_url_matches() {

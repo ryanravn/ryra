@@ -96,6 +96,15 @@ fn print_one(diff: &DiffResult) {
             ),
         }
     }
+    for add in &diff.env_additions {
+        println!(
+            "  {} env: {}={}  {}",
+            style("+").green().bold(),
+            add.key,
+            add.value,
+            style("registry-added env var").green()
+        );
+    }
 }
 
 /// When `services` is empty, diff every installed service. Otherwise validate

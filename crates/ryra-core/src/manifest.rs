@@ -30,6 +30,19 @@ pub struct ManifestEntry {
     pub sha256: String,
 }
 
+/// One static env var the registry expects in `.env`. "Static" means the
+/// template carries no `{{secret.*}}` or `{{auth.*}}` reference — those
+/// rotate at runtime and would produce false drift positives. Only static
+/// vars are tracked, and tracking is append-only: `ryra upgrade` adds
+/// missing keys to the user's `.env` but never removes or rewrites
+/// existing lines, since users may have manually edited values or added
+/// their own keys.
+#[derive(Debug, Clone)]
+pub struct EnvEntry {
+    pub key: String,
+    pub value: String,
+}
+
 /// Compute the hex sha256 of arbitrary bytes.
 pub fn hash_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -52,10 +65,15 @@ pub fn manifest_path(service_name: &str) -> Result<PathBuf> {
 }
 
 /// Render the manifest content from a list of entries, sorted by path so
-/// the output is stable across runs.
-pub fn format(entries: &[ManifestEntry]) -> String {
+/// the output is stable across runs. Static env vars are recorded as
+/// `# env: KEY=VALUE` comment lines — `sha256sum -c` ignores `#`-prefixed
+/// lines, so the file remains verifiable with the standard tool while
+/// still carrying the env metadata our own parser needs.
+pub fn format(entries: &[ManifestEntry], envs: &[EnvEntry]) -> String {
     let mut sorted: Vec<&ManifestEntry> = entries.iter().collect();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut sorted_envs: Vec<&EnvEntry> = envs.iter().collect();
+    sorted_envs.sort_by(|a, b| a.key.cmp(&b.key));
 
     let mut out = String::new();
     out.push_str("# ryra service.manifest — render manifest\n");
@@ -69,18 +87,43 @@ pub fn format(entries: &[ManifestEntry]) -> String {
         out.push_str(&entry.path.to_string_lossy());
         out.push('\n');
     }
+    if !sorted_envs.is_empty() {
+        out.push('\n');
+        out.push_str("# env: static env vars the registry expects in .env\n");
+        for env in sorted_envs {
+            out.push_str(&format!("# env: {}={}\n", env.key, env.value));
+        }
+    }
     out
 }
 
-/// Parse a manifest, ignoring `#` comment lines and blank lines. Lines that
-/// don't match `<hex>  <path>` are an error — the file is machine-written,
-/// so a malformed entry means corruption or a version mismatch we don't
-/// know how to handle.
-pub fn parse(content: &str) -> Result<Vec<ManifestEntry>> {
+/// Parse a manifest, returning both the file entries and any tracked env
+/// vars. Recognises `# env: KEY=VALUE` comment lines and pulls them out;
+/// other comment lines and blank lines are ignored. Lines that don't
+/// match `<hex>  <path>` (or the env-comment form) are an error — the
+/// file is machine-written, so a malformed entry means corruption or a
+/// version mismatch we don't know how to handle.
+pub fn parse(content: &str) -> Result<(Vec<ManifestEntry>, Vec<EnvEntry>)> {
     let mut entries = Vec::new();
+    let mut envs = Vec::new();
     for (lineno, raw) in content.lines().enumerate() {
         let line = raw.trim_start();
-        if line.is_empty() || line.starts_with('#') {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# env: ") {
+            // `# env: <header text>` (no `=` in the rest) is treated as a
+            // section header and skipped, so we can decorate the manifest.
+            // Real entries are `# env: KEY=VALUE`.
+            if let Some((key, value)) = rest.split_once('=') {
+                envs.push(EnvEntry {
+                    key: key.trim().to_string(),
+                    value: value.to_string(),
+                });
+            }
+            continue;
+        }
+        if line.starts_with('#') {
             continue;
         }
         // sha256sum text-mode separator is exactly two spaces.
@@ -101,13 +144,14 @@ pub fn parse(content: &str) -> Result<Vec<ManifestEntry>> {
             sha256: hash.to_string(),
         });
     }
-    Ok(entries)
+    Ok((entries, envs))
 }
 
 /// Load and parse the manifest for a service. `Ok(None)` when the file is
 /// absent (service installed before manifests existed); `Err` when present
-/// but unreadable / malformed.
-pub fn load(service_name: &str) -> Result<Option<Vec<ManifestEntry>>> {
+/// but unreadable / malformed. Returns both the file entries and any
+/// tracked static env vars.
+pub fn load(service_name: &str) -> Result<Option<(Vec<ManifestEntry>, Vec<EnvEntry>)>> {
     let path = manifest_path(service_name)?;
     if !path.exists() {
         return Ok(None);
@@ -135,9 +179,10 @@ mod tests {
                 sha256: "b".repeat(64),
             },
         ];
-        let rendered = format(&entries);
-        let parsed = parse(&rendered).expect("round-trip parse must succeed");
+        let rendered = format(&entries, &[]);
+        let (parsed, envs) = parse(&rendered).expect("round-trip parse must succeed");
         assert_eq!(parsed.len(), 2);
+        assert!(envs.is_empty());
         // Sorted by path; "/a/b/c.container" < "/a/b/scripts/x.sh".
         assert_eq!(parsed[0].path, PathBuf::from("/a/b/c.container"));
         assert_eq!(parsed[0].sha256, "a".repeat(64));
@@ -149,8 +194,9 @@ mod tests {
     fn parse_ignores_comments_and_blank_lines() {
         let input = "# header\n\n# another comment\n\
                      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  /x\n";
-        let parsed = parse(input).expect("parse must succeed");
+        let (parsed, envs) = parse(input).expect("parse must succeed");
         assert_eq!(parsed.len(), 1);
+        assert!(envs.is_empty());
         assert_eq!(parsed[0].path, PathBuf::from("/x"));
     }
 
@@ -199,11 +245,52 @@ mod tests {
                 sha256: "2".repeat(64),
             },
         ];
-        let rendered = format(&entries);
+        let rendered = format(&entries, &[]);
         let positions: Vec<usize> = ["/a", "/m", "/z"]
             .iter()
             .map(|p| rendered.find(p).expect("path must appear"))
             .collect();
         assert!(positions[0] < positions[1] && positions[1] < positions[2]);
+    }
+
+    #[test]
+    fn env_round_trips_through_format_and_parse() {
+        let entries = vec![ManifestEntry {
+            path: PathBuf::from("/svc/file"),
+            sha256: "0".repeat(64),
+        }];
+        let envs = vec![
+            EnvEntry {
+                key: "FOO".into(),
+                value: "bar".into(),
+            },
+            EnvEntry {
+                key: "BAR".into(),
+                value: "baz=qux".into(), // value with `=` survives intact
+            },
+        ];
+        let rendered = format(&entries, &envs);
+        let (parsed_files, parsed_envs) = parse(&rendered).expect("round-trip");
+        assert_eq!(parsed_files.len(), 1);
+        assert_eq!(parsed_envs.len(), 2);
+        // Sorted by key: BAR before FOO.
+        assert_eq!(parsed_envs[0].key, "BAR");
+        assert_eq!(parsed_envs[0].value, "baz=qux");
+        assert_eq!(parsed_envs[1].key, "FOO");
+        assert_eq!(parsed_envs[1].value, "bar");
+    }
+
+    #[test]
+    fn parse_skips_env_section_header_lines() {
+        // Section header is a `# env:` line without `=` in the body — our
+        // own format() emits one. It must round-trip without becoming a
+        // bogus EnvEntry.
+        let input = "# env: static env vars the registry expects in .env\n\
+                     # env: KEY=val\n";
+        let (files, envs) = parse(input).expect("parse should succeed");
+        assert!(files.is_empty());
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].key, "KEY");
+        assert_eq!(envs[0].value, "val");
     }
 }
