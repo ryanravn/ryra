@@ -32,6 +32,16 @@ service = "seafile"
 poll = { interval = 3, attempts = 60 }
 timeout = 240
 [[tests.steps]]
+# SeafDAV returns 401 when unauthenticated. Proves the WebDAV endpoint
+# is enabled and routed through the image's built-in proxy.
+action = "http"
+name = "seafdav-requires-auth"
+url = "https://seafile.internal:8443/seafdav/"
+status = 401
+service = "seafile"
+poll = { interval = 3, attempts = 60 }
+timeout = 240
+[[tests.steps]]
 action = "shell"
 name = "trigger-smtp-mail"
 run = """for i in $(seq 1 10); do

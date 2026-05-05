@@ -23,6 +23,7 @@ TimeoutStartSec=900
 ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/inject-oauth.sh
 ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/inject-smtp.sh
 ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/restart-seahub.sh
+ExecStartPost=/bin/bash %h/.local/share/services/seafile/configs/scripts/enable-seafdav.sh
 
 [Install]
 WantedBy=default.target
