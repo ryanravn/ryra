@@ -176,6 +176,51 @@ enum Command {
     },
     /// Diagnose environment + install state and report issues with fixes
     Doctor,
+    /// Show what would change if the current registry were re-rendered
+    /// against an installed service. Read-only; flags hand-edited files
+    /// so you know what `ryra upgrade` would refuse to overwrite.
+    Diff {
+        /// Service name(s). Omit to diff every installed service.
+        services: Vec<String>,
+    },
+    /// Re-render an installed service against the current registry, backing
+    /// up displaced files and restarting the unit. Refuses to clobber
+    /// hand-edited files unless --force.
+    Upgrade {
+        /// Service name(s). Omit to upgrade every installed service.
+        services: Vec<String>,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Overwrite hand-edited files. Backups still go to
+        /// ~/.local/state/ryra/backups/<timestamp>/<service>/ first.
+        #[arg(long)]
+        force: bool,
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Restore an installed service from its most recent (or `--at <timestamp>`)
+    /// upgrade backup. Inverts a `ryra upgrade`: brings back overwritten files,
+    /// removes upgrade-added files, restarts the unit.
+    Revert {
+        /// Service name(s) to revert. Required unless --list is set.
+        services: Vec<String>,
+        /// Specific snapshot timestamp (e.g. 2026-05-05T13-33-50Z). Omit
+        /// to use the most recent. Only valid for a single service.
+        #[arg(long)]
+        at: Option<String>,
+        /// Show available backup snapshots and exit. Combine with service
+        /// names to filter, or run alone to list every service's backups.
+        #[arg(long)]
+        list: bool,
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Show what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -266,6 +311,20 @@ async fn main() -> anyhow::Result<()> {
         } => cli::remove::run(services, all, orphans, yes, dry_run, purge).await?,
         Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
         Command::Doctor => cli::doctor::run()?,
+        Command::Diff { ref services } => cli::diff::run(services).await?,
+        Command::Upgrade {
+            ref services,
+            yes,
+            force,
+            dry_run,
+        } => cli::upgrade::run(services, yes, force, dry_run).await?,
+        Command::Revert {
+            ref services,
+            ref at,
+            list,
+            yes,
+            dry_run,
+        } => cli::revert::run(services, at.as_deref(), yes, dry_run, list).await?,
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {

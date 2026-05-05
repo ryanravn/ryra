@@ -109,6 +109,22 @@ pub enum Error {
 
     #[error("config validation failed: {0}")]
     ConfigValidation(String),
+
+    #[error(
+        "{service}: {} hand-edited file(s) would be overwritten — re-run with --force to overwrite, or back up your changes first:\n  {}",
+        paths.len(),
+        paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n  ")
+    )]
+    HandEditedFiles {
+        service: String,
+        paths: Vec<PathBuf>,
+    },
+
+    #[error("no backups found for service '{0}' — `ryra upgrade` creates them, run that first")]
+    NoBackup(String),
+
+    #[error("service '{service}' has no backup at timestamp {stamp} — run `ryra revert {service}` to use the most recent")]
+    BackupNotFound { service: String, stamp: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

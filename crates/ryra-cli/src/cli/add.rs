@@ -640,6 +640,8 @@ pub async fn run(
             prompt_ctx.clone(),
             &super::is_port_in_use,
             acme_for_service,
+            ryra_core::PlanMode::Add,
+            &BTreeMap::new(),
         ) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 // Two cases land here: a previous `ryra add` crashed mid-way
@@ -709,6 +711,8 @@ pub async fn run(
                     prompt_ctx.clone(),
                     &super::is_port_in_use,
                     acme_for_service,
+                    ryra_core::PlanMode::Add,
+                    &BTreeMap::new(),
                 )?
             }
             other => other?,

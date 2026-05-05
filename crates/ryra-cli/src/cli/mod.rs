@@ -1,17 +1,20 @@
 pub mod add;
 pub mod apply;
 pub mod config_cmd;
+pub mod diff;
 pub mod doctor;
 pub mod linger;
 pub mod list;
 pub mod prompts;
 pub mod registry_cmd;
 pub mod remove;
+pub mod revert;
 pub mod reset;
 pub mod search;
 pub mod style;
 pub mod sysctl_low_ports;
 pub mod test;
+pub mod upgrade;
 
 use std::io::IsTerminal;
 use std::net::TcpListener;

@@ -7,11 +7,13 @@ pub mod data;
 pub mod error;
 pub mod exposure;
 pub mod generate;
+pub mod manifest;
 pub mod metadata;
 pub mod paths;
 pub mod plan;
 pub mod registry;
 pub mod system;
+pub mod upgrade;
 pub mod well_known;
 
 use std::collections::BTreeMap;
@@ -27,9 +29,14 @@ pub use capability::{
     service_provides,
 };
 pub use exposure::{Exposure, is_public_url, is_tailscale_url};
+pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
 pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root, service_home};
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, Warning};
+pub use upgrade::{
+    BackupSnapshot, DiffEntry, DiffKind, DiffResult, RevertResult, UpgradeResult, diff_service,
+    list_backups, revert_service, upgrade_service,
+};
 pub use well_known::WellKnownService;
 
 pub(crate) use paths::home_dir;
@@ -234,6 +241,24 @@ fn resolve_extra_networks(
     networks
 }
 
+/// Why the planner is running. The render path is shared between fresh
+/// installs and re-renders (`ryra upgrade`); the side-effect steps are
+/// not — re-registering an OIDC client on upgrade would mint a new
+/// `client_id`/`client_secret` against authelia's existing entry, and
+/// patching every other installed service's quadlet (retroactive network
+/// joins) is install-time work. The mode gates those.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanMode {
+    /// Fresh install. Validate that the service isn't already on disk,
+    /// register OIDC clients, retroactively patch other services to
+    /// join shared networks, set up Tailscale, and start the unit.
+    Add,
+    /// Re-render an installed service to pick up registry changes.
+    /// Skips the validation rejects and the install-time side effects;
+    /// the upgrade caller handles diff/backup/restart.
+    Upgrade,
+}
+
 /// Add a service: generate config, return steps to execute.
 ///
 /// When `pre_built_ctx` is provided, its secrets and auth credentials are
@@ -253,6 +278,13 @@ pub fn add_service(
     pre_built_ctx: Option<BTreeMap<String, String>>,
     port_in_use: &dyn Fn(u16) -> bool,
     acme_mode: Option<&caddy::AcmeMode>,
+    mode: PlanMode,
+    // Pin specific port assignments by name (e.g. `{"http": 10005}`) instead
+    // of running the allocator. Used by upgrade so a re-render preserves the
+    // install's existing host ports — port_in_use would say they're taken
+    // (the running service holds them) and the allocator would skip to the
+    // next free one.
+    port_overrides: &BTreeMap<String, u16>,
 ) -> Result<AddResult> {
     // Legacy locals — the rest of this function still threads
     // `Option<&str>` URLs and a tailscale bool through downstream
@@ -267,19 +299,24 @@ pub fn add_service(
 
     // Quadlet directory is the source of truth: a marker'd `.container`
     // means the service is already installed.
-    if is_service_installed(service_name) {
-        return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
-    }
+    //
+    // Upgrade explicitly *re-renders* an installed service — those rejects
+    // would block the legitimate path.
+    if mode == PlanMode::Add {
+        if is_service_installed(service_name) {
+            return Err(Error::ServiceAlreadyInstalled(service_name.to_string()));
+        }
 
-    // No config entry, but preserved volumes or a lingering home dir from
-    // `ryra remove <svc>` (default Preserve mode) would make the fresh .env's
-    // generated secrets disagree with what's already baked into the volume —
-    // postgres writes POSTGRES_PASSWORD into pgdata on first init and then
-    // skips reinit, so a new password in .env just restart-loops on auth
-    // failures. Surface the same way as an incomplete install; the CLI's
-    // existing purge-and-retry recovery handles it.
-    if data::enumerate_service(service_name)?.is_some() {
-        return Err(Error::ServiceIncomplete(service_name.to_string()));
+        // No config entry, but preserved volumes or a lingering home dir from
+        // `ryra remove <svc>` (default Preserve mode) would make the fresh .env's
+        // generated secrets disagree with what's already baked into the volume —
+        // postgres writes POSTGRES_PASSWORD into pgdata on first init and then
+        // skips reinit, so a new password in .env just restart-loops on auth
+        // failures. Surface the same way as an incomplete install; the CLI's
+        // existing purge-and-retry recovery handles it.
+        if data::enumerate_service(service_name)?.is_some() {
+            return Err(Error::ServiceIncomplete(service_name.to_string()));
+        }
     }
 
     let reg_service = registry::find_service(repo_dir, service_name)?;
@@ -357,7 +394,13 @@ pub fn add_service(
         .collect();
     let mut resolved_ports: Vec<(String, u16)> = Vec::with_capacity(reg_service.def.ports.len());
     for p in &reg_service.def.ports {
-        let host = if let Some(hp) = p.host_port {
+        let host = if let Some(pinned) = port_overrides.get(&p.name) {
+            // Upgrade passes the install's existing port here so re-renders
+            // are stable. Trust the caller — port_in_use would say it's
+            // taken (the running service holds it) and the allocator would
+            // pick a different one.
+            *pinned
+        } else if let Some(hp) = p.host_port {
             hp
         } else {
             let privileged = p.container_port < 1024;
@@ -596,7 +639,8 @@ pub fn add_service(
     // `TailscaleEnable` defines the service via admin API and runs
     // `tailscale serve --service=...` from the host. No sidecar
     // containers, no per-service tailscaled.
-    if tailscale_enabled
+    if mode == PlanMode::Add
+        && tailscale_enabled
         && let Some(port) = host_port
     {
         // Scope the Tailscale Service name by host (`<service>-<host>`)
@@ -649,10 +693,15 @@ pub fn add_service(
     // This must happen first because the service's ExecStartPost (e.g., register-oidc.sh)
     // needs the auth provider configured and caddy's network alias in place so OIDC
     // discovery URLs resolve correctly from within the service container.
-    if let (
-        Some(registry::service_def::AuthKind::Oidc),
-        Some(config::schema::AuthCredentials::Authelia { .. }),
-    ) = (auth_kind.as_ref(), config.auth.as_ref())
+    //
+    // Skipped on upgrade: build_context generates a fresh client_id/secret
+    // every call, so re-registering would append a second entry to authelia's
+    // configuration.yml and break the existing OIDC integration.
+    if mode == PlanMode::Add
+        && let (
+            Some(registry::service_def::AuthKind::Oidc),
+            Some(config::schema::AuthCredentials::Authelia { .. }),
+        ) = (auth_kind.as_ref(), config.auth.as_ref())
     {
         steps.extend(authelia::register_oidc_client(
             service_name,
@@ -729,11 +778,17 @@ pub fn add_service(
     // it so they can reach the new provider by container DNS.
     // resolve_extra_networks only decides at install time; without this
     // step, services installed earlier remain isolated.
-    steps.extend(retroactive_network_joins(
-        service_name,
-        &quadlet_path,
-        Some(repo_dir),
-    ));
+    //
+    // Skipped on upgrade: re-running on the same shared-network provider
+    // would re-patch services unnecessarily, and a re-render of a regular
+    // service shouldn't touch its peers' quadlets.
+    if mode == PlanMode::Add {
+        steps.extend(retroactive_network_joins(
+            service_name,
+            &quadlet_path,
+            Some(repo_dir),
+        ));
+    }
 
     // 9d. Caddy: seed the user-owned `tls.caddy` snippet on first install.
     // Site blocks emit `import services_tls`; this file defines that snippet.
@@ -751,6 +806,36 @@ pub fn add_service(
             }));
         }
     }
+
+    // 9z. Manifest — sha256 list of every file we just emitted, written to
+    // `~/.local/share/services/<svc>/service.manifest` so `ryra diff` and
+    // `ryra upgrade` can detect drift between the registry and what's
+    // actually on disk. `.env` is excluded because it carries generated
+    // secrets that legitimately rotate at runtime; the manifest itself is
+    // excluded to avoid the chicken-and-egg of hashing itself. CopyFile
+    // sources (binary plugin payloads) are not yet covered — drift on
+    // those is rare and adds I/O at plan time. Revisit if it bites.
+    let manifest_path_for_svc = manifest::manifest_path(service_name)?;
+    let env_filename = std::ffi::OsStr::new(".env");
+    let mut manifest_entries: Vec<manifest::ManifestEntry> = Vec::new();
+    for step in &steps {
+        if let Step::WriteFile(file) = step {
+            if file.path == manifest_path_for_svc {
+                continue;
+            }
+            if file.path.file_name() == Some(env_filename) {
+                continue;
+            }
+            manifest_entries.push(manifest::ManifestEntry {
+                path: file.path.clone(),
+                sha256: manifest::hash_bytes(file.content.as_bytes()),
+            });
+        }
+    }
+    steps.push(Step::WriteFile(GeneratedFile {
+        path: manifest_path_for_svc,
+        content: manifest::format(&manifest_entries),
+    }));
 
     // 10. Reload and start via systemd
     steps.push(Step::DaemonReload);
