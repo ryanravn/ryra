@@ -3,13 +3,14 @@
 //! itself happens in `ryra-core::upgrade_service`; this module owns the
 //! user-facing flow: print the diff, confirm, apply.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use console::style;
-use dialoguer::Confirm;
+use dialoguer::{Confirm, Input};
 
-use ryra_core::{DiffKind, UpgradeResult};
+use ryra_core::registry::service_def::EnvKind;
+use ryra_core::{DiffKind, EnvAddition, GeneratedFile, Step, UpgradeResult};
 
 use super::apply;
 
@@ -61,6 +62,17 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
         return Ok(());
     }
 
+    // Prompt for any env additions that the registry marks as Prompted /
+    // Required — these are user-facing values (admin email, OAuth client
+    // ids, etc.) where the registry's literal default is a placeholder
+    // ("admin@example.com") and silently appending it would be wrong.
+    // Default-kind additions are appended as-is. Non-interactive runs
+    // accept defaults for Prompted but bail on Required (no value to
+    // use, and we don't want to silently write nothing).
+    for plan in plans.iter_mut() {
+        prompt_and_patch_env_additions(plan)?;
+    }
+
     if !yes {
         if super::is_interactive() {
             let proceed = Confirm::new()
@@ -98,6 +110,107 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
     }
     println!();
     println!("Done.");
+    Ok(())
+}
+
+/// Walk `plan.diff.env_additions`, prompt for any Prompted / Required
+/// entries, and rewrite the plan's `.env` write step to use the
+/// user-chosen values. Default-kind entries flow through unchanged.
+fn prompt_and_patch_env_additions(plan: &mut UpgradeResult) -> Result<()> {
+    if plan.diff.env_additions.is_empty() {
+        return Ok(());
+    }
+    let needs_prompt: Vec<&EnvAddition> = plan
+        .diff
+        .env_additions
+        .iter()
+        .filter(|a| matches!(a.kind, EnvKind::Prompted | EnvKind::Required))
+        .collect();
+    if needs_prompt.is_empty() {
+        return Ok(());
+    }
+    let interactive = super::is_interactive();
+    let has_required = needs_prompt
+        .iter()
+        .any(|a| matches!(a.kind, EnvKind::Required));
+    if !interactive && has_required {
+        anyhow::bail!(
+            "{}: registry adds required env var(s); re-run interactively or pre-populate them in `.env`:\n  {}",
+            plan.service,
+            needs_prompt
+                .iter()
+                .filter(|a| matches!(a.kind, EnvKind::Required))
+                .map(|a| a.key.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+    }
+    let mut overrides: BTreeMap<String, String> = BTreeMap::new();
+    if interactive {
+        println!();
+        println!("Confirm env values for {}:", style(&plan.service).bold());
+        for add in &needs_prompt {
+            let label = add.prompt.as_deref().unwrap_or(&add.key);
+            let value = match add.kind {
+                EnvKind::Required => Input::<String>::new()
+                    .with_prompt(format!("  {label} (required)"))
+                    .interact_text()?,
+                EnvKind::Prompted => Input::<String>::new()
+                    .with_prompt(format!("  {label}"))
+                    .default(add.value.clone())
+                    .interact_text()?,
+                EnvKind::Default => continue,
+            };
+            if value != add.value {
+                overrides.insert(add.key.clone(), value);
+            }
+        }
+    }
+    if overrides.is_empty() {
+        // User accepted every default — nothing to patch.
+        return Ok(());
+    }
+    // Apply overrides to the addition list (so the summary the user
+    // already saw remains coherent with what gets written).
+    for add in plan.diff.env_additions.iter_mut() {
+        if let Some(v) = overrides.get(&add.key) {
+            add.value = v.clone();
+        }
+    }
+    // Rebuild the .env write step with the new values. The old step's
+    // content was a `read existing + append` so we redo that with the
+    // patched additions.
+    let env_path = ryra_core::service_home(&plan.service)?.join(".env");
+    let mut content = match std::fs::read_to_string(&env_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => anyhow::bail!("read {}: {e}", env_path.display()),
+    };
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    for add in &plan.diff.env_additions {
+        content.push_str(&format!("{}={}\n", add.key, add.value));
+    }
+    // Find and replace the env step in plan.steps. Add a fresh step at
+    // the end of the file-write region if it isn't there (defensive —
+    // shouldn't happen).
+    let mut replaced = false;
+    for step in plan.steps.iter_mut() {
+        if let Step::WriteFile(file) = step
+            && file.path == env_path
+        {
+            file.content = content.clone();
+            replaced = true;
+            break;
+        }
+    }
+    if !replaced {
+        plan.steps.push(Step::WriteFile(GeneratedFile {
+            path: env_path,
+            content,
+        }));
+    }
     Ok(())
 }
 

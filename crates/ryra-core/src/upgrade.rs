@@ -71,10 +71,17 @@ pub struct DiffEntry {
 /// a present-but-different value as drift, and we never propose
 /// removing a key. Users may have manually edited values or added their
 /// own keys; clobbering those would be the larger harm.
+///
+/// `kind` and `prompt` come straight from the registry's `EnvVar`
+/// definition, so the CLI can route Prompted / Required additions
+/// through the same interactive prompt that `ryra add` uses, while
+/// silently appending Default ones.
 #[derive(Debug, Clone)]
 pub struct EnvAddition {
     pub key: String,
     pub value: String,
+    pub kind: crate::registry::service_def::EnvKind,
+    pub prompt: Option<String>,
 }
 
 /// Result of comparing the registry's render to what's on disk.
@@ -109,13 +116,11 @@ impl DiffResult {
 
 /// Reconstruct the planning inputs we stashed at install time and feed them
 /// back through `add_service` in upgrade mode. Returns the planned step
-/// list, the planned-file content map (path → content), and the static
-/// env vars the registry currently expects in `.env` (parsed back out of
-/// the planned manifest's content — that path is the single source of
-/// truth for "what static envs does this service need").
+/// list and the planned-file content map (path → content). The richer
+/// per-env metadata lives on `AddResult.tracked_envs`.
 async fn replan(
     service_name: &str,
-) -> Result<(AddResult, BTreeMap<PathBuf, String>, Vec<manifest::EnvEntry>)> {
+) -> Result<(AddResult, BTreeMap<PathBuf, String>)> {
     if !is_service_installed(service_name) {
         return Err(Error::ServiceNotInstalled(service_name.to_string()));
     }
@@ -171,22 +176,12 @@ async fn replan(
     )?;
 
     let mut planned: BTreeMap<PathBuf, String> = BTreeMap::new();
-    let manifest_file = manifest::manifest_path(service_name)?;
-    let mut planned_envs: Vec<manifest::EnvEntry> = Vec::new();
     for step in &result.steps {
         if let Step::WriteFile(file) = step {
-            if file.path == manifest_file {
-                // Single source of truth for the registry's expected static
-                // envs: parse them back out of the manifest we just rendered.
-                // Avoids re-walking the service def with the same logic
-                // collect_static_envs uses inside `add_service`.
-                let (_, envs) = manifest::parse(&file.content)?;
-                planned_envs = envs;
-            }
             planned.insert(file.path.clone(), file.content.clone());
         }
     }
-    Ok((result, planned, planned_envs))
+    Ok((result, planned))
 }
 
 /// Parse the on-disk `.env` for a service into a key→value map. Lines
@@ -263,7 +258,7 @@ fn should_skip_path(path: &std::path::Path, manifest_file: &std::path::Path) -> 
 /// Compute the diff between the registry's render and what's on disk for an
 /// installed service.
 pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
-    let (_result, planned, planned_envs) = replan(service_name).await?;
+    let (result, planned) = replan(service_name).await?;
     let manifest_file = manifest::manifest_path(service_name)?;
     let (manifest_entries, _manifest_envs) =
         manifest::load(service_name)?.unwrap_or_default();
@@ -277,14 +272,18 @@ pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
     // (could be a manual override) and never propose removals (could be
     // a key the user added themselves that the registry happens not to
     // ship). The registry-side list comes from the freshly-rendered
-    // manifest, not the on-disk one — that's the source of truth.
+    // `tracked_envs` (which carries kind + prompt for the CLI), not the
+    // on-disk manifest — that's the source of truth.
     let existing_env = read_existing_env_keys(service_name)?;
-    let env_additions: Vec<EnvAddition> = planned_envs
+    let env_additions: Vec<EnvAddition> = result
+        .tracked_envs
         .iter()
         .filter(|p| !existing_env.contains_key(&p.key))
         .map(|p| EnvAddition {
             key: p.key.clone(),
             value: p.value.clone(),
+            kind: p.kind.clone(),
+            prompt: p.prompt.clone(),
         })
         .collect();
 
@@ -368,9 +367,21 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
         }
     }
 
-    let (result, planned, _planned_envs) = replan(service_name).await?;
+    let (result, planned) = replan(service_name).await?;
     let manifest_file = manifest::manifest_path(service_name)?;
     let env_file = service_home(service_name)?.join(".env");
+
+    // Hard-fail if `.env` is missing. Append-only env handling can't
+    // reconstruct generated secrets (mysql_root_password, jwt_key, etc.)
+    // and would silently produce a half-written file that fails on
+    // restart. Surface the real problem instead.
+    if !env_file.exists() {
+        return Err(Error::Template(format!(
+            "{service_name}: `.env` is missing at {} — upgrade can't reconstruct generated secrets. \
+             Restore the file from a backup or reinstall the service.",
+            env_file.display()
+        )));
+    }
 
     // Decide the backup directory once per upgrade run. Used whenever any
     // file would be overwritten *or* the existing service.manifest exists (the

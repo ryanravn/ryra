@@ -153,6 +153,23 @@ pub struct AddResult {
     pub env_content: String,
     /// Public URL for this service (if --url was provided).
     pub url: Option<String>,
+    /// Static env vars (key, default value, kind, optional human prompt
+    /// label) the registry expects in `.env`. Populated whether or not
+    /// the user is in interactive mode — `ryra upgrade` reads this back
+    /// to decide which additions need to prompt the user (kind=Prompted
+    /// / Required) versus which can be appended silently (kind=Default).
+    pub tracked_envs: Vec<TrackedEnv>,
+}
+
+/// Per-env metadata the planner keeps alongside the rendered value, so
+/// downstream callers (CLI prompts for `ryra upgrade`) can decide
+/// whether a given env var needs user input.
+#[derive(Debug, Clone)]
+pub struct TrackedEnv {
+    pub key: String,
+    pub value: String,
+    pub kind: crate::registry::service_def::EnvKind,
+    pub prompt: Option<String>,
 }
 
 pub struct RemoveResult {

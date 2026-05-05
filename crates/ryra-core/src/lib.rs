@@ -22,7 +22,6 @@ use std::path::{Path, PathBuf};
 use config::ConfigPaths;
 use config::schema::InstalledService;
 use error::{Error, Result};
-use generate::GeneratedFile;
 
 pub use capability::{
     Capability, any_installed_provider, find_installed_provider, installed_provides,
@@ -32,7 +31,8 @@ pub use exposure::{Exposure, is_public_url, is_tailscale_url};
 pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
 pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root, service_home};
-pub use plan::{AddResult, RemoveResult, ResetResult, Step, Warning};
+pub use generate::GeneratedFile;
+pub use plan::{AddResult, RemoveResult, ResetResult, Step, TrackedEnv, Warning};
 pub use upgrade::{
     BackupSnapshot, DiffEntry, DiffKind, DiffResult, EnvAddition, RevertResult, UpgradeResult,
     diff_service, list_backups, revert_service, upgrade_service,
@@ -836,8 +836,17 @@ pub fn add_service(
     // no `{{secret.*}}` or `{{auth.*}}` reference. Tracked so `ryra
     // upgrade` can append registry-added env vars to the user's existing
     // `.env` without re-rendering it (which would clobber rotated
-    // secrets). Append-only by design.
-    let manifest_envs = collect_static_envs(&reg_service.def, &output.ctx, enabled_groups)?;
+    // secrets). Append-only by design. The richer `tracked_envs` is what
+    // upgrade uses to decide whether to prompt the user; the on-disk
+    // manifest only records key+value (the `# env: KEY=VAL` lines).
+    let tracked_envs = collect_static_envs(&reg_service.def, &output.ctx, enabled_groups)?;
+    let manifest_envs: Vec<manifest::EnvEntry> = tracked_envs
+        .iter()
+        .map(|t| manifest::EnvEntry {
+            key: t.key.clone(),
+            value: t.value.clone(),
+        })
+        .collect();
     steps.push(Step::WriteFile(GeneratedFile {
         path: manifest_path_for_svc,
         content: manifest::format(&manifest_entries, &manifest_envs),
@@ -873,6 +882,7 @@ pub fn add_service(
         generated_secrets,
         env_content,
         url: url.map(|u| u.to_string()),
+        tracked_envs,
     })
 }
 
@@ -1186,13 +1196,16 @@ fn collect_static_envs(
     service_def: &registry::service_def::ServiceDef,
     ctx: &BTreeMap<String, String>,
     enabled_groups: &std::collections::BTreeSet<String>,
-) -> Result<Vec<manifest::EnvEntry>> {
-    let mut out: Vec<manifest::EnvEntry> = Vec::new();
+) -> Result<Vec<plan::TrackedEnv>> {
+    use registry::service_def::EnvKind;
+    let mut out: Vec<plan::TrackedEnv> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let push = |name: &str,
-                    value_template: &str,
-                    out: &mut Vec<manifest::EnvEntry>,
-                    seen: &mut std::collections::HashSet<String>|
+                value_template: &str,
+                kind: EnvKind,
+                prompt: Option<String>,
+                out: &mut Vec<plan::TrackedEnv>,
+                seen: &mut std::collections::HashSet<String>|
      -> Result<()> {
         if !is_static_template(value_template) {
             return Ok(());
@@ -1201,34 +1214,66 @@ fn collect_static_envs(
             return Ok(());
         }
         let value = generate::template::render(value_template, ctx)?;
-        out.push(manifest::EnvEntry {
+        out.push(plan::TrackedEnv {
             key: name.to_string(),
             value,
+            kind,
+            prompt,
         });
         Ok(())
     };
     for env in &service_def.env {
-        push(&env.name, &env.value, &mut out, &mut seen)?;
+        push(
+            &env.name,
+            &env.value,
+            env.kind.clone(),
+            env.prompt.clone(),
+            &mut out,
+            &mut seen,
+        )?;
     }
     for group in &service_def.env_groups {
         if !enabled_groups.contains(&group.name) {
             continue;
         }
         for env in &group.env {
-            push(&env.name, &env.value, &mut out, &mut seen)?;
+            push(
+                &env.name,
+                &env.value,
+                env.kind.clone(),
+                env.prompt.clone(),
+                &mut out,
+                &mut seen,
+            )?;
         }
     }
     // Mirror the gating from `generate::render_env_vars`: SMTP mappings
     // only fire when smtp is configured globally; auth mappings only when
     // --auth was used. ctx-key presence is a faithful proxy for both.
+    // Mapping-emitted env vars are always treated as Default (silent
+    // append on upgrade) — there's no user-facing prompt label for them.
     if service_def.integrations.smtp && ctx.contains_key("smtp.host") {
         for (env_name, value_template) in &service_def.mappings.smtp {
-            push(env_name, value_template, &mut out, &mut seen)?;
+            push(
+                env_name,
+                value_template,
+                EnvKind::Default,
+                None,
+                &mut out,
+                &mut seen,
+            )?;
         }
     }
     if ctx.contains_key("auth.client_id") {
         for (env_name, value_template) in &service_def.mappings.auth {
-            push(env_name, value_template, &mut out, &mut seen)?;
+            push(
+                env_name,
+                value_template,
+                EnvKind::Default,
+                None,
+                &mut out,
+                &mut seen,
+            )?;
         }
     }
     Ok(out)
