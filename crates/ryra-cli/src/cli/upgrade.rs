@@ -107,6 +107,24 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
                 style(backup.display()).dim()
             );
         }
+        // Cap the backup tree to the most recent N snapshots per
+        // service so a long history of upgrades doesn't accumulate
+        // forever. Best-effort — a prune failure doesn't fail the
+        // upgrade (the new backup is already on disk).
+        match ryra_core::prune_backups(&plan.service, ryra_core::DEFAULT_BACKUP_KEEP) {
+            Ok(pruned) if !pruned.is_empty() => {
+                println!(
+                    "  {} pruned {} older backup(s) (keep={})",
+                    style("⌫").dim(),
+                    pruned.len(),
+                    ryra_core::DEFAULT_BACKUP_KEEP
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("  warning: backup prune failed: {e}");
+            }
+        }
     }
     println!();
     println!("Done.");

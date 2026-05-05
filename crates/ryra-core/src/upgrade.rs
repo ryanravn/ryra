@@ -577,14 +577,72 @@ pub struct RevertResult {
 
 /// List every backup snapshot for a service, newest first. Empty result
 /// means there's nothing to revert from.
+/// How many backup snapshots `ryra upgrade` retains per service before
+/// auto-pruning. Each snapshot is small (~tens of KB — config files +
+/// the manifest) so the cap is more about mental clutter than disk; 5
+/// is enough to revert a few iterations back without filling the
+/// `~/.local/state/ryra/backups/` tree with dead snapshots from years
+/// of upgrades.
+pub const DEFAULT_BACKUP_KEEP: usize = 5;
+
+/// Drop snapshots older than the most recent `keep` for this service.
+/// Returns the paths that were removed (newest-first within the
+/// removed set; the kept set keeps the same order). The shared
+/// timestamp dir is also removed when this was the last service-
+/// scoped subdir under it (multi-service upgrade runs share a
+/// timestamp dir; we don't want to nuke other services' state).
+pub fn prune_backups(service_name: &str, keep: usize) -> Result<Vec<PathBuf>> {
+    let backups_root = state_dir()?.join("backups");
+    prune_backups_in(&backups_root, service_name, keep)
+}
+
+/// Pure inner that operates on an explicit `<state>/backups/` root.
+/// Split out so tests can drive it against a tmp tree without touching
+/// the real XDG state dir.
+fn prune_backups_in(
+    backups_root: &std::path::Path,
+    service_name: &str,
+    keep: usize,
+) -> Result<Vec<PathBuf>> {
+    let snapshots = list_backups_in(backups_root, service_name)?;
+    if snapshots.len() <= keep {
+        return Ok(Vec::new());
+    }
+    let mut removed: Vec<PathBuf> = Vec::new();
+    for snap in snapshots.into_iter().skip(keep) {
+        if let Err(e) = std::fs::remove_dir_all(&snap.path) {
+            eprintln!(
+                "warning: failed to prune backup {}: {e}",
+                snap.path.display()
+            );
+            continue;
+        }
+        removed.push(snap.path.clone());
+        if let Some(parent) = snap.path.parent()
+            && let Ok(mut entries) = std::fs::read_dir(parent)
+            && entries.next().is_none()
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    Ok(removed)
+}
+
 pub fn list_backups(service_name: &str) -> Result<Vec<BackupSnapshot>> {
     let backups_root = state_dir()?.join("backups");
+    list_backups_in(&backups_root, service_name)
+}
+
+fn list_backups_in(
+    backups_root: &std::path::Path,
+    service_name: &str,
+) -> Result<Vec<BackupSnapshot>> {
     if !backups_root.is_dir() {
         return Ok(Vec::new());
     }
     let mut snapshots: Vec<BackupSnapshot> = Vec::new();
-    let entries = std::fs::read_dir(&backups_root).map_err(|source| Error::FileRead {
-        path: backups_root.clone(),
+    let entries = std::fs::read_dir(backups_root).map_err(|source| Error::FileRead {
+        path: backups_root.to_path_buf(),
         source,
     })?;
     for entry in entries.flatten() {
@@ -848,6 +906,64 @@ mod tests {
     fn backup_relpath_strips_leading_slash() {
         let p = backup_relpath(std::path::Path::new("/home/user/foo/bar"));
         assert_eq!(p, PathBuf::from("home/user/foo/bar"));
+    }
+
+    /// Stand up a tmp backups tree with the given timestamps and a
+    /// service subdir under each, then run `prune_backups_in` against it.
+    /// Returns (kept timestamps newest-first, removed paths). Hermetic:
+    /// no env vars touched, no shared global state.
+    fn setup_and_prune(stamps: &[&str], keep: usize) -> (Vec<String>, Vec<PathBuf>) {
+        let tmp = std::env::temp_dir().join(format!(
+            "ryra-prune-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let backups_root = tmp.join("backups");
+        for s in stamps {
+            std::fs::create_dir_all(backups_root.join(s).join("svc")).unwrap();
+        }
+        let removed = prune_backups_in(&backups_root, "svc", keep).unwrap();
+        let mut kept: Vec<String> = std::fs::read_dir(&backups_root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        kept.sort();
+        kept.reverse();
+        let _ = std::fs::remove_dir_all(&tmp);
+        (kept, removed)
+    }
+
+    #[test]
+    fn prune_keeps_newest_n() {
+        // Five timestamps, keep=3 — the two oldest (lex-smallest) should go.
+        let (kept, removed) = setup_and_prune(
+            &[
+                "2026-01-01T00-00-00Z",
+                "2026-02-01T00-00-00Z",
+                "2026-03-01T00-00-00Z",
+                "2026-04-01T00-00-00Z",
+                "2026-05-01T00-00-00Z",
+            ],
+            3,
+        );
+        assert_eq!(kept.len(), 3);
+        assert_eq!(kept[0], "2026-05-01T00-00-00Z");
+        assert_eq!(kept[2], "2026-03-01T00-00-00Z");
+        assert_eq!(removed.len(), 2);
+    }
+
+    #[test]
+    fn prune_no_op_when_under_keep() {
+        let (kept, removed) = setup_and_prune(
+            &["2026-01-01T00-00-00Z", "2026-02-01T00-00-00Z"],
+            5,
+        );
+        assert_eq!(kept.len(), 2);
+        assert!(removed.is_empty());
     }
 
     #[test]

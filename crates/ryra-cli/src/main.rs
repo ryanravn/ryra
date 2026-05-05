@@ -186,6 +186,10 @@ enum Command {
     /// Re-render an installed service against the current registry, backing
     /// up displaced files and restarting the unit. Refuses to clobber
     /// hand-edited files unless --force.
+    ///
+    /// Backups land in ~/.local/state/ryra/backups/<UTC-ts>/<service>/.
+    /// The most recent 5 snapshots per service are kept; older ones are
+    /// auto-pruned after each successful upgrade.
     Upgrade {
         /// Service name(s). Omit to upgrade every installed service.
         services: Vec<String>,

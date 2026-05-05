@@ -34,8 +34,9 @@ pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root,
 pub use generate::GeneratedFile;
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, TrackedEnv, Warning};
 pub use upgrade::{
-    BackupSnapshot, DiffEntry, DiffKind, DiffResult, EnvAddition, RevertResult, UpgradeResult,
-    diff_service, list_backups, revert_service, upgrade_service,
+    BackupSnapshot, DEFAULT_BACKUP_KEEP, DiffEntry, DiffKind, DiffResult, EnvAddition,
+    RevertResult, UpgradeResult, diff_service, list_backups, prune_backups, revert_service,
+    upgrade_service,
 };
 pub use well_known::WellKnownService;
 
