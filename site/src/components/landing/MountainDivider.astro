@@ -73,6 +73,21 @@ const ridge = ridges[variant];
   .mt-divider path {
     fill: var(--mt-fill);
   }
+  /* Pin a 1px strip of fill colour to the divider's bottom edge. The SVG
+     path already covers this area, but its anti-aliased y=100 row can
+     render at partial alpha and let the from colour leak through as a
+     hairline against the next section's bg. Painting an opaque 1px in
+     fill colour over the very bottom row eliminates that. */
+  .mt-divider::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--mt-fill);
+    pointer-events: none;
+  }
   .mt-flip svg {
     transform: scaleX(-1);
   }

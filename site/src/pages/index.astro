@@ -68,10 +68,6 @@ const principles = [
   },
 ];
 
-const stats = [
-  { v: "End to end tested", suffix: "", label: "Every service in the registry is tested in an ephemeral QEMU VM." },
-  { v: "AGPL", suffix: "", label: "Free and open source forever. Fork it, mirror it, ship it." },
-];
 ---
 
 <!doctype html>
@@ -112,7 +108,7 @@ const stats = [
           <a href="#examples">Examples</a>
           <a href="#quickstart">Quickstart</a>
           <a href="#testing">Testing</a>
-          <a href="#why">Philosophy</a>
+          <a href="#philosophy">Philosophy</a>
         </nav>
         <div class="topbar-right">
           <a href="/intro/" class="docs-link">Docs</a>
@@ -138,10 +134,9 @@ const stats = [
               Self-host your life or business with <em>Ryra</em>.
             </h1>
             <p class="lede">
-              Ryra is a CLI for running self-hosted services on a single Linux machine. Type <code>ryra add</code>
-              and a service pulls its image, writes a systemd quadlet, and runs under rootless podman. Expose them
-              over your private Tailnet, on a public domain, or just keep them on your own machine. Services that
-              support OpenID Connect get automatic single sign-on, set up from a few questions ryra asks when you add them.
+              Ryra is a command-line tool for running your own apps on a single Linux machine. Type <code>ryra add <em>&lt;service&gt;</em></code>
+              and it installs itself in containers using Podman. Sign in to everything with one account (SSO) if you choose. Keep it
+              private, share it across your own global private network, or expose it to the internet.
             </p>
             <div class="cta-row">
               <button class="install" id="copy-install" type="button">
@@ -215,7 +210,7 @@ const stats = [
         </div>
       </section>
 
-      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={120} />
+      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={92} />
 
       <section class="bleed examples" id="examples">
         <div class="container">
@@ -323,7 +318,7 @@ const stats = [
         </div>
       </section>
 
-      <MountainDivider variant="b" from="var(--paper)" fill="var(--ink)" height={120} />
+      <MountainDivider variant="b" from="var(--paper)" fill="var(--ink)" height={92} />
 
       <section class="bleed quickstart" id="quickstart">
         <div class="container">
@@ -336,7 +331,7 @@ const stats = [
         </div>
       </section>
 
-      <MountainDivider variant="a" from="var(--ink)" fill="var(--snow)" height={120} />
+      <MountainDivider variant="a" from="var(--ink)" fill="var(--snow)" height={92} />
 
       <section class="bleed sandbox" id="testing">
         <div class="container">
@@ -393,9 +388,9 @@ const stats = [
         </div>
       </section>
 
-      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={120} />
+      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={92} />
 
-      <section class="bleed why" id="why">
+      <section class="bleed why" id="philosophy">
         <div class="container">
           <div class="why-grid">
             <div>
@@ -418,25 +413,18 @@ const stats = [
               ))}
             </div>
           </div>
-        </div>
-      </section>
-
-      <MountainDivider variant="d" from="var(--paper)" fill="var(--snow)" height={90} flip />
-
-      <section class="proof">
-        <div class="container">
-          <div class="proof-grid">
-            {stats.map((s) => (
-              <div class="stat">
-                <div class="v"><em>{s.v}</em>{s.suffix}</div>
-                <div class="l">{s.label}</div>
-              </div>
-            ))}
+          <div style="display: flex; justify-content: center; margin-top: 56px;">
+            <a href="/intro/" class="cta cta-secondary">
+              Read the docs
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h14M13 6l6 6-6 6" />
+              </svg>
+            </a>
           </div>
         </div>
       </section>
 
-      <MountainDivider variant="a" from="var(--snow)" fill="var(--fjord)" height={110} />
+      <MountainDivider variant="a" from="var(--paper)" fill="var(--fjord)" height={86} />
     </main>
 
     <footer>
@@ -621,7 +609,7 @@ const stats = [
       /* ─── Hero ─── */
       .hero {
         position: relative;
-        padding: 80px 28px 60px;
+        padding: 60px 28px 44px;
         /* No overflow:hidden — that would clip the Terminal's drop shadow
            at the section boundary, which on mobile (where the terminal
            sits at the bottom of the stacked layout) creates a hard line
@@ -720,11 +708,11 @@ const stats = [
       .meta-row svg { color: var(--moss); }
 
       /* ─── Sections ─── */
-      section.bleed { padding: 100px 28px; }
+      section.bleed { padding: 72px 28px; }
       .container { max-width: 1240px; margin: 0 auto; }
       .section-head {
         display: flex; align-items: end; justify-content: space-between;
-        gap: 30px; margin-bottom: 50px; flex-wrap: wrap;
+        gap: 30px; margin-bottom: 36px; flex-wrap: wrap;
       }
       .section-eyebrow {
         font-family: var(--mono); font-size: 12px;
@@ -760,9 +748,9 @@ const stats = [
       @media (max-width: 600px) { .feat-grid { grid-template-columns: 1fr; } }
       .feat {
         background: var(--snow);
-        padding: 32px 28px 30px;
-        display: flex; flex-direction: column; gap: 12px;
-        min-height: 220px;
+        padding: 26px 26px 24px;
+        display: flex; flex-direction: column; gap: 10px;
+        min-height: 196px;
         position: relative;
       }
       .feat .icon {
@@ -791,9 +779,9 @@ const stats = [
       .examples { background: var(--paper); }
       .examples-list {
         display: grid;
-        gap: 72px;
+        gap: 56px;
       }
-      @media (max-width: 800px) { .examples-list { gap: 56px; } }
+      @media (max-width: 800px) { .examples-list { gap: 44px; } }
       .example {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
@@ -904,18 +892,6 @@ const stats = [
         background: var(--paper);
         color: var(--ink);
         position: relative;
-        overflow: hidden;
-      }
-      .why::before {
-        content: ""; position: absolute; inset: 0;
-        /* Gradient centres are pushed away from the section's top edge so
-           the radial halos don't form a visible ring right where the
-           mountain divider ends — that seam was reading as a "weird line"
-           against the flat paper fill of the divider. */
-        background:
-          radial-gradient(circle at 90% 70%, color-mix(in oklab, var(--cabin) 22%, transparent) 0%, transparent 38%),
-          radial-gradient(circle at 5% 90%, color-mix(in oklab, var(--moss) 18%, transparent) 0%, transparent 38%);
-        pointer-events: none;
       }
       .why .container { position: relative; }
       .why-grid {
@@ -936,7 +912,7 @@ const stats = [
         max-width: 22ch;
       }
       .why-quote span { color: var(--ember); font-style: normal; }
-      .principles { display: grid; gap: 28px; }
+      .principles { display: grid; gap: 22px; }
       .principle {
         display: grid; grid-template-columns: 36px 1fr;
         gap: 18px; align-items: start;
@@ -959,14 +935,6 @@ const stats = [
       .sandbox {
         background: var(--snow);
         position: relative;
-        overflow: hidden;
-      }
-      .sandbox::before {
-        content: ""; position: absolute; inset: 0;
-        background:
-          radial-gradient(circle at 95% 30%, color-mix(in oklab, var(--cabin) 14%, transparent) 0%, transparent 35%),
-          radial-gradient(circle at 0% 70%, color-mix(in oklab, var(--moss) 10%, transparent) 0%, transparent 35%);
-        pointer-events: none;
       }
       .sandbox .container { position: relative; }
       .sandbox-grid {
@@ -981,9 +949,9 @@ const stats = [
       .sandbox-points {
         list-style: none;
         padding: 0;
-        margin: 32px 0 0;
+        margin: 24px 0 0;
         display: grid;
-        gap: 18px;
+        gap: 14px;
       }
       .sandbox-points li {
         font-size: 15px;
@@ -1081,37 +1049,9 @@ const stats = [
       .quickstart h2 { color: var(--snow); }
       .quickstart .section-sub { color: #c5b9a6; }
 
-      /* ─── Stats / proof ─── */
-      .proof {
-        background: var(--snow);
-      }
-      .proof-grid {
-        display: grid; grid-template-columns: repeat(2, 1fr);
-        gap: 0;
-      }
-      @media (max-width: 800px) { .proof-grid { grid-template-columns: 1fr; } }
-      .stat {
-        padding: 36px 24px;
-        text-align: center;
-      }
-      .stat .v {
-        font-family: var(--serif); font-weight: 500;
-        font-size: 44px; line-height: 1;
-        letter-spacing: -0.02em;
-        color: var(--ink);
-      }
-      .stat .v em { color: var(--ember); font-style: normal; }
-      .stat .l {
-        font-size: 13px; color: var(--ink-2); margin-top: 8px;
-        line-height: 1.4;
-        max-width: 32ch;
-        margin-left: auto;
-        margin-right: auto;
-      }
-
       /* ─── Footer ─── */
       footer {
-        padding: 60px 28px 36px;
+        padding: 48px 28px 30px;
         background: var(--fjord);
         color: var(--snow);
         position: relative; overflow: hidden;
@@ -1137,7 +1077,7 @@ const stats = [
         margin: 14px 0 0;
       }
       .footer-meta {
-        max-width: 1240px; margin: 50px auto 0;
+        max-width: 1240px; margin: 36px auto 0;
         padding-top: 24px; border-top: 1px solid #ffffff14;
         display: flex; justify-content: center; flex-wrap: wrap; gap: 12px;
         font-family: var(--mono); font-size: 11.5px; color: #6f8a9d;
