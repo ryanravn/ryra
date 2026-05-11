@@ -29,6 +29,17 @@ pub struct Config {
     pub registries: Vec<RegistryEntry>,
 }
 
+impl Config {
+    /// True iff this config carries credentials/tokens that must be
+    /// protected from casual disclosure: SMTP user/password, Tailscale
+    /// admin API token, and anything similar added in the future.
+    /// Callers use this to fire a one-time warning the first time
+    /// preferences.toml acquires sensitive content.
+    pub fn has_secrets(&self) -> bool {
+        self.smtp.is_some() || self.tailscale.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HostConfig {
     #[serde(default)]
