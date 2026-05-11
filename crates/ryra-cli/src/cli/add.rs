@@ -251,6 +251,7 @@ pub async fn run(
             } else {
                 match prompts::prompt_smtp()? {
                     prompts::SmtpSetupChoice::Custom(smtp) => {
+                        let had_secrets_before = config.has_secrets();
                         config.smtp = Some(smtp);
                         paths.ensure_dirs()?;
                         ryra_core::config::save_config(&paths.config_file, &config)?;
@@ -258,6 +259,7 @@ pub async fn run(
                             "  SMTP configured. Saved to {}\n",
                             paths.config_file.display()
                         );
+                        warn_if_first_secret_save(&paths, had_secrets_before, &config);
                         true
                     }
                     prompts::SmtpSetupChoice::Inbucket => {
@@ -281,6 +283,7 @@ pub async fn run(
                         // Use container name for SMTP host — services on the
                         // caddy network can reach inbucket directly. The host
                         // port isn't reachable from --no-hosts containers.
+                        let had_secrets_before = config.has_secrets();
                         config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
                             host: "inbucket".to_string(),
                             port: INBUCKET_SMTP_PORT, // inbucket's internal container port
@@ -295,6 +298,7 @@ pub async fn run(
                             "  SMTP configured (inbucket). Saved to {}\n",
                             paths.config_file.display()
                         );
+                        warn_if_first_secret_save(&paths, had_secrets_before, &config);
                         true
                     }
                     prompts::SmtpSetupChoice::Skip => false,
@@ -916,6 +920,9 @@ pub async fn run(
             } else {
                 println!("\n{service} is running.");
             }
+            println!(
+                "  May take a moment to start. Check: systemctl --user status {service}"
+            );
 
             // Connection info — skip localhost URLs when a proper URL is displayed
             if result.url.is_none() && !result.allocated_ports.is_empty() {
@@ -958,7 +965,6 @@ pub async fn run(
             println!("Commands:");
             println!("  cat {}  # view config", env_path.display());
             println!("  systemctl --user restart {service}  # restart (picks up .env changes)");
-            println!("  systemctl --user status {service}  # check if running");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
 
             // Caddy-only: tell the user which TLS mode they got and where
@@ -1370,6 +1376,7 @@ async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
         })?
     };
 
+    let had_secrets_before = config.has_secrets();
     config.tailscale = Some(ryra_core::config::schema::TailscaleConfig {
         admin_api_key,
         tailnet: None,
@@ -1377,6 +1384,7 @@ async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, &config)?;
     println!("  ✓ Tailscale admin token saved to {}", paths.config_file.display());
+    warn_if_first_secret_save(&paths, had_secrets_before, &config);
     Ok(())
 }
 
@@ -1615,7 +1623,7 @@ async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
 ///
 /// Called from the per-service URL resolver in two cases:
 ///   * `needs_https = true` and neither `--url` nor `--tailscale` was
-///     given: `allow_loopback = false`, default = Self-signed.
+///     given: `allow_loopback = false`, default = Tailscale (recommended).
 ///   * `kind = Application` without an HTTPS requirement: surfaces the
 ///     same exposure choices (so users can put e.g. vikunja on a tailnet)
 ///     with `allow_loopback = true`, default = Loopback.
@@ -1632,8 +1640,8 @@ async fn prompt_exposure_for(
         items.push("Local only — http://127.0.0.1 on this machine (no proxy)");
     }
     items.extend_from_slice(&[
+        "Tailscale (recommended): access from anywhere in your own global network",
         "Self-signed (LAN) — Caddy local CA at *.internal (browsers warn unless trusted)",
-        "Tailscale — exposed on your tailnet (publicly-trusted cert)",
         "Public + Let's Encrypt — Caddy issues real certs (DNS + Caddy reachable from the internet)",
         "External — I have my own reverse proxy (Cloudflare Tunnel, nginx, etc.)",
     ]);
@@ -1654,6 +1662,18 @@ async fn prompt_exposure_for(
     }
     match selection - loopback_offset {
         0 => {
+            // Tailscale: same path as `--tailscale` flag — preflight,
+            // ensure auth key, derive `https://<service>.<tailnet>/`.
+            // Failures bail rather than save partial state.
+            if let Err(e) = ryra_core::system::doctor::check_tailscale_runtime() {
+                bail!("Tailscale not ready:\n\n{e}");
+            }
+            ensure_tailscale_admin_token(true).await?;
+            Ok(ryra_core::Exposure::Tailscale {
+                url: derive_tailscale_url(service)?,
+            })
+        }
+        1 => {
             // Self-signed (LAN): install Caddy in default mode if it isn't
             // already there, then derive the *.internal URL using its
             // allocated HTTPS port. Match the planner's `installed`-aware
@@ -1683,18 +1703,6 @@ async fn prompt_exposure_for(
                     "https://{service}.{}:{caddy_https_port}",
                     ryra_core::config::schema::CADDY_LOCAL_DOMAIN
                 ),
-            })
-        }
-        1 => {
-            // Tailscale: same path as `--tailscale` flag — preflight,
-            // ensure auth key, derive `https://<service>.<tailnet>/`.
-            // Failures bail rather than save partial state.
-            if let Err(e) = ryra_core::system::doctor::check_tailscale_runtime() {
-                bail!("Tailscale not ready:\n\n{e}");
-            }
-            ensure_tailscale_admin_token(true).await?;
-            Ok(ryra_core::Exposure::Tailscale {
-                url: derive_tailscale_url(service)?,
             })
         }
         2 => {
@@ -1746,6 +1754,23 @@ async fn prompt_exposure_for(
     }
 }
 
+/// Fire a one-time security note when preferences.toml just acquired its
+/// first credential (SMTP, Tailscale token, etc.). Compares pre- and
+/// post-save state so the message only prints on the transition, not on
+/// every save. Terse on purpose: the file mode is already 0600.
+fn warn_if_first_secret_save(
+    paths: &ryra_core::config::ConfigPaths,
+    had_secrets_before: bool,
+    config: &ryra_core::config::schema::Config,
+) {
+    if !had_secrets_before && config.has_secrets() {
+        println!(
+            "  Note: credentials saved to {} (mode 0600 / do not commit or share).",
+            paths.config_file.display()
+        );
+    }
+}
+
 /// Auto-install inbucket and point `config.smtp` at it for `--smtp=inbucket`.
 /// Idempotent: does nothing if `config.smtp` is already set.
 async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
@@ -1780,6 +1805,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
             // Target inbucket by container name — services on the same
             // podman network resolve it via DNS. `:2500` is inbucket's
             // internal SMTP port; the host-side PublishPort isn't used.
+            let had_secrets_before = config.has_secrets();
             config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
                 host: "inbucket".to_string(),
                 port: INBUCKET_SMTP_PORT,
@@ -1794,6 +1820,7 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
                 "  SMTP configured (inbucket). Saved to {}\n",
                 paths.config_file.display()
             );
+            warn_if_first_secret_save(&paths, had_secrets_before, &config);
         }
     }
 
