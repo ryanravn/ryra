@@ -59,7 +59,7 @@ Service data lives under `~/.local/share/services/<name>/`. `tar czf services.ta
 
 ## Available services
 
-Run `ryra search` to see the full list with install status. The current registry ships 18 services:
+Run `ryra search` to see the full list with install status. The bundled registry includes:
 
 | Service | Description |
 |---------|-------------|
@@ -84,7 +84,7 @@ Run `ryra search` to see the full list with install status. The current registry
 
 ## What Ryra is not
 
-- **Not a PaaS**: there's no web UI, no dashboard, no multi-tenant abstractions. It's a CLI tool.
+- **Not a PaaS**: it's a CLI tool that generates systemd units, not a managed platform.
 - **Not multi-server**: Ryra manages one machine. For multiple servers, run independent instances.
 - **Not Docker**: Ryra uses Podman exclusively. No Docker daemon required.
 

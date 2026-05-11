@@ -8,74 +8,69 @@ const installCmd = "curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/m
 
 const features = [
   {
-    icon: "compass",
-    tag: "01",
-    title: "Curated registry",
-    body: "Eighteen services pre-wired and E2E tested in QEMU. One ryra add immich and you're up. No compose files, no copy-paste configs, no glue scripts.",
-  },
-  {
     icon: "lock",
-    tag: "02",
-    title: "Rootless by default",
-    body: "Containers run under your user, not root. No docker daemon, no privileged sockets, no sudo for day-to-day work.",
-  },
-  {
-    icon: "layers",
-    tag: "03",
-    title: "Idiomatic quadlets",
-    body: "Plain systemd unit files. systemctl --user and journalctl --user work as you'd expect. No bespoke runtime, no daemon.",
+    tag: "01",
+    title: "Rootless. systemd-native.",
+    body: "Containers run rootless under your user via podman, and each service is a plain systemd unit. systemctl --user and journalctl --user work the way you'd expect.",
   },
   {
     icon: "spark",
-    tag: "04",
-    title: "Tailnet-native",
-    body: "Expose services on your private Tailnet with HTTPS via tailscale cert. No public domain, no port forward, no DDNS. Or run on localhost. Or front it with Caddy. Pick per service.",
-  },
-  {
-    icon: "branch",
-    tag: "05",
-    title: "Backups in one tar",
-    body: "Every service's full state lives under ~/.local/share/services/. One tar czf and you've captured everything.",
+    tag: "02",
+    title: "Tailnet by default.",
+    body: "Built-in Tailscale support: any service can sit on your private tailnet with HTTPS, reachable from any of your devices without exposing it to the public internet. Or keep it on localhost. Or front it with Caddy. Pick per service.",
   },
   {
     icon: "key",
+    tag: "03",
+    title: "One login, optional.",
+    body: "Add Authelia once and any service that speaks OIDC wires up to it. One sign-in across the stack. Particularly handy when you're running multiple AI agents and want a real security boundary between them.",
+  },
+  {
+    icon: "compass",
+    tag: "04",
+    title: "E2E tested in VMs.",
+    body: "Every service is verified end-to-end in an ephemeral QEMU VM by a custom Rust test framework. Browser flows, OIDC login, SMTP delivery: all asserted before a service lands in the registry.",
+  },
+  {
+    icon: "layers",
+    tag: "05",
+    title: "Startup stack, bundled.",
+    body: "The bundled registry covers most of what a small team needs: file storage, Supabase, a CRM, tasks, password vault, helpdesk, monitoring, AI chat. Need something else? Custom registries are a one-liner.",
+  },
+  {
+    icon: "branch",
     tag: "06",
-    title: "SSO across the stack",
-    body: "ryra add authelia once, then any service with native OIDC gets single-sign-on with --auth. Forgejo, Immich, Nextcloud, Open WebUI, Paperless-ngx, Seafile, Synapse, Vikunja, Zammad: nine of the eighteen, today.",
+    title: "Clean state, easy reset.",
+    body: "All service state lives under ~/.local/share/services/, plus one global preferences file. ryra reset wipes everything. ryra upgrade swaps images without drift. Move to a new box with one tar.",
   },
 ];
 
 const principles = [
   {
     n: "/01",
-    title: "Plain text wins",
-    body: "Quadlets are systemd unit files. Anything that can read a file can read your stack: diff it, commit it, restore it from a snapshot.",
+    title: "Least privilege",
+    body: "Containers run rootless under your user via podman. No Docker daemon, no privileged sockets, no permanent sudo. Elevated permissions only when there's no alternative, never sticky.",
   },
   {
     n: "/02",
-    title: "Boring is a feature",
-    body: "systemd is on every Linux box you own. podman is in every distro. Ryra just helps the two get along.",
+    title: "Leaves no trace",
+    body: "Ryra is a scaffolding tool, not a runtime. It writes plain systemd units and exits; systemd owns the lifecycle, the data lives in plain folders, the configs are text. Uninstall ryra and your stack keeps running.",
   },
   {
     n: "/03",
-    title: "You own the keys",
-    body: "No accounts. No telemetry. No remote control plane. Your services live on your machine, behind your door.",
+    title: "Tested, every service",
+    body: "Every registry service has an end-to-end test that boots a fresh QEMU VM and asserts the full lifecycle: install, HTTP, OIDC, SMTP, removal. The same loop runs in CI and on your laptop.",
   },
   {
     n: "/04",
-    title: "Built in the open",
-    body: "AGPL-3.0. Built in public on GitHub. Issues from real users on real boxes, not a roadmap from a quarterly review.",
-  },
-  {
-    n: "/05",
-    title: "Like a friend set it up",
-    body: "Uninstall ryra and your services keep running. The registry is just a folder of quadlets and a bit of TOML, so fork it, point ryra at your own, ship whatever stack you want. No ryra-shaped hole when you walk away.",
+    title: "For agents, sysadmins, and beginners",
+    body: "One command stands up a service end-to-end. An AI agent can drive ryra unsupervised inside a sandbox VM. A highly skilled sysadmin can read and audit every quadlet it writes. A first-timer gets a working stack without learning systemd or podman first.",
   },
 ];
 
 const stats = [
-  { v: "18", suffix: "", label: "Services in the registry, all E2E tested in QEMU." },
-  { v: "AGPL", suffix: "", label: "Free forever. Fork it, mirror it, ship it." },
+  { v: "End to end tested", suffix: "", label: "Every service in the registry is tested in an ephemeral QEMU VM." },
+  { v: "AGPL", suffix: "", label: "Free and open source forever. Fork it, mirror it, ship it." },
 ];
 ---
 
@@ -114,8 +109,9 @@ const stats = [
         </a>
         <nav class="nav">
           <a href="#features">Features</a>
+          <a href="#examples">Examples</a>
           <a href="#quickstart">Quickstart</a>
-          <a href="#sandbox">Sandbox</a>
+          <a href="#testing">Testing</a>
           <a href="#why">Philosophy</a>
         </nav>
         <div class="topbar-right">
@@ -153,7 +149,7 @@ const stats = [
                 <span class="install-cmd">{installCmd}</span>
                 <span class="copy">COPY</span>
               </button>
-              <a href="#quickstart" class="cta cta-secondary">
+              <a href="#features" class="cta cta-secondary">
                 See how it works
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M5 12h14M13 6l6 6-6 6" />
@@ -163,11 +159,15 @@ const stats = [
             <div class="meta-row">
               <div class="item">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-                Rootless podman
+                Podman
               </div>
               <div class="item">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-                No daemon
+                End-to-end tested
+              </div>
+              <div class="item">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+                Free and open source forever
               </div>
             </div>
           </div>
@@ -179,13 +179,8 @@ const stats = [
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="section-eyebrow">What it does</div>
-              <h2 class="section-title">One CLI. Eighteen services.</h2>
+              <h2 class="section-title">Features</h2>
             </div>
-            <p class="section-sub">
-              Ryra is a single Rust binary that turns the messy realities of self-hosting into clean,
-              scriptable systemd units. Six things it does well.
-            </p>
           </div>
           <div class="feat-grid">
             {features.map((f) => (
@@ -220,19 +215,122 @@ const stats = [
         </div>
       </section>
 
-      <MountainDivider variant="b" from="var(--snow)" fill="var(--ink)" height={120} />
+      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={120} />
+
+      <section class="bleed examples" id="examples">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <h2 class="section-title">Examples</h2>
+            </div>
+          </div>
+
+          <div class="examples-list">
+            <article class="example">
+              <div class="example-text">
+                <span class="example-tag">/01</span>
+                <h3>Replace one app at a time.</h3>
+                <p>
+                  Most of self-hosting is a single web app. Pick one, type one command, walk away with a new URL on
+                  your Tailnet or your domain.
+                </p>
+                <pre class="example-cmd"><code><span class="p">$</span> ryra add vikunja</code></pre>
+                <p class="example-foot">
+                  Same shape for Forgejo, Paperless, Vaultwarden, Open WebUI, Uptime Kuma, and the rest of the registry.
+                </p>
+              </div>
+              <div class="example-visual">
+                <img
+                  class="example-img"
+                  src="/screenshots/vikunja.webp"
+                  alt="Vikunja task manager: a dark UI with sidebar (Overview, Upcoming, Projects, Labels, Teams) and an empty task list captioned 'Nothing to do — Have a nice day!'"
+                  loading="lazy"
+                  decoding="async"
+                  width="1996"
+                  height="1086"
+                />
+              </div>
+            </article>
+
+            <article class="example reverse">
+              <div class="example-text">
+                <span class="example-tag">/02</span>
+                <h3>One login across the stack.</h3>
+                <p>
+                  Install Authelia (or optionally point ryra at your own OIDC provider). Any service that speaks
+                  OIDC hooks into it on <code>ryra add</code>. One login across the lot.
+                </p>
+                <pre class="example-cmd"><code><span class="p">$</span> ryra add seafile immich</code></pre>
+              </div>
+              <div class="example-visual">
+                <svg class="auth-diagram" viewBox="0 0 360 240" role="img" aria-label="Authelia issues OIDC to Seafile and Immich" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="auth-node" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0" stop-color="#d97a3a" />
+                      <stop offset="1" stop-color="#c25a2c" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M 180 70 C 180 110, 90 120, 90 170" fill="none" stroke="#1d3e54" stroke-width="1.4" stroke-dasharray="4 4" opacity="0.55" />
+                  <path d="M 180 70 C 180 110, 270 120, 270 170" fill="none" stroke="#1d3e54" stroke-width="1.4" stroke-dasharray="4 4" opacity="0.55" />
+                  <text x="118" y="125" font-family="JetBrains Mono, monospace" font-size="9" fill="#6b8497" text-anchor="middle">OIDC</text>
+                  <text x="242" y="125" font-family="JetBrains Mono, monospace" font-size="9" fill="#6b8497" text-anchor="middle">OIDC</text>
+                  <g>
+                    <rect x="120" y="24" width="120" height="48" rx="10" fill="url(#auth-node)" />
+                    <text x="180" y="48" font-family="Fraunces, Georgia, serif" font-weight="500" font-size="16" fill="#f4ede2" text-anchor="middle">Authelia</text>
+                    <text x="180" y="63" font-family="JetBrains Mono, monospace" font-size="9.5" fill="#f4ede2" opacity="0.78" text-anchor="middle">OIDC issuer</text>
+                  </g>
+                  <g>
+                    <rect x="30" y="170" width="120" height="48" rx="10" fill="#f4ede2" stroke="#1d3e54" stroke-width="1.2" />
+                    <text x="90" y="194" font-family="Fraunces, Georgia, serif" font-weight="500" font-size="16" fill="#0e2230" text-anchor="middle">Seafile</text>
+                    <text x="90" y="209" font-family="JetBrains Mono, monospace" font-size="9.5" fill="#3a2e22" opacity="0.65" text-anchor="middle">files</text>
+                  </g>
+                  <g>
+                    <rect x="210" y="170" width="120" height="48" rx="10" fill="#f4ede2" stroke="#1d3e54" stroke-width="1.2" />
+                    <text x="270" y="194" font-family="Fraunces, Georgia, serif" font-weight="500" font-size="16" fill="#0e2230" text-anchor="middle">Immich</text>
+                    <text x="270" y="209" font-family="JetBrains Mono, monospace" font-size="9.5" fill="#3a2e22" opacity="0.65" text-anchor="middle">photos</text>
+                  </g>
+                </svg>
+              </div>
+            </article>
+
+            <article class="example">
+              <div class="example-text">
+                <span class="example-tag">/03</span>
+                <h3>Run anything.</h3>
+                <p>
+                  The registry is a folder of <code>service.toml</code> and quadlet files. Fork it, drop a definition
+                  in for my_app (or whatever you need), point ryra at your registry, install with the same command.
+                </p>
+                <pre class="example-cmd"><code><span class="p">$</span> ryra registry add my_registry https://github.com/you/registry
+<span class="p">$</span> ryra add my_registry/my_app</code></pre>
+                <p class="example-foot">
+                  No plugin API to learn. If you can write a systemd unit, you can extend ryra.
+                </p>
+              </div>
+              <div class="example-visual">
+                <img
+                  class="example-img"
+                  src="/screenshots/posthog.webp"
+                  alt="PostHog dashboards view: a 'Default project' workspace with sidebar links for Dashboards, Activity, Data, Apps, Product analytics, SQL editor, Web analytics, and a single 'My App Dashboard' row in the table."
+                  loading="lazy"
+                  decoding="async"
+                  width="3000"
+                  height="1722"
+                />
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <MountainDivider variant="b" from="var(--paper)" fill="var(--ink)" height={120} />
 
       <section class="bleed quickstart" id="quickstart">
         <div class="container">
           <div class="section-head">
             <div>
-              <div class="section-eyebrow" style="color: var(--cabin);">Quickstart</div>
-              <h2 class="section-title">Three steps. About three minutes.</h2>
+              <h2 class="section-title">Quickstart</h2>
             </div>
-            <p class="section-sub">
-              From cold metal to a running service. Click through the steps. The panel on the right shows
-              what each one looks like.
-            </p>
           </div>
           <Quickstart />
         </div>
@@ -240,12 +338,11 @@ const stats = [
 
       <MountainDivider variant="a" from="var(--ink)" fill="var(--snow)" height={120} />
 
-      <section class="bleed sandbox" id="sandbox">
+      <section class="bleed sandbox" id="testing">
         <div class="container">
           <div class="sandbox-grid">
             <div>
-              <div class="section-eyebrow">Try anything · break nothing</div>
-              <h2 class="section-title">Test your stack in a VM,<br />not on your box.</h2>
+              <h2 class="section-title">Test your stack with virtual machines</h2>
               <p class="section-sub" style="margin-top: 22px;">
                 <code>ryra test</code> boots an ephemeral QEMU VM, installs whatever combination of
                 services you want, and runs assertions end to end. Wire Authelia + Caddy + Immich
@@ -302,16 +399,12 @@ const stats = [
         <div class="container">
           <div class="why-grid">
             <div>
-              <div class="section-eyebrow">Why Ryra</div>
-              <h2 class="section-title">Your machine. Your services.<br />Your rules.</h2>
+              <h2 class="section-title">Philosophy</h2>
               <p class="section-sub" style="margin-top: 22px;">
-                You don't need a hyperscaler to run a website, sync your files, or keep your photos. You need a
-                single Linux box, a few hours, and the right tools. Ryra is the right tools: opinionated where
-                it has to be, out of the way everywhere else.
+                Most of the time, all you need is one single machine to run a website, sync your files, or
+                keep your photos. A few hours, and the right tools. Ryra is the right tools: opinionated
+                where it has to be, out of the way everywhere else.
               </p>
-              <blockquote class="why-quote">
-                &ldquo;Run your own infrastructure. <span>Own your own life.</span>&rdquo;
-              </blockquote>
             </div>
             <div class="principles">
               {principles.map((p) => (
@@ -362,7 +455,7 @@ const stats = [
             </svg>
             Ryra
           </div>
-          <p>A CLI for self-hosting on a single Linux box. AGPL-3.0, no telemetry, no accounts.</p>
+          <p>A CLI for self-hosting on a single Linux box. Free and open source forever, AGPL-3.0.</p>
         </div>
         <div>
           <h5>Tool</h5>
@@ -393,8 +486,16 @@ const stats = [
         </div>
       </div>
       <div class="footer-meta">
-        <span>© 2026 · Erlend Ravn Ryan</span>
-        <span>Built by self-hosters.</span>
+        <span>
+          © 2026 · Erlend Ravn Ryan
+          <svg class="flag-no" viewBox="0 0 22 16" width="18" height="13" role="img" aria-label="Norway">
+            <rect width="22" height="16" fill="#ba0c2f" />
+            <rect x="6" width="4" height="16" fill="#ffffff" />
+            <rect y="6" width="22" height="4" fill="#ffffff" />
+            <rect x="7" width="2" height="16" fill="#00205b" />
+            <rect y="7" width="22" height="2" fill="#00205b" />
+          </svg>
+        </span>
       </div>
     </footer>
 
@@ -686,6 +787,118 @@ const stats = [
         color: var(--mist); letter-spacing: 0.08em;
       }
 
+      /* ─── Examples ─── */
+      .examples { background: var(--paper); }
+      .examples-list {
+        display: grid;
+        gap: 72px;
+      }
+      @media (max-width: 800px) { .examples-list { gap: 56px; } }
+      .example {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+        gap: 56px;
+        align-items: center;
+      }
+      @media (max-width: 900px) {
+        .example { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+      }
+      .example.reverse .example-text { order: 2; }
+      .example.reverse .example-visual { order: 1; }
+      @media (max-width: 900px) {
+        .example.reverse .example-text { order: 1; }
+        .example.reverse .example-visual { order: 2; }
+      }
+      .example-tag {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--ember);
+        letter-spacing: 0.06em;
+      }
+      .example-text h3 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: clamp(26px, 2.6vw, 34px);
+        line-height: 1.1;
+        letter-spacing: -0.015em;
+        margin: 8px 0 14px;
+        max-width: 18ch;
+        text-wrap: balance;
+      }
+      .example-text p {
+        margin: 0 0 18px;
+        color: var(--ink-2);
+        font-size: 16px;
+        line-height: 1.6;
+        max-width: 50ch;
+        text-wrap: pretty;
+      }
+      .example-text p.example-foot {
+        font-size: 13.5px;
+        color: var(--mist);
+        margin-top: 14px;
+      }
+      .example-cmd {
+        margin: 0;
+        background: var(--ink);
+        color: var(--snow);
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.7;
+        padding: 16px 18px;
+        border-radius: 10px;
+        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--cabin));
+        overflow-x: auto;
+      }
+      .example-cmd code { background: none; padding: 0; color: inherit; font-size: inherit; }
+      .example-cmd .p { color: var(--cabin); user-select: none; padding-right: 6px; }
+
+      .example-visual { min-width: 0; }
+      .example-img {
+        width: 100%;
+        border-radius: 12px;
+        display: block;
+      }
+      img.example-img {
+        height: auto;
+        border: 1px solid color-mix(in oklab, var(--ink) 14%, transparent);
+        box-shadow: 0 14px 30px -14px rgba(14, 34, 48, 0.25);
+      }
+      div.example-img {
+        aspect-ratio: 16 / 10;
+        background:
+          repeating-linear-gradient(
+            135deg,
+            color-mix(in oklab, var(--ink) 4%, transparent) 0 2px,
+            transparent 2px 14px
+          ),
+          var(--snow);
+        border: 1px dashed color-mix(in oklab, var(--ink) 22%, transparent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--mist);
+      }
+      .example-img-label {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: color-mix(in oklab, var(--paper) 80%, transparent);
+        border: 1px solid color-mix(in oklab, var(--ink) 10%, transparent);
+      }
+
+      .auth-diagram {
+        width: 100%;
+        height: auto;
+        max-width: 440px;
+        display: block;
+        margin: 0 auto;
+        filter: drop-shadow(0 12px 30px rgba(14, 34, 48, 0.12));
+      }
+
       /* ─── Why section ─── */
       .why {
         background: var(--paper);
@@ -695,9 +908,13 @@ const stats = [
       }
       .why::before {
         content: ""; position: absolute; inset: 0;
+        /* Gradient centres are pushed away from the section's top edge so
+           the radial halos don't form a visible ring right where the
+           mountain divider ends — that seam was reading as a "weird line"
+           against the flat paper fill of the divider. */
         background:
-          radial-gradient(circle at 90% 35%, color-mix(in oklab, var(--cabin) 22%, transparent) 0%, transparent 32%),
-          radial-gradient(circle at 5% 65%, color-mix(in oklab, var(--moss) 18%, transparent) 0%, transparent 32%);
+          radial-gradient(circle at 90% 70%, color-mix(in oklab, var(--cabin) 22%, transparent) 0%, transparent 38%),
+          radial-gradient(circle at 5% 90%, color-mix(in oklab, var(--moss) 18%, transparent) 0%, transparent 38%);
         pointer-events: none;
       }
       .why .container { position: relative; }
@@ -922,7 +1139,7 @@ const stats = [
       .footer-meta {
         max-width: 1240px; margin: 50px auto 0;
         padding-top: 24px; border-top: 1px solid #ffffff14;
-        display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+        display: flex; justify-content: center; flex-wrap: wrap; gap: 12px;
         font-family: var(--mono); font-size: 11.5px; color: #6f8a9d;
         letter-spacing: 0.04em;
       }

@@ -12,7 +12,7 @@ interface Step {
 const steps: Step[] = [
   {
     title: "Install",
-    desc: "One curl, one binary. No daemon, no runtime.",
+    desc: "One curl, one binary.",
     file: "install.sh",
     code: `<span class="k3"># Linux · Debian / Ubuntu / Fedora / Arch</span>
 <span class="k4">$</span><span class="k5"> curl -fsSL </span><span class="k2">https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh</span><span class="k5"> | sh</span>
@@ -56,7 +56,7 @@ const steps: Step[] = [
   },
   {
     title: "It's just systemd + podman now",
-    desc: "Ryra is a generator, not a runtime. Once your service is up, the box looks like a sysadmin set it up by hand. No daemon, no agent, no traces.",
+    desc: "Ryra is a generator, not a runtime. Once your service is up, the box looks like a sysadmin set it up by hand.",
     file: "after ryra",
     code: `<span class="k3"># ryra has done its job. Everything that's running</span>
 <span class="k3"># is plain systemd + rootless podman.</span>
@@ -101,6 +101,12 @@ const steps: Step[] = [
         <div class="qs-progress" aria-hidden="true">
           <div class="qs-progress-bar" id="qs-progress-bar"></div>
         </div>
+        <a href="/intro/" class="qs-docs-link">
+          Read the docs
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h14M13 6l6 6-6 6" />
+          </svg>
+        </a>
       </div>
       <div class="qs-code">
         <div class="qs-code-bar">
@@ -408,6 +414,33 @@ const steps: Step[] = [
   }
   .qs-step.active .desc {
     color: #c5b9a6;
+  }
+  .qs-docs-link {
+    margin-top: 18px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 18px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklab, var(--cabin) 45%, transparent);
+    background: rgba(217, 122, 58, 0.08);
+    color: var(--snow);
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    width: fit-content;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .qs-docs-link:hover {
+    background: rgba(217, 122, 58, 0.16);
+    border-color: var(--cabin);
+  }
+  .qs-docs-link svg {
+    transition: transform 0.15s ease;
+  }
+  .qs-docs-link:hover svg {
+    transform: translateX(2px);
   }
 
   .qs-code {

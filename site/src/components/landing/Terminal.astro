@@ -12,7 +12,7 @@
       <span class="tdot g"></span>
     </div>
     <div class="terminal-body" id="ryra-term">
-      <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra add immich --tailscale</span></div>
+      <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra add immich</span></div>
       <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/immich-server:v2.7.4</div>
       <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/postgres:14-vectorchord0.4.3</div>
       <div class="term-out" data-step><span class="term-arrow">→</span> writes ~/.local/share/services/immich/immich.container</div>
@@ -64,10 +64,16 @@
     };
     reset();
 
-    const delayFor = (el: HTMLElement) => {
-      if (el.classList.contains("term-line") && el.querySelector(".term-cmd")) return 700;
+    const isCmd = (el: HTMLElement | undefined) =>
+      !!el?.classList.contains("term-line") && !!el?.querySelector(".term-cmd");
+
+    const delayFor = (el: HTMLElement, next: HTMLElement | undefined) => {
+      if (isCmd(el)) return 700;
       if (el.querySelector(".term-table")) return 350;
       if (el.classList.contains("term-final")) return 0;
+      // Pause longer before the next command so it reads like the user paused
+      // to read the previous output before typing again.
+      if (isCmd(next)) return 1400;
       return 220;
     };
 
@@ -87,7 +93,7 @@
         chip?.classList.add("revealed");
       }
       i++;
-      setTimeout(tick, delayFor(el));
+      setTimeout(tick, delayFor(el, lines[i]));
     };
     tick();
   }

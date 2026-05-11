@@ -55,19 +55,12 @@ const ridge = ridges[variant];
     pointer-events: none;
     margin: 0;
     padding: 0;
-    /* Bottom 1px is the fill colour to mask any sub-pixel hairline left
-       by the SVG ridge's anti-aliased bottom edge. preserveAspectRatio
-       stretches the path and the last row may end up partially
-       transparent, letting the `from` colour show as a thin line above
-       the next section. */
-    background:
-      linear-gradient(
-        to bottom,
-        var(--mt-from) 0,
-        var(--mt-from) calc(100% - 1px),
-        var(--mt-fill) calc(100% - 1px),
-        var(--mt-fill) 100%
-      );
+    /* Solid `from` colour fills above the ridge; the SVG path paints
+       the `fill` colour from the ridge downward. No 1px mask trick —
+       it was causing a visible hairline at the divider's bottom edge
+       on screens where the SVG's anti-aliased bottom didn't quite line
+       up with the mask boundary. */
+    background: var(--mt-from);
     position: relative;
     z-index: 1;
   }
