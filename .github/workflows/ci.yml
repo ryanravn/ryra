@@ -131,11 +131,15 @@ jobs:
           EOF
           sed -i 's/^          //' ~/.rpmmacros
           rpmsign --addsign ryra.${{ matrix.rpm_arch }}.rpm
-          sig=$(rpm -qp --queryformat '%{SIGPGP:pgpsig}' ryra.${{ matrix.rpm_arch }}.rpm)
-          if [ -z "$sig" ] || [ "$sig" = "(none)" ]; then
-            echo "::error::RPM was not signed (SIGPGP=${sig})"
-            exit 1
-          fi
+          # Modern rpmsign writes a V4 RSA header signature (RSAHEADER tag);
+          # the legacy SIGPGP/SIGGPG tags stay empty. Check both.
+          sig=$(rpm -qp --queryformat '%{RSAHEADER:pgpsig}|%{SIGPGP:pgpsig}' ryra.${{ matrix.rpm_arch }}.rpm)
+          case "$sig" in
+            "(none)|(none)"|"|")
+              echo "::error::RPM was not signed ($sig)"
+              exit 1
+              ;;
+          esac
           echo "Signed: $sig"
 
       - name: Build pacman package
