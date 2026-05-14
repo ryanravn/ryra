@@ -8,7 +8,7 @@ This guide walks you through deploying your first service on a fresh server.
 ## 1. Install Ryra
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
+curl -fsSL https://ryra.dev/install.sh | sh
 ```
 
 Verify your environment is wired up correctly:

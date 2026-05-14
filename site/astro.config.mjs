@@ -3,7 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 // https://astro.build/config
 export default defineConfig({
-  site: "https://docs.ryra.dev",
+  site: "https://ryra.dev",
   integrations: [
     starlight({
       title: "Ryra",

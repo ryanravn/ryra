@@ -11,7 +11,7 @@ Bring your own reverse proxy if you prefer: Cloudflare Tunnel, Tailscale Funnel,
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
+curl -fsSL https://ryra.dev/install.sh | sh
 ```
 
 Works on Debian, Ubuntu, Fedora, and Arch and any other Linux system with Systemd and Podman.

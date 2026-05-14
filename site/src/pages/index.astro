@@ -4,7 +4,7 @@ import Terminal from "../components/landing/Terminal.astro";
 import Quickstart from "../components/landing/Quickstart.astro";
 import MountainDivider from "../components/landing/MountainDivider.astro";
 
-const installCmd = "curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh";
+const installCmd = "curl -fsSL https://ryra.dev/install.sh | sh";
 
 const features = [
   {
@@ -121,12 +121,13 @@ const principles = [
         <div class="hero-inner">
           <div>
             <h1 class="headline">
-              Take <em>ownership</em> of your digital tools.
+              The <em>container scaffolding</em> tool made for AI.
             </h1>
             <p class="lede">
-              Ryra is a command-line tool for running your own apps on a single Linux machine: your todo list, your photo library,
-              your password vault, your file sync. One command per app. Sign in to everything with one account (SSO) if you choose.
-              Keep it private, share it across your own private network, or expose it to the internet.
+              Ryra is a CLI that deploys a self-hosted service with one declarative command: a rootless podman container,
+              a systemd unit, optional reverse proxy and SSO. The registry is plain TOML, the output is structured text,
+              and every service ships with an end-to-end VM test, so an AI agent can build, verify, and revert a stack
+              as confidently as a human.
             </p>
             <div class="cta-row">
               <button class="install" id="copy-install" type="button">

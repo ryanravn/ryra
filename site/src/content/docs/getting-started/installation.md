@@ -11,7 +11,7 @@ prev:
 The install script detects your distro and sets up the appropriate package repository:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryanravn/ryra/main/install.sh | sh
+curl -fsSL https://ryra.dev/install.sh | sh
 ```
 
 This adds the Ryra repo for your package manager and installs the `ryra` binary. Updates come through your normal system updates (`apt upgrade`, `dnf upgrade`, `pacman -Syu`).
