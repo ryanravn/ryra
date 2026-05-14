@@ -84,12 +84,7 @@ pub async fn run(
 /// Remove a single service. Handles both the "installed" path (stops +
 /// deregisters via `remove_service`) and the "orphan + purge" path
 /// (wipes leftover home dir + volumes directly).
-async fn remove_one(
-    service: &str,
-    purge: bool,
-    skip_prompt: bool,
-    dry_run: bool,
-) -> Result<()> {
+async fn remove_one(service: &str, purge: bool, skip_prompt: bool, dry_run: bool) -> Result<()> {
     // Quadlet directory is the source of truth: if the marker'd
     // `.container` is present, the service is installed.
     let is_installed = ryra_core::is_service_installed(service);
@@ -245,9 +240,7 @@ fn prompt_installed(
     println!("This will:");
     println!("  - Stop and remove {service}");
     if tailnet_disable {
-        println!(
-            "  - Remove {service} from your tailnet (deregister via Tailscale Admin API)"
-        );
+        println!("  - Remove {service} from your tailnet (deregister via Tailscale Admin API)");
     }
     match mode {
         ryra_core::RemoveMode::Purge => {
@@ -324,12 +317,7 @@ fn prompt_orphan(svc: &ServiceData) -> Result<()> {
     Ok(())
 }
 
-fn confirm_bulk(
-    names: &[String],
-    purge: bool,
-    yes: bool,
-    dry_run: bool,
-) -> Result<()> {
+fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Result<()> {
     if yes || dry_run {
         return Ok(());
     }
@@ -346,8 +334,7 @@ fn confirm_bulk(
         .iter()
         .filter(|n| {
             installed.iter().any(|s| {
-                &s.name == *n
-                    && matches!(s.exposure, ryra_core::Exposure::Tailscale { .. })
+                &s.name == *n && matches!(s.exposure, ryra_core::Exposure::Tailscale { .. })
             })
         })
         .count();

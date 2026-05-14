@@ -118,9 +118,7 @@ impl DiffResult {
 /// back through `add_service` in upgrade mode. Returns the planned step
 /// list and the planned-file content map (path → content). The richer
 /// per-env metadata lives on `AddResult.tracked_envs`.
-async fn replan(
-    service_name: &str,
-) -> Result<(AddResult, BTreeMap<PathBuf, String>)> {
+async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, String>)> {
     if !is_service_installed(service_name) {
         return Err(Error::ServiceNotInstalled(service_name.to_string()));
     }
@@ -224,7 +222,12 @@ fn read_existing_ports(service_name: &str) -> Result<BTreeMap<String, u16>> {
         // re-allocate. (`add_service` will then surface a richer error if
         // the install is genuinely broken.)
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(overrides),
-        Err(source) => return Err(Error::FileRead { path: env_path, source }),
+        Err(source) => {
+            return Err(Error::FileRead {
+                path: env_path,
+                source,
+            });
+        }
     };
     for line in content.lines() {
         let line = line.trim();
@@ -260,8 +263,7 @@ fn should_skip_path(path: &std::path::Path, manifest_file: &std::path::Path) -> 
 pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
     let (result, planned) = replan(service_name).await?;
     let manifest_file = manifest::manifest_path(service_name)?;
-    let (manifest_entries, _manifest_envs) =
-        manifest::load(service_name)?.unwrap_or_default();
+    let (manifest_entries, _manifest_envs) = manifest::load(service_name)?.unwrap_or_default();
     let manifest_by_path: BTreeMap<PathBuf, String> = manifest_entries
         .into_iter()
         .map(|e| (e.path, e.sha256))
@@ -308,7 +310,7 @@ pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
             // File doesn't exist on disk.
             (None, Some(_)) | (None, None) => match manifest_hash {
                 Some(_) => DiffKind::Modified, // we wrote it, user deleted it; restore
-                None => DiffKind::Added,        // registry adds it, fresh write
+                None => DiffKind::Added,       // registry adds it, fresh write
             },
             // On-disk content already matches what the registry would render.
             (Some(d), _) if d == planned_hash => DiffKind::Unchanged,
@@ -451,7 +453,8 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
                 // upgrade (current lock − pre-upgrade lock) so it can delete
                 // them on revert. Without this, revert would leave
                 // upgrade-added files orphaned.
-                let should_backup = (needs_backup.contains(&file.path) || file.path == manifest_file)
+                let should_backup = (needs_backup.contains(&file.path)
+                    || file.path == manifest_file)
                     && file.path.exists();
                 if should_backup {
                     let rel = backup_relpath(&file.path);
@@ -690,7 +693,8 @@ pub fn revert_service(service_name: &str, at: Option<&str>) -> Result<RevertResu
     // *backed-up* lock was added by the upgrade and should disappear on
     // revert. If either lock is absent, leave the delete set empty —
     // safest no-op for snapshots that pre-date this feature.
-    let backup_manifest_file = absolute_to_backup_path(&snapshot.path, &manifest::manifest_path(service_name)?);
+    let backup_manifest_file =
+        absolute_to_backup_path(&snapshot.path, &manifest::manifest_path(service_name)?);
     let (backup_manifest_entries, _) = read_manifest_at(&backup_manifest_file)?;
     let (current_manifest_entries, _) = manifest::load(service_name)?.unwrap_or_default();
 
@@ -762,7 +766,10 @@ fn pick_snapshot(service_name: &str, at: Option<&str>) -> Result<BackupSnapshot>
         return Err(Error::NoBackup(service_name.to_string()));
     }
     match at {
-        None => Ok(snapshots.into_iter().next().expect("non-empty checked above")),
+        None => Ok(snapshots
+            .into_iter()
+            .next()
+            .expect("non-empty checked above")),
         Some(stamp) => snapshots
             .into_iter()
             .find(|s| s.timestamp == stamp)
@@ -958,10 +965,7 @@ mod tests {
 
     #[test]
     fn prune_no_op_when_under_keep() {
-        let (kept, removed) = setup_and_prune(
-            &["2026-01-01T00-00-00Z", "2026-02-01T00-00-00Z"],
-            5,
-        );
+        let (kept, removed) = setup_and_prune(&["2026-01-01T00-00-00Z", "2026-02-01T00-00-00Z"], 5);
         assert_eq!(kept.len(), 2);
         assert!(removed.is_empty());
     }
@@ -971,6 +975,9 @@ mod tests {
         let lock = PathBuf::from("/svc/service.manifest");
         assert!(should_skip_path(&PathBuf::from("/svc/.env"), &lock));
         assert!(should_skip_path(&lock, &lock));
-        assert!(!should_skip_path(&PathBuf::from("/svc/configs/x.sh"), &lock));
+        assert!(!should_skip_path(
+            &PathBuf::from("/svc/configs/x.sh"),
+            &lock
+        ));
     }
 }

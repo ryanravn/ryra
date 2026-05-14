@@ -277,7 +277,7 @@ pub async fn ensure_browser_image(
     if !browser_path.exists() {
         println!("Preparing browser image (installing bun + playwright + chromium)...");
         println!("  This is a one-time operation.");
-        prepare_browser_image(&base, &browser_path, use_kvm).await?;
+        prepare_browser_image(base, &browser_path, use_kvm).await?;
         println!("Browser image cached at: {}", browser_path.display());
     } else {
         println!("Using browser image: {}", browser_path.display());

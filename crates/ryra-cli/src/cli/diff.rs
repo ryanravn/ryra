@@ -3,10 +3,12 @@
 //!
 //! Output mirrors the verbs the user sees on `ryra upgrade`:
 //!
+//! ```text
 //!   ~ /home/.../seafile.container        modified (registry changed)
 //!   + /home/.../scripts/enable-seafdav.sh added (new file)
 //!   - /home/.../old-helper.sh             removed (no longer in registry)
 //!   ! /home/.../seafile.container        drift (you edited this)
+//! ```
 //!
 //! Drift entries (`!`) block `ryra upgrade` without `--force`; they're flagged
 //! here so the user can decide what to do before running upgrade.

@@ -135,12 +135,11 @@ pub fn ensure_auth_provider_routed(
             path: caddy_quadlet_link.clone(),
             source,
         })?;
-    let caddy_quadlet_target = std::fs::canonicalize(&caddy_quadlet_link).map_err(|source| {
-        Error::FileRead {
+    let caddy_quadlet_target =
+        std::fs::canonicalize(&caddy_quadlet_link).map_err(|source| Error::FileRead {
             path: caddy_quadlet_link.clone(),
             source,
-        }
-    })?;
+        })?;
     let network_spec = format!("{auth_service}:alias={auth_domain}");
     if !content.contains(&format!("alias={auth_domain}")) {
         let updated = inject_networks(&content, &[network_spec]);
@@ -161,8 +160,10 @@ pub fn ensure_auth_provider_routed(
         // today this matches the service name, but go through the same
         // resolver so a future provider with a non-default ContainerName
         // (or a multi-container layout) just works.
-        let target_host =
-            primary_container_name(&caddy_quadlet_link.with_file_name(format!("{auth_service}.container")), auth_service.as_str());
+        let target_host = primary_container_name(
+            &caddy_quadlet_link.with_file_name(format!("{auth_service}.container")),
+            auth_service.as_str(),
+        );
         let block = render_site_block(&CaddySiteParams {
             service_name: auth_service.to_string(),
             target_host,
@@ -404,7 +405,8 @@ mod tests {
     }
 
     #[test]
-    fn primary_container_name_reads_directive() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn primary_container_name_reads_directive()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("immich.container");
         std::fs::write(
@@ -416,7 +418,8 @@ mod tests {
     }
 
     #[test]
-    fn primary_container_name_falls_back_when_directive_absent() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    fn primary_container_name_falls_back_when_directive_absent()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("whoami.container");
         std::fs::write(
@@ -424,7 +427,7 @@ mod tests {
             "[Container]\nImage=docker.io/whoami\nNetwork=whoami.network\n",
         )?;
         assert_eq!(primary_container_name(&path, "whoami"), "whoami");
-    Ok(())
+        Ok(())
     }
 
     #[test]
@@ -526,10 +529,8 @@ mod tests {
 
     #[test]
     fn add_route_appends() {
-        let existing =
-            "# Service-Source: registry/foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n";
-        let block =
-            "# Service-Source: registry/bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n";
+        let existing = "# Service-Source: registry/foo\nfoo.example.com {\n    reverse_proxy host.containers.internal:3000\n}\n";
+        let block = "# Service-Source: registry/bar\nbar.example.com {\n    reverse_proxy host.containers.internal:4000\n}\n";
         let result = add_route(existing, "bar", block);
         assert!(result.contains("# Service-Source: registry/foo"));
         assert!(result.contains("# Service-Source: registry/bar"));

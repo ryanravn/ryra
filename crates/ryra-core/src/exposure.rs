@@ -52,9 +52,9 @@ impl Exposure {
     pub fn url(&self) -> Option<&str> {
         match self {
             Exposure::Loopback => None,
-            Exposure::Internal { url }
-            | Exposure::Tailscale { url }
-            | Exposure::Public { url } => Some(url),
+            Exposure::Internal { url } | Exposure::Tailscale { url } | Exposure::Public { url } => {
+                Some(url)
+            }
         }
     }
 

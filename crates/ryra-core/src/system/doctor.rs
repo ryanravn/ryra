@@ -44,9 +44,16 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Issue {
     /// User has no entry in /etc/subuid or /etc/subgid.
-    SubidNotConfigured { user: String, missing_files: Vec<&'static str> },
+    SubidNotConfigured {
+        user: String,
+        missing_files: Vec<&'static str>,
+    },
     /// Range is too small — common on Debian where adduser doesn't auto-allocate.
-    SubidRangeTooSmall { user: String, current: u32, minimum: u32 },
+    SubidRangeTooSmall {
+        user: String,
+        current: u32,
+        minimum: u32,
+    },
     /// `--tailscale` was used but the `tailscale` CLI isn't on PATH.
     TailscaleCliMissing,
     /// CLI is present but `tailscale status --json` doesn't return a
@@ -94,7 +101,10 @@ impl Issue {
 impl fmt::Display for Issue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Issue::SubidNotConfigured { user, missing_files } => {
+            Issue::SubidNotConfigured {
+                user,
+                missing_files,
+            } => {
                 write!(
                     f,
                     "rootless podman needs subuid/subgid mappings, but {} has no entry in {}.\n\
@@ -107,7 +117,11 @@ impl fmt::Display for Issue {
                     user,
                 )
             }
-            Issue::SubidRangeTooSmall { user, current, minimum } => {
+            Issue::SubidRangeTooSmall {
+                user,
+                current,
+                minimum,
+            } => {
                 write!(
                     f,
                     "rootless podman needs at least {minimum} subuids/subgids, but {user} has only {current}.\n\
@@ -248,7 +262,10 @@ fn check_subid_range() -> Result<(), Issue> {
     let subgid_size = parse_subid_range("/etc/subgid", &user, &mut missing);
 
     if !missing.is_empty() {
-        return Err(Issue::SubidNotConfigured { user, missing_files: missing });
+        return Err(Issue::SubidNotConfigured {
+            user,
+            missing_files: missing,
+        });
     }
     let min = subuid_size.min(subgid_size);
     if min < MIN_SUBID_RANGE {
@@ -315,7 +332,9 @@ fn check_install_integrity() -> Vec<Issue> {
                 // parent. The else-arm only fires if a future caller hands us
                 // a rootless path — skip rather than join against an empty
                 // base and report a phantom dangling symlink.
-                let Some(parent) = path.parent() else { continue };
+                let Some(parent) = path.parent() else {
+                    continue;
+                };
                 parent.join(&target)
             };
             if !resolved.starts_with(&data_root) {
@@ -407,7 +426,10 @@ fn parse_subid_range(path: &'static str, user: &str, missing: &mut Vec<&'static 
         let _start = parts.next();
         // A malformed count falls through as 0, which then trips
         // SubidRangeTooSmall — same actionable fix command as a missing range.
-        let count = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        let count = parts
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
         return count;
     }
     missing.push(path);

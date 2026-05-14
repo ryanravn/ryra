@@ -90,7 +90,10 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
     };
 
     let passed = results.iter().filter(|r| r.passed()).count();
-    let failed = results.iter().filter(|r| matches!(r.outcome, Outcome::Failed(_))).count();
+    let failed = results
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
+        .count();
     let total = results.len();
 
     println!("\nResults: {passed}/{total} passed ({failed} failed)");
@@ -99,7 +102,10 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
 
     if failed > 0 {
         println!("\n  Failed:");
-        for r in results.iter().filter(|r| matches!(r.outcome, Outcome::Failed(_))) {
+        for r in results
+            .iter()
+            .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
+        {
             println!("    - {}", r.name);
         }
     }

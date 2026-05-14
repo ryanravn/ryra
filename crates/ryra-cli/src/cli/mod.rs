@@ -8,8 +8,8 @@ pub mod list;
 pub mod prompts;
 pub mod registry_cmd;
 pub mod remove;
-pub mod revert;
 pub mod reset;
+pub mod revert;
 pub mod search;
 pub mod style;
 pub mod sysctl_low_ports;
@@ -132,7 +132,11 @@ pub fn remove_hosts_entries(service: &str) {
         return;
     };
     let lines: Vec<&str> = content.lines().collect();
-    let kept: Vec<&str> = lines.iter().filter(|l| !l.contains(&marker)).copied().collect();
+    let kept: Vec<&str> = lines
+        .iter()
+        .filter(|l| !l.contains(&marker))
+        .copied()
+        .collect();
     if kept.len() == lines.len() {
         return;
     }
@@ -159,13 +163,9 @@ pub fn remove_hosts_entries(service: &str) {
     };
 
     if try_write(false) {
-        println!(
-            "  Removed {removed_count} stale /etc/hosts entry(ies) (via sudo)."
-        );
+        println!("  Removed {removed_count} stale /etc/hosts entry(ies) (via sudo).");
     } else if std::io::stderr().is_terminal() {
-        eprintln!(
-            "  Removing {removed_count} stale /etc/hosts entry(ies) (sudo required):"
-        );
+        eprintln!("  Removing {removed_count} stale /etc/hosts entry(ies) (sudo required):");
         if try_write(true) {
             println!("  Removed.");
         } else {

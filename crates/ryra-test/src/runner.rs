@@ -809,10 +809,7 @@ async fn run_step_with_poll(
                         let line = last_err.lines().next().unwrap_or("").trim();
                         let snippet: String = line.chars().take(80).collect();
                         if stream_prefix.is_empty() {
-                            println!(
-                                "    retrying ({attempt}/{}): {snippet}",
-                                poll_cfg.attempts
-                            );
+                            println!("    retrying ({attempt}/{}): {snippet}", poll_cfg.attempts);
                         } else {
                             println!(
                                 "[{stream_prefix}]     retrying ({attempt}/{}): {snippet}",

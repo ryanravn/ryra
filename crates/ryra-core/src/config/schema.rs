@@ -243,5 +243,4 @@ mod tests {
         let s = toml::to_string(&cfg).unwrap();
         assert!(!s.contains("tailnet"));
     }
-
 }

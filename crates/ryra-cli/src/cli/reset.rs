@@ -30,9 +30,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
                 "  - Delete ~/.local/share/services/  (per-service quadlets, configs, .env, metadata.toml, bind-mounted data)"
             );
             println!("  - Delete ~/.config/services/        (ryra preferences)");
-            println!(
-                "  - Clear ryra symlinks from ~/.config/containers/systemd/"
-            );
+            println!("  - Clear ryra symlinks from ~/.config/containers/systemd/");
             if tailnet_count > 0 {
                 let plural = if tailnet_count == 1 { "" } else { "s" };
                 println!(

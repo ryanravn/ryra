@@ -107,9 +107,7 @@ pub async fn run(
     // surfaces before any service planning. Stays separate from the
     // unified doctor view because tailscale issues are only relevant
     // when the user explicitly opts into the tailscale path.
-    if tailscale
-        && let Err(e) = ryra_core::system::doctor::check_tailscale_runtime()
-    {
+    if tailscale && let Err(e) = ryra_core::system::doctor::check_tailscale_runtime() {
         bail!("--tailscale flag passed but {e}");
     }
 
@@ -354,8 +352,7 @@ pub async fn run(
         //      (non-interactive default, and the choice for infrastructure
         //      services like inbucket that aren't user-facing).
         // Clap's `conflicts_with = "url"` on --tailscale means 1+2 don't collide.
-        let is_user_facing_app =
-            matches!(reg_service.def.service.kind, ServiceKind::Application);
+        let is_user_facing_app = matches!(reg_service.def.service.kind, ServiceKind::Application);
         let exposure: ryra_core::Exposure = if let Some(u) = url {
             ryra_core::Exposure::from_url(u)
         } else if tailscale {
@@ -383,8 +380,7 @@ pub async fn run(
                 };
                 ryra_core::Exposure::from_url(&chosen)
             } else if interactive && !dry_run {
-                let chosen =
-                    prompt_exposure_for(service, will_install_authelia, false).await?;
+                let chosen = prompt_exposure_for(service, will_install_authelia, false).await?;
                 // Reload after potential Caddy install inside the prompt.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
                 chosen
@@ -416,8 +412,7 @@ pub async fn run(
         // have to know to add Caddy first, which the previous flow
         // forced and most people forget.
         let caddy_already_installed = ryra_core::is_service_installed("caddy");
-        let need_caddy_for_public_url = url
-            .is_some_and(ryra_core::is_public_url)
+        let need_caddy_for_public_url = url.is_some_and(ryra_core::is_public_url)
             && !caddy_already_installed
             && !service_provides(service, Capability::ReverseProxy)
             && !tailscale_enabled
@@ -684,8 +679,8 @@ pub async fn run(
                     apply::execute_all(&remove_result.steps).await?;
                     ryra_core::finalize_remove(service)?;
                 } else {
-                    let svc_data = ryra_core::data::enumerate_service(service)?
-                        .ok_or_else(|| {
+                    let svc_data =
+                        ryra_core::data::enumerate_service(service)?.ok_or_else(|| {
                             anyhow::anyhow!(
                                 "internal: ServiceIncomplete for '{service}' but no state found"
                             )
@@ -851,7 +846,10 @@ pub async fn run(
             super::print_plan_header(&result.steps, service, url_display.as_deref());
 
             if let Err(e) = apply::execute_all(&result.steps).await {
-                eprintln!("\n{} {e}", super::style::error_prefix("Error during setup:"));
+                eprintln!(
+                    "\n{} {e}",
+                    super::style::error_prefix("Error during setup:")
+                );
                 eprintln!("Cleaning up partial installation...");
                 // Attempt cleanup so the user doesn't have to do it manually.
                 // If cleanup fails, fall back to telling the user how to do it.
@@ -903,26 +901,20 @@ pub async fn run(
                 // only — services that mandate HTTPS (vaultwarden,
                 // authelia) won't accept it, so we flag that too.
                 if ryra_core::is_tailscale_url(url) {
-                    println!(
-                        "  Note: tailnet URLs don't loop back to this host. From other"
-                    );
+                    println!("  Note: tailnet URLs don't loop back to this host. From other");
                     println!("        tailnet devices, the URL above works (HTTPS via Tailscale).");
                     if let Some((_, p)) = result.allocated_ports.first() {
+                        println!("        Locally on this host: http://127.0.0.1:{p} (HTTP only —");
+                        println!("        services that require HTTPS won't accept it; reinstall");
                         println!(
-                            "        Locally on this host: http://127.0.0.1:{p} (HTTP only —"
+                            "        without --tailscale for Caddy-local HTTPS at *.internal)."
                         );
-                        println!(
-                            "        services that require HTTPS won't accept it; reinstall"
-                        );
-                        println!("        without --tailscale for Caddy-local HTTPS at *.internal).");
                     }
                 }
             } else {
                 println!("\n{service} is running.");
             }
-            println!(
-                "  May take a moment to start. Check: systemctl --user status {service}"
-            );
+            println!("  May take a moment to start. Check: systemctl --user status {service}");
 
             // Connection info — skip localhost URLs when a proper URL is displayed
             if result.url.is_none() && !result.allocated_ports.is_empty() {
@@ -976,7 +968,9 @@ pub async fn run(
                 let snippet_path = snippet_pathbuf
                     .as_ref()
                     .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "~/.local/share/services/caddy/config/tls.caddy".to_string());
+                    .unwrap_or_else(|| {
+                        "~/.local/share/services/caddy/config/tls.caddy".to_string()
+                    });
                 // Read tls.caddy from disk and report what's actually in
                 // effect — not what `--acme` asked for. This matters when a
                 // pre-existing snippet was preserved across re-installs
@@ -1009,28 +1003,24 @@ pub async fn run(
                 // shape at all, say so explicitly so the user isn't misled
                 // into thinking ryra is managing it.
                 if detected_mode.is_none() && acme_for_service.is_none() {
-                    println!(
-                        "  (note: tls.caddy looks user-customized — leaving it untouched)"
-                    );
+                    println!("  (note: tls.caddy looks user-customized — leaving it untouched)");
                 }
                 if matches!(displayed_mode, AcmeMode::WithEmail(_) | AcmeMode::Anonymous) {
-                    let (http_port, https_port) = result
-                        .allocated_ports
-                        .iter()
-                        .fold((8080u16, 8443u16), |(h, hs), (n, p)| match n.as_str() {
+                    let (http_port, https_port) = result.allocated_ports.iter().fold(
+                        (8080u16, 8443u16),
+                        |(h, hs), (n, p)| match n.as_str() {
                             "http" => (*p, hs),
                             "https" => (h, *p),
                             _ => (h, hs),
-                        });
+                        },
+                    );
                     println!("  For LE to issue certs Caddy must be reachable from the internet:");
                     println!("    - DNS A/AAAA for each --url host must point at this machine");
                     if http_port == 80 && https_port == 443 {
                         println!(
                             "    - Caddy listens on host 80/443; forward router 80→80 and 443→443"
                         );
-                        println!(
-                            "    - Firewall must allow 80/443 (ufw / firewalld / nft varies)"
-                        );
+                        println!("    - Firewall must allow 80/443 (ufw / firewalld / nft varies)");
                     } else {
                         println!(
                             "    - Caddy listens on host {http_port}/{https_port} (rootless); \
@@ -1048,9 +1038,7 @@ pub async fn run(
                         "  For Let's Encrypt:  ryra remove caddy && ryra add caddy --acme you@example.com"
                     );
                 }
-                println!(
-                    "  For Cloudflare DNS-01, wildcards, or BYO certs: edit {snippet_path}"
-                );
+                println!("  For Cloudflare DNS-01, wildcards, or BYO certs: edit {snippet_path}");
             }
         }
     } // end for service_input in services
@@ -1123,8 +1111,7 @@ fn collect_non_interactive<'a>(
 /// Register Caddy's CA with every rootless trust store we can reach, and
 /// print (but never run) hints for the stores that need sudo — `/etc/hosts`
 /// for any hostname the user's resolver can't reach (including
-/// `*.internal`, which unlike `*.localhost` does not auto-resolve).
-
+/// `*.internal`, which unlike `*.localhost` does not auto-resolve), and
 /// the system trust bundle for curl/wget/Firefox-on-p11-kit users.
 ///
 /// The rootless work covers Chromium-family browsers (via the user's
@@ -1210,7 +1197,11 @@ fn setup_host_access(service: &str, domains: &[&str]) {
     // requires a password.
     let hostnames: Vec<String> = domains
         .iter()
-        .filter_map(|d| url::Url::parse(d).ok().and_then(|u| u.host_str().map(String::from)))
+        .filter_map(|d| {
+            url::Url::parse(d)
+                .ok()
+                .and_then(|u| u.host_str().map(String::from))
+        })
         // Tailscale MagicDNS already resolves *.ts.net — skip /etc/hosts dance.
         .filter(|h| !h.to_ascii_lowercase().ends_with(".ts.net"))
         .collect();
@@ -1262,7 +1253,10 @@ fn setup_host_access(service: &str, domains: &[&str]) {
             false
         };
         if wrote {
-            println!("  Added {} to /etc/hosts (via sudo).", missing_hosts.join(", "));
+            println!(
+                "  Added {} to /etc/hosts (via sudo).",
+                missing_hosts.join(", ")
+            );
             missing_hosts.clear();
         } else {
             // Emit a loud warning to stderr so it survives stdout capture
@@ -1274,9 +1268,7 @@ fn setup_host_access(service: &str, domains: &[&str]) {
                 "  WARN: {} not in /etc/hosts — the service URL won't resolve.",
                 missing_hosts.join(", ")
             );
-            eprintln!(
-                "        Run:  echo '{line}' | sudo tee -a /etc/hosts"
-            );
+            eprintln!("        Run:  echo '{line}' | sudo tee -a /etc/hosts");
             eprintln!();
         }
     }
@@ -1383,7 +1375,10 @@ async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
     });
     paths.ensure_dirs()?;
     ryra_core::config::save_config(&paths.config_file, &config)?;
-    println!("  ✓ Tailscale admin token saved to {}", paths.config_file.display());
+    println!(
+        "  ✓ Tailscale admin token saved to {}",
+        paths.config_file.display()
+    );
     warn_if_first_secret_save(&paths, had_secrets_before, &config);
     Ok(())
 }
@@ -1466,7 +1461,10 @@ fn service_url_is_caddy_local(url: &str) -> bool {
         .ok()
         .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
         .is_some_and(|h| {
-            h.ends_with(&format!(".{}", ryra_core::config::schema::CADDY_LOCAL_DOMAIN))
+            h.ends_with(&format!(
+                ".{}",
+                ryra_core::config::schema::CADDY_LOCAL_DOMAIN
+            ))
         })
 }
 
@@ -1607,7 +1605,9 @@ async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
     match selection {
         0 => {
             let email: String = Input::new()
-                .with_prompt("Email for Let's Encrypt (optional — for renewal notices, press Enter to skip)")
+                .with_prompt(
+                    "Email for Let's Encrypt (optional — for renewal notices, press Enter to skip)",
+                )
                 .allow_empty(true)
                 .interact_text()?;
             Ok(TlsHandling::LetsEncrypt(acme_mode_from_email(email)))
@@ -1695,9 +1695,10 @@ async fn prompt_exposure_for(
                 .await?;
             }
             let installed_all = ryra_core::list_installed().unwrap_or_default();
-            let caddy_https_port = find_installed_provider(&installed_all, Capability::ReverseProxy)
-                .and_then(|s| s.ports.get("https").copied())
-                .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
+            let caddy_https_port =
+                find_installed_provider(&installed_all, Capability::ReverseProxy)
+                    .and_then(|s| s.ports.get("https").copied())
+                    .unwrap_or(DEFAULT_CADDY_HTTPS_PORT);
             Ok(ryra_core::Exposure::Internal {
                 url: format!(
                     "https://{service}.{}:{caddy_https_port}",
@@ -1842,9 +1843,8 @@ async fn ensure_dependencies(auth: bool, tailscale: bool, interactive: bool) -> 
     let config = ryra_core::config::load_or_default(
         &ryra_core::config::ConfigPaths::resolve()?.config_file,
     )?;
-    let needs_authelia = auth
-        && !ryra_core::is_service_installed("authelia")
-        && config.auth.is_none();
+    let needs_authelia =
+        auth && !ryra_core::is_service_installed("authelia") && config.auth.is_none();
 
     if !needs_authelia {
         return Ok(());

@@ -62,8 +62,13 @@ async fn execute(step: &Step) -> Result<()> {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;
             }
-            std::os::unix::fs::symlink(target, link)
-                .with_context(|| format!("failed to symlink {} -> {}", link.display(), target.display()))?;
+            std::os::unix::fs::symlink(target, link).with_context(|| {
+                format!(
+                    "failed to symlink {} -> {}",
+                    link.display(),
+                    target.display()
+                )
+            })?;
             Ok(())
         }
         Step::DaemonReload => run_cmd("systemctl", &["--user", "daemon-reload"]),
@@ -244,8 +249,8 @@ async fn execute(step: &Step) -> Result<()> {
 /// add/remove paths emit Steps; apply.rs realises them.
 mod tailscale_services {
     use anyhow::{Context, Result, bail};
-    use std::process::{Command, Stdio};
     use ryra_core::config::schema::{HOST_TAG, SERVICE_TAG, TailscaleConfig};
+    use std::process::{Command, Stdio};
 
     /// Read the admin token + cached tailnet from preferences.toml. Bails if
     /// the user is somehow running a tailscale step without ever having
@@ -276,7 +281,9 @@ mod tailscale_services {
             cmd.args(["-H", "Content-Type: application/json", "--data-binary", b]);
         }
         cmd.arg(url);
-        let out = cmd.output().with_context(|| format!("curl {method} {url}"))?;
+        let out = cmd
+            .output()
+            .with_context(|| format!("curl {method} {url}"))?;
         let combined = String::from_utf8_lossy(&out.stdout).into_owned();
         let (body, code) = combined
             .rsplit_once('\n')
@@ -297,12 +304,17 @@ mod tailscale_services {
         let key = &ts.admin_api_key;
 
         // 1. Update ACL if our tagOwners + autoApprovers entries are missing.
-        let (code, body) = curl("GET", "https://api.tailscale.com/api/v2/tailnet/-/acl", key, None)?;
+        let (code, body) = curl(
+            "GET",
+            "https://api.tailscale.com/api/v2/tailnet/-/acl",
+            key,
+            None,
+        )?;
         if code != 200 {
             bail!("read ACL failed (HTTP {code}): {body}");
         }
-        let mut acl: serde_json::Value = serde_json::from_str(&body)
-            .with_context(|| format!("ACL JSON parse: {body}"))?;
+        let mut acl: serde_json::Value =
+            serde_json::from_str(&body).with_context(|| format!("ACL JSON parse: {body}"))?;
         let mut changed = false;
         let owners = acl
             .as_object_mut()
@@ -407,9 +419,7 @@ mod tailscale_services {
         // GET first so a re-run after a partial install (or any update)
         // preserves the existing addrs instead of failing with
         // "addrs must contain 2 elements".
-        let url = format!(
-            "https://api.tailscale.com/api/v2/tailnet/-/services/svc:{svc_name}"
-        );
+        let url = format!("https://api.tailscale.com/api/v2/tailnet/-/services/svc:{svc_name}");
         let (get_code, get_body) = curl("GET", &url, key, None)?;
         let body = match get_code {
             200 => {
@@ -456,11 +466,18 @@ mod tailscale_services {
         // a working URL line printed at the end but no actual route.
         let target = format!("http://127.0.0.1:{host_port}");
         let svc_arg = format!("--service=svc:{svc_name}");
-        let serve_cmd =
-            || format!("sudo tailscale serve --bg {svc_arg} --https=443 {target}");
+        let serve_cmd = || format!("sudo tailscale serve --bg {svc_arg} --https=443 {target}");
 
         let mut status = Command::new("sudo")
-            .args(["-n", "tailscale", "serve", "--bg", &svc_arg, "--https=443", &target])
+            .args([
+                "-n",
+                "tailscale",
+                "serve",
+                "--bg",
+                &svc_arg,
+                "--https=443",
+                &target,
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -477,7 +494,14 @@ mod tailscale_services {
             println!();
             println!("  Configuring `tailscale serve` (sudo may prompt for your password)…");
             status = Command::new("sudo")
-                .args(["tailscale", "serve", "--bg", &svc_arg, "--https=443", &target])
+                .args([
+                    "tailscale",
+                    "serve",
+                    "--bg",
+                    &svc_arg,
+                    "--https=443",
+                    &target,
+                ])
                 .status()
                 .with_context(|| "failed to spawn sudo")?;
         }
@@ -538,9 +562,8 @@ mod tailscale_services {
                 .output();
             if let Ok(o) = out
                 && o.status.success()
-                && let Ok(v) = serde_json::from_str::<serde_json::Value>(
-                    &String::from_utf8_lossy(&o.stdout),
-                )
+                && let Ok(v) =
+                    serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&o.stdout))
                 && v.pointer("/Self/CapMap/service-host")
                     .and_then(|sh| sh.as_array())
                     .is_some_and(|arr| {
@@ -627,8 +650,8 @@ mod tailscale_services {
         if code != 200 {
             bail!("read ACL failed (HTTP {code}): {body}");
         }
-        let mut acl: serde_json::Value = serde_json::from_str(&body)
-            .with_context(|| format!("ACL JSON parse: {body}"))?;
+        let mut acl: serde_json::Value =
+            serde_json::from_str(&body).with_context(|| format!("ACL JSON parse: {body}"))?;
         let services = acl
             .as_object_mut()
             .ok_or_else(|| anyhow::anyhow!("ACL root is not an object"))?

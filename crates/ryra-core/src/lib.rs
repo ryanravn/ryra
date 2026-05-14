@@ -28,10 +28,10 @@ pub use capability::{
     service_provides,
 };
 pub use exposure::{Exposure, is_public_url, is_tailscale_url};
+pub use generate::GeneratedFile;
 pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
 pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root, service_home};
-pub use generate::GeneratedFile;
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, TrackedEnv, Warning};
 pub use upgrade::{
     BackupSnapshot, DEFAULT_BACKUP_KEEP, DiffEntry, DiffKind, DiffResult, EnvAddition,
@@ -131,8 +131,7 @@ fn retroactive_network_joins(
         // and restart each unit so podman recreates the container with the
         // new network. Restarting only the primary unit doesn't cascade to
         // subunits — their containers would keep running on the old network.
-        let installed_names_owned: Vec<String> =
-            installed.iter().map(|s| s.name.clone()).collect();
+        let installed_names_owned: Vec<String> = installed.iter().map(|s| s.name.clone()).collect();
         let all_service_names: Vec<&str> =
             installed_names_owned.iter().map(|s| s.as_str()).collect();
         let marker = format!("Network={network_name}.network");
@@ -408,8 +407,7 @@ pub fn add_service(
             let claimed_in_service = claimed.contains(&p.container_port);
             let in_use = port_in_use(p.container_port);
             if privileged || claimed_in_service || in_use {
-                let allocated =
-                    system::port::allocate_port_excluding(&claimed, port_in_use)?;
+                let allocated = system::port::allocate_port_excluding(&claimed, port_in_use)?;
                 let reason = if privileged {
                     "port is privileged (requires root)".to_string()
                 } else if claimed_in_service {
@@ -615,7 +613,9 @@ pub fn add_service(
             .path
             .file_name()
             .map(|n| quadlet_path.join(n))
-            .ok_or_else(|| Error::Bundle(format!("invalid quadlet path: {}", file.path.display())))?;
+            .ok_or_else(|| {
+                Error::Bundle(format!("invalid quadlet path: {}", file.path.display()))
+            })?;
         let target = file.path.clone();
         steps.push(Step::WriteFile(file));
         steps.push(Step::Symlink { link, target });
@@ -916,7 +916,6 @@ pub fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names:
             && filename[other.len()..].starts_with(['.', '-'])
     })
 }
-
 
 /// How destructive `remove_service` should be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1488,9 +1487,7 @@ pub fn is_service_installed(name: &str) -> bool {
     if !has_quadlet {
         return false;
     }
-    metadata_path(name)
-        .map(|p| p.exists())
-        .unwrap_or(false)
+    metadata_path(name).map(|p| p.exists()).unwrap_or(false)
 }
 
 /// Scan the user's quadlet directory for ryra-managed services. A
@@ -1571,7 +1568,10 @@ fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService>
                     }
                     let (key, val) = l.split_once('=')?;
                     let name = key.strip_prefix("SERVICE_PORT_")?.to_lowercase();
-                    let port = val.trim_matches(|c: char| c == '"' || c == '\'').parse::<u16>().ok()?;
+                    let port = val
+                        .trim_matches(|c: char| c == '"' || c == '\'')
+                        .parse::<u16>()
+                        .ok()?;
                     Some((name, port))
                 })
                 .collect::<std::collections::BTreeMap<String, u16>>()

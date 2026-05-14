@@ -74,10 +74,7 @@ pub fn service_provides(name: &str, cap: Capability) -> bool {
 /// Capability list declared by a [`ServiceDef`]. Use this when the def
 /// is already in scope (e.g. in `add_service` after `find_service`) —
 /// it avoids the registry round-trip that [`service_provides`] does.
-pub fn def_provides(
-    def: &crate::registry::service_def::ServiceDef,
-    cap: Capability,
-) -> bool {
+pub fn def_provides(def: &crate::registry::service_def::ServiceDef, cap: Capability) -> bool {
     def.capabilities.provides.contains(&cap)
 }
 

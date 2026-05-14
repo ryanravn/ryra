@@ -42,11 +42,10 @@ pub fn enumerate_all() -> Result<Vec<ServiceData>> {
     // authoritative source for "installed"; data-root dirs catch
     // orphan data (services that were removed in Preserve mode and
     // still have a home dir or volumes lying around).
-    let managed_via_marker: std::collections::HashSet<String> =
-        crate::scan_managed_services()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+    let managed_via_marker: std::collections::HashSet<String> = crate::scan_managed_services()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
     let mut names: std::collections::BTreeSet<String> =
         managed_via_marker.iter().cloned().collect();
     if home_root.is_dir() {

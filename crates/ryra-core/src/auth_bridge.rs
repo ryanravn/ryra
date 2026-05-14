@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::Step;
 use crate::capability::{Capability, find_installed_provider};
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
 use crate::generate::GeneratedFile;
-use crate::Step;
 
 /// System CA bundle locations probed in order. First hit wins.
 const SYSTEM_CA_PATHS: &[&str] = &[
@@ -76,8 +76,7 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     {
         return Ok(None);
     }
-    let Some(authelia) = find_installed_provider(params.installed, Capability::OidcProvider)
-    else {
+    let Some(authelia) = find_installed_provider(params.installed, Capability::OidcProvider) else {
         return Ok(None);
     };
     // Bridge applies only when the OIDC provider is reachable via a

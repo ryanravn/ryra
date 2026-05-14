@@ -26,8 +26,10 @@ pub enum Error {
     #[error("failed to serialize config: {0}")]
     TomlSerialize(#[from] toml::ser::Error),
 
-    #[error("service {name} not found in any registry{}",
-        crate::registry::format_service_suggestions(suggestions))]
+    #[error(
+        "service {name} not found in any registry{}",
+        crate::registry::format_service_suggestions(suggestions)
+    )]
     ServiceNotFound {
         name: String,
         suggestions: Vec<String>,
@@ -123,7 +125,9 @@ pub enum Error {
     #[error("no backups found for service '{0}' — `ryra upgrade` creates them, run that first")]
     NoBackup(String),
 
-    #[error("service '{service}' has no backup at timestamp {stamp} — run `ryra revert {service}` to use the most recent")]
+    #[error(
+        "service '{service}' has no backup at timestamp {stamp} — run `ryra revert {service}` to use the most recent"
+    )]
     BackupNotFound { service: String, stamp: String },
 }
 

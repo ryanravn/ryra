@@ -236,8 +236,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
         // used in Caddyfile site blocks and /etc/hosts entries.
         // Wiring details (exposure / url / auth / registry) live in the
         // service's metadata.toml — this comment carries provenance only.
-        let is_main_container =
-            file_name == format!("{}.container", params.service_name);
+        let is_main_container = file_name == format!("{}.container", params.service_name);
         let header = format!("# Service-Source: registry/{}\n", params.service_name);
         content = header + &content;
 
@@ -685,8 +684,11 @@ mod tests {
         std::fs::create_dir_all(&service_dir)
             .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
 
-        let files = process_configs(&service_dir, Path::new("/home/user/.local/share/services/svc"))
-            .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
+        let files = process_configs(
+            &service_dir,
+            Path::new("/home/user/.local/share/services/svc"),
+        )
+        .unwrap_or_else(|e| unreachable!("process_configs should not fail: {e}"));
 
         assert!(files.is_empty());
     }

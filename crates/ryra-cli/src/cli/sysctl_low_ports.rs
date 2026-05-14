@@ -85,7 +85,9 @@ pub async fn offer_enable() -> Result<()> {
 
     // Persist for reboot. `sudo tee` writes the file with root permissions
     // and we discard its stdout (it echoes the input by default).
-    let conf = format!("# Written by ryra so rootless Caddy can bind 80/443.\n{SYSCTL_KEY} = {SYSCTL_VALUE}\n");
+    let conf = format!(
+        "# Written by ryra so rootless Caddy can bind 80/443.\n{SYSCTL_KEY} = {SYSCTL_VALUE}\n"
+    );
     let mut child = match std::process::Command::new("sudo")
         .args(["tee", SYSCTL_FILE])
         .stdin(Stdio::piped())
@@ -163,7 +165,11 @@ pub async fn offer_disable() -> Result<()> {
         return Ok(());
     }
 
-    match Command::new("sudo").args(["rm", SYSCTL_FILE]).status().await {
+    match Command::new("sudo")
+        .args(["rm", SYSCTL_FILE])
+        .status()
+        .await
+    {
         Ok(s) if s.success() => {}
         Ok(s) => {
             eprintln!("  sudo rm {SYSCTL_FILE} exited with {s}; leaving sysctl alone");
@@ -176,7 +182,11 @@ pub async fn offer_disable() -> Result<()> {
     }
     // `sysctl --system` re-applies all of /etc/sysctl.d/, /usr/lib/sysctl.d/,
     // /run/sysctl.d/, etc. With our file gone, the kernel default takes over.
-    match Command::new("sudo").args(["sysctl", "--system"]).status().await {
+    match Command::new("sudo")
+        .args(["sysctl", "--system"])
+        .status()
+        .await
+    {
         Ok(s) if s.success() => println!("  Reverted privileged port binding."),
         Ok(s) => eprintln!(
             "  Note: removed {SYSCTL_FILE}, but `sudo sysctl --system` exited {s}; \
