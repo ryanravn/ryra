@@ -3,8 +3,8 @@
 # Channel model stores SMTP config as a hash on a Channel row with
 # area="Email::Notification"; setting it here mirrors what the admin UI does.
 #
-# Per docs/registry/conventions.md: ExecStartPost scripts must never return
-# non-zero — it kills the service. We log failures and exit 0.
+# ExecStartPost scripts must never return non-zero (it kills the service).
+# We log failures and exit 0.
 set -u
 [ -z "${SMTP_HOST:-}" ] && exit 0
 

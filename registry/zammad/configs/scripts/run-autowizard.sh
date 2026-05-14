@@ -5,8 +5,8 @@
 # the first web wizard visit. We trigger it directly via rails runner.
 #
 # Idempotent: we skip when an Admin user already exists, and AutoWizard
-# itself is a no-op when the payload file is missing. Per
-# docs/registry/conventions.md this script must never return non-zero.
+# itself is a no-op when the payload file is missing. ExecStartPost scripts
+# must never return non-zero (would block the service from starting).
 set -u
 
 echo "autowizard: waiting for railsserver to respond on :3000 (up to 120 × 2s)"

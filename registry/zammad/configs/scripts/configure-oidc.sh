@@ -9,8 +9,8 @@
 # set the fqdn/http_type Settings so Zammad's redirect_uri matches what
 # authelia has registered.
 #
-# Per docs/registry/conventions.md: ExecStartPost scripts must never return
-# non-zero — it kills the service. We log failures and exit 0.
+# ExecStartPost scripts must never return non-zero (it kills the service).
+# We log failures and exit 0.
 set -u
 [ -z "${OAUTH_CLIENT_ID:-}" ] && exit 0
 
