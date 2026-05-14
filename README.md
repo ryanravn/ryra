@@ -3,9 +3,9 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENCE.md)
 [![CI](https://github.com/ryanravn/ryra/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanravn/ryra/actions/workflows/ci.yml)
 
-> Self-host anything, lifecycle-tested in virtual machines.
+> Self-host anything, automatically test it works.
 
-Ryra scaffolds **rootless**, **daemonless** **podman** containers wired into a shared **SSO** and **email** setup. The bundled registry covers useful services, each **lifecycle-tested** in a fresh virtual machine, and the test framework is simple enough that you can have an AI add new services and prove they work the same way.
+Ryra scaffolds **rootless**, **daemonless** **podman** containers wired with the same authorization system (**SSO**) and e-mail system with **SMTP**. The bundled registry covers useful services, each **end-to-end tested** in a fresh virtual machine, and the test framework is simple enough that you can have an AI add new services and prove they work the same way.
 
 [Website](https://ryra.dev) · [Docs](https://ryra.dev/intro/) · [Services](https://ryra.dev/services/)
 
