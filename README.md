@@ -36,7 +36,9 @@ Service data lives at `~/.local/share/services/<name>/`. Back it up with `tar`. 
 
 ## Why
 
-Self-hosting one service is a weekend of docker-compose files, reverse proxy configs, and TLS certs. Self-hosting ten is a part-time job. Ryra collapses each of those weekends into `ryra add <service>`, and every service in the registry is lifecycle-tested in a fresh QEMU VM before it ships.
+SaaS prices keep climbing and the products keep moving slower than you want. Self-hosting is the way out, but the operational cost (compose files, reverse proxies, expiring certs, half-finished install scripts) is what stops most people from leaving.
+
+No other self-hosting toolkit ships the full combination: rootless **podman quadlets** for security and clean systemd integration, **automated VM tests** that prove every registry service works before you install it, and a TOML-based recipe format that an AI can read and extend without hand-holding. You stay in control: customise per host, add your own services, and grow your stack at the pace your vendors won't.
 
 ## Examples
 
