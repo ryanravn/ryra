@@ -1,63 +1,46 @@
 ---
-// Animated terminal that types out a ryra session. Animation is driven by
-// a small vanilla script that walks through pre-rendered lines, hidden
-// until their turn.
+interface Props {
+  title?: string;
+  label?: string;
+}
+
+const {
+  title,
+  label = "Terminal demonstration of the Ryra command-line tool",
+} = Astro.props;
+
+const hasChip = Astro.slots.has("chip");
 ---
 
 <div class="terminal-wrap">
-  <div class="terminal" role="img" aria-label="Terminal demonstration of the Ryra command-line tool">
+  <div class="terminal" role="img" aria-label={label}>
     <div class="terminal-bar">
       <span class="tdot r"></span>
       <span class="tdot y"></span>
       <span class="tdot g"></span>
+      {title && <span class="terminal-title">{title}</span>}
     </div>
-    <div class="terminal-body" id="ryra-term">
-      <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra add immich</span></div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/immich-server:v2.7.4</div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/postgres:14-vectorchord0.4.3</div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> writes ~/.local/share/services/immich/immich.container</div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> provisioning HTTPS cert via tailscale</div>
-      <div class="term-out" data-step><span class="term-arrow">→</span> exposing https://immich.tail-cabin.ts.net (tailnet-only)</div>
-      <div class="term-out term-blank" data-step>&nbsp;</div>
-      <div class="term-out term-ok" data-step data-reveal-chip>immich is running.</div>
-      <div class="term-out" data-step>  URL: https://immich.tail-cabin.ts.net</div>
-      <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra list</span></div>
-      <div class="term-out" data-step style="padding-left: 0;">
-        <table class="term-table">
-          <thead>
-            <tr><th>SERVICE</th><th>STATUS</th><th>URL</th></tr>
-          </thead>
-          <tbody>
-            <tr><td class="term-name">caddy</td><td class="term-up">running</td><td>http://127.0.0.1:8080</td></tr>
-            <tr><td class="term-name">forgejo</td><td class="term-up">running</td><td>http://127.0.0.1:3000</td></tr>
-            <tr><td class="term-name">immich</td><td class="term-up">running</td><td>https://immich.tail-cabin.ts.net</td></tr>
-            <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>https://vault.tail-cabin.ts.net</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="term-line term-final" data-step><span class="term-prompt">$</span><span class="cursor"></span></div>
+    <div class="terminal-body">
+      <slot />
     </div>
   </div>
-  <div class="floating-chip" id="floating-chip" aria-hidden="true">
-    <div class="floating-chip-head">
-      <span class="floating-chip-dot"></span>
-      immich.container
+  {hasChip && (
+    <div class="floating-chip" aria-hidden="true">
+      <slot name="chip" />
     </div>
-    <div class="floating-chip-path">~/.local/share/services/immich/</div>
-    <div class="floating-chip-body">
-      <span class="chip-section">[Container]</span><br />
-      Image=ghcr.io/<br />immich-app/immich-server<br />
-      PublishPort=2283:3001<br />
-      Volume=%h/.local/share/<br />services/immich/data:/data<br />
-      Network=immich.network
-    </div>
-  </div>
+  )}
 </div>
 
 <script>
-  const lines = document.querySelectorAll<HTMLElement>("#ryra-term [data-step]");
-  const chip = document.getElementById("floating-chip");
-  if (lines.length > 0) {
+  // Each .terminal-wrap on the page animates its [data-step] children
+  // independently, so multiple terminals can share the same chrome and
+  // script without coordinating.
+  const wraps = document.querySelectorAll<HTMLElement>(".terminal-wrap");
+  wraps.forEach((wrap) => {
+    const lines = wrap.querySelectorAll<HTMLElement>("[data-step]");
+    if (lines.length === 0) return;
+    const chip = wrap.querySelector<HTMLElement>(".floating-chip");
+
     const reset = () => {
       lines.forEach((el) => (el.style.display = "none"));
       chip?.classList.remove("revealed");
@@ -96,7 +79,7 @@
       setTimeout(tick, delayFor(el, lines[i]));
     };
     tick();
-  }
+  });
 </script>
 
 <style>
@@ -134,6 +117,14 @@
   .tdot.y { background: #febc2e; }
   .tdot.g { background: #28c840; }
 
+  .terminal-title {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: #8aa9bf;
+    letter-spacing: 0.05em;
+  }
+
   .terminal-body {
     padding: 22px 24px 26px;
     font-family: var(--mono);
@@ -167,6 +158,12 @@
   .term-comment {
     color: #5d7686;
     font-style: italic;
+  }
+  .term-step { color: #d6e4ee; }
+  .term-step .term-arrow { color: var(--cabin); }
+  .term-summary {
+    color: #7fb77a;
+    font-weight: 500;
   }
 
   .term-table {
@@ -236,36 +233,6 @@
     opacity: 1;
     transform: rotate(1.5deg) translateY(0) scale(1);
   }
-  .floating-chip-path {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    color: color-mix(in oklab, var(--ink-2) 65%, transparent);
-    margin: -2px 0 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px dashed color-mix(in oklab, var(--ink) 14%, transparent);
-    word-break: break-all;
-  }
-  .floating-chip-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-    font-family: var(--sans);
-    font-size: 11px;
-    color: var(--ember);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-  .floating-chip-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--ember);
-  }
-  .floating-chip-body {
-    line-height: 1.55;
-  }
-  .chip-section { color: #a35a2a; }
 
   @media (max-width: 720px) {
     .floating-chip { display: none; }

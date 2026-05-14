@@ -156,7 +156,46 @@ const principles = [
               </div>
             </div>
           </div>
-          <Terminal />
+          <Terminal>
+            <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra add immich</span></div>
+            <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/immich-server:v2.7.4</div>
+            <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/postgres:14-vectorchord0.4.3</div>
+            <div class="term-out" data-step><span class="term-arrow">→</span> writes ~/.local/share/services/immich/immich.container</div>
+            <div class="term-out" data-step><span class="term-arrow">→</span> provisioning HTTPS cert via tailscale</div>
+            <div class="term-out" data-step><span class="term-arrow">→</span> exposing https://immich.tail-cabin.ts.net (tailnet-only)</div>
+            <div class="term-out term-blank" data-step>&nbsp;</div>
+            <div class="term-out term-ok" data-step data-reveal-chip>immich is running.</div>
+            <div class="term-out" data-step>  URL: https://immich.tail-cabin.ts.net</div>
+            <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra list</span></div>
+            <div class="term-out" data-step style="padding-left: 0;">
+              <table class="term-table">
+                <thead>
+                  <tr><th>SERVICE</th><th>STATUS</th><th>URL</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td class="term-name">caddy</td><td class="term-up">running</td><td>http://127.0.0.1:8080</td></tr>
+                  <tr><td class="term-name">forgejo</td><td class="term-up">running</td><td>http://127.0.0.1:3000</td></tr>
+                  <tr><td class="term-name">immich</td><td class="term-up">running</td><td>https://immich.tail-cabin.ts.net</td></tr>
+                  <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>https://vault.tail-cabin.ts.net</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="term-line term-final" data-step><span class="term-prompt">$</span><span class="cursor"></span></div>
+            <Fragment slot="chip">
+              <div class="floating-chip-head">
+                <span class="floating-chip-dot"></span>
+                immich.container
+              </div>
+              <div class="floating-chip-path">~/.local/share/services/immich/</div>
+              <div class="floating-chip-body">
+                <span class="chip-section">[Container]</span><br />
+                Image=ghcr.io/<br />immich-app/immich-server<br />
+                PublishPort=2283:3001<br />
+                Volume=%h/.local/share/<br />services/immich/data:/data<br />
+                Network=immich.network
+              </div>
+            </Fragment>
+          </Terminal>
         </div>
       </section>
 
@@ -402,28 +441,24 @@ const principles = [
                 </li>
               </ul>
             </div>
-            <div class="sandbox-term-wrap">
-              <div class="sandbox-term">
-                <div class="sandbox-term-bar">
-                  <span class="tdot r"></span>
-                  <span class="tdot y"></span>
-                  <span class="tdot g"></span>
-                  <span class="sandbox-term-title">vm: fedora-43 · kvm</span>
-                </div>
-                <pre class="sandbox-term-body"><code><span class="t-prompt">$</span> <span class="t-cmd">ryra test immich-oidc --keep-alive</span>
-<span class="t-out">booting fedora-43 (qemu, kvm) ............ <span class="t-ok">ok</span></span>
-<span class="t-out">ssh ready on 127.0.0.1:2222</span>
-<span class="t-step">▸ ryra add caddy</span>
-<span class="t-step">▸ ryra add authelia --url https://auth.test.local</span>
-<span class="t-step">▸ ryra add immich --auth --url https://immich.test.local</span>
-<span class="t-out">probe https://immich.test.local .......... <span class="t-ok">200</span></span>
-<span class="t-out">browser oidc login flow .................. <span class="t-ok">ok</span></span>
-<span class="t-out">smtp delivery to inbucket ................ <span class="t-ok">ok</span></span>
-<span class="t-blank">&nbsp;</span>
-<span class="t-summary">✓ all assertions passed in 2m41s</span>
-<span class="t-comment"># vm kept alive: ssh -p 2222 ryra@127.0.0.1</span></code></pre>
-              </div>
-            </div>
+            <Terminal
+              title="vm: fedora-43 · kvm"
+              label="Terminal demonstration of ryra test running an end-to-end OIDC test inside a QEMU virtual machine"
+            >
+              <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra test immich-oidc --keep-alive</span></div>
+              <div class="term-out" data-step>booting fedora-43 (qemu, kvm) ............ <span class="term-ok">ok</span></div>
+              <div class="term-out" data-step>ssh ready on 127.0.0.1:2222</div>
+              <div class="term-out term-step" data-step><span class="term-arrow">▸</span>ryra add caddy</div>
+              <div class="term-out term-step" data-step><span class="term-arrow">▸</span>ryra add authelia --url https://auth.test.local</div>
+              <div class="term-out term-step" data-step><span class="term-arrow">▸</span>ryra add immich --auth --url https://immich.test.local</div>
+              <div class="term-out" data-step>probe https://immich.test.local .......... <span class="term-ok">200</span></div>
+              <div class="term-out" data-step>browser oidc login flow .................. <span class="term-ok">ok</span></div>
+              <div class="term-out" data-step>smtp delivery to inbucket ................ <span class="term-ok">ok</span></div>
+              <div class="term-out term-blank" data-step>&nbsp;</div>
+              <div class="term-out term-summary" data-step>✓ all assertions passed in 2m41s</div>
+              <div class="term-out term-comment" data-step># vm kept alive: ssh -p 2222 ryra@127.0.0.1</div>
+              <div class="term-line term-final" data-step><span class="term-prompt">$</span><span class="cursor"></span></div>
+            </Terminal>
           </div>
         </div>
       </section>
@@ -1016,63 +1051,42 @@ const principles = [
         color: var(--ink);
         font-weight: 600;
       }
-      .sandbox-term-wrap {
-        position: relative;
-        min-width: 0;
-      }
-      .sandbox-term {
-        background: var(--fjord);
-        border-radius: 12px;
-        overflow: hidden;
-        border: 1px solid color-mix(in oklab, var(--fjord) 40%, var(--ink));
-        box-shadow:
-          0 1px 0 rgba(255, 255, 255, 0.05) inset,
-          0 30px 60px -20px rgba(14, 34, 48, 0.45),
-          0 8px 20px -8px rgba(14, 34, 48, 0.32);
-      }
-      .sandbox-term-bar {
-        display: flex; align-items: center; gap: 10px;
-        padding: 10px 14px;
-        background: linear-gradient(180deg, #1a3a52 0%, #122c3e 100%);
-        border-bottom: 1px solid #00000040;
-      }
-      .sandbox-term-title {
-        margin-left: auto;
+      /* Inner pieces of the hero's floating chip. The chip *container* is
+         styled by Terminal.astro, but slotted content carries this file's
+         scope, so the inner elements need their styles defined here. */
+      .floating-chip-path {
         font-family: var(--mono);
+        font-size: 10.5px;
+        color: color-mix(in oklab, var(--ink-2) 65%, transparent);
+        margin: -2px 0 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px dashed color-mix(in oklab, var(--ink) 14%, transparent);
+        word-break: break-all;
+      }
+      .floating-chip-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-family: var(--sans);
         font-size: 11px;
-        color: #8aa9bf;
-        letter-spacing: 0.05em;
+        color: var(--ember);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
-      .sandbox-term-body {
-        margin: 0;
-        padding: 22px 24px 24px;
+      .floating-chip-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--ember);
+      }
+      .floating-chip-body {
         font-family: var(--mono);
-        font-size: 13px;
-        line-height: 1.7;
-        color: #d6e4ee;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+        font-size: 11.5px;
+        color: var(--ink-2);
+        line-height: 1.55;
       }
-      .sandbox-term-body .t-prompt { color: var(--cabin); user-select: none; }
-      .sandbox-term-body .t-cmd { color: var(--snow); }
-      .sandbox-term-body .t-out { color: #9fbacb; display: block; }
-      .sandbox-term-body .t-step {
-        color: #d6e4ee;
-        display: block;
-      }
-      .sandbox-term-body .t-step::first-letter { color: var(--cabin); }
-      .sandbox-term-body .t-ok { color: #7fb77a; }
-      .sandbox-term-body .t-summary {
-        color: #7fb77a;
-        display: block;
-        font-weight: 500;
-      }
-      .sandbox-term-body .t-comment {
-        color: #5d7686;
-        display: block;
-        font-style: italic;
-      }
-      .sandbox-term-body .t-blank { display: block; line-height: 0.4; }
+      .chip-section { color: #a35a2a; }
 
       /* ─── Quickstart wrapper ─── */
       .quickstart {
