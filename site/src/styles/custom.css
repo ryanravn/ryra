@@ -3,7 +3,7 @@
   --ryra-snow: #f4ede2;
   --ryra-paper: #ede2d0;
   --ryra-paper-2: #e3d4bc;
-  --ryra-cabin: #d97a3a;
+  --ryra-amber: #d97a3a;
   --ryra-ember: #c25a2c;
   --ryra-fjord: #0e2230;
   --ryra-fjord-2: #143246;
@@ -22,8 +22,8 @@
   --sl-font-mono: var(--ryra-mono);
 
   /* Accent: used everywhere Starlight calls out a colored element */
-  --sl-color-accent-low: color-mix(in oklab, var(--ryra-cabin) 16%, transparent);
-  --sl-color-accent: var(--ryra-cabin);
+  --sl-color-accent-low: color-mix(in oklab, var(--ryra-amber) 16%, transparent);
+  --sl-color-accent: var(--ryra-amber);
   --sl-color-accent-high: var(--ryra-ember);
 }
 
@@ -66,7 +66,7 @@
   --sl-color-black: var(--ryra-fjord);
 
   --sl-color-text: #d6e4ee;
-  --sl-color-text-accent: var(--ryra-cabin);
+  --sl-color-text-accent: var(--ryra-amber);
   --sl-color-text-invert: var(--ryra-fjord);
 
   --sl-color-bg: var(--ryra-fjord);

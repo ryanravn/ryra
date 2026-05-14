@@ -162,10 +162,10 @@ const principles = [
             <div class="term-out" data-step><span class="term-arrow">→</span> pulls ghcr.io/immich-app/postgres:14-vectorchord0.4.3</div>
             <div class="term-out" data-step><span class="term-arrow">→</span> writes ~/.local/share/services/immich/immich.container</div>
             <div class="term-out" data-step><span class="term-arrow">→</span> provisioning HTTPS cert via tailscale</div>
-            <div class="term-out" data-step><span class="term-arrow">→</span> exposing https://immich.tail-cabin.ts.net (tailnet-only)</div>
+            <div class="term-out" data-step><span class="term-arrow">→</span> exposing https://immich.tail-ryra.ts.net (tailnet-only)</div>
             <div class="term-out term-blank" data-step>&nbsp;</div>
             <div class="term-out term-ok" data-step data-reveal-chip>immich is running.</div>
-            <div class="term-out" data-step>  URL: https://immich.tail-cabin.ts.net</div>
+            <div class="term-out" data-step>  URL: https://immich.tail-ryra.ts.net</div>
             <div class="term-line" data-step><span class="term-prompt">$</span><span class="term-cmd">ryra list</span></div>
             <div class="term-out" data-step style="padding-left: 0;">
               <table class="term-table">
@@ -175,8 +175,8 @@ const principles = [
                 <tbody>
                   <tr><td class="term-name">caddy</td><td class="term-up">running</td><td>http://127.0.0.1:8080</td></tr>
                   <tr><td class="term-name">forgejo</td><td class="term-up">running</td><td>http://127.0.0.1:3000</td></tr>
-                  <tr><td class="term-name">immich</td><td class="term-up">running</td><td>https://immich.tail-cabin.ts.net</td></tr>
-                  <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>https://vault.tail-cabin.ts.net</td></tr>
+                  <tr><td class="term-name">immich</td><td class="term-up">running</td><td>https://immich.tail-ryra.ts.net</td></tr>
+                  <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>https://vault.tail-ryra.ts.net</td></tr>
                 </tbody>
               </table>
             </div>
@@ -204,7 +204,7 @@ const principles = [
           <div class="features-head">
             <span class="features-eyebrow">What it does</span>
             <p class="features-claim">
-              Ryra is the <strong>only</strong> self-hosting tool that runs
+              Ryra is one of the <strong>few</strong> self-hosting tools that runs
               <strong>daemonless</strong> and <strong>rootless</strong> on podman and
               systemd, with every service tested in <strong>virtual machines</strong>.
             </p>
@@ -314,7 +314,7 @@ const principles = [
                 </p>
                 <pre class="example-cmd"><code><span class="p">$</span> ryra add openclaw</code></pre>
                 <p class="example-foot">
-                  And 19 more in the bundled registry. <a href="/services/">Browse them all →</a>
+                  More in the bundled registry. <a href="/services/">Browse them all →</a>
                 </p>
               </div>
               <div class="example-visual">
@@ -588,7 +588,7 @@ const principles = [
         --mist: #6b8497;
         --snow: #f4ede2;
         --paper: #ede2d0;
-        --cabin: #d97a3a;
+        --amber: #d97a3a;
         --ember: #c25a2c;
         --moss: #4a6b3e;
         --pine: #2d4a3a;
@@ -658,11 +658,11 @@ const principles = [
         display: inline-flex; align-items: center; gap: 6px;
         font-family: var(--mono); font-size: 12px;
         padding: 5px 10px; border-radius: 999px;
-        background: color-mix(in oklab, var(--cabin) 12%, transparent);
+        background: color-mix(in oklab, var(--amber) 12%, transparent);
         color: var(--ember);
-        border: 1px solid color-mix(in oklab, var(--cabin) 24%, transparent);
+        border: 1px solid color-mix(in oklab, var(--amber) 24%, transparent);
       }
-      .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cabin); }
+      .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
       .gh-btn {
         display: inline-flex; align-items: center; gap: 8px;
         text-decoration: none;
@@ -755,7 +755,7 @@ const principles = [
         border-radius: 8px;
         display: inline-flex; align-items: center; gap: 12px;
         cursor: pointer;
-        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--cabin));
+        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--amber));
         max-width: 100%;
         min-width: 0;
         overflow: hidden;
@@ -767,12 +767,12 @@ const principles = [
       }
       .install .copy { flex: 0 0 auto; }
       .install .prompt { flex: 0 0 auto; }
-      .install .prompt { color: var(--cabin); user-select: none; }
+      .install .prompt { color: var(--amber); user-select: none; }
       .install .copy {
         font-size: 11px; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase;
         border-left: 1px solid #ffffff22; padding-left: 12px; margin-left: 6px;
       }
-      .install:hover .copy { opacity: 1; color: var(--cabin); }
+      .install:hover .copy { opacity: 1; color: var(--amber); }
 
       .meta-row {
         margin-top: 38px;
@@ -951,11 +951,11 @@ const principles = [
         line-height: 1.7;
         padding: 16px 18px;
         border-radius: 10px;
-        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--cabin));
+        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--amber));
         overflow-x: auto;
       }
       .example-cmd code { background: none; padding: 0; color: inherit; font-size: inherit; }
-      .example-cmd .p { color: var(--cabin); user-select: none; padding-right: 6px; }
+      .example-cmd .p { color: var(--amber); user-select: none; padding-right: 6px; }
 
       .example-visual { min-width: 0; }
       .example-img {
@@ -1140,7 +1140,7 @@ const principles = [
       }
       footer ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
       footer a { text-decoration: none; color: #c5d4e0; font-size: 14px; }
-      footer a:hover { color: var(--cabin); }
+      footer a:hover { color: var(--amber); }
       .footer-brand p {
         color: #8aa9bf; font-size: 14px; line-height: 1.55; max-width: 30ch;
         margin: 14px 0 0;

@@ -33,7 +33,7 @@ pub fn list_status(status: &ServiceStatus, active: bool, width: usize) -> String
 }
 
 /// `→` prefix for `print_plan_header`. Yellow is the closest 16-color
-/// match to ryra's cabin-orange brand.
+/// match to ryra's amber-orange brand.
 pub fn arrow() -> StyledObject<&'static str> {
     style("→").yellow()
 }

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "kabin-site",
+      "name": "ryra-site",
       "dependencies": {
         "@astrojs/starlight": "^0.38.2",
         "astro": "^6.0.8",
