@@ -1,64 +1,53 @@
 ---
 title: Exposing Services
-description: Control how your services are accessed from the network.
+description: How --url and --auth change what ryra add wires up.
 ---
 
-By default, services bind to a dynamically allocated port on localhost. To make them accessible via a domain name with HTTPS, use Caddy as a reverse proxy.
+`ryra add <service>` is the only command you need. Two optional flags change how the service is reached and authenticated:
 
-## Local access (default)
+- `--url https://...` gives the service a public URL.
+- `--auth` wires it to SSO.
 
-When you run `ryra add <service>` without any flags, the service is only accessible on the host via `localhost:<port>`. Check the assigned port with:
+Use either, both, or neither.
 
-```bash
-ryra config <service>
-```
-
-## Public URL with Caddy
-
-To expose a service on a public URL with automatic HTTPS:
-
-1. **Install Caddy** (if not already installed):
-
-   ```bash
-   ryra add caddy
-   ```
-
-2. **Add a service with `--url`**:
-
-   ```bash
-   ryra add vaultwarden --url https://vault.example.com
-   ```
-
-Ryra adds a site block to the Caddyfile that routes `vault.example.com` to the service's port. Caddy handles TLS certificate provisioning automatically.
-
-When you remove a service with `ryra remove`, its Caddy route is cleaned up automatically.
-
-## Using your own reverse proxy
-
-If you already run nginx, Traefik, a Cloudflare Tunnel, a Tailscale Funnel, or any other external routing, skip `ryra add caddy`. Still pass `--url` to tell Ryra the public URL your setup exposes:
+## Default: localhost
 
 ```bash
-ryra add vaultwarden --url https://vault.example.com
+ryra add forgejo
 ```
 
-Ryra uses the URL to populate template variables (OIDC callback URLs, email links, `{{service.external_url}}`) but won't touch the Caddyfile or generate certs. Point your reverse proxy at the service's `http://127.0.0.1:<port>` binding shown by `ryra list`.
+Binds to `localhost:<dynamic-port>`. Find the port with `ryra config forgejo`.
 
-## Authentication with Authelia
+## With a public URL
 
-To add SSO authentication to a service:
+```bash
+ryra add forgejo --url https://git.example.com
+```
 
-1. **Install Authelia**:
+If Caddy is installed (`ryra add caddy`), ryra adds a site block routing `git.example.com` to the service's port; Caddy provisions TLS automatically. Removing the service cleans up the route.
 
-   ```bash
-   ryra add authelia --url https://auth.example.com
-   ```
+If Caddy isn't installed, ryra leaves routing to whatever you already run (nginx, Traefik, Cloudflare Tunnel, Tailscale Funnel, etc.). It still uses the URL to populate template variables for OIDC callbacks, email links, and `{{service.external_url}}`. Point your reverse proxy at the `http://127.0.0.1:<port>` shown by `ryra list`.
 
-2. **Add a service with `--auth`**:
+## With SSO
 
-   ```bash
-   ryra add forgejo --auth --url https://git.example.com
-   ```
+```bash
+ryra add forgejo --auth
+```
 
-Services with native OIDC support get an OIDC client registered with Authelia and the matching env vars injected at install time. Services without native OIDC get Caddy forward auth instead, so Authelia handles login at the proxy level.
+Authelia auto-installs at `https://auth.internal:<port>` if it isn't there yet, and the service is wired in. To pick the Authelia URL yourself, add Authelia first:
+
+```bash
+ryra add authelia --url https://auth.example.com
+```
+
+Services with native OIDC get an OIDC client registered with Authelia and the matching env vars injected at install time. Services without native OIDC get Caddy forward auth, so Authelia handles login at the proxy level.
 
 Run `ryra search` to see which services advertise `oidc` in the `SUPPORTS` column. As of v0.1.0 that includes Forgejo, Immich, Nextcloud, Open WebUI, Paperless-ngx, Seafile, Synapse, Vikunja, and Zammad.
+
+## Combine them
+
+```bash
+ryra add forgejo --auth --url https://git.example.com
+```
+
+The two flags are independent: each works with or without the other.

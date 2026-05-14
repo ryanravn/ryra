@@ -1,12 +1,13 @@
 # Ryra
 
-[ryra.dev](https://ryra.dev) · [Docs](https://ryra.dev/docs) · [Install](#install)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENCE.md)
+[![CI](https://github.com/ryanravn/ryra/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanravn/ryra/actions/workflows/ci.yml)
 
-**Self-host Supabase, Immich, Forgejo, Nextcloud, Vaultwarden and a dozen more — one command per service.**
+> Self-host anything, lifecycle-tested in virtual machines.
 
-Ryra is a CLI for running self-hosted services on a single Linux box. Each `ryra add <service>` pulls a container image, writes a systemd quadlet, starts the service under rootless Podman, and — if you want it — wires up HTTPS via Caddy and SSO via Authelia. No daemon.
+Ryra scaffolds **rootless**, **daemonless** **podman** containers wired into a shared **SSO** and **email** setup. The bundled registry covers useful services, each **lifecycle-tested** in a fresh virtual machine, and the test framework is simple enough that you can have an AI add new services and prove they work the same way.
 
-Bring your own reverse proxy if you prefer: Cloudflare Tunnel, Tailscale Funnel, nginx — pass `--url https://…` and Ryra leaves routing alone.
+[Website](https://ryra.dev) · [Docs](https://ryra.dev/intro/) · [Services](https://ryra.dev/services/)
 
 ## Install
 
@@ -14,89 +15,61 @@ Bring your own reverse proxy if you prefer: Cloudflare Tunnel, Tailscale Funnel,
 curl -fsSL https://ryra.dev/install.sh | sh
 ```
 
-Works on Debian, Ubuntu, Fedora, and Arch and any other Linux system with Systemd and Podman.
+Works on Debian, Ubuntu, Fedora, Arch, and any Linux with systemd and Podman.
 
-## Quick start
+## What it does
+
+`ryra add <service>` reads a recipe from a curated registry and writes:
+
+- A **rootless Podman** container, owned by your user
+- A **systemd quadlet**, so `systemctl --user` and `journalctl --user` work like normal
+- Optionally: a **Caddy** route with auto-HTTPS, and an **Authelia** OIDC client for SSO
+
+Service data lives at `~/.local/share/services/<name>/`. Back it up with `tar`. Uninstall ryra and your stack keeps running, because the systemd units and containers stay.
+
+## Why
+
+Self-hosting one service is a weekend of docker-compose files, reverse proxy configs, and TLS certs. Self-hosting ten is a part-time job. Ryra collapses each of those weekends into `ryra add <service>`, and every service in the registry is lifecycle-tested in a fresh QEMU VM before it ships.
+
+## Examples
+
+### Replace your cloud storage
+
+<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/seafile.webp" alt="Seafile file storage UI" width="900" />
+
+```sh
+ryra add seafile
+```
+
+### Replace your todo list
+
+<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/vikunja.webp" alt="Vikunja task manager UI" width="900" />
+
+```sh
+ryra add vikunja
+```
+
+### Run your own AI gateway
+
+<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/openclaw.webp" alt="OpenClaw AI gateway UI" width="900" />
 
 ```sh
 ryra add openclaw
 ```
 
-Ryra pulls the image, prompts for any API keys or passwords the service needs, generates a systemd quadlet, and starts the container under rootless Podman. `ryra list` shows what's running.
+### Install anything
 
-## What you can run
+<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/custom.webp" alt="A service.toml definition" width="900" />
 
-| | | |
-|-|-|-|
-| **OpenClaw** — AI assistant gateway | **Open WebUI** — LLM frontend | **Supabase** — backend-as-a-service |
-| **Immich** — photos | **Uptime Kuma** — monitoring | **Caddy** — reverse proxy |
-| **Vaultwarden** — password vault | **Nextcloud** — files & collaboration | **Twenty** — CRM |
-| **Paperless-ngx** — docs | **Authelia** — SSO/OIDC | **Zammad** — helpdesk |
-| **Seafile** — file sync | **DocuSeal** — e-signatures | **Forgejo** — git forge |
-| **Synapse** — Matrix chat | **Vikunja** — tasks | **Inbucket** — dev SMTP |
+The registry is plain TOML and quadlet files. Drop a definition in for your own app, point ryra at your registry, and install it the same way as anything bundled.
 
-Run `ryra search` to browse the full list with install status.
+## Services
 
-## Design
+Run `ryra search` for the full list, or browse the [services catalog](https://ryra.dev/services/). The bundled registry includes Immich, Forgejo, Vaultwarden, Nextcloud, Twenty CRM, Paperless-ngx, Synapse, Supabase, Open WebUI, Authelia, Uptime Kuma, Caddy, DocuSeal, Zammad, Seafile, Vikunja, OpenClaw, and more.
 
-- Containers run under your user with rootless Podman. Ryra is a stateless CLI — no background process.
-- systemd owns the lifecycle via Podman quadlets. `systemctl --user` and `journalctl --user` work as normal.
-- Service data lives in `~/.local/share/services/<name>/`. `ryra remove` preserves it by default; `--purge` wipes it.
-- The registry is plain TOML in `registry/`, one directory per service. Fork, edit, contribute back — no plugin system.
-- Caddy and Authelia are services themselves, added the same way as anything else, only needed if you want HTTPS / SSO.
-- E2E tests run in ephemeral QEMU VMs — fresh Debian or Fedora install, SSH in, run `ryra add`, assert.
+## Documentation
 
-## How it works
-
-1. **`ryra add <service>`** reads `registry/<service>/service.toml`, allocates a port, writes a quadlet + `.env` + `metadata.toml` to `~/.local/share/services/<service>/`, drops a symlink at `~/.config/containers/systemd/<service>.container` so systemd-quadlet finds it, and asks systemd to start it. The first `ryra add` also creates `~/.config/services/preferences.toml` and offers to enable `loginctl linger` so services survive logout.
-2. **`--url <public-url>`** records where the service will be reachable. If Caddy is installed, Ryra also adds a site block routing that hostname to the container. If you run your own reverse proxy (nginx, Cloudflare Tunnel, Tailscale Funnel, …), Ryra leaves the routing alone and just uses the URL to populate OIDC callbacks and email links.
-3. **`--auth`** registers an OIDC client with the auth provider and either (a) injects credentials into the service's native OIDC config, or (b) puts Authelia's forward-auth in front of the service via Caddy.
-
-### Where things live
-
-| Path | What |
-|---|---|
-| `~/.local/share/services/<svc>/` | Everything for one service: quadlets, `.env`, `metadata.toml`, configs, bind-mounted runtime data |
-| `~/.config/containers/systemd/<svc>.container` | Symlink → the real quadlet in the service's folder, so systemd-quadlet finds it |
-| `~/.config/services/preferences.toml` | Ryra's own config (default SMTP relay, auth provider, etc.) |
-
-`tar czf services.tar.gz --dereference ~/.local/share/services/` captures every service's full state in one shot.
-
-## Managing services
-
-```sh
-ryra list                        # installed services + orphans
-ryra doctor                      # diagnose env + install state, surface fixes
-ryra remove nextcloud            # stop + deregister, keep data
-ryra remove nextcloud --purge    # also wipe the data dir and volumes
-ryra remove -a                   # remove everything, preserve data
-ryra reset                       # full teardown, including Ryra's own config
-```
-
-An "orphan" is a service you removed whose data is still on disk. `ryra list` shows them alongside installed services; `ryra remove <name> --purge` cleans them up.
-
-## Development
-
-Requires Rust stable.
-
-```sh
-cargo build
-cargo run -- add whoami
-```
-
-### E2E tests
-
-Tests run in ephemeral QEMU VMs — each test gets a fresh Linux install. Requires KVM and QEMU.
-
-```sh
-cargo run -- test                    # every test
-cargo run -- test immich             # name filter
-cargo run -- test list -v            # list tests with step detail
-cargo run -- test --parallel=3       # 3 VMs in parallel
-cargo run -- test --keep-alive       # boot once, SSH in to poke around
-```
-
-See `CLAUDE.md` for architectural conventions and `docs/` for deep-dives.
+Full docs at [ryra.dev/intro](https://ryra.dev/intro/).
 
 ## License
 

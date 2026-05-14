@@ -28,8 +28,8 @@ const features = [
   {
     icon: "spark",
     tag: "04",
-    title: "Bring your own routing.",
-    body: "Caddy, Tailscale Funnel, Cloudflare Tunnel, nginx, or no proxy at all. Pass --url and ryra populates OIDC callbacks and email links, then leaves the actual routing to whatever you already run.",
+    title: "Easily upgradable.",
+    body: "Container images update themselves on a systemd timer via podman-auto-update. When the registry ships a new env var or a quadlet fix, ryra upgrade shows you the diff, backs up the old version, and re-renders in place. Roll back with ryra revert if something breaks.",
   },
   {
     icon: "layers",
@@ -94,7 +94,7 @@ const principles = [
           Ryra
         </a>
         <nav class="nav">
-          <a href="#features">Features</a>
+          <a href="#features">What it does</a>
           <a href="#examples">Examples</a>
           <a href="#quickstart">Quickstart</a>
           <a href="#testing">Testing</a>
@@ -102,7 +102,7 @@ const principles = [
         </nav>
         <div class="topbar-right">
           <a href="/intro/" class="docs-link">Docs</a>
-          <span class="pill"><span class="dot"></span>v0.1.0 · pre-release</span>
+          <span class="pill"><span class="dot"></span>v0.1.0</span>
           <a class="gh-btn" href="https://github.com/ryanravn/ryra" target="_blank" rel="noopener">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path
@@ -121,13 +121,12 @@ const principles = [
         <div class="hero-inner">
           <div>
             <h1 class="headline">
-              The <em>container scaffolding</em> tool made for AI.
+              Self-host anything, <em>lifecycle-tested</em> in virtual machines.
             </h1>
             <p class="lede">
-              Ryra is a CLI that deploys a self-hosted service with one declarative command: a rootless podman container,
-              a systemd unit, optional reverse proxy and SSO. The registry is plain TOML, the output is structured text,
-              and every service ships with an end-to-end VM test, so an AI agent can build, verify, and revert a stack
-              as confidently as a human.
+              Scaffolds <strong>rootless</strong>, <strong>daemonless</strong> <strong>podman</strong> containers wired into a shared <strong>SSO</strong> and <strong>email</strong> setup.
+              The bundled registry covers useful services, each <strong>lifecycle-tested</strong> in a fresh virtual machine, and the
+              test framework is simple enough that you can have an AI add new services and prove they work the same way.
             </p>
             <div class="cta-row">
               <button class="install" id="copy-install" type="button">
@@ -203,7 +202,7 @@ const principles = [
       <section class="bleed" id="features">
         <div class="container">
           <div class="features-head">
-            <span class="features-eyebrow">Features</span>
+            <span class="features-eyebrow">What it does</span>
             <p class="features-claim">
               Ryra is the <strong>only</strong> self-hosting tool that runs
               <strong>daemonless</strong> and <strong>rootless</strong> on podman and
@@ -252,6 +251,11 @@ const principles = [
               <h2 class="section-title">Examples</h2>
             </div>
           </div>
+
+          <p class="section-sub examples-lead">
+            Run <code>ryra search</code> or view <a href="/services/">available services</a> to see what's in the bundled
+            registry. A few of the highlights:
+          </p>
 
           <div class="examples-list">
             <article class="example">
@@ -530,7 +534,6 @@ const principles = [
           <ul>
             <li><a href="/intro/">Docs</a></li>
             <li><a href="/getting-started/quick-start/">Quick start</a></li>
-            <li><a href="/guides/configuration/">Configuration</a></li>
             <li><a href="/guides/exposure-modes/">Exposure modes</a></li>
           </ul>
         </div>
@@ -725,6 +728,7 @@ const principles = [
         text-wrap: pretty;
         margin: 0 0 30px;
       }
+      .lede strong { font-weight: 600; color: var(--ink); }
       .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
       .cta {
         display: inline-flex; align-items: center; gap: 10px;
@@ -884,6 +888,11 @@ const principles = [
 
       /* ─── Examples ─── */
       .examples { background: var(--paper); }
+      .examples .section-head { margin-bottom: 18px; }
+      .examples-lead {
+        max-width: none;
+        margin: 0 0 40px;
+      }
       .examples-list {
         display: grid;
         gap: 56px;

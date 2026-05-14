@@ -7,7 +7,13 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Ryra",
+      logo: {
+        src: "./src/assets/logo.svg",
+      },
       customCss: ["./src/styles/custom.css"],
+      components: {
+        SocialIcons: "./src/components/docs/SocialIcons.astro",
+      },
       expressiveCode: {
         themes: ["github-dark"],
         styleOverrides: {
@@ -74,7 +80,6 @@ export default defineConfig({
         {
           label: "Guides",
           items: [
-            { label: "Configuration", slug: "guides/configuration" },
             { label: "Exposure Modes", slug: "guides/exposure-modes" },
           ],
         },

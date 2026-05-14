@@ -82,14 +82,6 @@ const total = groups.reduce((acc, g) => acc + g.items.length, 0);
 
   <pre><code>ryra add &lt;name&gt;</code></pre>
 
-  <p>
-    Add <code>--url https://&lt;host&gt;</code> to publish through Caddy (or
-    your own reverse proxy), and <code>--auth</code> to wire SSO via Authelia.
-    The badges below show which services have native integrations. Anything
-    without an <strong>OIDC</strong> badge can still sit behind Authelia via
-    Caddy forward auth.
-  </p>
-
   {groups.map((group) => (
     <section style="margin: 2.4rem 0;">
       <h2>{group.title}</h2>

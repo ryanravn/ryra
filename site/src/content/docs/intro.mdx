@@ -42,8 +42,6 @@ curl -fsSL https://ryra.dev/install.sh | sh
 2. Ryra reads `registry/<service>/service.toml`, allocates a port, and writes a systemd quadlet, `.env`, and `metadata.toml` to `~/.local/share/services/<service>/`
 3. **Rootless Podman** runs the container under your user (no root containers, no docker daemon)
 4. **A systemd quadlet** owns the container lifecycle, so `systemctl --user` and `journalctl --user` work as normal
-5. **Caddy** (optional) is configured as a reverse proxy with automatic HTTPS when you pass `--url`
-6. **Authelia** (optional) issues OIDC clients when you pass `--auth`
 
 Every service is isolated in its own container and systemd scope. If one service breaks, the others keep running.
 
@@ -59,7 +57,7 @@ Service data lives under `~/.local/share/services/<name>/`. `tar czf services.ta
 
 ## Available services
 
-Run `ryra search` to see the full list with install status. The bundled registry includes:
+Run `ryra search` to see the full list with install status, or browse the [services catalog](/services/) on the web. The bundled registry includes:
 
 | Service | Description |
 |---------|-------------|
@@ -81,12 +79,6 @@ Run `ryra search` to see the full list with install status. The bundled registry
 | **Inbucket** | Disposable SMTP test server with web UI |
 | **Caddy** | Reverse proxy with automatic HTTPS |
 | **Authelia** | SSO and 2FA via OIDC |
-
-## What Ryra is not
-
-- **Not a PaaS**: it's a CLI tool that generates systemd units, not a managed platform.
-- **Not multi-server**: Ryra manages one machine. For multiple servers, run independent instances.
-- **Not Docker**: Ryra uses Podman exclusively. No Docker daemon required.
 
 ## License
 

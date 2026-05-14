@@ -140,6 +140,13 @@ header [class*="site-title"] {
   font-weight: 600;
   letter-spacing: -0.01em;
   font-size: 22px;
+  gap: 10px;
+}
+
+/* Constrain the logo to the same 26x26 mark used on the landing topbar. */
+.site-title img {
+  width: 26px;
+  height: 26px;
 }
 
 /* Docs header: same blurred snow chrome as the landing topbar. */

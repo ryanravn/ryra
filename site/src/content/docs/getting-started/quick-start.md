@@ -52,14 +52,16 @@ ryra config vaultwarden
 
 ```bash
 ryra search
-ryra search forgejo    # filter
 ```
 
 The `SUPPORTS` column tells you whether a service has native OIDC and/or SMTP integration.
 
 ## Next steps
 
-- [Configure reverse proxy, SMTP, and auth](/guides/configuration/) for production use
-- Add `--url https://service.example.com` to expose services through Caddy with automatic HTTPS
-- Add `--auth` to enable SSO authentication via Authelia
-- Run `ryra remove <service>` to stop and deregister a service. By default the data is preserved on disk; pass `--purge` to wipe it too.
+Optional flags on `ryra add`:
+
+- `--url https://...` for a public URL (auto-HTTPS if Caddy is installed)
+- `--auth` for SSO (Authelia auto-installs)
+- `--smtp=inbucket` for a local test inbox; `ryra config smtp` for a real relay
+
+`ryra remove <service>` to uninstall. Data is preserved; add `--purge` to wipe it too.
