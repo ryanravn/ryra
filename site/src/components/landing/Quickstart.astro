@@ -25,19 +25,20 @@ const steps: Step[] = [
 <span class="k4">$</span><span class="k5"> ryra search</span>
 <span class="k5">SERVICE       SUPPORTS      DESCRIPTION</span>
 <span class="k5">────────────────────────────────────────────────</span>
-<span class="k5">forgejo       oidc, smtp    Self-hosted Git forge</span>
+<span class="k5">seafile       oidc, smtp    File sync & share</span>
 <span class="k5">immich        oidc          Photo & video management</span>
 <span class="k5">nextcloud     oidc, smtp    Files & collaboration</span>
-<span class="k5">vaultwarden   smtp          Bitwarden-compatible vault</span>
+<span class="k5">vaultwarden   smtp          Password vault</span>
 <span class="k5">…</span>`,
   },
   {
     title: "Add a service",
     desc: "Ryra prompts for the things that matter (SMTP, SSO) and writes the quadlet. No flags to memorise.",
-    file: "ryra add forgejo",
-    code: `<span class="k4">$</span><span class="k5"> ryra add forgejo</span>
-<span class="k1">→</span><span class="k5"> pulls codeberg.org/forgejo/forgejo:11</span>
-<span class="k1">→</span><span class="k5"> writes ~/.local/share/services/forgejo/forgejo.container</span>
+    file: "ryra add seafile",
+    code: `<span class="k4">$</span><span class="k5"> ryra add seafile</span>
+<span class="k1">→</span><span class="k5"> pulls docker.io/seafileltd/seafile-mc:13</span>
+<span class="k1">→</span><span class="k5"> pulls docker.io/mariadb:11</span>
+<span class="k1">→</span><span class="k5"> writes ~/.local/share/services/seafile/seafile.container</span>
 
 <span class="k3">? SMTP for outgoing email?</span><span class="k5"> (y/N) › </span><span class="k1">y</span>
 <span class="k3">?   Relay host ›</span><span class="k5"> smtp.fastmail.com</span>
@@ -46,12 +47,12 @@ const steps: Step[] = [
 
 <span class="k3">? Sign-on via Authelia (OIDC)?</span><span class="k5"> (y/N) › </span><span class="k1">y</span>
 <span class="k1">→</span><span class="k5"> registering OIDC client with authelia</span>
-<span class="k1">→</span><span class="k5"> injecting credentials into forgejo .env</span>
+<span class="k1">→</span><span class="k5"> injecting credentials into seafile .env</span>
 
-<span class="k1">→</span><span class="k5"> starts forgejo on http://127.0.0.1:3000</span>
+<span class="k1">→</span><span class="k5"> starts seafile on http://127.0.0.1:8000</span>
 
-<span class="k5">forgejo is running.</span>
-<span class="k5">  URL: http://127.0.0.1:3000</span>
+<span class="k5">seafile is running.</span>
+<span class="k5">  URL: http://127.0.0.1:8000</span>
 <span class="k5">  Sign in with the SSO button or admin/$INITIAL_PASSWORD.</span>`,
   },
   {
@@ -61,21 +62,21 @@ const steps: Step[] = [
     code: `<span class="k3"># ryra has done its job. Everything that's running</span>
 <span class="k3"># is plain systemd + rootless podman.</span>
 
-<span class="k4">$</span><span class="k5"> systemctl --user status forgejo.service</span>
-<span class="k1">●</span><span class="k5"> forgejo.service - Forgejo</span>
+<span class="k4">$</span><span class="k5"> systemctl --user status seafile.service</span>
+<span class="k1">●</span><span class="k5"> seafile.service - Seafile</span>
 <span class="k5">     Active: </span><span class="k1">active (running)</span><span class="k5"> since Tue 14:22:18 CEST</span>
 
-<span class="k4">$</span><span class="k5"> journalctl --user -fu forgejo.service</span>
-<span class="k4">$</span><span class="k5"> podman logs systemd-forgejo</span>
+<span class="k4">$</span><span class="k5"> journalctl --user -fu seafile.service</span>
+<span class="k4">$</span><span class="k5"> podman logs systemd-seafile</span>
 
 <span class="k3"># everything lives in plain files</span>
-<span class="k4">$</span><span class="k5"> ls ~/.local/share/services/forgejo/</span>
-<span class="k5">forgejo.container  .env  metadata.toml  data/</span>
+<span class="k4">$</span><span class="k5"> ls ~/.local/share/services/seafile/</span>
+<span class="k5">seafile.container  mariadb.container  .env  metadata.toml  data/  db-data/</span>
 
 <span class="k3"># uninstall ryra. your services keep running.</span>
 <span class="k4">$</span><span class="k5"> rm /usr/local/bin/ryra</span>
-<span class="k4">$</span><span class="k5"> systemctl --user restart forgejo.service</span>
-<span class="k1">●</span><span class="k5"> forgejo.service - </span><span class="k1">active (running)</span><span class="k5">   ← still works.</span>`,
+<span class="k4">$</span><span class="k5"> systemctl --user restart seafile.service</span>
+<span class="k1">●</span><span class="k5"> seafile.service - </span><span class="k1">active (running)</span><span class="k5">   ← still works.</span>`,
   },
 ];
 ---
