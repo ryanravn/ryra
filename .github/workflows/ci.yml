@@ -203,30 +203,19 @@ jobs:
           artifacts: "ryra-*.tar.gz,ryra-*.tar.gz.asc,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
           makeLatest: true
 
-  publish-site:
-    needs: check
+  deploy-pages:
+    needs: build-linux
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: gh-pages
-        continue-on-error: true
-
-      - name: Ensure gh-pages branch is checked out locally
-        run: |
-          if [ ! -d gh-pages/.git ]; then
-            mkdir -p gh-pages
-            git -C gh-pages init -q
-          fi
-          if ! git -C gh-pages show-ref --verify --quiet refs/heads/gh-pages; then
-            git -C gh-pages checkout -q -B gh-pages
-          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -239,52 +228,6 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run build
-
-      - name: Sync site to gh-pages
-        run: |
-          # Preserve package-repo paths owned by publish-repos.
-          rsync -a --delete \
-            --exclude='/deb' \
-            --exclude='/rpm' \
-            --exclude='/pacman' \
-            --exclude='/gpg.key' \
-            --exclude='/CNAME' \
-            --exclude='/.git' \
-            site/dist/ gh-pages/
-          echo "ryra.dev" > gh-pages/CNAME
-
-      - name: Push to gh-pages
-        run: |
-          cd gh-pages
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Deploy site"
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
-
-  publish-repos:
-    needs: [build-linux, publish-site]
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: gh-pages
-        continue-on-error: true
-
-      - name: Ensure gh-pages branch is checked out locally
-        run: |
-          if [ ! -d gh-pages/.git ]; then
-            mkdir -p gh-pages
-            git -C gh-pages init -q
-          fi
-          if ! git -C gh-pages show-ref --verify --quiet refs/heads/gh-pages; then
-            git -C gh-pages checkout -q -B gh-pages
-          fi
 
       - uses: actions/download-artifact@v4
         with:
@@ -299,16 +242,16 @@ jobs:
       - name: Install repo tools
         run: sudo apt-get update && sudo apt-get install -y createrepo-c
 
-      - name: Build APT repository
+      - name: Assemble APT repository
         run: |
-          mkdir -p gh-pages/deb/pool \
-            gh-pages/deb/dists/stable/main/binary-amd64 \
-            gh-pages/deb/dists/stable/main/binary-arm64
+          mkdir -p site/dist/deb/pool \
+            site/dist/deb/dists/stable/main/binary-amd64 \
+            site/dist/deb/dists/stable/main/binary-arm64
 
-          cp artifacts/ryra_amd64.deb gh-pages/deb/pool/
-          cp artifacts/ryra_arm64.deb gh-pages/deb/pool/
+          cp artifacts/ryra_amd64.deb site/dist/deb/pool/
+          cp artifacts/ryra_arm64.deb site/dist/deb/pool/
 
-          cd gh-pages/deb
+          cd site/dist/deb
 
           dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
           gzip -k -f dists/stable/main/binary-amd64/Packages
@@ -330,44 +273,44 @@ jobs:
           gpg --batch --yes --armor --detach-sign -o Release.gpg Release
           gpg --batch --yes --armor --clearsign -o InRelease Release
 
-      - name: Build RPM repository
+      - name: Assemble RPM repository
         run: |
-          mkdir -p gh-pages/rpm/x86_64 gh-pages/rpm/aarch64
+          mkdir -p site/dist/rpm/x86_64 site/dist/rpm/aarch64
 
-          cp artifacts/ryra.x86_64.rpm gh-pages/rpm/x86_64/
-          cp artifacts/ryra.aarch64.rpm gh-pages/rpm/aarch64/
+          cp artifacts/ryra.x86_64.rpm site/dist/rpm/x86_64/
+          cp artifacts/ryra.aarch64.rpm site/dist/rpm/aarch64/
 
-          createrepo_c gh-pages/rpm/x86_64
-          createrepo_c gh-pages/rpm/aarch64
+          createrepo_c site/dist/rpm/x86_64
+          createrepo_c site/dist/rpm/aarch64
 
-          gpg --batch --yes --armor --detach-sign -o gh-pages/rpm/x86_64/repodata/repomd.xml.asc gh-pages/rpm/x86_64/repodata/repomd.xml
-          gpg --batch --yes --armor --detach-sign -o gh-pages/rpm/aarch64/repodata/repomd.xml.asc gh-pages/rpm/aarch64/repodata/repomd.xml
+          gpg --batch --yes --armor --detach-sign -o site/dist/rpm/x86_64/repodata/repomd.xml.asc site/dist/rpm/x86_64/repodata/repomd.xml
+          gpg --batch --yes --armor --detach-sign -o site/dist/rpm/aarch64/repodata/repomd.xml.asc site/dist/rpm/aarch64/repodata/repomd.xml
 
-      - name: Build Pacman repository
+      - name: Assemble Pacman repository
         run: |
-          mkdir -p gh-pages/pacman/x86_64 gh-pages/pacman/aarch64
+          mkdir -p site/dist/pacman/x86_64 site/dist/pacman/aarch64
 
-          cp artifacts/ryra-*-x86_64.pkg.tar.zst gh-pages/pacman/x86_64/
-          cp artifacts/ryra-*-aarch64.pkg.tar.zst gh-pages/pacman/aarch64/
+          cp artifacts/ryra-*-x86_64.pkg.tar.zst site/dist/pacman/x86_64/
+          cp artifacts/ryra-*-aarch64.pkg.tar.zst site/dist/pacman/aarch64/
 
-          docker run --rm -v "$PWD/gh-pages/pacman:/repo" archlinux:latest bash -c '
+          docker run --rm -v "$PWD/site/dist/pacman:/repo" archlinux:latest bash -c '
             pacman -Sy --noconfirm
             repo-add /repo/x86_64/ryra.db.tar.gz /repo/x86_64/*.pkg.tar.zst
             repo-add /repo/aarch64/ryra.db.tar.gz /repo/aarch64/*.pkg.tar.zst
           '
 
-      - name: Export public key
-        run: gpg --armor --export > gh-pages/gpg.key
+      - name: Export GPG public key
+        run: gpg --armor --export > site/dist/gpg.key
 
-      - name: Push to gh-pages
-        run: |
-          cd gh-pages
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Update package repositories"
-          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
 
   publish-crates:
     needs: check
