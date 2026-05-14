@@ -218,13 +218,14 @@ jobs:
           path: gh-pages
         continue-on-error: true
 
-      - name: Init gh-pages if missing
+      - name: Ensure gh-pages branch is checked out locally
         run: |
           if [ ! -d gh-pages/.git ]; then
             mkdir -p gh-pages
-            cd gh-pages
-            git init
-            git checkout -b gh-pages
+            git -C gh-pages init -q
+          fi
+          if ! git -C gh-pages show-ref --verify --quiet refs/heads/gh-pages; then
+            git -C gh-pages checkout -q -B gh-pages
           fi
 
       - uses: actions/setup-node@v4
@@ -275,13 +276,14 @@ jobs:
           path: gh-pages
         continue-on-error: true
 
-      - name: Init gh-pages if missing
+      - name: Ensure gh-pages branch is checked out locally
         run: |
           if [ ! -d gh-pages/.git ]; then
             mkdir -p gh-pages
-            cd gh-pages
-            git init
-            git checkout -b gh-pages
+            git -C gh-pages init -q
+          fi
+          if ! git -C gh-pages show-ref --verify --quiet refs/heads/gh-pages; then
+            git -C gh-pages checkout -q -B gh-pages
           fi
 
       - uses: actions/download-artifact@v4
