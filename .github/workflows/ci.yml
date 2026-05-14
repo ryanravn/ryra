@@ -121,10 +121,22 @@ jobs:
             echo "::error::No secret GPG key found for RPM signing"
             exit 1
           fi
-          echo "%_gpg_name ${KEY_ID}" > ~/.rpmmacros
+          # Default %__gpg_sign_cmd expects gpg-agent / interactive pinentry.
+          # In CI there's no TTY, so force loopback and an empty passphrase
+          # (the APT_GPG_PRIVATE key has none, matching how gpg --batch is
+          # used for tarballs and repo metadata).
+          cat > ~/.rpmmacros <<EOF
+          %_gpg_name ${KEY_ID}
+          %__gpg_sign_cmd %{__gpg} gpg --batch --no-tty --pinentry-mode loopback --passphrase '' --no-verbose --no-armor --no-secmem-warning --digest-algo sha256 -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+          EOF
+          sed -i 's/^          //' ~/.rpmmacros
           rpmsign --addsign ryra.${{ matrix.rpm_arch }}.rpm
-          gpg --armor --export "$KEY_ID" | rpm --import -
-          rpm -Kv ryra.${{ matrix.rpm_arch }}.rpm
+          sig=$(rpm -qp --queryformat '%{SIGPGP:pgpsig}' ryra.${{ matrix.rpm_arch }}.rpm)
+          if [ -z "$sig" ] || [ "$sig" = "(none)" ]; then
+            echo "::error::RPM was not signed (SIGPGP=${sig})"
+            exit 1
+          fi
+          echo "Signed: $sig"
 
       - name: Build pacman package
         run: |
