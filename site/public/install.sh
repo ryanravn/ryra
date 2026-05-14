@@ -2,7 +2,7 @@
 set -eu
 
 REPO="ryanravn/ryra"
-PAGES_URL="https://ryanravn.github.io/ryra"
+PAGES_URL="https://ryra.dev"
 BASE_URL="https://github.com/${REPO}/releases/download/latest"
 
 main() {
