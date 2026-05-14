@@ -13,8 +13,8 @@ const features = [
   {
     icon: "branch",
     tag: "01",
-    title: "Daemonless.",
-    body: "Ryra writes systemd units and exits; systemd owns the lifecycle from there. Your services run as normal user-level units: restarted by systemd, logged to journald, managed with systemctl.",
+    title: "Daemonless and simple.",
+    body: "Every service is one folder under ~/.local/share/services/, symlinked into systemd's user generator path. Ryra writes the files and exits: systemctl manages them, journalctl shows their logs, tar backs them up. No daemon, no hidden state.",
   },
   {
     icon: "lock",
@@ -99,9 +99,9 @@ const principles = [
         <nav class="nav">
           <a href="#features">What it does</a>
           <a href="#examples">Examples</a>
+          <a href="#philosophy">Philosophy</a>
           <a href="#quickstart">Quickstart</a>
           <a href="#testing">Testing</a>
-          <a href="#philosophy">Philosophy</a>
         </nav>
         <div class="topbar-right">
           <a href="/intro/" class="docs-link">Docs</a>
@@ -405,7 +405,136 @@ const principles = [
         </div>
       </section>
 
-      <MountainDivider variant="b" from="var(--paper)" fill="var(--ink)" height={92} />
+      <MountainDivider variant="d" from="var(--paper)" fill="var(--linen)" height={92} />
+
+      <section class="bleed why" id="philosophy">
+        <div class="container">
+          <div class="section-head">
+            <div>
+              <h2 class="section-title">Philosophy</h2>
+            </div>
+          </div>
+
+          <div class="layout-list">
+            <article class="example">
+              <div class="example-text">
+                <span class="example-tag">/01</span>
+                <h3>A service is a folder.</h3>
+                <p>
+                  Every quadlet, env file, network, and bind-mounted data directory for a service lives
+                  under <code>~/.local/share/services/&lt;name&gt;/</code>. Back up the whole folder with
+                  <code>tar</code>, or just the data dirs like <code>db-data/</code> and <code>upload/</code>.
+                  Move it to another box, the service comes with it.
+                </p>
+              </div>
+              <div class="example-visual">
+                <div class="tree-viz" aria-label="Listing of ~/.local/share/services showing immich, openclaw, and seafile service folders, each containing quadlet files, config dirs, and bind-mounted data dirs.">
+                  <div class="tree-prompt"><span class="tree-user">user@fedora</span>:<span class="tree-path">~/.local/share/services</span><span class="tree-dollar">$</span> tree -L 2</div>
+<pre class="tree-body">.
+├── <span class="tree-dir">immich</span>
+│   ├── <span class="tree-dir">configs</span>
+│   ├── <span class="tree-dir">db-data</span>
+│   ├── immich.container
+│   ├── immich-machine-learning.container
+│   ├── immich.network
+│   ├── immich-postgres.container
+│   ├── immich-valkey.container
+│   ├── metadata.toml
+│   ├── <span class="tree-dir">model-cache</span>
+│   ├── service.manifest
+│   └── <span class="tree-dir">upload</span>
+├── <span class="tree-dir">openclaw</span>
+│   ├── <span class="tree-dir">config</span>
+│   ├── metadata.toml
+│   ├── openclaw.container
+│   └── service.manifest
+└── <span class="tree-dir">seafile</span>
+    ├── <span class="tree-dir">configs</span>
+    ├── <span class="tree-dir">db-data</span>
+    ├── metadata.toml
+    ├── seafile.container
+    ├── seafile-mariadb.container
+    ├── seafile.network
+    ├── seafile-redis.container
+    ├── service.manifest
+    └── <span class="tree-dir">shared</span></pre>
+                </div>
+              </div>
+            </article>
+
+            <article class="example reverse">
+              <div class="example-text">
+                <span class="example-tag">/02</span>
+                <h3>One file of preferences.</h3>
+                <p>
+                  SMTP credentials, OIDC provider, Tailscale key, custom registries: all the cross-service
+                  settings ryra reads at startup live in a single TOML file. The rest is just service folders.
+                </p>
+              </div>
+              <div class="example-visual">
+                <div class="tree-viz" aria-label="Listing of ~/.config/services showing a single file, preferences.toml.">
+                  <div class="tree-prompt"><span class="tree-user">user@fedora</span>:<span class="tree-path">~/.config/services</span><span class="tree-dollar">$</span> tree -L 1</div>
+<pre class="tree-body">.
+└── preferences.toml</pre>
+                </div>
+              </div>
+            </article>
+
+            <article class="example">
+              <div class="example-text">
+                <span class="example-tag">/03</span>
+                <h3>Symlinked into systemd.</h3>
+                <p>
+                  Each <code>.container</code> and <code>.network</code> is symlinked from its service folder
+                  into <code>~/.config/containers/systemd/</code>, where systemd's user generator picks it up.
+                  Remove the service and the symlink goes with it.
+                </p>
+              </div>
+              <div class="example-visual">
+                <div class="tree-viz tree-viz-wide" aria-label="Listing of ~/.config/containers/systemd showing each .container and .network file as a symlink pointing back to the matching file inside ~/.local/share/services/.">
+                  <div class="tree-prompt"><span class="tree-user">user@fedora</span>:<span class="tree-path">~/.config/containers/systemd</span><span class="tree-dollar">$</span> tree</div>
+<pre class="tree-body">.
+├── immich.container
+│       <span class="tree-arrow">→</span> <span class="tree-link">~/.local/share/services/immich/immich.container</span>
+├── immich-postgres.container
+│       <span class="tree-arrow">→</span> <span class="tree-link">~/.local/share/services/immich/immich-postgres.container</span>
+├── immich.network
+│       <span class="tree-arrow">→</span> <span class="tree-link">~/.local/share/services/immich/immich.network</span>
+├── openclaw.container
+│       <span class="tree-arrow">→</span> <span class="tree-link">~/.local/share/services/openclaw/openclaw.container</span>
+├── seafile.container
+│       <span class="tree-arrow">→</span> <span class="tree-link">~/.local/share/services/seafile/seafile.container</span>
+└── seafile.network
+        <span class="tree-arrow">→</span> <span class="tree-link">~/.local/share/services/seafile/seafile.network</span></pre>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="principles-row">
+            {principles.map((p) => (
+              <div class="principle">
+                <span class="num">{p.n}</span>
+                <div>
+                  <h4>{p.title}</h4>
+                  <p>{p.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style="display: flex; justify-content: center; margin-top: 56px;">
+            <a href="/intro/" class="cta cta-secondary">
+              Read the docs
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h14M13 6l6 6-6 6" />
+              </svg>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <MountainDivider variant="b" from="var(--linen)" fill="var(--ink)" height={92} />
 
       <section class="bleed quickstart" id="quickstart">
         <div class="container">
@@ -471,43 +600,7 @@ const principles = [
         </div>
       </section>
 
-      <MountainDivider variant="c" from="var(--snow)" fill="var(--paper)" height={92} />
-
-      <section class="bleed why" id="philosophy">
-        <div class="container">
-          <div class="why-grid">
-            <div>
-              <h2 class="section-title">Philosophy</h2>
-              <p class="section-sub" style="margin-top: 22px;">
-                Most of the time, all you need is one single machine to run a website, sync your files, or
-                keep your photos. A few hours, and the right tools. Ryra is the right tools: opinionated
-                where it has to be, out of the way everywhere else.
-              </p>
-            </div>
-            <div class="principles">
-              {principles.map((p) => (
-                <div class="principle">
-                  <span class="num">{p.n}</span>
-                  <div>
-                    <h4>{p.title}</h4>
-                    <p>{p.body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div style="display: flex; justify-content: center; margin-top: 56px;">
-            <a href="/intro/" class="cta cta-secondary">
-              Read the docs
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M5 12h14M13 6l6 6-6 6" />
-              </svg>
-            </a>
-          </div>
-        </div>
-      </section>
-
-      <MountainDivider variant="a" from="var(--paper)" fill="var(--fjord)" height={86} />
+      <MountainDivider variant="c" from="var(--snow)" fill="var(--fjord)" height={86} flip />
     </main>
 
     <footer>
@@ -591,6 +684,7 @@ const principles = [
         --mist: #6b8497;
         --snow: #f4ede2;
         --paper: #ede2d0;
+        --linen: #e3d6bc;
         --amber: #d97a3a;
         --ember: #c25a2c;
         --moss: #4a6b3e;
@@ -980,9 +1074,72 @@ const principles = [
         filter: drop-shadow(0 12px 30px rgba(14, 34, 48, 0.12));
       }
 
+      /* ─── Philosophy on-disk trees ─── */
+      .layout-list {
+        display: grid;
+        gap: 56px;
+        margin-top: 28px;
+      }
+      @media (max-width: 800px) { .layout-list { gap: 44px; } }
+
+      .principles-row {
+        margin-top: 72px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 32px;
+      }
+      @media (max-width: 900px) {
+        .principles-row { grid-template-columns: 1fr; gap: 22px; margin-top: 56px; }
+      }
+
+      .tree-viz {
+        background: var(--ink);
+        border-radius: 12px;
+        border: 1px solid color-mix(in oklab, var(--ink) 70%, var(--amber));
+        box-shadow: 0 14px 30px -14px rgba(14, 34, 48, 0.25);
+        overflow: hidden;
+      }
+      .tree-prompt {
+        font-family: var(--mono);
+        font-size: 12.5px;
+        color: var(--snow);
+        padding: 14px 18px 8px;
+        white-space: nowrap;
+        overflow-x: auto;
+      }
+      .tree-prompt .tree-user { color: #aebd5d; }
+      .tree-prompt .tree-path { color: #7fb4d9; }
+      .tree-prompt .tree-dollar {
+        color: var(--amber);
+        margin: 0 6px 0 2px;
+        user-select: none;
+      }
+      .tree-body {
+        margin: 0;
+        padding: 4px 18px 16px;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.62;
+        color: #d6e4ee;
+        white-space: pre;
+        overflow-x: auto;
+      }
+      .tree-body .tree-dir { color: #7fb4d9; }
+      .tree-body .tree-arrow {
+        color: var(--amber);
+        padding: 0 2px;
+      }
+      .tree-body .tree-link { color: #8aa9bf; }
+      .tree-viz-wide .tree-body { font-size: 11.5px; }
+
+      @media (max-width: 600px) {
+        .tree-prompt, .tree-body { font-size: 11.5px; }
+        .tree-viz-wide .tree-body { font-size: 10.5px; }
+      }
+
       /* ─── Why section ─── */
       .why {
-        background: var(--paper);
+        background: var(--linen);
         color: var(--ink);
         position: relative;
       }
