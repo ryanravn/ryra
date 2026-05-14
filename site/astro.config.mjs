@@ -1,9 +1,25 @@
 // @ts-check
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+
+const cargoToml = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), "../Cargo.toml"),
+  "utf8",
+);
+const ryraVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? "unknown";
+
 // https://astro.build/config
 export default defineConfig({
   site: "https://ryra.dev",
+  vite: {
+    define: {
+      __RYRA_VERSION__: JSON.stringify(ryraVersion),
+    },
+  },
   integrations: [
     starlight({
       title: "Ryra",
