@@ -64,7 +64,7 @@ jobs:
         run: |
           cargo install cargo-deb
           cargo install cargo-generate-rpm
-          sudo apt-get update && sudo apt-get install -y libarchive-tools zstd
+          sudo apt-get update && sudo apt-get install -y libarchive-tools zstd rpm
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -109,6 +109,22 @@ jobs:
         run: |
           cargo generate-rpm -p crates/ryra --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/generate-rpm/*.rpm ./ryra.${{ matrix.rpm_arch }}.rpm
+
+      - name: Sign rpm
+        run: |
+          # GPG key already imported in "Sign tarballs" step above.
+          # dnf with gpgcheck=1 verifies each package's embedded signature,
+          # so the .rpm itself must be signed (createrepo's repomd.xml.asc
+          # is repo_gpgcheck, a separate thing).
+          KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          if [ -z "$KEY_ID" ]; then
+            echo "::error::No secret GPG key found for RPM signing"
+            exit 1
+          fi
+          echo "%_gpg_name ${KEY_ID}" > ~/.rpmmacros
+          rpmsign --addsign ryra.${{ matrix.rpm_arch }}.rpm
+          gpg --armor --export "$KEY_ID" | rpm --import -
+          rpm -Kv ryra.${{ matrix.rpm_arch }}.rpm
 
       - name: Build pacman package
         run: |
