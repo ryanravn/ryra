@@ -17,6 +17,13 @@ curl -fsSL https://ryra.dev/install.sh | sh
 
 Works on Debian, Ubuntu, Fedora, Arch, and any Linux with systemd and Podman.
 
+## Quickstart
+
+```sh
+ryra search           # browse the registry
+ryra add <service>    # install one
+```
+
 ## What it does
 
 `ryra add <service>` reads a recipe from a curated registry and writes:
@@ -35,7 +42,7 @@ Self-hosting one service is a weekend of docker-compose files, reverse proxy con
 
 ### Replace your cloud storage
 
-<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/seafile.webp" alt="Seafile file storage UI" width="900" />
+<img src="site/public/screenshots/seafile.webp" alt="Seafile file storage UI" width="900" />
 
 ```sh
 ryra add seafile
@@ -43,7 +50,7 @@ ryra add seafile
 
 ### Replace your todo list
 
-<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/vikunja.webp" alt="Vikunja task manager UI" width="900" />
+<img src="site/public/screenshots/vikunja.webp" alt="Vikunja task manager UI" width="900" />
 
 ```sh
 ryra add vikunja
@@ -51,7 +58,7 @@ ryra add vikunja
 
 ### Run your own AI gateway
 
-<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/openclaw.webp" alt="OpenClaw AI gateway UI" width="900" />
+<img src="site/public/screenshots/openclaw.webp" alt="OpenClaw AI gateway UI" width="900" />
 
 ```sh
 ryra add openclaw
@@ -59,7 +66,7 @@ ryra add openclaw
 
 ### Install anything
 
-<img src="https://raw.githubusercontent.com/ryanravn/ryra/main/site/public/screenshots/custom.webp" alt="A service.toml definition" width="900" />
+<img src="site/public/screenshots/custom.webp" alt="A service.toml definition" width="900" />
 
 The registry is plain TOML and quadlet files. Drop a definition in for your own app, point ryra at your registry, and install it the same way as anything bundled.
 
