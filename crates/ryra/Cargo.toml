@@ -1,5 +1,5 @@
 [package]
-name = "ryra-cli"
+name = "ryra"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -7,10 +7,9 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-
-[[bin]]
-name = "ryra"
-path = "src/main.rs"
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
 
 [package.metadata.deb]
 name = "ryra"
@@ -22,8 +21,8 @@ priority = "optional"
 assets = [{ source = "target/release/ryra", dest = "/usr/bin/ryra", mode = "0755" }]
 
 [dependencies]
-ryra-core = { path = "../ryra-core" }
-ryra-test = { path = "../ryra-test" }
+ryra-core = { path = "../ryra-core", version = "0.1.0" }
+ryra-test = { path = "../ryra-test", version = "0.1.0" }
 anyhow.workspace = true
 tokio.workspace = true
 url = "2"

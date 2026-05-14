@@ -4,7 +4,7 @@ use include_dir::{Dir, include_dir};
 
 use crate::error::{Error, Result};
 
-static BUNDLED_REGISTRY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../../registry");
+static BUNDLED_REGISTRY: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/registry");
 
 const BUNDLED_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Content hash of the registry at build time — changes when any file is modified,

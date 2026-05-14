@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 fn main() {
-    // Recompile when registry files change — include_dir! embeds them at
+    // Recompile when registry files change: include_dir! embeds them at
     // compile time but cargo doesn't track them automatically.
-    let registry = Path::new("../../registry");
+    let registry = Path::new("registry");
     if registry.is_dir() {
         walk_dir(registry);
     }

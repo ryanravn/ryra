@@ -2,12 +2,14 @@
 name = "ryra-vm"
 version.workspace = true
 edition.workspace = true
-publish = false
 description = "VM orchestration library for ryra E2E tests (QEMU + Apple Virtualization)"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories = ["virtualization"]
 
 [dependencies]
 anyhow.workspace = true

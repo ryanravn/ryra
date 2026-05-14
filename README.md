@@ -15,6 +15,12 @@ Ryra scaffolds **rootless**, **daemonless** **podman** containers wired with the
 curl -fsSL https://ryra.dev/install.sh | sh
 ```
 
+Or with Rust:
+
+```sh
+cargo install ryra
+```
+
 Works on Debian, Ubuntu, Fedora, Arch, and any Linux with systemd and Podman.
 
 ## Quickstart

@@ -731,7 +731,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ryra-cli"
+name = "ryra"
 version = "0.1.0"
 dependencies = [
  "anyhow",

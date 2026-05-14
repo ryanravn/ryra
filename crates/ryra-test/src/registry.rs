@@ -1026,7 +1026,7 @@ service = "whoami"
 
     #[test]
     fn discover_registry() {
-        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../registry");
+        let registry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ryra-core/registry");
         if !registry.exists() {
             return; // skip if not available
         }

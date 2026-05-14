@@ -75,7 +75,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). P
 ## Architecture
 
 - `ryra-core`: pure library, no CLI deps, no sudo, no side effects beyond file I/O to user-owned config
-- `ryra-cli`: thin shell that calls core and handles sudo/system interaction
+- `ryra` (crate `ryra`, binary `ryra`): thin shell that calls core and handles sudo/system interaction
 - `ryra-vm`: QEMU/SSH/cloud-init VM orchestration library
 - `ryra-test`: E2E test runner, depends on ryra-vm
 - Core returns typed results describing what needs to happen; CLI decides whether to apply or print
@@ -120,7 +120,7 @@ When `ryra add <service> --auth` is called:
 
 ### Pre-start and post-start scripts
 
-Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/services/<service>/configs/scripts/<script>.sh`.
+Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `crates/ryra-core/registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/services/<service>/configs/scripts/<script>.sh`.
 
 The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$SERVICE_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$SERVICE_HOME` (pointing to `~/.local/share/services/<service>/`).
 
@@ -175,7 +175,7 @@ Key points:
 - Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
 - `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image (flags on the test runner binary, not `ryra test`)
 - Test runner lives in `crates/ryra-test/`, VM orchestration in `crates/ryra-vm/`
-- Tests are defined in `registry/` via `[[tests]]` in service.toml and lifecycle test files in `registry/tests/`
+- Tests are defined in `crates/ryra-core/registry/` via `[[tests]]` in service.toml and lifecycle test files in `crates/ryra-core/registry/tests/`
 - VMs use cloud images + cloud-init for setup, SSH for command execution
 - `--parallel=N` controls concurrency (default 1), each VM gets a unique SSH port
 - VM memory is auto-sized per test based on `[requirements.ram]` in each service's service.toml
@@ -188,7 +188,7 @@ Key points:
 ### Test types
 
 - **SingleService tests**: defined in `[[tests]]` within `service.toml` — auto-discovered, run `ryra add` then assertions
-- **Lifecycle tests**: defined in `registry/tests/<name>.toml` — multi-step sequences of add/remove/assert/wait/run steps
+- **Lifecycle tests**: defined in `crates/ryra-core/registry/tests/<name>.toml` — multi-step sequences of add/remove/assert/wait/run steps
 
 ### OIDC lifecycle tests
 
@@ -204,18 +204,18 @@ After creating a service definition (service.toml, quadlets, configs), always ru
 
 **Before writing a new test, skim existing ones with `ryra test list -v [name-filter]`.** The verbose listing shows every step (ryra subcommand, HTTP probes, shell bodies, mail polls, playwright env) inline — it's the fastest way to learn the conventions for basic install / `--smtp=inbucket` / `--auth` flows without opening a bunch of `.toml` files.
 
-Tests for a service all live in `registry/<service>/test.toml` as a `[[tests]]` array. Convention: the first test is named after the service (so `ryra test <svc>` runs only it); additional tests are named `smtp`, `oidc`, `diff`, etc., and get prefixed automatically (`<svc>-smtp`, `<svc>-oidc`). Cross-cutting multi-service tests live in `registry/tests/*.toml`.
+Tests for a service all live in `crates/ryra-core/registry/<service>/test.toml` as a `[[tests]]` array. Convention: the first test is named after the service (so `ryra test <svc>` runs only it); additional tests are named `smtp`, `oidc`, `diff`, etc., and get prefixed automatically (`<svc>-smtp`, `<svc>-oidc`). Cross-cutting multi-service tests live in `crates/ryra-core/registry/tests/*.toml`.
 
 1. Start with `--keep-alive` to validate the service starts:
    - Boot the VM: `ryra test <service> --keep-alive --yes`
    - SSH in and check logs: `journalctl --user -u <service>.service`, `podman logs systemd-<service>`
    - Verify the service is actually responding before writing assertions
-2. Add a basic install test as the first `[[tests]]` entry in `registry/<service>/test.toml`. Run `ryra test <service>` to verify.
+2. Add a basic install test as the first `[[tests]]` entry in `crates/ryra-core/registry/<service>/test.toml`. Run `ryra test <service>` to verify.
 3. If the service has OIDC integration (`auth = ["oidc"]` in service.toml), add an `oidc` test entry with `browser = true`:
-   - Create `registry/tests/browser/<service>-auth.spec.ts` with Playwright tests
+   - Create `crates/ryra-core/registry/tests/browser/<service>-auth.spec.ts` with Playwright tests
    - Use `--keep-alive` on `ryra test <service>-oidc` to boot the VM with caddy + authelia + the service, then SSH in and use `curl` to inspect the actual login page HTML — find the real CSS selectors, button text, and post-login indicators before writing the Playwright spec
    - The browser test must click the SSO button, authenticate with Authelia (fill username/password, submit, handle consent), and verify the redirect back results in an authenticated session
    - Don't guess at selectors — look at the real page. Iterate with `--keep-alive` until the test passes
-4. If the service sends mail, add an `smtp` test using the `mail` step to assert inbucket delivery (see `registry/forgejo/test.toml` or `ryra test list -v forgejo-smtp`).
+4. If the service sends mail, add an `smtp` test using the `mail` step to assert inbucket delivery (see `crates/ryra-core/registry/forgejo/test.toml` or `ryra test list -v forgejo-smtp`).
 
 When E2E tests have long setup times (pulling images, waiting for services), don't just wait — check logs periodically. If a service takes more than 60s to become ready, SSH in via `--keep-alive` and investigate rather than increasing timeouts blindly.

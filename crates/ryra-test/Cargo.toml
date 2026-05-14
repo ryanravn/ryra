@@ -2,19 +2,21 @@
 name = "ryra-test"
 version.workspace = true
 edition.workspace = true
-publish = false
 description = "E2E test runner for ryra using ephemeral QEMU VMs"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories = ["development-tools::testing"]
 
 [lib]
 name = "ryra_test"
 path = "src/lib.rs"
 
 [dependencies]
-ryra-vm = { path = "../ryra-vm" }
+ryra-vm = { path = "../ryra-vm", version = "0.1.0" }
 anyhow.workspace = true
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }

@@ -2,11 +2,14 @@
 name = "ryra-core"
 version.workspace = true
 edition.workspace = true
-description = "Core library for ryra — config, registry, and service generation logic"
+description = "Core library for ryra: config, registry, and service generation logic"
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 serde.workspace = true

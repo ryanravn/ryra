@@ -407,7 +407,10 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
             .with_context(|| format!("registry path not found: {}", p.display()));
     }
 
-    let candidates = [PathBuf::from("registry")];
+    let candidates = [
+        PathBuf::from("crates/ryra-core/registry"),
+        PathBuf::from("registry"),
+    ];
     for c in &candidates {
         if c.exists() {
             return std::fs::canonicalize(c)
@@ -451,7 +454,8 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     // Need a registry path for dependency resolution even with local projects
-    let registry_path = registry_path.unwrap_or_else(|_| PathBuf::from("registry"));
+    let registry_path =
+        registry_path.unwrap_or_else(|_| PathBuf::from("crates/ryra-core/registry"));
 
     if args.list {
         // Respect positional filters: `ryra test --list whoami` shows only
