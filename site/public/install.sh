@@ -34,7 +34,7 @@ main() {
     fi
 
     echo ""
-    echo "ryra installed successfully! Run 'ryra add <service>' to get started."
+    echo "ryra installed successfully! Run 'ryra search' to see available services, then 'ryra add <service>' to get started."
 }
 
 install_apt() {
