@@ -21,8 +21,8 @@ priority = "optional"
 assets = [{ source = "target/release/ryra", dest = "/usr/bin/ryra", mode = "0755" }]
 
 [dependencies]
-ryra-core = { path = "../ryra-core", version = "0.1.0" }
-ryra-test = { path = "../ryra-test", version = "0.1.0" }
+ryra-core = { path = "../ryra-core", version = "0.1.1" }
+ryra-test = { path = "../ryra-test", version = "0.1.1" }
 anyhow.workspace = true
 tokio.workspace = true
 url = "2"
