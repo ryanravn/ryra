@@ -23,6 +23,33 @@ value = "{{service.external_url}}"
 name = "VIKUNJA_SERVICE_JWTSECRET"
 value = "{{secret.jwt_secret}}"
 
+# Optional Todoist import. Enabling this surfaces the "Todoist" tile
+# under Settings -> Import from other services in the Vikunja UI. The
+# user must register an OAuth app at
+# https://developer.todoist.com/appconsole.html; Vikunja derives the
+# redirect URL from VIKUNJA_SERVICE_PUBLICURL as
+# <publicurl>/migrate/todoist. Todoist requires HTTPS for OAuth, so
+# this is only useful when Vikunja is reachable via a real https URL.
+[[env_group]]
+name = "todoist"
+prompt = "Enable Todoist import? (requires an OAuth app at developer.todoist.com)"
+
+  [[env_group.env]]
+  name = "VIKUNJA_MIGRATION_TODOIST_ENABLE"
+  value = "true"
+
+  [[env_group.env]]
+  name = "VIKUNJA_MIGRATION_TODOIST_CLIENTID"
+  value = ""
+  kind = "required"
+  prompt = "Todoist OAuth client ID"
+
+  [[env_group.env]]
+  name = "VIKUNJA_MIGRATION_TODOIST_CLIENTSECRET"
+  value = ""
+  kind = "required"
+  prompt = "Todoist OAuth client secret"
+
 [integrations]
 auth = ["oidc"]
 oidc_callbacks = ["/auth/openid/authelia"]
