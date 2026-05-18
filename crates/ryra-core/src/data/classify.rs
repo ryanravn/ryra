@@ -32,10 +32,11 @@ pub fn classify_home_dir(home_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)
 
     let manifest_path = home_dir.join(manifest::MANIFEST_FILENAME);
     let manifest_entries: Vec<PathBuf> = if manifest_path.exists() {
-        let content = std::fs::read_to_string(&manifest_path).map_err(|source| Error::FileRead {
-            path: manifest_path.clone(),
-            source,
-        })?;
+        let content =
+            std::fs::read_to_string(&manifest_path).map_err(|source| Error::FileRead {
+                path: manifest_path.clone(),
+                source,
+            })?;
         let (entries, _envs) = manifest::parse(&content)?;
         entries.into_iter().map(|e| e.path).collect()
     } else {
