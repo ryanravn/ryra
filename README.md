@@ -46,6 +46,28 @@ SaaS prices keep climbing and the products keep moving slower than you want. Sel
 
 No other self-hosting toolkit ships the full combination: rootless **podman quadlets** for security and clean systemd integration, **automated VM tests** that prove every registry service works before you install it, and a TOML-based recipe format that an AI can read and extend without hand-holding. You stay in control: customise per host, add your own services, and grow your stack at the pace your vendors won't.
 
+## Philosophy
+
+Ryra is a scaffolding tool, not a runtime. It writes plain files and exits, so the box ends up looking like a sysadmin set it up by hand.
+
+### A service is a folder
+
+<img src="site/public/screenshots/services-folder.webp" alt="Tree listing of ~/.local/share/services showing each service as its own folder containing quadlets, configs, and bind-mounted data dirs" width="700" />
+
+Every quadlet, env file, network, and bind-mounted data directory for a service lives under `~/.local/share/services/<name>/`. Back up the whole folder with `tar`, or just the data dirs like `db-data/` and `upload/`. Move the folder to another box, the service comes with it.
+
+### One file of preferences
+
+<img src="site/public/screenshots/preferences-file.webp" alt="Tree listing of ~/.config/services showing a single preferences.toml file" width="700" />
+
+SMTP credentials, OIDC provider, Tailscale key, custom registries: all the cross-service settings ryra reads at startup live in a single TOML file. The rest is just service folders.
+
+### Symlinked into systemd
+
+<img src="site/public/screenshots/systemd-symlinks.webp" alt="Tree listing of ~/.config/containers/systemd showing each .container and .network as a symlink back into the service's folder" width="900" />
+
+Each `.container` and `.network` is symlinked from its service folder into `~/.config/containers/systemd/`, where systemd's user generator picks it up. Remove the service and the symlink goes with it. Uninstall ryra and the symlinks plus the services keep running, because there is no ryra runtime.
+
 ## Examples
 
 ### Replace your cloud storage
