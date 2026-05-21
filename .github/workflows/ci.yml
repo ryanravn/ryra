@@ -190,6 +190,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # actions: write lets us dispatch the deploy-pages workflow once
+      # the GitHub release exists. Dispatching with --ref main keeps the
+      # deploy on a ref the github-pages env protection allows.
+      actions: write
     steps:
       - uses: actions/checkout@v4
 
@@ -213,146 +217,14 @@ jobs:
           artifacts: "ryra-*.tar.gz,ryra-*.tar.gz.asc,ryra_*.deb,ryra.*.rpm,ryra-*.pkg.tar.zst"
           makeLatest: true
 
-  deploy-pages:
-    # Runs on:
-    #   * main pushes (so site copy updates land without waiting for a tag)
-    #   * tag pushes (so a fresh release rebuilds the apt/rpm/pacman repos
-    #     against the just-built artifacts).
-    # GitHub Pages serves one tarball, so we always rebuild the full site
-    # (Astro + repo metadata pulled from the latest release).
-    needs: [check, release-version]
-    if: |
-      always() &&
-      needs.check.result == 'success' &&
-      (needs.release-version.result == 'success' || needs.release-version.result == 'skipped') &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Build site
-        working-directory: site
-        run: |
-          bun install --frozen-lockfile
-          bun run build
-
-      # Pull deb/rpm/pacman artifacts from the GitHub release rather than
-      # from this workflow's build-linux outputs. On a tag push we use
-      # this tag's release (release-version has just created it); on a
-      # main push we use whatever the latest release is. Either way the
-      # apt/rpm/pacman repos in site/dist/{deb,rpm,pacman} reflect a real
-      # downloadable release.
-      - name: Determine release tag
-        id: tag
+      - name: Trigger pages deploy with new release binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          else
-            TAG=$(gh release view --json tagName --jq .tagName --repo "${{ github.repository }}")
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download release artifacts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p artifacts
-          gh release download "${{ steps.tag.outputs.tag }}" \
-            --dir artifacts \
+          gh workflow run deploy-pages.yml \
+            --ref main \
+            -f release_tag="${{ github.ref_name }}" \
             --repo "${{ github.repository }}"
-
-      - name: Import GPG key
-        env:
-          APT_GPG_PRIVATE: ${{ secrets.APT_GPG_PRIVATE }}
-        run: echo "$APT_GPG_PRIVATE" | gpg --batch --import
-
-      - name: Install repo tools
-        run: sudo apt-get update && sudo apt-get install -y createrepo-c
-
-      - name: Assemble APT repository
-        run: |
-          mkdir -p site/dist/deb/pool \
-            site/dist/deb/dists/stable/main/binary-amd64 \
-            site/dist/deb/dists/stable/main/binary-arm64
-
-          cp artifacts/ryra_amd64.deb site/dist/deb/pool/
-          cp artifacts/ryra_arm64.deb site/dist/deb/pool/
-
-          cd site/dist/deb
-
-          dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
-          gzip -k -f dists/stable/main/binary-amd64/Packages
-
-          dpkg-scanpackages --arch arm64 pool > dists/stable/main/binary-arm64/Packages
-          gzip -k -f dists/stable/main/binary-arm64/Packages
-
-          cd dists/stable
-          cat > Release <<EOF
-          Origin: ryra
-          Label: ryra
-          Suite: stable
-          Codename: stable
-          Architectures: amd64 arm64
-          Components: main
-          EOF
-          sed -i 's/^          //' Release
-          apt-ftparchive release . >> Release
-          gpg --batch --yes --armor --detach-sign -o Release.gpg Release
-          gpg --batch --yes --armor --clearsign -o InRelease Release
-
-      - name: Assemble RPM repository
-        run: |
-          mkdir -p site/dist/rpm/x86_64 site/dist/rpm/aarch64
-
-          cp artifacts/ryra.x86_64.rpm site/dist/rpm/x86_64/
-          cp artifacts/ryra.aarch64.rpm site/dist/rpm/aarch64/
-
-          createrepo_c site/dist/rpm/x86_64
-          createrepo_c site/dist/rpm/aarch64
-
-          gpg --batch --yes --armor --detach-sign -o site/dist/rpm/x86_64/repodata/repomd.xml.asc site/dist/rpm/x86_64/repodata/repomd.xml
-          gpg --batch --yes --armor --detach-sign -o site/dist/rpm/aarch64/repodata/repomd.xml.asc site/dist/rpm/aarch64/repodata/repomd.xml
-
-      - name: Assemble Pacman repository
-        run: |
-          mkdir -p site/dist/pacman/x86_64 site/dist/pacman/aarch64
-
-          cp artifacts/ryra-*-x86_64.pkg.tar.zst site/dist/pacman/x86_64/
-          cp artifacts/ryra-*-aarch64.pkg.tar.zst site/dist/pacman/aarch64/
-
-          docker run --rm -v "$PWD/site/dist/pacman:/repo" archlinux:latest bash -c '
-            pacman -Sy --noconfirm
-            repo-add /repo/x86_64/ryra.db.tar.gz /repo/x86_64/*.pkg.tar.zst
-            repo-add /repo/aarch64/ryra.db.tar.gz /repo/aarch64/*.pkg.tar.zst
-          '
-
-      - name: Export GPG public key
-        run: gpg --armor --export > site/dist/gpg.key
-
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
 
   publish-crates:
     needs: check
