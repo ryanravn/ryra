@@ -4,7 +4,7 @@ resolver = "3"
 default-members = ["crates/ryra"]
 
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 description = "A tool to test and deploy self-hosted services on a Linux server using rootless Podman and systemd. Built-in VM testing gives AI agents fast feedback loops for building infrastructure and deploying apps."
 license = "AGPL-3.0-or-later"
