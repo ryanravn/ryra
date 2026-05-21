@@ -53,7 +53,7 @@ Every service is isolated in its own container and systemd scope. If one service
 - **podman**: rootless containers for every service
 - **systemd**: manages everything via quadlet units and `loginctl` linger
 
-Service data lives under `~/.local/share/services/<name>/`. `tar czf services.tar.gz --dereference ~/.local/share/services/` captures every service's full state in one shot.
+Service data lives under `~/.local/share/services/<name>/`. `tar czf services.tar.gz --dereference ~/.local/share/services/` captures every service's full state in one shot, or use `ryra backup` to push encrypted snapshots to any S3-compatible store like MinIO.
 
 ## Available services
 
@@ -76,6 +76,7 @@ Run `ryra search` to see the full list with install status, or browse the [servi
 | **OpenClaw** | Self-hosted AI assistant gateway |
 | **Open WebUI** | Self-hosted AI chat (Ollama, OpenAI, …) |
 | **Uptime Kuma** | Monitoring and status pages |
+| **MinIO** | S3-compatible object storage (the `ryra backup` target) |
 | **Inbucket** | Disposable SMTP test server with web UI |
 | **Caddy** | Reverse proxy with automatic HTTPS |
 | **Authelia** | SSO and 2FA via OIDC |

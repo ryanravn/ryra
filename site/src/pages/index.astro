@@ -14,37 +14,37 @@ const features = [
     icon: "branch",
     tag: "01",
     title: "Daemonless and simple.",
-    body: "Every service is one folder under ~/.local/share/services/, symlinked into systemd's user generator path. Ryra writes the files and exits: systemctl manages them, journalctl shows their logs, tar backs them up. No daemon, no hidden state.",
+    body: "Every service is one folder symlinked into systemd. Ryra writes the files and exits; systemctl and journalctl take it from there.",
   },
   {
     icon: "lock",
     tag: "02",
     title: "Rootless.",
-    body: "Containers run under your user via podman, and each service is a plain systemd unit you could have written by hand. Elevated permissions only when there's no alternative.",
+    body: "Every container runs under your user via podman, as a plain systemd unit you could have written by hand.",
   },
   {
     icon: "compass",
     tag: "03",
     title: "Every service tested in a VM.",
-    body: "Each registry service ships a test that boots a fresh QEMU VM, installs the service, and asserts the full lifecycle: HTTP, OIDC login, SMTP delivery, removal. The same loop runs in CI and on your laptop.",
+    body: "A test.toml beside each service declares HTTP probes, Playwright clicks, and mail deliveries; ryra test runs them in throwaway QEMU VMs.",
   },
   {
     icon: "spark",
     tag: "04",
     title: "Easily upgradable.",
-    body: "Container images update themselves on a systemd timer via podman-auto-update. When the registry ships a new env var or a quadlet fix, ryra upgrade shows you the diff, backs up the old version, and re-renders in place. Roll back with ryra revert if something breaks.",
+    body: "Container images self-update via podman-auto-update; registry changes preview as a diff and revert cleanly if something breaks.",
   },
   {
-    icon: "layers",
+    icon: "shield",
     tag: "05",
-    title: "Run your own registry to install anything.",
-    body: "The registry is plain TOML and quadlet files in a folder. Drop a definition in for your internal app, point ryra at your own registry, and install it the same way as anything bundled.",
+    title: "Encrypted backups, anywhere.",
+    body: "Per-service encrypted snapshots push to any S3-compatible store like MinIO. The key never leaves your machine.",
   },
   {
     icon: "key",
     tag: "06",
     title: "One login across every service.",
-    body: "Bundled SSO via Authelia. Every service in the registry that speaks OIDC gets wired up automatically with --auth: clients registered, callbacks set, env vars injected. One sign-in for files, photos, tasks, the lot.",
+    body: "Any OIDC-capable service in the registry gets bundled SSO via Authelia: clients registered, callbacks set, env vars injected.",
   },
 ];
 
@@ -127,8 +127,8 @@ const principles = [
               Self-host anything, <em>automatically test</em> it works.
             </h1>
             <p class="lede">
-              Scaffolds <strong>rootless</strong>, <strong>daemonless</strong> <strong>podman</strong> containers wired with the same authorization system (<strong>SSO</strong>) and e-mail system with <strong>SMTP</strong>.
-              The bundled registry covers useful services, each <strong>end-to-end tested</strong> in a fresh virtual machine, and the
+              Scaffolds <strong>rootless</strong>, <strong>daemonless</strong> <strong>podman</strong> containers wired with the same authorization system (<strong>SSO</strong>), e-mail system (<strong>SMTP</strong>), and <strong>automatic end-to-end encrypted backups</strong>.
+              The bundled registry covers useful services, each <strong>tested</strong> in a fresh virtual machine, and the
               test framework is simple enough that you can have an AI add new services and prove they work the same way.
             </p>
             <div class="cta-row">
@@ -151,7 +151,7 @@ const principles = [
               </div>
               <div class="item">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
-                End-to-end tested
+                Tested
               </div>
               <div class="item">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
@@ -230,6 +230,9 @@ const principles = [
                 )}
                 {f.icon === "key" && (
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="12" r="4"/><path d="M12 12h9M16 12v3M21 12v4"/></svg>
+                )}
+                {f.icon === "shield" && (
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.5-8 9.5-4.6-1-8-5-8-9.5V6l8-3z"/><path d="M9 12.5l2.2 2.2L15 11"/></svg>
                 )}
                 <h3>{f.title}</h3>
                 <p>{f.body}</p>
@@ -331,6 +334,60 @@ const principles = [
             <article class="example reverse">
               <div class="example-text">
                 <span class="example-tag">/04</span>
+                <h3>Run anything.</h3>
+                <p>
+                  The registry is a folder of <code>service.toml</code> and quadlet files. Drop a definition in
+                  for my_app (or whatever you need), point ryra at your own registry, install with the same command.
+                </p>
+                <pre class="example-cmd"><code><span class="p">$</span> ryra registry add my_registry https://github.com/you/registry
+<span class="p">$</span> ryra add my_registry/my_app</code></pre>
+                <p class="example-foot">
+                  If you can write a systemd unit, you can extend ryra (or use <code>ryra test</code> to let an AI agent write one for you).
+                </p>
+              </div>
+              <div class="example-visual">
+                <img
+                  class="example-img"
+                  src="/screenshots/custom.webp"
+                  alt="A service.toml definition for DocuSeal showing the [service] block (name, description, url, architecture), RAM requirements, an HTTP port on 3000, and a HOST environment variable templated from service.external_url."
+                  loading="lazy"
+                  decoding="async"
+                  width="2424"
+                  height="1344"
+                />
+              </div>
+            </article>
+
+            <article class="example">
+              <div class="example-text">
+                <span class="example-tag">/05</span>
+                <h3>Encrypted backups.</h3>
+                <p>
+                  Every backup-enabled service ships encrypted snapshots to an S3-compatible store like MinIO,
+                  ideally on a separate machine over your tailnet. The key stays on the box that made the backup;
+                  whoever holds the storage just sees ciphertext.
+                </p>
+                <pre class="example-cmd"><code><span class="p">$</span> ryra add minio --tailscale
+<span class="p">$</span> ryra backup configure
+<span class="p">$</span> ryra backup schedule daily</code></pre>
+              </div>
+              <div class="example-visual">
+                <svg class="auth-diagram" viewBox="0 0 360 240" role="img" aria-label="A dark navy padlock labelled end-to-end encrypted." xmlns="http://www.w3.org/2000/svg">
+                  <!-- Same fjord/navy as the terminals on the page. -->
+                  <!-- Shackle -->
+                  <path d="M 145 110 L 145 80 A 35 35 0 0 1 215 80 L 215 110" fill="none" stroke="#0e2230" stroke-width="12" stroke-linecap="round" />
+                  <!-- Lock body -->
+                  <rect x="120" y="105" width="120" height="95" rx="14" fill="#0e2230" />
+                  <!-- Text inside (terminal-cream on dark navy) -->
+                  <text x="180" y="148" font-family="JetBrains Mono, monospace" font-size="13" font-weight="500" fill="#f4ede2" text-anchor="middle">end-to-end</text>
+                  <text x="180" y="170" font-family="JetBrains Mono, monospace" font-size="13" font-weight="500" fill="#f4ede2" text-anchor="middle">encrypted</text>
+                </svg>
+              </div>
+            </article>
+
+            <article class="example reverse">
+              <div class="example-text">
+                <span class="example-tag">/06</span>
                 <h3>One login across the stack.</h3>
                 <p>
                   Add the bundled SSO provider with one command. Every service that speaks OpenID Connect hooks
@@ -369,33 +426,6 @@ const principles = [
               </div>
             </article>
 
-            <article class="example">
-              <div class="example-text">
-                <span class="example-tag">/05</span>
-                <h3>Run anything.</h3>
-                <p>
-                  The registry is a folder of <code>service.toml</code> and quadlet files. Drop a definition in
-                  for my_app (or whatever you need), point ryra at your own registry, install with the same command.
-                </p>
-                <pre class="example-cmd"><code><span class="p">$</span> ryra registry add my_registry https://github.com/you/registry
-<span class="p">$</span> ryra add my_registry/my_app</code></pre>
-                <p class="example-foot">
-                  If you can write a systemd unit, you can extend ryra (or use <code>ryra test</code> to let an AI agent write one for you).
-                </p>
-              </div>
-              <div class="example-visual">
-                <img
-                  class="example-img"
-                  src="/screenshots/custom.webp"
-                  alt="A service.toml definition for DocuSeal showing the [service] block (name, description, url, architecture), RAM requirements, an HTTP port on 3000, and a HOST environment variable templated from service.external_url."
-                  loading="lazy"
-                  decoding="async"
-                  width="2424"
-                  height="1344"
-                />
-
-              </div>
-            </article>
           </div>
         </div>
       </section>
@@ -418,7 +448,8 @@ const principles = [
                 <p>
                   Every quadlet, env file, network, and bind-mounted data directory for a service lives
                   under <code>~/.local/share/services/&lt;name&gt;/</code>. Back up the whole folder with
-                  <code>tar</code>, or just the data dirs like <code>db-data/</code> and <code>upload/</code>.
+                  <code>tar</code>, just the data dirs like <code>db-data/</code> and <code>upload/</code>,
+                  or hand it off to <code>ryra backup</code> for encrypted snapshots pushed to any S3-compatible store like MinIO.
                   Move it to another box, the service comes with it.
                 </p>
               </div>
