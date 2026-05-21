@@ -124,6 +124,15 @@ auth = ["oidc"]
 token_auth_method = "client_secret_basic"
 oidc_callbacks = ["/oauth/callback/"]
 smtp = true
+# File-level snapshot of mariadb datadir (db-data/) + the shared
+# file storage (shared/, holds user file blobs + seafile config +
+# logs). Redis is regenerable cache and excluded. Mariadb is
+# stopped during the backup so InnoDB tablespaces are at a
+# consistent on-disk point, same as the supabase pattern.
+backup = true
+
+[backup]
+paths = ["db-data", "shared"]
 
 [mappings.smtp]
 SMTP_HOST = "{{smtp.host}}"

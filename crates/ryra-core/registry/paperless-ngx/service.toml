@@ -47,6 +47,15 @@ value = "{{service.external_url}}"
 auth = ["oidc"]
 oidc_callbacks = ["/accounts/oidc/authelia/login/callback/"]
 smtp = true
+# Paperless uses bundled sqlite (no separate postgres container),
+# so file-level backup with the service stopped is sufficient — the
+# sqlite file lives inside `data/`. Media holds the ingested
+# documents. Redis is the Celery task queue; in-flight jobs are
+# regenerable (paperless retries on next start), so it's excluded.
+backup = true
+
+[backup]
+paths = ["data", "media"]
 
 [mappings.smtp]
 PAPERLESS_EMAIL_HOST = "{{smtp.host}}"

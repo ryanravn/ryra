@@ -15,3 +15,8 @@ container_port = 3001
 [integrations]
 auth = []
 smtp = false
+# Sqlite-backed (data/kuma.db). Stop, snapshot, start.
+backup = true
+
+[backup]
+paths = ["data"]

@@ -64,6 +64,14 @@ prompt = "Admin password"
 auth = ["oidc"]
 oidc_callbacks = ["/auth/login"]
 smtp = false
+# File-level backup of db-data (postgres) + upload (user-uploaded
+# photos). The ML model-cache is regenerable on first use and the
+# valkey volume is cache + transient job state, so both are
+# excluded from the snapshot.
+backup = true
+
+[backup]
+paths = ["db-data", "upload"]
 
 [mappings.auth]
 OAUTH_CLIENT_ID = "{{auth.client_id}}"

@@ -54,6 +54,15 @@ prompt = "Enable Todoist import? (requires an OAuth app at developer.todoist.com
 auth = ["oidc"]
 oidc_callbacks = ["/auth/openid/authelia"]
 smtp = true
+# Vikunja state is sqlite + uploaded files. The sqlite db can be written
+# to mid-snapshot, so the hooks stop vikunja before restic reads the
+# `db/` dir and start it again after. Brief downtime, no risk of a
+# half-written page producing an unrestorable backup.
+#
+# No `[backup]` block needed: `paths` defaults to the manifest
+# classifier output (db/ and files/), and the four hook scripts in
+# configs/scripts/{backup,restore}-{pre,post}.sh are auto-discovered.
+backup = true
 
 [mappings.auth]
 VIKUNJA_AUTH_OPENID_ENABLED = "true"

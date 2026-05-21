@@ -88,6 +88,14 @@ value = "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 auth = ["oidc"]
 oidc_callbacks = ["/apps/user_oidc/code"]
 smtp = true
+# Backup NOT YET supported. The nextcloud:31-apache image doesn't set
+# USER (it stays as root and apache drops to www-data internally),
+# so podman's `:U` chowns the bind-mount tree to root on every
+# container start. After a file-level restore, the entrypoint
+# detects an existing install (version.php present) and skips the
+# install-time chown to www-data, leaving the data tree unreadable
+# by apache. Needs a different strategy — probably `occ backup`
+# data dump, or modifying the quadlet to not use :U.
 
 # OIDC is configured via `occ user_oidc:provider` in configure-oidc.sh —
 # the OAUTH_* vars below are read by that script, not by Nextcloud itself.

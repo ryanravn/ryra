@@ -27,6 +27,13 @@ value = "false"
 [integrations]
 auth = []
 smtp = true
+# DocuSeal stores everything in `data/`: bundled sqlite, signed
+# document attachments, ActiveStorage blobs, encrypted at-rest
+# keys. Stop, snapshot, start.
+backup = true
+
+[backup]
+paths = ["data"]
 
 [mappings.smtp]
 # DocuSeal uses standard Rails ActionMailer SMTP env vars.

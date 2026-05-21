@@ -1,0 +1,5 @@
+[Unit]
+Description=MinIO network
+
+[Network]
+NetworkName=minio

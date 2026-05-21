@@ -38,6 +38,13 @@ prompt = "Admin token for /admin panel (leave empty to disable)"
 [integrations]
 auth = []
 smtp = true
+# Sqlite-backed (vaultwarden uses a single db.sqlite3 in data/),
+# so file-level backup with the service stopped is bulletproof:
+# the sqlite file is in a quiescent state and round-trips cleanly.
+backup = true
+
+[backup]
+paths = ["data"]
 
 [mappings.smtp]
 SMTP_HOST = "{{smtp.host}}"

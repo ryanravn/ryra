@@ -80,3 +80,233 @@ name = "mail-delivered-to-inbucket"
 mailbox = "smtptest"
 poll = { interval = 2, attempts = 45 }
 timeout = 120
+
+# Backup round-trip: pg_dumpall + storage-data snapshot to MinIO,
+# mutate state, restore, verify. Exercises the full hook flow
+# including the supabase-specific init-script-vs-dump dance on
+# restore.
+#
+# Why a dedicated table + file: the restore must round-trip both
+# postgres state (via pg_dumpall logical replay) and filesystem
+# state (via raw restic restore of storage-data/). Asserting both
+# end-to-end catches half-broken implementations where only one
+# half got snapshotted.
+[[tests]]
+name = "backup"
+ram = 4608
+[[tests.steps]]
+action = "shell"
+name = "ensure-restic"
+run = """set -euo pipefail
+if ! command -v restic >/dev/null; then
+    if command -v dnf >/dev/null; then
+        sudo dnf install -y restic
+    elif command -v apt-get >/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y restic
+    else
+        echo "no recognised package manager and restic is missing" >&2
+        exit 1
+    fi
+fi
+restic version
+"""
+timeout = 180
+
+# 1. MinIO — backup target.
+[[tests.steps]]
+action = "add"
+service = "minio"
+timeout = 300
+[[tests.steps]]
+action = "wait"
+service = "minio"
+timeout = 180
+[[tests.steps]]
+action = "http"
+name = "minio-health"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/minio/health/live"
+service = "minio"
+poll = { interval = 2, attempts = 60 }
+timeout = 180
+
+# 2. Wire ryra backup to MinIO using MinIO's root credentials.
+[[tests.steps]]
+action = "shell"
+name = "configure-backup"
+run = """set -euo pipefail
+MINIO_ENV=$HOME/.local/share/services/minio/.env
+ROOT_USER=$(grep '^MINIO_ROOT_USER=' $MINIO_ENV | cut -d= -f2-)
+ROOT_PWD=$(grep '^MINIO_ROOT_PASSWORD=' $MINIO_ENV | cut -d= -f2-)
+PORT=$(grep '^SERVICE_PORT_HTTP=' $MINIO_ENV | cut -d= -f2-)
+ryra backup configure \\
+    --backend=s3 \\
+    --endpoint=http://127.0.0.1:$PORT \\
+    --bucket=ryra-backups \\
+    --access-key-id=$ROOT_USER \\
+    --secret-access-key=$ROOT_PWD \\
+    --password=test-encryption-key-abcdef0123456789 \\
+    --yes
+"""
+timeout = 120
+
+# 3. Install supabase with --backup.
+[[tests.steps]]
+action = "add"
+service = "supabase"
+args = "--backup"
+timeout = 1200
+[[tests.steps]]
+action = "wait"
+service = "supabase"
+timeout = 600
+[[tests.steps]]
+action = "http"
+name = "supabase-auth-healthy"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/auth/v1/health"
+service = "supabase"
+headers = { apikey = "$ANON_KEY" }
+poll = { interval = 5, attempts = 72 }
+timeout = 420
+
+# 4. Seed test state: one row in a fresh table (verifies pg_dumpall
+#    round-trip) and one file under storage-data (verifies filesystem
+#    snapshot round-trip).
+[[tests.steps]]
+action = "shell"
+name = "seed-state"
+run = """set -euo pipefail
+podman exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "
+    DROP TABLE IF EXISTS ryra_backup_test;
+    CREATE TABLE ryra_backup_test (id int, payload text);
+    INSERT INTO ryra_backup_test VALUES (42, 'original-row');
+"
+STORAGE=$HOME/.local/share/services/supabase/storage-data
+test -d $STORAGE
+echo "original-file" > $STORAGE/sentinel.txt
+"""
+timeout = 60
+
+# 5. Backup.
+[[tests.steps]]
+action = "shell"
+name = "backup-run"
+run = "ryra backup run supabase"
+timeout = 600
+[[tests.steps]]
+action = "wait"
+service = "supabase"
+timeout = 600
+
+# 6. List shows the snapshot tagged service:supabase.
+[[tests.steps]]
+action = "shell"
+name = "list-shows-snapshot"
+run = """set -euo pipefail
+OUTPUT=$(ryra backup list supabase 2>&1)
+echo "$OUTPUT"
+echo "$OUTPUT" | grep -q 'service:supabase' || {
+    echo "expected at least one snapshot tagged service:supabase"
+    exit 1
+}
+"""
+timeout = 60
+
+# 6b. Audit snapshot contents: must include only db-data +
+#     storage-data, nothing ephemeral.
+[[tests.steps]]
+action = "shell"
+name = "audit-snapshot-contents"
+run = """set -euo pipefail
+PREFS=$HOME/.config/services/preferences.toml
+RESTIC_PASSWORD=$(awk -F'"' '/^password = /{print $2; exit}' $PREFS)
+ENDPOINT=$(awk -F'"' '/^endpoint = /{print $2}' $PREFS)
+BUCKET=$(awk -F'"' '/^bucket = /{print $2}' $PREFS)
+ACCESS=$(awk -F'"' '/^access_key_id = /{print $2}' $PREFS)
+SECRET=$(awk -F'"' '/^secret_access_key = /{print $2}' $PREFS)
+export AWS_ACCESS_KEY_ID=$ACCESS
+export AWS_SECRET_ACCESS_KEY=$SECRET
+export RESTIC_PASSWORD
+SCHEME=${ENDPOINT%%://*}
+HOST=${ENDPOINT#*://}
+REPO=s3:${SCHEME}://${HOST}/${BUCKET}
+
+FILES=$(restic ls --repo $REPO --tag service:supabase latest 2>/dev/null \\
+    | grep '^/home/ryra/.local/share/services/supabase/' \\
+    | sed 's|/home/ryra/.local/share/services/supabase/||' \\
+    | awk -F/ '{print $1}' \\
+    | sort -u)
+echo "snapshot top-level entries:"
+echo "$FILES"
+
+UNEXPECTED=$(echo "$FILES" | grep -vE '^(db-data|storage-data)?$' || true)
+if [ -n "$UNEXPECTED" ]; then
+    echo "ERROR: unexpected paths in the snapshot:"
+    echo "$UNEXPECTED"
+    exit 1
+fi
+echo "$FILES" | grep -q '^db-data$' || { echo "missing db-data"; exit 1; }
+echo "$FILES" | grep -q '^storage-data$' || { echo "missing storage-data"; exit 1; }
+echo "snapshot scope: OK"
+"""
+timeout = 60
+
+# 7. Mutate both pieces of state so a clean restore is visible.
+[[tests.steps]]
+action = "shell"
+name = "mutate-state"
+run = """set -euo pipefail
+podman exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c "
+    DELETE FROM ryra_backup_test;
+    INSERT INTO ryra_backup_test VALUES (99, 'mutated-row');
+"
+STORAGE=$HOME/.local/share/services/supabase/storage-data
+echo "mutated-file" > $STORAGE/sentinel.txt
+"""
+timeout = 60
+
+# 8. Restore.
+[[tests.steps]]
+action = "shell"
+name = "backup-restore"
+run = "ryra backup restore supabase"
+timeout = 900
+[[tests.steps]]
+action = "wait"
+service = "supabase"
+timeout = 600
+[[tests.steps]]
+action = "http"
+name = "supabase-auth-healthy-after-restore"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/auth/v1/health"
+service = "supabase"
+headers = { apikey = "$ANON_KEY" }
+poll = { interval = 5, attempts = 72 }
+timeout = 420
+
+# 9. The original row must be back AND the mutated row must be gone.
+[[tests.steps]]
+action = "shell"
+name = "verify-postgres-restored"
+run = """set -euo pipefail
+ROW=$(podman exec supabase-db psql -U postgres -d postgres -tAc \
+    "SELECT id || ':' || payload FROM ryra_backup_test ORDER BY id")
+test "$ROW" = "42:original-row" || {
+    echo "expected '42:original-row', got: $ROW"
+    exit 1
+}
+"""
+timeout = 60
+
+# 10. Storage file must have the original content too.
+[[tests.steps]]
+action = "shell"
+name = "verify-storage-restored"
+run = """set -euo pipefail
+STORAGE=$HOME/.local/share/services/supabase/storage-data
+ACTUAL=$(cat $STORAGE/sentinel.txt)
+test "$ACTUAL" = "original-file" || {
+    echo "expected 'original-file', got: $ACTUAL"
+    exit 1
+}
+"""
+timeout = 30

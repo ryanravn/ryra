@@ -486,6 +486,26 @@ value = "{{secret.jwt_secret}}"
 [integrations]
 auth = []
 smtp = true
+# File-level backup: stop the stack, restic snapshots db-data +
+# storage-data, restart. Same shape as supabase-internal data, no
+# SQL replay.
+#
+# Supabase is the postgres outlier where pg_dumpall doesn't replay
+# cleanly: its init scripts create `supabase_admin` as the cluster
+# superuser AND mark it as "required by the database system" via
+# its ownership of system catalog rows, so `pg_dumpall --clean`'s
+# `DROP ROLE supabase_admin` fails no matter which other role you
+# connect as. Per-database `pg_dump` works for data but trips on
+# `graphql_public.graphql` GRANTs whose function lookup mismatches
+# at replay. File-level avoids all of this — the snapshot IS the
+# cluster state, no SQL replay needed.
+#
+# For simpler postgres services (forgejo, immich, etc.) the
+# `pg_dump`-based no-downtime approach IS viable.
+backup = true
+
+[backup]
+paths = ["db-data", "storage-data"]
 
 [mappings.smtp]
 GOTRUE_SMTP_HOST = "{{smtp.host}}"

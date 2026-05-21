@@ -69,6 +69,14 @@ value = "true"
 auth = ["oidc"]
 oidc_callbacks = ["/user/oauth2/Authelia/callback"]
 smtp = true
+# File-level backup of db-data (postgres) + data (git repos + LFS +
+# avatars). Same pattern as supabase/nextcloud — stop the stack,
+# restic snapshots the raw volumes, restart. Avoids the pg_dumpall
+# init-script-vs-replay conflicts entirely.
+backup = true
+
+[backup]
+paths = ["db-data", "data"]
 
 [mappings.auth]
 FORGEJO__openid__ENABLE_OPENID_SIGNIN = "true"

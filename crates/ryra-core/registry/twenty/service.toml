@@ -98,6 +98,13 @@ value = "true"
 [integrations]
 auth = []
 smtp = true
+# File-level backup of db-data + the docker-data volume (file
+# attachments, workspace artefacts). Redis is regenerable cache,
+# so it's excluded.
+backup = true
+
+[backup]
+paths = ["db-data", "data"]
 
 [mappings.smtp]
 EMAIL_DRIVER = "smtp"

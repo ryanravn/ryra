@@ -1,0 +1,43 @@
+[service]
+name = "minio"
+description = "MinIO - S3-compatible object storage. The recommended `ryra backup` target, typically hosted on a separate machine reachable over your tailnet."
+url = "https://min.io/"
+# kind = "application" (the default) — unlike caddy/inbucket which
+# are pure glue, minio is the destination other machines back up to,
+# so it deserves the same Loopback/Tailscale/Public exposure prompt
+# that user-facing apps get. Hosting on a separate machine via the
+# tailnet is the typical pattern; loopback is fine for testing.
+architecture = ["amd64", "arm64"]
+
+[requirements.ram]
+min = 256
+recommended = 512
+
+[requirements.disk]
+min = 1
+
+[[ports]]
+name = "http"
+container_port = 9000
+
+[[ports]]
+name = "console"
+container_port = 9001
+
+[[env]]
+name = "MINIO_ROOT_USER"
+value = "{{secret.root_user}}"
+kind = "default"
+format = "string"
+length = 16
+
+[[env]]
+name = "MINIO_ROOT_PASSWORD"
+value = "{{secret.root_password}}"
+kind = "default"
+format = "string"
+length = 32
+
+[integrations]
+auth = []
+smtp = false

@@ -66,6 +66,14 @@ value = "{{secret.form_secret}}"
 auth = ["oidc"]
 oidc_callbacks = ["/_synapse/client/oidc/callback"]
 smtp = false
+# File-level snapshot of postgres datadir (db/) + synapse data
+# dir (data/, which holds the homeserver signing key + media
+# store + uploaded attachments). Brief downtime on stop/start
+# of the synapse stack.
+backup = true
+
+[backup]
+paths = ["db", "data"]
 
 [mappings.auth]
 # Trigger config-render overlay and make credentials available to

@@ -136,6 +136,15 @@ auth = ["oidc"]
 token_auth_method = "none"
 oidc_callbacks = ["/auth/openid_connect/callback"]
 smtp = true
+# File-level backup of postgres-data (DB) + storage (attachments).
+# Redis is cache + websocket session state; elasticsearch is a
+# search index zammad rebuilds from the DB on demand (`rails r
+# Searchindex::Rebuild`). Both are excluded from the snapshot;
+# zammad triggers a reindex on first start when ES is empty.
+backup = true
+
+[backup]
+paths = ["postgres-data", "storage"]
 
 # OIDC lives in Zammad's Setting table, not env vars. These envs are
 # consumed by configs/scripts/configure-oidc.sh which sets the Settings
