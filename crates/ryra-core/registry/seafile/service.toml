@@ -124,15 +124,22 @@ auth = ["oidc"]
 token_auth_method = "client_secret_basic"
 oidc_callbacks = ["/oauth/callback/"]
 smtp = true
-# File-level snapshot of mariadb datadir (db-data/) + the shared
-# file storage (shared/, holds user file blobs + seafile config +
-# logs). Redis is regenerable cache and excluded. Mariadb is
-# stopped during the backup so InnoDB tablespaces are at a
-# consistent on-disk point, same as the supabase pattern.
+# Online backup: backup-pre.sh runs `mariadb-dump --single-transaction`
+# inside the live mariadb container (InnoDB-consistent snapshot, no
+# table locks, no service downtime), writing the three seafile
+# databases to .backup/all-dbs.sql. Restic then snapshots the live
+# shared/ tree alongside the dump. Seafile's blob storage is
+# content-addressable so concurrent writes during restic produce
+# extra blocks the next snapshot picks up; the upstream docs bless
+# this order (SQL first, data dir second) and `seaf-fsck` reconciles
+# any unreferenced blocks. Mariadb's raw datadir (db-data/) is *not*
+# snapshotted: the SQL dump replaces it, and restoring a live
+# datadir into a stopped one is fragile across mariadb minor
+# versions anyway. Redis is regenerable cache and excluded.
 backup = true
 
 [backup]
-paths = ["db-data", "shared"]
+paths = ["shared", ".backup"]
 
 [mappings.smtp]
 SMTP_HOST = "{{smtp.host}}"

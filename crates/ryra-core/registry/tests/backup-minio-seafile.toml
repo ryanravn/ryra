@@ -1,0 +1,230 @@
+# End-to-end test of seafile's online backup flow against MinIO.
+# Mirrors backup-minio.toml (vikunja) but exercises the two
+# seafile-specific code paths the rewrite introduced:
+#
+#   1. File-storage round-trip: a sentinel file under shared/ must
+#      survive backup -> mutate -> restore.
+#   2. SQL-dump round-trip: a sentinel row in seafile_db must survive
+#      the same cycle. This proves `mariadb-dump --single-transaction`
+#      captured the live DB and that restore-post.sh imports it back.
+#
+# Critically, this test does *not* stop seafile around the backup —
+# the new flow keeps the stack live. The mid-test http probe between
+# planting sentinels and `ryra backup run` would fail if anything
+# took it down.
+[test]
+name = "backup-minio-seafile-lifecycle"
+ram = 4096
+
+# 0. Ensure restic is on PATH.
+[[steps]]
+action = "shell"
+name = "ensure-restic"
+run = """set -euo pipefail
+if ! command -v restic >/dev/null; then
+    if command -v dnf >/dev/null; then
+        sudo dnf install -y restic
+    elif command -v apt-get >/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y restic
+    else
+        echo "no recognised package manager and restic is missing" >&2
+        exit 1
+    fi
+fi
+restic version
+"""
+timeout = 180
+
+# 1. MinIO — the S3 backend.
+[[steps]]
+action = "add"
+service = "minio"
+timeout = 300
+[[steps]]
+action = "wait"
+service = "minio"
+timeout = 180
+[[steps]]
+action = "http"
+name = "minio-health"
+url = "http://127.0.0.1:$SERVICE_PORT_HTTP/minio/health/live"
+service = "minio"
+poll = { interval = 2, attempts = 60 }
+timeout = 180
+
+# 2. Configure `ryra backup` against MinIO.
+[[steps]]
+action = "shell"
+name = "configure-backup"
+run = """set -euo pipefail
+MINIO_ENV=$HOME/.local/share/services/minio/.env
+ROOT_USER=$(grep '^MINIO_ROOT_USER=' $MINIO_ENV | cut -d= -f2-)
+ROOT_PWD=$(grep '^MINIO_ROOT_PASSWORD=' $MINIO_ENV | cut -d= -f2-)
+PORT=$(grep '^SERVICE_PORT_HTTP=' $MINIO_ENV | cut -d= -f2-)
+ryra backup configure \\
+    --backend=s3 \\
+    --endpoint=http://127.0.0.1:$PORT \\
+    --bucket=ryra-backups \\
+    --access-key-id=$ROOT_USER \\
+    --secret-access-key=$ROOT_PWD \\
+    --password=test-encryption-key-abcdef0123456789 \\
+    --yes
+ryra backup status
+"""
+timeout = 120
+
+# 3. Caddy. Seafile's `https = "always"` requires a URL, so caddy
+#    must front it. Same setup as the smtp test.
+[[steps]]
+action = "add"
+service = "caddy"
+[[steps]]
+action = "wait"
+service = "caddy"
+
+# 4. Seafile with --backup. Admin credentials are set inline so the
+#    later SQL queries are reproducible.
+[[steps]]
+action = "add"
+service = "seafile"
+args = "--backup --url https://seafile.internal:8443"
+env = { INIT_SEAFILE_ADMIN_EMAIL = "backup-test@example.com", INIT_SEAFILE_ADMIN_PASSWORD = "Backup-Test-123!" }
+timeout = 900
+[[steps]]
+action = "wait"
+service = "seafile"
+[[steps]]
+action = "http"
+name = "seafile-responds"
+url = "https://seafile.internal:8443"
+service = "seafile"
+poll = { interval = 3, attempts = 60 }
+timeout = 240
+
+# 5. Plant the two sentinels.
+#    a) A flat file under shared/ — picked up by `paths = ["shared"]`.
+#    b) A SQL row in seafile_db — exercises the mariadb-dump path.
+[[steps]]
+action = "shell"
+name = "plant-sentinels"
+run = """set -euo pipefail
+SVC_HOME=$HOME/.local/share/services/seafile
+ROOT_PWD=$(grep '^MYSQL_ROOT_PASSWORD=' $SVC_HOME/.env | cut -d= -f2-)
+
+# File-storage sentinel.
+test -d $SVC_HOME/shared
+echo "original-file-content" > $SVC_HOME/shared/backup-test-sentinel.txt
+
+# SQL sentinel: a dedicated table in seafile_db so we don't perturb
+# seahub's own tables. `--add-drop-database` in the dump will drop
+# and recreate seafile_db on restore, taking this table with it.
+podman exec -e MYSQL_PWD="$ROOT_PWD" seafile-mariadb mariadb -uroot seafile_db -e \\
+    "CREATE TABLE IF NOT EXISTS backup_test_sentinel (val VARCHAR(255));
+     DELETE FROM backup_test_sentinel;
+     INSERT INTO backup_test_sentinel VALUES ('original-sql-content');"
+
+# Confirm both planted cleanly.
+test "$(cat $SVC_HOME/shared/backup-test-sentinel.txt)" = "original-file-content"
+GOT=$(podman exec -e MYSQL_PWD="$ROOT_PWD" seafile-mariadb mariadb -uroot seafile_db -N -B -e \\
+    "SELECT val FROM backup_test_sentinel;")
+test "$GOT" = "original-sql-content"
+"""
+timeout = 60
+
+# 6. Run the backup. New flow: nothing stops, mariadb-dump runs
+#    online, restic snapshots shared/ + .backup/all-dbs.sql.
+[[steps]]
+action = "shell"
+name = "backup-run"
+run = "ryra backup run seafile"
+timeout = 600
+
+# 7. The stack must still be up immediately after backup-run — this
+#    is the regression guard for the old stop-and-snapshot behaviour.
+[[steps]]
+action = "http"
+name = "seafile-still-up-after-backup"
+url = "https://seafile.internal:8443"
+service = "seafile"
+poll = { interval = 2, attempts = 5 }
+timeout = 30
+
+# 8. Verify the SQL dump landed inside .backup/.
+[[steps]]
+action = "shell"
+name = "dump-file-exists"
+run = """set -euo pipefail
+DUMP=$HOME/.local/share/services/seafile/.backup/all-dbs.sql
+test -s $DUMP || { echo "dump missing or empty at $DUMP"; exit 1; }
+grep -q 'CREATE DATABASE.*ccnet_db' $DUMP || { echo "ccnet_db missing from dump"; exit 1; }
+grep -q 'CREATE DATABASE.*seafile_db' $DUMP || { echo "seafile_db missing from dump"; exit 1; }
+grep -q 'CREATE DATABASE.*seahub_db' $DUMP || { echo "seahub_db missing from dump"; exit 1; }
+grep -q 'backup_test_sentinel' $DUMP || { echo "sentinel table missing from dump"; exit 1; }
+"""
+timeout = 30
+
+# 9. Snapshot exists in restic.
+[[steps]]
+action = "shell"
+name = "list-shows-snapshot"
+run = """set -euo pipefail
+OUTPUT=$(ryra backup list seafile 2>&1)
+echo "$OUTPUT"
+echo "$OUTPUT" | grep -q 'service:seafile' || {
+    echo "expected snapshot tagged service:seafile in: $OUTPUT"
+    exit 1
+}
+"""
+timeout = 60
+
+# 10. Mutate both sentinels: file content + SQL row.
+[[steps]]
+action = "shell"
+name = "mutate-sentinels"
+run = """set -euo pipefail
+SVC_HOME=$HOME/.local/share/services/seafile
+ROOT_PWD=$(grep '^MYSQL_ROOT_PASSWORD=' $SVC_HOME/.env | cut -d= -f2-)
+echo "mutated-file-content" > $SVC_HOME/shared/backup-test-sentinel.txt
+podman exec -e MYSQL_PWD="$ROOT_PWD" seafile-mariadb mariadb -uroot seafile_db -e \\
+    "UPDATE backup_test_sentinel SET val = 'mutated-sql-content';"
+test "$(cat $SVC_HOME/shared/backup-test-sentinel.txt)" = "mutated-file-content"
+"""
+timeout = 30
+
+# 11. Restore. restore-pre.sh only stops seafile.service (mariadb
+#     keeps running); restic restores shared/ + .backup/;
+#     restore-post.sh pipes the dump back into mariadb, starts
+#     seafile.service.
+[[steps]]
+action = "shell"
+name = "backup-restore"
+run = "ryra backup restore seafile"
+timeout = 600
+
+[[steps]]
+action = "wait"
+service = "seafile"
+timeout = 240
+
+# 12. Both sentinels must be back to their original content.
+[[steps]]
+action = "shell"
+name = "verify-restored"
+run = """set -euo pipefail
+SVC_HOME=$HOME/.local/share/services/seafile
+ROOT_PWD=$(grep '^MYSQL_ROOT_PASSWORD=' $SVC_HOME/.env | cut -d= -f2-)
+
+FILE_VAL=$(cat $SVC_HOME/shared/backup-test-sentinel.txt)
+test "$FILE_VAL" = "original-file-content" || {
+    echo "file sentinel: expected 'original-file-content', got '$FILE_VAL'"
+    exit 1
+}
+
+SQL_VAL=$(podman exec -e MYSQL_PWD="$ROOT_PWD" seafile-mariadb mariadb -uroot seafile_db -N -B -e \\
+    "SELECT val FROM backup_test_sentinel;")
+test "$SQL_VAL" = "original-sql-content" || {
+    echo "sql sentinel: expected 'original-sql-content', got '$SQL_VAL'"
+    exit 1
+}
+"""
+timeout = 60
