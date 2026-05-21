@@ -6,14 +6,6 @@ pub fn run() -> Result<()> {
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     let issues = check_all(&config);
 
-    if config.has_secrets() {
-        println!(
-            "Credentials: {} and ~/.local/share/services/*/.env (all mode 0600).",
-            paths.config_file.display()
-        );
-        println!();
-    }
-
     if issues.is_empty() {
         println!("No issues found.");
         return Ok(());
