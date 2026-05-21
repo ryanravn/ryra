@@ -419,21 +419,37 @@ pub async fn configure_service(
     let needs_tailscale_disable = prior_is_ts && !target_is_ts;
     let needs_tailscale_enable = target_is_ts && !prior_is_ts;
 
-    // Build the executable plan. Filter the replanned steps the same way
-    // upgrade does, then weave in the lifecycle side-steps.
-    let steps = build_configure_steps(
-        service_name,
-        &result,
-        &reg_service.def,
-        &diff,
-        current_url.as_deref(),
-        target_url.as_deref(),
-        needs_unregister,
-        needs_register,
-        needs_tailscale_disable,
-        needs_tailscale_enable,
-        minted_oidc.as_ref(),
-    )?;
+    // Configure is a *user-requested-change applicator*, not a
+    // drift-corrector. If the user asked for nothing (no
+    // `ConfigureChange` entries) and no cross-service lifecycle step is
+    // needed, we return zero steps — even if a `.env` re-render would
+    // produce slightly different bytes (e.g. an `{{auth.*}}` template
+    // resolving differently because caddy's port shifted since
+    // install). Drift correction is what `ryra upgrade` is for; making
+    // configure also chase drift produces confusing "nothing changed
+    // but I'm restarting your service" runs.
+    let no_user_request = changes.is_empty()
+        && !needs_unregister
+        && !needs_register
+        && !needs_tailscale_disable
+        && !needs_tailscale_enable;
+    let steps = if no_user_request {
+        Vec::new()
+    } else {
+        build_configure_steps(
+            service_name,
+            &result,
+            &reg_service.def,
+            &diff,
+            current_url.as_deref(),
+            target_url.as_deref(),
+            needs_unregister,
+            needs_register,
+            needs_tailscale_disable,
+            needs_tailscale_enable,
+            minted_oidc.as_ref(),
+        )?
+    };
 
     Ok(ConfigureResult {
         service: service_name.to_string(),
