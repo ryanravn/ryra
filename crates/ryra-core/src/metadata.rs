@@ -35,10 +35,38 @@ pub struct Metadata {
     /// not-enabled rather than as malformed.
     #[serde(default, skip_serializing_if = "is_false")]
     pub backup_enabled: bool,
+    /// Whether the user opted in to global-SMTP wiring for this install
+    /// (the `--smtp` flag at install time, or "yes" at the interactive
+    /// SMTP prompt). Stored as *user intent*, NOT as "SMTP is currently
+    /// being rendered" — the latter is gated additionally on
+    /// `config.smtp.is_some()` inside the planner. Decoupling lets
+    /// `ryra configure` remember the choice across re-renders even when
+    /// global SMTP isn't configured yet.
+    ///
+    /// Default `true` so installs that pre-date this field read back
+    /// as opt-in (matches the historical CLI shape: `ryra add` passed
+    /// `enable_smtp = true` unconditionally and let the planner gate).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub smtp_enabled: bool,
+    /// `[[env_group]]` bundles that were enabled at install time.
+    /// Persisted so `ryra configure --disable <group>` and re-renders
+    /// know which group members belong in the rendered `.env`. Default
+    /// empty for legacy installs (groups are an opt-in feature; an
+    /// empty list reads back as "no groups were toggled").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enabled_groups: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {
     !b
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Load metadata.toml for an installed service. Returns `None` if the
@@ -82,6 +110,8 @@ registry = "bundled"
             auth: None,
             provides: vec![],
             backup_enabled: true,
+            smtp_enabled: true,
+            enabled_groups: vec![],
         };
         let text = toml::to_string(&meta).expect("serialize");
         assert!(
@@ -102,6 +132,8 @@ registry = "bundled"
             auth: None,
             provides: vec![],
             backup_enabled: false,
+            smtp_enabled: true,
+            enabled_groups: vec![],
         };
         let text = toml::to_string(&meta).expect("serialize");
         assert!(!text.contains("backup_enabled"), "got: {text}");

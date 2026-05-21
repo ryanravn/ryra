@@ -16,7 +16,7 @@ Use either, both, or neither.
 ryra add forgejo
 ```
 
-Binds to `localhost:<dynamic-port>`. Find the port with `ryra config forgejo`.
+Binds to `localhost:<dynamic-port>`. Find the port with `ryra list -l`.
 
 ## With a public URL
 

@@ -1354,7 +1354,29 @@ fn add_ca_to_nssdb(nss_arg: &str, ca: &std::path::Path, context: &str) {
 /// Persists to preferences.toml so the user pastes their token once and every
 /// subsequent `--tailscale` install + remove reuses it for service
 /// definition + ACL setup via the admin API.
-async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
+/// Run [`ensure_tailscale_admin_token`] if the plan needs to *register*
+/// something with the tailnet (Setup or Enable). Disable is intentionally
+/// excluded: if there's no `[tailscale]` config at remove/configure time
+/// the executor skips the API call rather than demanding a token the
+/// user only needs for setup — cleaning up corrupted install state
+/// shouldn't require "first-time Tailscale setup."
+pub(super) async fn ensure_tailscale_token_for_steps(
+    steps: &[ryra_core::Step],
+    interactive: bool,
+) -> Result<()> {
+    let needs = steps.iter().any(|s| {
+        matches!(
+            s,
+            ryra_core::Step::TailscaleSetup | ryra_core::Step::TailscaleEnable { .. }
+        )
+    });
+    if needs {
+        ensure_tailscale_admin_token(interactive).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn ensure_tailscale_admin_token(interactive: bool) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.tailscale.is_some() {

@@ -150,21 +150,20 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
     // unconditionally is safe — no allocation runs.
     let port_in_use = |_p: u16| false;
 
+    let enabled_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
     let result = add_service(
         service_name,
         &exposure,
         metadata.auth.clone(),
         metadata.auth.is_some(),
-        // SMTP is gated inside add_service by `config.smtp.is_some()` and
-        // the service's own `integrations.smtp` flag, so passing `true`
-        // here mirrors what `ryra add` does and is harmless when SMTP is
-        // not configured.
-        true,
+        // SMTP enablement is per-install state — persisted by `ryra add`
+        // and `ryra configure`. Upgrade preserves whatever the user picked.
+        metadata.smtp_enabled,
         // Backup enablement is per-install state; preserve whatever the
         // user picked at the original `ryra add`.
         metadata.backup_enabled,
         &BTreeMap::new(),
-        &BTreeSet::new(),
+        &enabled_groups,
         &metadata.registry,
         &repo_dir,
         None,

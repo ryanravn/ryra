@@ -1,7 +1,7 @@
 pub mod add;
 pub mod apply;
 pub mod backup;
-pub mod config_cmd;
+pub mod configure;
 pub mod diff;
 pub mod doctor;
 pub mod linger;
@@ -12,6 +12,7 @@ pub mod remove;
 pub mod reset;
 pub mod revert;
 pub mod search;
+pub mod status;
 pub mod style;
 pub mod sysctl_low_ports;
 pub mod test;

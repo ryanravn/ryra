@@ -131,6 +131,13 @@ async fn remove_one(service: &str, purge: bool, skip_prompt: bool, dry_run: bool
         if dry_run {
             super::print_dry_run(&result.steps);
         } else {
+            // A `TailscaleDisable` step needs the admin token in
+            // preferences.toml. If the install's metadata says
+            // tailscale but the token was never saved (e.g. a prior
+            // configure ran before the preflight existed), prompt now
+            // rather than crashing mid-apply.
+            super::add::ensure_tailscale_token_for_steps(&result.steps, super::is_interactive())
+                .await?;
             println!("Removing {service}...");
             apply::execute_all(&result.steps).await?;
             ryra_core::finalize_remove(&result.service_name)?;

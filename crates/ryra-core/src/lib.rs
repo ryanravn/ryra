@@ -4,6 +4,7 @@ pub mod backup;
 pub mod caddy;
 pub mod capability;
 pub mod config;
+pub mod configure;
 pub mod data;
 pub mod error;
 pub mod exposure;
@@ -27,6 +28,10 @@ use error::{Error, Result};
 pub use capability::{
     Capability, any_installed_provider, find_installed_provider, installed_provides,
     service_provides,
+};
+pub use configure::{
+    ConfigureChange, ConfigureResult, ExposureChange, Overrides as ConfigureOverrides,
+    configure_service,
 };
 pub use exposure::{Exposure, is_public_url, is_tailscale_url};
 pub use generate::GeneratedFile;
@@ -555,12 +560,22 @@ pub fn add_service(
     // This is what makes service state authoritative for "what's installed
     // and how is it wired" — every field a future `ryra list` needs to
     // reconstruct the install reads back from this file.
+    // `smtp_enabled` captures *user intent* (the `enable_smtp` flag the
+    // caller passed) rather than the gated render flag (`has_smtp`).
+    // Otherwise an install on a host without globally-configured SMTP
+    // records `false`, and a later `ryra configure` that doesn't touch
+    // SMTP would still show as "modified" because the legacy default
+    // (`true`) disagrees with what gets serialized. Storing intent keeps
+    // metadata stable across re-renders and lets `ryra configure --smtp`
+    // remember the choice even before global SMTP is configured.
     let install_metadata = Metadata {
         registry: registry_name.to_string(),
         url: url.map(str::to_string),
         auth: auth_kind.clone(),
         provides: reg_service.def.capabilities.provides.clone(),
         backup_enabled: enable_backup,
+        smtp_enabled: enable_smtp,
+        enabled_groups: enabled_groups.iter().cloned().collect(),
     };
 
     // Process quadlet bundle from registry

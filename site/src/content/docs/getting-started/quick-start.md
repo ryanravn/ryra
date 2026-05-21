@@ -43,10 +43,10 @@ ryra list -l        # also include data sizes and volumes
 ## 4. Inspect a service
 
 ```bash
-ryra config vaultwarden
+ryra list -l
 ```
 
-`ryra config <service>` shows whether the service is installed, the URL it's reachable at, and the commands you can run against it. For live container output, use `journalctl --user -fu vaultwarden.service` or `systemctl --user status vaultwarden.service`. The unit names are plain systemd, exactly what you'd expect.
+Shows every installed service with its URL, status, and storage. For live container output use `journalctl --user -fu vaultwarden.service` or `systemctl --user status vaultwarden.service` — the unit names are plain systemd, exactly what you'd expect.
 
 ## 5. Browse available services
 
@@ -62,6 +62,6 @@ Optional flags on `ryra add`:
 
 - `--url https://...` for a public URL (auto-HTTPS if Caddy is installed)
 - `--auth` for SSO (Authelia auto-installs)
-- `--smtp=inbucket` for a local test inbox; `ryra config smtp` for a real relay
+- `--smtp=inbucket` for a local test inbox; for a real relay set `[smtp]` in `~/.config/services/preferences.toml`
 
 `ryra remove <service>` to uninstall. Data is preserved; add `--purge` to wipe it too.

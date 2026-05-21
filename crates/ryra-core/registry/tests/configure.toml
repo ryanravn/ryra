@@ -1,0 +1,89 @@
+# End-to-end lifecycle test for `ryra configure <service>`. Exercises
+# the two main user-facing flows: toggling per-install knobs (backup)
+# and toggling env_group bundles with `--set` overrides for required
+# group members.
+#
+# Vikunja is a good fit: it has `integrations.backup = true` and a
+# `[[env_group]] todoist` whose members are `kind = required`, so
+# `--set` is necessary to render them. It's also already known to boot
+# quickly in CI (see data-lifecycle.toml).
+
+[test]
+name = "configure"
+
+[[steps]]
+action = "add"
+service = "vikunja"
+timeout = 300
+
+[[steps]]
+action = "wait"
+service = "vikunja"
+timeout = 120
+
+# --backup toggle round-trips through metadata.toml. `backup_enabled`
+# is `skip_serializing_if = "is_false"`, so the off state means the
+# field is absent rather than `= false`.
+[[steps]]
+action = "shell"
+name = "backup-toggle"
+run = """set -e
+META=~/.local/share/services/vikunja/metadata.toml
+ryra configure vikunja --backup -y
+grep -q '^backup_enabled = true$' "$META"
+ryra configure vikunja --no-backup -y
+! grep -q '^backup_enabled' "$META"
+"""
+timeout = 90
+
+# A second --no-backup is a no-op and prints the "already configured"
+# short-circuit instead of restarting the unit.
+[[steps]]
+action = "shell"
+name = "noop-already-configured"
+run = """set -e
+ryra configure vikunja --no-backup -y | grep -q 'already configured'
+"""
+timeout = 30
+
+# --dry-run shows the planned change but doesn't apply it.
+[[steps]]
+action = "shell"
+name = "dry-run-makes-no-change"
+run = """set -e
+META=~/.local/share/services/vikunja/metadata.toml
+ryra configure vikunja --backup --dry-run | grep -q 'Dry run'
+! grep -q '^backup_enabled' "$META"
+"""
+timeout = 30
+
+# Enabling an env_group bundle injects its members into `.env`.
+# `--set` provides values for the group's required members.
+[[steps]]
+action = "shell"
+name = "enable-group"
+run = """set -e
+ENV=~/.local/share/services/vikunja/.env
+META=~/.local/share/services/vikunja/metadata.toml
+ryra configure vikunja --enable todoist \\
+    --set VIKUNJA_MIGRATION_TODOIST_CLIENTID=test-id \\
+    --set VIKUNJA_MIGRATION_TODOIST_CLIENTSECRET=test-secret -y
+grep -q '^VIKUNJA_MIGRATION_TODOIST_ENABLE=true$' "$ENV"
+grep -q '^VIKUNJA_MIGRATION_TODOIST_CLIENTID=test-id$' "$ENV"
+grep -q '"todoist"' "$META"
+"""
+timeout = 90
+
+# Disabling the group strips the members back out (destructive — gated
+# on --yes in non-interactive mode).
+[[steps]]
+action = "shell"
+name = "disable-group"
+run = """set -e
+ENV=~/.local/share/services/vikunja/.env
+META=~/.local/share/services/vikunja/metadata.toml
+ryra configure vikunja --disable todoist -y
+! grep -q '^VIKUNJA_MIGRATION_TODOIST_' "$ENV"
+! grep -q '"todoist"' "$META"
+"""
+timeout = 90

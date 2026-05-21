@@ -120,12 +120,8 @@ enum Command {
         #[arg(long, short = 'l')]
         long: bool,
     },
-    /// View or edit global configuration (no args = overview)
-    Config {
-        /// A config section (`smtp`, `auth`) to edit, or a service name
-        /// to show details for. Omit to print the global overview.
-        section: Option<String>,
-    },
+    /// Global overview: config path, SMTP / auth providers, service count.
+    Status,
     /// Manage custom registries
     Registry {
         #[command(subcommand)]
@@ -183,20 +179,16 @@ enum Command {
     },
     /// Diagnose environment + install state and report issues with fixes
     Doctor,
-    /// Show what would change if the current registry were re-rendered
-    /// against an installed service. Read-only; flags hand-edited files
-    /// so you know what `ryra upgrade` would refuse to overwrite.
+    /// Preview what `ryra upgrade` would change. Read-only.
     Diff {
         /// Service name(s). Omit to diff every installed service.
         services: Vec<String>,
     },
-    /// Re-render an installed service against the current registry, backing
-    /// up displaced files and restarting the unit. Refuses to clobber
-    /// hand-edited files unless --force.
+    /// Re-render an installed service against the current registry.
     ///
-    /// Backups land in ~/.local/state/ryra/backups/<UTC-ts>/<service>/.
-    /// The most recent 5 snapshots per service are kept; older ones are
-    /// auto-pruned after each successful upgrade.
+    /// Backs up displaced files to ~/.local/state/ryra/backups/<UTC-ts>/<service>/
+    /// (last 5 snapshots kept) and restarts the unit. Refuses to clobber
+    /// hand-edited files unless --force.
     Upgrade {
         /// Service name(s). Omit to upgrade every installed service.
         services: Vec<String>,
@@ -211,9 +203,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Restore an installed service from its most recent (or `--at <timestamp>`)
-    /// upgrade backup. Inverts a `ryra upgrade`: brings back overwritten files,
-    /// removes upgrade-added files, restarts the unit.
+    /// Restore an installed service from an upgrade backup.
     Revert {
         /// Service name(s) to revert. Required unless --list is set.
         services: Vec<String>,
@@ -233,11 +223,61 @@ enum Command {
         dry_run: bool,
     },
     /// Encrypted backups to an S3-compatible store (MinIO, AWS, R2, B2,
-    /// Wasabi) via restic. Per-install opt-in: `ryra add <svc> --backup`
-    /// flips the bit; `ryra backup run` does the actual push.
+    /// Wasabi) via restic.
     Backup {
         #[command(subcommand)]
         action: cli::backup::BackupAction,
+    },
+    /// Reconfigure an installed service in place.
+    Configure {
+        /// Service name to reconfigure.
+        service: String,
+        /// Set or change the public URL.
+        #[arg(long, conflicts_with_all = ["no_url", "tailscale"])]
+        url: Option<String>,
+        /// Remove the public URL (drops the Caddy route, switches to loopback).
+        #[arg(long = "no-url", conflicts_with_all = ["url", "tailscale"])]
+        no_url: bool,
+        /// Switch this service to Tailscale Service exposure.
+        #[arg(long, conflicts_with_all = ["url", "no_url"])]
+        tailscale: bool,
+        /// Wire this service to the global SMTP relay.
+        #[arg(long, conflicts_with = "no_smtp")]
+        smtp: bool,
+        /// Stop wiring this service to the global SMTP relay.
+        #[arg(long = "no-smtp", conflicts_with = "smtp")]
+        no_smtp: bool,
+        /// Include this service in encrypted backups.
+        #[arg(long, conflicts_with = "no_backup")]
+        backup: bool,
+        /// Stop including this service in encrypted backups.
+        #[arg(long = "no-backup", conflicts_with = "backup")]
+        no_backup: bool,
+        /// Register an OIDC client with the auth provider and enable SSO.
+        /// Requires a `--url` if the service wasn't already URL-exposed.
+        #[arg(long, conflicts_with = "no_auth")]
+        auth: bool,
+        /// Unregister the OIDC client and disable SSO. Destructive.
+        #[arg(long = "no-auth", conflicts_with = "auth")]
+        no_auth: bool,
+        /// Enable a named env_group bundle (repeatable).
+        #[arg(long = "enable", value_name = "GROUP")]
+        enable: Vec<String>,
+        /// Disable a named env_group bundle (repeatable). Destructive —
+        /// drops the group's env vars from `.env`.
+        #[arg(long = "disable", value_name = "GROUP")]
+        disable: Vec<String>,
+        /// Override an individual env var (repeatable). Format: KEY=VALUE.
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
+        /// Skip confirmation prompts. Destructive changes still require
+        /// typed confirmation in an interactive session unless `--yes`
+        /// is combined with destructive flags (then they're auto-confirmed).
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Show what would happen without making changes.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -346,7 +386,42 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
         } => cli::revert::run(services, at.as_deref(), yes, dry_run, list).await?,
         Command::Backup { action } => cli::backup::run(action).await?,
-        Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
+        Command::Configure {
+            ref service,
+            ref url,
+            no_url,
+            tailscale,
+            smtp,
+            no_smtp,
+            backup,
+            no_backup,
+            auth,
+            no_auth,
+            ref enable,
+            ref disable,
+            ref set,
+            yes,
+            dry_run,
+        } => {
+            let flags = cli::configure::ConfigureFlags {
+                url: url.clone(),
+                no_url,
+                tailscale,
+                smtp,
+                no_smtp,
+                backup,
+                no_backup,
+                auth,
+                no_auth,
+                enable: enable.clone(),
+                disable: disable.clone(),
+                set: set.clone(),
+                yes,
+                dry_run,
+            };
+            cli::configure::run(service, flags).await?
+        }
+        Command::Status => cli::status::run().await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {
             ref query,

@@ -603,8 +603,24 @@ mod tailscale_services {
     /// Stop advertising and delete the service definition. Idempotent:
     /// either step failing is logged but doesn't fail the disable
     /// (e.g. service already deleted, host already not advertising).
+    ///
+    /// If no `[tailscale]` config is present, skip with a warning
+    /// rather than failing the whole `ryra remove`. The only way to
+    /// reach this step without a token is a corrupted install (e.g. a
+    /// half-applied configure that wrote the new metadata but crashed
+    /// before TailscaleEnable ran). In that case there's nothing in
+    /// the tailnet to deregister anyway, so eat the error instead of
+    /// blocking the cleanup.
     pub fn disable(svc_name: &str) -> Result<()> {
-        let ts = token()?;
+        let paths = ryra_core::config::ConfigPaths::resolve()?;
+        let cfg = ryra_core::config::load_or_default(&paths.config_file)?;
+        let Some(ts) = cfg.tailscale else {
+            eprintln!(
+                "  Note: no [tailscale] config — assuming svc:{svc_name} \
+                 was never registered. Skipping deregistration."
+            );
+            return Ok(());
+        };
         let key = &ts.admin_api_key;
 
         // Stop advertising. Errors here are usually "wasn't advertising

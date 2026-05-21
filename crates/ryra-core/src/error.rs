@@ -77,7 +77,7 @@ pub enum Error {
     Template(String),
 
     #[error(
-        "auth integration requires an auth provider to be configured first — run `ryra config auth`"
+        "auth integration requires an auth provider to be configured first — run `ryra add authelia`"
     )]
     AuthNotConfigured,
 
@@ -92,6 +92,13 @@ pub enum Error {
         service: String,
         group: String,
         hint: String,
+    },
+
+    #[error("`ryra configure` can't change {field} for service '{service}'. {workaround}")]
+    ConfigureUnsupported {
+        service: String,
+        field: String,
+        workaround: String,
     },
 
     #[error("could not determine home directory: set $HOME")]
