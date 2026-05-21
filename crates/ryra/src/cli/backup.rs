@@ -1,4 +1,4 @@
-//! `ryra backup` — configure repos, push snapshots, restore, list.
+//! `ryra backup`: configure repos, push snapshots, restore, list.
 //!
 //! All flows shell out to the `restic` binary; ryra-core stays free of
 //! the subprocess plumbing so its planning is unit-testable without
@@ -35,7 +35,7 @@ pub enum BackupAction {
     /// to change the backend or rotate the password).
     Configure {
         /// `s3` (any S3-compatible store: MinIO, AWS S3, R2, B2-S3,
-        /// Wasabi) or `local` (testing only — local disk, no
+        /// Wasabi) or `local` (testing only, local disk, no
         /// off-machine protection).
         #[arg(long, value_enum)]
         backend: Option<BackendKind>,
@@ -61,7 +61,7 @@ pub enum BackupAction {
         path: Option<PathBuf>,
         /// Encryption password. Omit to generate a fresh 32-byte
         /// random key (recommended). The password is the only thing
-        /// that decrypts snapshots — store it somewhere safe.
+        /// that decrypts snapshots; store it somewhere safe.
         #[arg(long)]
         password: Option<String>,
         /// Skip the "save this password somewhere" interactive
@@ -84,7 +84,7 @@ pub enum BackupAction {
         #[arg(long)]
         at: Option<String>,
         /// Restore even if the snapshot was taken against a different
-        /// version of the service manifest. May fail to start —
+        /// version of the service manifest. May fail to start:
         /// expect to migrate by hand.
         #[arg(long)]
         force: bool,
@@ -133,7 +133,7 @@ impl ScheduleInterval {
             // service from sprouting a half-built cron DSL.
             ScheduleInterval::Daily => "*-*-* 03:00:00",
             ScheduleInterval::Weekly => "Sun *-*-* 03:00:00",
-            // unreachable — Disable doesn't write a timer
+            // unreachable: Disable doesn't write a timer
             ScheduleInterval::Disable => "",
         }
     }
@@ -238,58 +238,57 @@ struct ConfigureArgs {
 async fn configure(args: ConfigureArgs) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
-
     let interactive = super::is_interactive();
-    let kind = match args.backend {
-        Some(k) => k,
-        None if interactive => prompt_backend()?,
-        None => bail!("--backend is required in non-interactive mode (s3 or local)"),
-    };
 
-    let backend = match kind {
-        BackendKind::S3 => collect_s3(&args, interactive)?,
-        BackendKind::Local => collect_local(&args, interactive)?,
-    };
-
-    let password = match args.password {
-        Some(p) if p.trim().is_empty() => bail!("--password may not be empty"),
-        Some(p) => p,
-        None => {
-            let generated = generate_password();
-            if interactive && !args.yes {
-                println!(
-                    "\n  {}: {}",
-                    style("Generated encryption password").bold(),
-                    style(&generated).cyan()
-                );
-                println!(
-                    "  Store this somewhere safe — it's the only key that can decrypt your backups."
-                );
-                let confirm = Confirm::new()
-                    .with_prompt("Have you saved the password?")
-                    .default(false)
-                    .interact()?;
-                if !confirm {
-                    bail!("aborting: confirm the password is saved before continuing");
-                }
-            }
-            generated
+    // If a backup repo is already configured, default action is "retry
+    // init with the saved settings". That recovers cleanly from the
+    // common case where a previous `configure` saved settings but the
+    // init then failed (backend not yet reachable, ACL not yet
+    // propagated, TLS cert still being issued). The user can opt to
+    // reconfigure from scratch if they actually want to change backends.
+    let mode = if config.backup.is_some() {
+        if interactive {
+            prompt_existing_config_choice()?
+        } else if args.backend.is_some() {
+            // Non-interactive caller passed fresh backend flags: honour
+            // that as an explicit reconfigure.
+            ConfigureMode::Fresh
+        } else {
+            // Bare `ryra backup configure` after a prior failed init:
+            // retry with existing settings.
+            ConfigureMode::Retry
         }
+    } else {
+        ConfigureMode::Fresh
     };
 
-    config.backup = Some(BackupSettings { password, backend });
-    paths.ensure_dirs()?;
-    ryra_core::config::save_config(&paths.config_file, &config)?;
-    println!(
-        "\n  Backup repository saved to {}",
-        paths.config_file.display()
-    );
+    let settings = match mode {
+        ConfigureMode::Retry => config
+            .backup
+            .clone()
+            .ok_or_else(|| anyhow!("retry mode requires existing backup settings"))?,
+        ConfigureMode::Fresh => collect_new_settings(&args, interactive)?,
+    };
 
-    // Initialise the restic repo if it isn't already initialised.
-    // `restic init` is idempotent in the sense that it fails on an
-    // already-initialised repo with a recognisable error.
-    init_repo_if_needed(&config)?;
-    println!("  Repository ready: {}", style(repo_url(&config)?).dim());
+    // Init first, then save. Restic talks to the backend during init,
+    // so failures here (auth, network, missing bucket) surface BEFORE
+    // we touch preferences.toml. That means a failed configure leaves
+    // no stale state behind to clean up.
+    init_repo_if_needed(&settings)?;
+
+    if matches!(mode, ConfigureMode::Fresh) {
+        config.backup = Some(settings.clone());
+        paths.ensure_dirs()?;
+        ryra_core::config::save_config(&paths.config_file, &config)?;
+        println!(
+            "\n  Backup repository saved to {}",
+            paths.config_file.display()
+        );
+    }
+    println!(
+        "  Repository ready: {}",
+        style(settings.backend.restic_repo()).dim()
+    );
 
     // Offer to install a daily systemd timer. Default `no` because
     // not every user wants their first action after configure to be
@@ -308,10 +307,75 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
     Ok(())
 }
 
+enum ConfigureMode {
+    /// No prior config: prompt, init, save.
+    Fresh,
+    /// Existing config present: reuse it, only re-run init.
+    Retry,
+}
+
+fn prompt_existing_config_choice() -> Result<ConfigureMode> {
+    println!("\n  A backup repository is already configured.");
+    println!("  1. Retry connection         (reuse saved settings)");
+    println!("  2. Reconfigure from scratch (replace saved settings)");
+    println!("  3. Cancel");
+    let choice: u32 = Input::new()
+        .with_prompt("Choose")
+        .default(1)
+        .interact_text()?;
+    match choice {
+        1 => Ok(ConfigureMode::Retry),
+        2 => Ok(ConfigureMode::Fresh),
+        3 => bail!("cancelled"),
+        n => bail!("invalid choice: {n} (expected 1, 2, or 3)"),
+    }
+}
+
+fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<BackupSettings> {
+    let kind = match args.backend {
+        Some(k) => k,
+        None if interactive => prompt_backend()?,
+        None => bail!("--backend is required in non-interactive mode (s3 or local)"),
+    };
+
+    let backend = match kind {
+        BackendKind::S3 => collect_s3(args, interactive)?,
+        BackendKind::Local => collect_local(args, interactive)?,
+    };
+
+    let password = match &args.password {
+        Some(p) if p.trim().is_empty() => bail!("--password may not be empty"),
+        Some(p) => p.clone(),
+        None => {
+            let generated = generate_password();
+            if interactive && !args.yes {
+                println!(
+                    "\n  {}: {}",
+                    style("Generated encryption password").bold(),
+                    style(&generated).cyan()
+                );
+                println!(
+                    "  Store this somewhere safe: it's the only key that can decrypt your backups."
+                );
+                let confirm = Confirm::new()
+                    .with_prompt("Have you saved the password?")
+                    .default(false)
+                    .interact()?;
+                if !confirm {
+                    bail!("aborting: confirm the password is saved before continuing");
+                }
+            }
+            generated
+        }
+    };
+
+    Ok(BackupSettings { password, backend })
+}
+
 fn prompt_backend() -> Result<BackendKind> {
     println!("\nWhich backup backend?");
     println!("  1. S3-compatible  (MinIO, AWS, Backblaze B2, R2, Wasabi)");
-    println!("  2. Local path     (testing only — no off-machine protection)");
+    println!("  2. Local path     (testing only, no off-machine protection)");
     let choice: u32 = Input::new()
         .with_prompt("Choose")
         .default(1)
@@ -379,11 +443,7 @@ fn generate_password() -> String {
     ryra_core::system::secret::generate_secret()
 }
 
-fn init_repo_if_needed(config: &Config) -> Result<()> {
-    let settings = config
-        .backup
-        .as_ref()
-        .ok_or_else(|| anyhow!("backup settings not present after save"))?;
+fn init_repo_if_needed(settings: &BackupSettings) -> Result<()> {
     let mut cmd = std::process::Command::new("restic");
     cmd.arg("init")
         .arg("--repo")
@@ -401,19 +461,9 @@ fn init_repo_if_needed(config: &Config) -> Result<()> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.contains("already initialized") || stderr.contains("config file already exists") {
-        // Existing repo — fine.
         return Ok(());
     }
-    bail!("restic init failed: {stderr}");
-}
-
-fn repo_url(config: &Config) -> Result<String> {
-    Ok(config
-        .backup
-        .as_ref()
-        .ok_or_else(|| anyhow!("backup not configured"))?
-        .backend
-        .restic_repo())
+    bail!("restic init failed: {}", stderr.trim());
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +475,7 @@ async fn run_backup(services: Vec<String>) -> Result<()> {
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.backup.is_none() {
         bail!(
-            "no backup repository configured — run `{}` first",
+            "no backup repository configured: run `{}` first",
             style("ryra backup configure").cyan()
         );
     }
@@ -481,7 +531,7 @@ async fn run_one(service_name: &str, config: &Config) -> Result<()> {
     let restic_result = restic_backup(&plan);
 
     if let Some(hook) = &plan.post_backup_hook {
-        // Run the post hook even if restic failed — its purpose is
+        // Run the post hook even if restic failed: its purpose is
         // usually cleanup (removing a dump file). Failing to clean
         // up shouldn't mask the original error.
         if let Err(e) = run_hook("post_backup", &plan.service_name, hook, &plan.service_home)
@@ -496,7 +546,7 @@ async fn run_one(service_name: &str, config: &Config) -> Result<()> {
 fn restic_backup(plan: &BackupRunPlan) -> Result<()> {
     // restic runs as the ryra user; reading the container-owned
     // bind-mount tree (postgres data, www-data html, etc.) is the
-    // hook's job — backup-pre.sh chowns those volumes to namespace
+    // hook's job; backup-pre.sh chowns those volumes to namespace
     // root via `podman unshare chown -R 0:0`, so by the time we
     // get here every file is owned by ryra and freely readable.
     // The next container start's `:U` re-chowns to the container's
@@ -544,7 +594,7 @@ async fn restore(service: String, at: Option<String>, force: bool) -> Result<()>
     let paths = ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.backup.is_none() {
-        bail!("no backup repository configured — run `ryra backup configure` first");
+        bail!("no backup repository configured: run `ryra backup configure` first");
     }
     let repo_dir = resolve_repo_dir_for_install(&service).await?;
     let snapshot = at.unwrap_or_else(|| "latest".to_string());
