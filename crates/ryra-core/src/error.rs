@@ -129,6 +129,41 @@ pub enum Error {
         "service '{service}' has no backup at timestamp {stamp} — run `ryra revert {service}` to use the most recent"
     )]
     BackupNotFound { service: String, stamp: String },
+
+    #[error(
+        "service '{0}' does not declare backup support — the service author must set `backup = true` under [integrations] in its service.toml first"
+    )]
+    BackupNotSupported(String),
+
+    #[error("backup repository is not configured — run `ryra backup configure` first")]
+    BackupRepoNotConfigured,
+
+    #[error("backup is not enabled for service '{0}' — re-install with `ryra add {0} --backup`")]
+    BackupNotEnabled(String),
+
+    #[error(
+        "no snapshots found for service '{0}' in the backup repository — has `ryra backup run` ever succeeded?"
+    )]
+    BackupNoSnapshots(String),
+
+    #[error("restic command failed: {0}")]
+    Restic(String),
+
+    #[error("backup hook '{hook}' for service '{service}' failed: {message}")]
+    BackupHookFailed {
+        service: String,
+        hook: String,
+        message: String,
+    },
+
+    #[error(
+        "service '{service}' was backed up at manifest hash {backed_up} but current install is at {current} — pass --force to restore anyway, or --migrate-to=<dir> to extract without touching the live install"
+    )]
+    BackupVersionMismatch {
+        service: String,
+        backed_up: String,
+        current: String,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

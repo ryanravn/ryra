@@ -30,6 +30,12 @@ pub struct ServiceDef {
     /// Drives capability-based dispatch — see [`crate::capability`].
     #[serde(default)]
     pub capabilities: Capabilities,
+    /// Backup configuration. Present only when the author has declared
+    /// `backup = true` in `[integrations]` and the service needs more
+    /// than the default "back up everything classified as data."
+    /// Carries hooks (pre/post dump) and exclude lists.
+    #[serde(default)]
+    pub backup: Option<BackupConfig>,
 }
 
 /// Capability declarations on a service.
@@ -311,6 +317,18 @@ pub struct IntegrationFlags {
     pub oidc_callbacks: Vec<String>,
     #[serde(default = "default_true")]
     pub smtp: bool,
+    /// True if the service author has certified this service can be
+    /// backed up safely. The default is `false` (explicit opt-in)
+    /// because the worst failure mode is a backup that takes cleanly
+    /// but won't restore (e.g. forgot to write a pg_dump hook), so
+    /// authors must consciously declare support.
+    ///
+    /// When `true`, an accompanying `[backup]` section MAY provide
+    /// hooks and excludes; when absent, the default behaviour is to
+    /// back up every top-level child of the service home dir that the
+    /// classifier marks as data.
+    #[serde(default)]
+    pub backup: bool,
 }
 
 impl Default for IntegrationFlags {
@@ -320,12 +338,62 @@ impl Default for IntegrationFlags {
             token_auth_method: TokenAuthMethod::default(),
             oidc_callbacks: vec![],
             smtp: true,
+            backup: false,
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Per-service backup configuration. Present only when the service's
+/// `[integrations]` section sets `backup = true` AND the service needs
+/// non-default behaviour (excludes or hooks).
+///
+/// Hooks are filenames inside `configs/scripts/` (same convention as
+/// the existing `ExecStartPost=` scripts). They run with the same env
+/// as those scripts: `$SERVICE_HOME` plus everything in the service's
+/// `.env` file.
+///
+/// Pre/post hooks form a pair around the operation:
+///
+/// ```text
+/// backup:  [pre_backup]  -> restic snapshot   -> [post_backup]
+/// restore: [pre_restore] -> restic restore    -> [post_restore]
+/// ```
+///
+/// Hooks must dump to `$SERVICE_HOME/.backup/` (a sibling of `data/`)
+/// so it's clear which files are user-owned data versus snapshot
+/// artefacts. Listing `.backup/<file>` in `paths` is required if the
+/// hook writes one; nothing is implicitly included.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackupConfig {
+    /// Explicit list of paths (relative to service home) to include in
+    /// the snapshot. When empty, the default is "every top-level child
+    /// of the service home dir that the classifier marks as data."
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Restic-style exclude patterns relative to service home.
+    /// Useful for skipping caches, previews, transcoding artefacts.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// Script filename (in `configs/scripts/`) run before the restic
+    /// snapshot. Typically dumps a database to `$SERVICE_HOME/.backup/`.
+    #[serde(default)]
+    pub pre_backup: Option<String>,
+    /// Script filename run after a successful restic snapshot.
+    /// Typically cleans up `$SERVICE_HOME/.backup/`.
+    #[serde(default)]
+    pub post_backup: Option<String>,
+    /// Script filename run before restoring (typically stops the
+    /// service and wipes the live data dir).
+    #[serde(default)]
+    pub pre_restore: Option<String>,
+    /// Script filename run after restoring (typically imports the
+    /// dump back into the live database and restarts the service).
+    #[serde(default)]
+    pub post_restore: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +518,46 @@ impl ServiceDef {
             ));
         }
 
+        // --- Backup consistency ---
+        //
+        // The `[backup]` section is only meaningful when the author has
+        // certified the service is backup-safe via `backup = true`. If
+        // they wrote hooks/excludes without flipping the flag we'd
+        // silently ship a service whose backup support is half-declared,
+        // so reject it loudly.
+        if let Some(ref backup) = self.backup
+            && !self.integrations.backup
+        {
+            errors.push("[backup] section requires `backup = true` in [integrations]".to_string());
+            // No-op read so the binding isn't unused if all sub-checks
+            // below get gated out by serde defaults.
+            let _ = backup;
+        }
+        if let Some(ref backup) = self.backup {
+            for (label, hook) in [
+                ("pre_backup", &backup.pre_backup),
+                ("post_backup", &backup.post_backup),
+                ("pre_restore", &backup.pre_restore),
+                ("post_restore", &backup.post_restore),
+            ] {
+                if let Some(script) = hook
+                    && (script.is_empty() || script.contains('/') || script.contains(".."))
+                {
+                    errors.push(format!(
+                        "backup hook '{label}' must be a bare filename under configs/scripts/ \
+                         (got {script:?})"
+                    ));
+                }
+            }
+            for p in &backup.paths {
+                if p.is_empty() || p.starts_with('/') || p.contains("..") {
+                    errors.push(format!(
+                        "backup path {p:?} must be a relative path within the service home"
+                    ));
+                }
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -505,5 +613,165 @@ pub fn current_architecture() -> Arch {
         // Fallback: default to amd64 for unknown architectures.
         // The service's check_architecture() will catch unsupported ones.
         _ => Arch::Amd64,
+    }
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    fn parse(toml_src: &str) -> ServiceDef {
+        toml::from_str(toml_src).expect("parse")
+    }
+
+    #[test]
+    fn backup_defaults_to_false_when_omitted() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+"#,
+        );
+        assert!(!svc.integrations.backup);
+        assert!(svc.backup.is_none());
+        svc.validate().expect("default is valid");
+    }
+
+    #[test]
+    fn backup_section_alone_is_rejected_without_integration_flag() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[backup]
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(
+            err.contains("backup = true"),
+            "error mentions the required flag: {err}"
+        );
+    }
+
+    #[test]
+    fn backup_supported_without_hooks_validates() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[integrations]
+backup = true
+"#,
+        );
+        assert!(svc.integrations.backup);
+        assert!(svc.backup.is_none());
+        svc.validate().expect("ok without [backup] table");
+    }
+
+    #[test]
+    fn backup_with_full_hooks_validates() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[integrations]
+backup = true
+
+[backup]
+paths = [".backup/db.sql.gz", "data"]
+exclude = ["data/cache"]
+pre_backup = "backup-pre.sh"
+post_backup = "backup-post.sh"
+pre_restore = "restore-pre.sh"
+post_restore = "restore-post.sh"
+"#,
+        );
+        svc.validate().expect("ok");
+        let backup = svc.backup.as_ref().expect("section present");
+        assert_eq!(backup.paths, vec![".backup/db.sql.gz", "data"]);
+        assert_eq!(backup.pre_backup.as_deref(), Some("backup-pre.sh"));
+    }
+
+    #[test]
+    fn backup_hook_with_slash_is_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[integrations]
+backup = true
+
+[backup]
+pre_backup = "subdir/script.sh"
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("pre_backup"), "{err}");
+    }
+
+    #[test]
+    fn backup_hook_with_dotdot_is_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[integrations]
+backup = true
+
+[backup]
+post_backup = "../escape.sh"
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("post_backup"), "{err}");
+    }
+
+    #[test]
+    fn backup_absolute_path_is_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[integrations]
+backup = true
+
+[backup]
+paths = ["/etc/passwd"]
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("/etc/passwd"), "{err}");
+    }
+
+    #[test]
+    fn backup_path_with_dotdot_is_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[integrations]
+backup = true
+
+[backup]
+paths = ["../../somewhere"]
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("somewhere"), "{err}");
     }
 }

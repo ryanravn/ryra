@@ -16,7 +16,7 @@ name = "ryra_test"
 path = "src/lib.rs"
 
 [dependencies]
-ryra-vm = { path = "../ryra-vm", version = "0.1.1" }
+ryra-vm = { path = "../ryra-vm", version = "0.2.0" }
 anyhow.workspace = true
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }

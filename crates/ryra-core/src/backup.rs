@@ -1,0 +1,497 @@
+//! Backup planning. Pure functions that take service install state +
+//! the user's backup config and produce typed plans the CLI executes.
+//!
+//! What lives here:
+//! - [`BackupRunPlan`]: everything the CLI needs to push one service's
+//!   data to the configured restic repository.
+//! - [`BackupRestorePlan`]: same shape for the reverse operation.
+//! - [`plan_backup_run`] / [`plan_backup_restore`]: the planners.
+//!
+//! What does *not* live here: spawning the `restic` subprocess, running
+//! hook scripts, or any other side effect. The CLI layer owns those.
+//! Keeping the planner pure means it round-trips cleanly in tests
+//! against a tempdir without needing restic on the test runner.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+
+use crate::config::schema::{BackupBackend, Config};
+use crate::data::classify::classify_home_dir;
+use crate::error::{Error, Result};
+use crate::metadata::{Metadata, load_metadata};
+use crate::paths::service_home;
+use crate::registry;
+use crate::registry::service_def::{BackupConfig, ServiceDef};
+
+const SERVICE_TOML_FILENAME: &str = "service.toml";
+
+/// Concrete instructions for backing up one installed service.
+///
+/// The CLI consumes this by:
+/// 1. Running every `pre_backup_hook` script in order.
+/// 2. Spawning `restic backup` with `repo`, `password` (via
+///    `RESTIC_PASSWORD` env), `env` set on the child, `--tag` for each
+///    string in `tags`, and `--exclude` for each string in `excludes`,
+///    with `paths` as the positional arguments.
+/// 3. Running every `post_backup_hook` (even if step 2 failed —
+///    failure-cleanup matters; see [`PlanHook::Cleanup`]).
+#[derive(Debug, Clone)]
+pub struct BackupRunPlan {
+    pub service_name: String,
+    pub service_home: PathBuf,
+    pub repo: String,
+    pub password: String,
+    pub env: BTreeMap<String, String>,
+    pub tags: Vec<String>,
+    pub paths: Vec<PathBuf>,
+    pub excludes: Vec<String>,
+    pub pre_backup_hook: Option<PathBuf>,
+    pub post_backup_hook: Option<PathBuf>,
+}
+
+/// Instructions for restoring one installed service from a specific
+/// restic snapshot.
+#[derive(Debug, Clone)]
+pub struct BackupRestorePlan {
+    pub service_name: String,
+    pub service_home: PathBuf,
+    pub repo: String,
+    pub password: String,
+    pub env: BTreeMap<String, String>,
+    /// `latest` to grab the newest snapshot, or a specific restic
+    /// snapshot id (hex prefix) when the user passed `--at <id>`.
+    pub snapshot: String,
+    pub pre_restore_hook: Option<PathBuf>,
+    pub post_restore_hook: Option<PathBuf>,
+}
+
+/// Plan a `ryra backup run <service>` invocation. Errors loudly when:
+/// - the service isn't installed,
+/// - its install metadata didn't opt into backups (`--backup` wasn't
+///   passed at `ryra add`),
+/// - the user hasn't run `ryra backup configure` yet,
+/// - the service author hasn't declared backup support (defensive —
+///   the install-time check should have caught this earlier, but a
+///   manifest change between install and backup is possible).
+pub fn plan_backup_run(
+    service_name: &str,
+    config: &Config,
+    repo_dir: &Path,
+) -> Result<BackupRunPlan> {
+    let metadata = load_install_metadata(service_name)?;
+    if !metadata.backup_enabled {
+        return Err(Error::BackupNotEnabled(service_name.to_string()));
+    }
+    let settings = config
+        .backup
+        .as_ref()
+        .ok_or(Error::BackupRepoNotConfigured)?;
+
+    let svc = registry::find_service(repo_dir, service_name)?;
+    if !svc.def.integrations.backup {
+        return Err(Error::BackupNotSupported(service_name.to_string()));
+    }
+
+    let home = service_home(service_name)?;
+    let (paths, excludes) = resolve_paths(&svc.def, &home)?;
+
+    let manifest_sha = manifest_sha256(&svc.service_dir);
+    let mut tags = vec![format!("service:{service_name}")];
+    tags.push(format!("manifest_sha:{}", &manifest_sha[..16]));
+
+    let backup = svc.def.backup.as_ref();
+    let pre = resolve_hook(
+        backup.and_then(|b| b.pre_backup.as_deref()),
+        &home,
+        "backup-pre.sh",
+    );
+    let post = resolve_hook(
+        backup.and_then(|b| b.post_backup.as_deref()),
+        &home,
+        "backup-post.sh",
+    );
+
+    Ok(BackupRunPlan {
+        service_name: service_name.to_string(),
+        service_home: home,
+        repo: settings.backend.restic_repo(),
+        password: settings.password.clone(),
+        env: backend_env_map(&settings.backend),
+        tags,
+        paths,
+        excludes,
+        pre_backup_hook: pre,
+        post_backup_hook: post,
+    })
+}
+
+/// Plan a `ryra backup restore <service>` invocation.
+///
+/// `snapshot` is either `latest` (newest snapshot tagged with this
+/// service) or an explicit restic snapshot id. The CLI resolves the
+/// actual id by querying restic; this planner stays pure and just
+/// passes the user's choice through.
+pub fn plan_backup_restore(
+    service_name: &str,
+    snapshot: &str,
+    config: &Config,
+    repo_dir: &Path,
+) -> Result<BackupRestorePlan> {
+    let metadata = load_install_metadata(service_name)?;
+    if !metadata.backup_enabled {
+        return Err(Error::BackupNotEnabled(service_name.to_string()));
+    }
+    let settings = config
+        .backup
+        .as_ref()
+        .ok_or(Error::BackupRepoNotConfigured)?;
+
+    let svc = registry::find_service(repo_dir, service_name)?;
+    let home = service_home(service_name)?;
+
+    let backup = svc.def.backup.as_ref();
+    let pre = resolve_hook(
+        backup.and_then(|b| b.pre_restore.as_deref()),
+        &home,
+        "restore-pre.sh",
+    );
+    let post = resolve_hook(
+        backup.and_then(|b| b.post_restore.as_deref()),
+        &home,
+        "restore-post.sh",
+    );
+
+    Ok(BackupRestorePlan {
+        service_name: service_name.to_string(),
+        service_home: home,
+        repo: settings.backend.restic_repo(),
+        password: settings.password.clone(),
+        env: backend_env_map(&settings.backend),
+        snapshot: snapshot.to_string(),
+        pre_restore_hook: pre,
+        post_restore_hook: post,
+    })
+}
+
+/// List installed services that have `backup_enabled = true` in their
+/// metadata. The CLI's `ryra backup run` (no service argument) uses
+/// this to iterate every enabled install.
+pub fn list_backup_enabled() -> Result<Vec<String>> {
+    let root = crate::paths::service_data_root()?;
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&root).map_err(|source| Error::FileRead {
+        path: root.clone(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| Error::FileRead {
+            path: root.clone(),
+            source,
+        })?;
+        let name = match entry.file_name().to_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        if let Some(meta) = load_metadata(&name)?
+            && meta.backup_enabled
+        {
+            out.push(name);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn load_install_metadata(service_name: &str) -> Result<Metadata> {
+    load_metadata(service_name)?.ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))
+}
+
+/// Resolve the set of absolute paths to feed restic, plus the list of
+/// `--exclude` patterns.
+///
+/// Two routes:
+/// - Explicit `[backup].paths`: trust the manifest, resolve each
+///   entry against the service home.
+/// - No explicit paths: ask the classifier "what's data here?" — that
+///   covers every top-level child not in the install manifest (the
+///   `data/` directory, the `db-data/` directory, anything the user
+///   has dropped in). Also include `.backup/` if the manifest declared
+///   any pre_backup hook, since that's the convention for dumping.
+fn resolve_paths(def: &ServiceDef, home: &Path) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    let backup = def.backup.as_ref();
+    let excludes: Vec<String> = backup.map(|b| b.exclude.clone()).unwrap_or_default();
+
+    if let Some(b) = backup
+        && !b.paths.is_empty()
+    {
+        let abs: Vec<PathBuf> = b.paths.iter().map(|p| home.join(p)).collect();
+        return Ok((abs, excludes));
+    }
+
+    // Default: classifier-derived data paths.
+    let (data, _ephemeral) = classify_home_dir(home)?;
+    let mut paths: Vec<PathBuf> = data;
+
+    // If a hook is declared, it writes to .backup/ — include it if
+    // present at backup time. We add it conditionally rather than
+    // unconditionally so a service that never created the dir doesn't
+    // make restic complain about a missing path.
+    if backup.is_some_and(has_any_backup_hook) {
+        let dump_dir = home.join(".backup");
+        if dump_dir.exists() && !paths.iter().any(|p| p == &dump_dir) {
+            paths.push(dump_dir);
+        }
+    }
+
+    paths.sort();
+    Ok((paths, excludes))
+}
+
+fn has_any_backup_hook(b: &BackupConfig) -> bool {
+    b.pre_backup.is_some() || b.post_backup.is_some()
+}
+
+fn hook_path(home: &Path, filename: &str) -> PathBuf {
+    home.join("configs").join("scripts").join(filename)
+}
+
+/// Decide which hook script (if any) to invoke for a given lifecycle
+/// phase. Priority:
+/// 1. Explicit `[backup].pre_backup` (or sibling) in service.toml.
+/// 2. Convention: `configs/scripts/<phase>.sh` on disk.
+/// 3. None — phase is a no-op.
+///
+/// The convention path means a typical service.toml's `[backup]`
+/// section is a single `paths = [...]` line; the four hook scripts
+/// are auto-discovered when their conventional names are present in
+/// `configs/scripts/`, and authors never have to repeat the
+/// filenames in the manifest.
+fn resolve_hook(explicit: Option<&str>, home: &Path, conventional: &str) -> Option<PathBuf> {
+    if let Some(name) = explicit {
+        return Some(hook_path(home, name));
+    }
+    let conv = hook_path(home, conventional);
+    if conv.exists() { Some(conv) } else { None }
+}
+
+fn backend_env_map(backend: &BackupBackend) -> BTreeMap<String, String> {
+    backend
+        .env()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
+}
+
+/// Hex SHA256 of the service's `service.toml`. Used as the
+/// `manifest_sha:` tag on each snapshot so a future restore can detect
+/// version skew between the snapshot and the currently-installed
+/// service definition.
+///
+/// Falls back to an all-zero hash if the file can't be read — the
+/// caller's higher-level error handling will already have failed for
+/// other reasons, and a sentinel hash is more useful than panicking.
+pub fn manifest_sha256(service_dir: &Path) -> String {
+    let path = service_dir.join(SERVICE_TOML_FILENAME);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(_) => return "0".repeat(64),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let digest = hasher.finalize();
+    hex_encode(&digest)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0xf) as usize] as char);
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::schema::{BackupBackend, BackupSettings};
+    use crate::registry::service_def::{
+        Arch, HttpsRequirement, IntegrationFlags, PortDef, ServiceDef, ServiceMeta,
+    };
+
+    fn def_with_backup(backup_section: Option<BackupConfig>) -> ServiceDef {
+        ServiceDef {
+            service: ServiceMeta {
+                name: "demo".into(),
+                description: "demo".into(),
+                url: None,
+                kind: Default::default(),
+                architecture: vec![Arch::Amd64, Arch::Arm64],
+                https: HttpsRequirement::default(),
+            },
+            requirements: None,
+            ports: vec![PortDef {
+                name: "http".into(),
+                container_port: 80,
+                host_port: None,
+                protocol: Default::default(),
+            }],
+            env: vec![],
+            env_groups: vec![],
+            requires: vec![],
+            mappings: Default::default(),
+            integrations: IntegrationFlags {
+                backup: backup_section.is_some(),
+                ..Default::default()
+            },
+            capabilities: Default::default(),
+            backup: backup_section,
+        }
+    }
+
+    #[test]
+    fn resolve_paths_uses_classifier_when_paths_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir(home.join("data")).unwrap();
+        std::fs::create_dir(home.join("cache")).unwrap();
+        // No manifest — classifier treats everything as data.
+        let def = def_with_backup(Some(BackupConfig::default()));
+        let (paths, excludes) = resolve_paths(&def.clone(), home).unwrap();
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"data".to_string()), "got {names:?}");
+        assert!(names.contains(&"cache".to_string()), "got {names:?}");
+        assert!(excludes.is_empty());
+    }
+
+    #[test]
+    fn resolve_paths_honours_explicit_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let def = def_with_backup(Some(BackupConfig {
+            paths: vec!["data/uploads".into(), ".backup/db.sql".into()],
+            exclude: vec!["data/uploads/cache".into()],
+            ..Default::default()
+        }));
+        let (paths, excludes) = resolve_paths(&def, home).unwrap();
+        assert_eq!(
+            paths,
+            vec![home.join("data/uploads"), home.join(".backup/db.sql")]
+        );
+        assert_eq!(excludes, vec!["data/uploads/cache"]);
+    }
+
+    #[test]
+    fn resolve_paths_includes_dot_backup_when_hook_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        std::fs::create_dir(home.join("data")).unwrap();
+        std::fs::create_dir(home.join(".backup")).unwrap();
+        // Hook declared but no explicit paths → classifier output
+        // plus .backup/.
+        let def = def_with_backup(Some(BackupConfig {
+            pre_backup: Some("dump.sh".into()),
+            ..Default::default()
+        }));
+        let (paths, _) = resolve_paths(&def, home).unwrap();
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&".backup".to_string()), "got {names:?}");
+        assert!(names.contains(&"data".to_string()), "got {names:?}");
+    }
+
+    #[test]
+    fn hook_path_resolves_under_configs_scripts() {
+        let home = PathBuf::from("/x/y");
+        assert_eq!(
+            hook_path(&home, "backup-pre.sh"),
+            PathBuf::from("/x/y/configs/scripts/backup-pre.sh")
+        );
+    }
+
+    #[test]
+    fn resolve_hook_prefers_explicit_over_convention() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // Both the conventional and a custom-named file exist; the
+        // explicit field wins.
+        let scripts = home.join("configs").join("scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("backup-pre.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::write(scripts.join("custom.sh"), "#!/bin/sh\n").unwrap();
+        let resolved = resolve_hook(Some("custom.sh"), home, "backup-pre.sh");
+        assert_eq!(resolved.unwrap().file_name().unwrap(), "custom.sh");
+    }
+
+    #[test]
+    fn resolve_hook_falls_back_to_convention_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let scripts = home.join("configs").join("scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("backup-pre.sh"), "#!/bin/sh\n").unwrap();
+        let resolved = resolve_hook(None, home, "backup-pre.sh");
+        assert_eq!(resolved.unwrap().file_name().unwrap(), "backup-pre.sh");
+    }
+
+    #[test]
+    fn resolve_hook_returns_none_when_no_script_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        // No configs/scripts/ at all → no hook to run.
+        assert!(resolve_hook(None, dir.path(), "backup-pre.sh").is_none());
+    }
+
+    #[test]
+    fn manifest_sha256_changes_with_content() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("service.toml"), "v1").unwrap();
+        std::fs::write(b.path().join("service.toml"), "v2").unwrap();
+        assert_ne!(manifest_sha256(a.path()), manifest_sha256(b.path()));
+    }
+
+    #[test]
+    fn manifest_sha256_stable_for_identical_content() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("service.toml"), "same").unwrap();
+        std::fs::write(b.path().join("service.toml"), "same").unwrap();
+        assert_eq!(manifest_sha256(a.path()), manifest_sha256(b.path()));
+    }
+
+    #[test]
+    fn manifest_sha256_returns_zero_hash_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(manifest_sha256(dir.path()), "0".repeat(64));
+    }
+
+    #[test]
+    fn backend_env_map_round_trips_aws_creds() {
+        let settings = BackupSettings {
+            password: "p".into(),
+            backend: BackupBackend::S3 {
+                endpoint: "http://h:9000".into(),
+                bucket: "b".into(),
+                access_key_id: "id".into(),
+                secret_access_key: "secret".into(),
+                prefix: None,
+            },
+        };
+        let env = backend_env_map(&settings.backend);
+        assert_eq!(env.get("AWS_ACCESS_KEY_ID"), Some(&"id".to_string()));
+        assert_eq!(
+            env.get("AWS_SECRET_ACCESS_KEY"),
+            Some(&"secret".to_string())
+        );
+    }
+}

@@ -1,5 +1,6 @@
 pub mod auth_bridge;
 pub mod authelia;
+pub mod backup;
 pub mod caddy;
 pub mod capability;
 pub mod config;
@@ -271,6 +272,7 @@ pub fn add_service(
     auth_kind: Option<registry::service_def::AuthKind>,
     enable_auth: bool,
     enable_smtp: bool,
+    enable_backup: bool,
     env_overrides: &BTreeMap<String, String>,
     enabled_groups: &std::collections::BTreeSet<String>,
     registry_name: &str,
@@ -354,6 +356,13 @@ pub fn add_service(
         && !capability::def_provides(&reg_service.def, Capability::OidcProvider)
     {
         return Err(Error::NoOidcSupport(service_name.to_string()));
+    }
+
+    // --backup requires the service author to have certified backup
+    // safety. Refusing here means a user typo can't silently produce
+    // an install whose backups would never restore cleanly.
+    if enable_backup && !reg_service.def.integrations.backup {
+        return Err(Error::BackupNotSupported(service_name.to_string()));
     }
 
     // Every `--enable <group>` must match a group defined on this service.
@@ -551,6 +560,7 @@ pub fn add_service(
         url: url.map(str::to_string),
         auth: auth_kind.clone(),
         provides: reg_service.def.capabilities.provides.clone(),
+        backup_enabled: enable_backup,
     };
 
     // Process quadlet bundle from registry

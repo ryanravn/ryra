@@ -27,6 +27,13 @@ pub struct Config {
     pub tailscale: Option<TailscaleConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
+    /// Backup repository + encryption password. Set by
+    /// `ryra backup configure`; consumed by every `ryra backup run`,
+    /// `ryra backup restore`, and `ryra backup list` invocation.
+    /// `None` means the user hasn't configured backups yet — every
+    /// backup command refuses with [`Error::BackupRepoNotConfigured`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<BackupSettings>,
 }
 
 impl Config {
@@ -36,7 +43,113 @@ impl Config {
     /// Callers use this to fire a one-time warning the first time
     /// preferences.toml acquires sensitive content.
     pub fn has_secrets(&self) -> bool {
-        self.smtp.is_some() || self.tailscale.is_some()
+        self.smtp.is_some() || self.tailscale.is_some() || self.backup.is_some()
+    }
+}
+
+// --- Backup ---
+
+/// Top-level backup repository configuration. Persisted in
+/// preferences.toml under `[backup]`. Storing the password here (vs.
+/// requiring it on every invocation) is the only ergonomic way to run
+/// `ryra backup run` from a systemd timer — but the file is already
+/// 0600 and contains comparably-sensitive SMTP and Tailscale tokens,
+/// so the threat model doesn't change.
+///
+/// Losing this password = losing access to every snapshot. Surfaced
+/// once by `ryra backup configure` with a print-and-confirm step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupSettings {
+    /// The restic encryption password. Forms the only key that can
+    /// decrypt the repo's content.
+    pub password: String,
+    /// Storage backend the snapshots are pushed to. Typed enum
+    /// (instead of a raw restic URL string + opaque env map) so
+    /// invalid combinations of credentials are unrepresentable and
+    /// the CLI can prompt for the right fields per backend.
+    pub backend: BackupBackend,
+}
+
+/// Storage backend for the backup repository. The variants map to
+/// restic's supported backends; each carries exactly the fields restic
+/// needs to authenticate, no more.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum BackupBackend {
+    /// Any S3-compatible object store: MinIO, AWS S3, Backblaze B2 via
+    /// S3 API, Cloudflare R2, Wasabi. The `endpoint` is the full URL
+    /// to the API (e.g. `http://127.0.0.1:9000` for a local MinIO,
+    /// `https://s3.us-east-1.amazonaws.com` for AWS).
+    S3 {
+        endpoint: String,
+        bucket: String,
+        access_key_id: String,
+        secret_access_key: String,
+        /// Optional path prefix inside the bucket. Lets one bucket
+        /// host multiple ryra installs (one per host or per user) by
+        /// scoping each to a sub-prefix.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+    },
+    /// A local filesystem path. Primarily a testing affordance — point
+    /// at a tempdir and round-trip backup/restore without spinning up
+    /// MinIO. Production users should prefer the S3 variant pointed at
+    /// off-machine storage; a "local" backup gives no protection from
+    /// disk failure.
+    Local { path: std::path::PathBuf },
+}
+
+impl BackupBackend {
+    /// The `--repo` argument passed to the restic binary. restic uses
+    /// a single colon-prefixed string to identify the backend ("s3:",
+    /// "rest:", a raw path for local). This builder centralises the
+    /// formatting so callers never hand-construct it.
+    pub fn restic_repo(&self) -> String {
+        match self {
+            BackupBackend::S3 {
+                endpoint,
+                bucket,
+                prefix,
+                ..
+            } => {
+                let stripped = endpoint
+                    .trim_end_matches('/')
+                    .trim_start_matches("http://")
+                    .trim_start_matches("https://");
+                // Keep the scheme: restic distinguishes
+                // s3:http://… (plain HTTP) from s3:https://….
+                let scheme = if endpoint.starts_with("http://") {
+                    "http://"
+                } else {
+                    "https://"
+                };
+                let base = format!("s3:{scheme}{stripped}/{bucket}");
+                match prefix.as_deref().map(|p| p.trim_matches('/')) {
+                    Some(p) if !p.is_empty() => format!("{base}/{p}"),
+                    _ => base,
+                }
+            }
+            BackupBackend::Local { path } => path.display().to_string(),
+        }
+    }
+
+    /// Environment variables restic needs to authenticate to this
+    /// backend. Returned as a vec of `(key, value)` pairs so the
+    /// caller can decide whether to set them on a `Command` or via
+    /// `std::env::set_var` (the former is preferred — keeps the
+    /// process env clean and per-invocation).
+    pub fn env(&self) -> Vec<(&'static str, String)> {
+        match self {
+            BackupBackend::S3 {
+                access_key_id,
+                secret_access_key,
+                ..
+            } => vec![
+                ("AWS_ACCESS_KEY_ID", access_key_id.clone()),
+                ("AWS_SECRET_ACCESS_KEY", secret_access_key.clone()),
+            ],
+            BackupBackend::Local { .. } => vec![],
+        }
     }
 }
 
@@ -242,5 +355,126 @@ mod tests {
         };
         let s = toml::to_string(&cfg).unwrap();
         assert!(!s.contains("tailnet"));
+    }
+
+    #[test]
+    fn backup_s3_repo_string_is_restic_compatible() {
+        let backend = BackupBackend::S3 {
+            endpoint: "http://127.0.0.1:9000".into(),
+            bucket: "ryra-backups".into(),
+            access_key_id: "minio".into(),
+            secret_access_key: "minio123".into(),
+            prefix: None,
+        };
+        assert_eq!(
+            backend.restic_repo(),
+            "s3:http://127.0.0.1:9000/ryra-backups"
+        );
+    }
+
+    #[test]
+    fn backup_s3_repo_with_prefix() {
+        let backend = BackupBackend::S3 {
+            endpoint: "https://s3.eu-west-1.amazonaws.com".into(),
+            bucket: "shared-bucket".into(),
+            access_key_id: "k".into(),
+            secret_access_key: "s".into(),
+            prefix: Some("hosts/laptop".into()),
+        };
+        assert_eq!(
+            backend.restic_repo(),
+            "s3:https://s3.eu-west-1.amazonaws.com/shared-bucket/hosts/laptop"
+        );
+    }
+
+    #[test]
+    fn backup_s3_trims_trailing_endpoint_slashes() {
+        // Sloppy user input shouldn't double-slash the resulting URL —
+        // restic accepts both but the canonical form is cleaner.
+        let backend = BackupBackend::S3 {
+            endpoint: "http://127.0.0.1:9000/".into(),
+            bucket: "b".into(),
+            access_key_id: "k".into(),
+            secret_access_key: "s".into(),
+            prefix: None,
+        };
+        assert_eq!(backend.restic_repo(), "s3:http://127.0.0.1:9000/b");
+    }
+
+    #[test]
+    fn backup_local_repo_is_path_string() {
+        let backend = BackupBackend::Local {
+            path: "/tmp/ryra-test-repo".into(),
+        };
+        assert_eq!(backend.restic_repo(), "/tmp/ryra-test-repo");
+    }
+
+    #[test]
+    fn backup_s3_env_carries_aws_credentials() {
+        let backend = BackupBackend::S3 {
+            endpoint: "http://127.0.0.1:9000".into(),
+            bucket: "b".into(),
+            access_key_id: "the_id".into(),
+            secret_access_key: "the_secret".into(),
+            prefix: None,
+        };
+        let env: std::collections::HashMap<_, _> = backend.env().into_iter().collect();
+        assert_eq!(env.get("AWS_ACCESS_KEY_ID"), Some(&"the_id".to_string()));
+        assert_eq!(
+            env.get("AWS_SECRET_ACCESS_KEY"),
+            Some(&"the_secret".to_string())
+        );
+    }
+
+    #[test]
+    fn backup_local_env_is_empty() {
+        let backend = BackupBackend::Local {
+            path: "/tmp/x".into(),
+        };
+        assert!(backend.env().is_empty());
+    }
+
+    #[test]
+    fn backup_settings_round_trip() {
+        let cfg = Config {
+            backup: Some(BackupSettings {
+                password: "the-key".into(),
+                backend: BackupBackend::S3 {
+                    endpoint: "http://127.0.0.1:9000".into(),
+                    bucket: "ryra".into(),
+                    access_key_id: "minio".into(),
+                    secret_access_key: "minio123".into(),
+                    prefix: None,
+                },
+            }),
+            ..Config::default()
+        };
+        let text = toml::to_string(&cfg).unwrap();
+        assert!(text.contains("[backup]"), "expected [backup] table: {text}");
+        assert!(text.contains("password = \"the-key\""), "{text}");
+        assert!(text.contains("kind = \"s3\""), "{text}");
+        let parsed: Config = toml::from_str(&text).unwrap();
+        let b = parsed.backup.expect("backup round-trips");
+        assert_eq!(b.password, "the-key");
+        match b.backend {
+            BackupBackend::S3 { bucket, .. } => assert_eq!(bucket, "ryra"),
+            other => panic!("unexpected backend: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn backup_settings_counted_in_has_secrets() {
+        // Triggers the "first time secrets are saved" warning the same
+        // way SMTP / Tailscale do.
+        let cfg = Config {
+            backup: Some(BackupSettings {
+                password: "x".into(),
+                backend: BackupBackend::Local {
+                    path: "/tmp/r".into(),
+                },
+            }),
+            ..Config::default()
+        };
+        assert!(cfg.has_secrets());
     }
 }

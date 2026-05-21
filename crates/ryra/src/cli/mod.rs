@@ -1,5 +1,6 @@
 pub mod add;
 pub mod apply;
+pub mod backup;
 pub mod config_cmd;
 pub mod diff;
 pub mod doctor;

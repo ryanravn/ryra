@@ -160,6 +160,9 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
         // here mirrors what `ryra add` does and is harmless when SMTP is
         // not configured.
         true,
+        // Backup enablement is per-install state; preserve whatever the
+        // user picked at the original `ryra add`.
+        metadata.backup_enabled,
         &BTreeMap::new(),
         &BTreeSet::new(),
         &metadata.registry,

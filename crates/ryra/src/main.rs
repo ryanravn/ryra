@@ -58,6 +58,13 @@ enum Command {
         /// Mutually exclusive with --url.
         #[arg(long, conflicts_with = "url")]
         tailscale: bool,
+        /// Include this install in encrypted backups managed by
+        /// `ryra backup run`. Only valid for services whose manifest
+        /// sets `backup = true` under [integrations]. The actual
+        /// backup repository (S3 endpoint, password) is configured
+        /// once with `ryra backup configure`.
+        #[arg(long)]
+        backup: bool,
         /// Use Let's Encrypt for Caddy-managed routes. Pass `--acme you@example.com`
         /// to register with that email for renewal notices, or `--acme` alone to
         /// register anonymously. Without this flag, Caddy uses its internal CA
@@ -225,6 +232,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Encrypted backups to an S3-compatible store (MinIO, AWS, R2, B2,
+    /// Wasabi) via restic. Per-install opt-in: `ryra add <svc> --backup`
+    /// flips the bit; `ryra backup run` does the actual push.
+    Backup {
+        #[command(subcommand)]
+        action: cli::backup::BackupAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -274,6 +288,7 @@ async fn main() -> anyhow::Result<()> {
             smtp,
             ref enable,
             tailscale,
+            backup,
             ref acme,
             yes,
             dry_run,
@@ -299,6 +314,7 @@ async fn main() -> anyhow::Result<()> {
                 smtp,
                 enable,
                 tailscale,
+                backup,
                 acme_mode.as_ref(),
                 dry_run,
                 yes,
@@ -329,6 +345,7 @@ async fn main() -> anyhow::Result<()> {
             yes,
             dry_run,
         } => cli::revert::run(services, at.as_deref(), yes, dry_run, list).await?,
+        Command::Backup { action } => cli::backup::run(action).await?,
         Command::Config { ref section } => cli::config_cmd::run(section.as_deref()).await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {

@@ -298,6 +298,7 @@ mod tests {
             mappings: Default::default(),
             integrations: Default::default(),
             capabilities: Default::default(),
+            backup: None,
         }
     }
 

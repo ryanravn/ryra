@@ -27,6 +27,18 @@ pub struct Metadata {
     /// SMTP relay / metrics scraper?" without re-reading the registry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provides: Vec<Capability>,
+    /// True if `--backup` was passed at `ryra add` time. Drives
+    /// whether `ryra backup run` picks this install up.
+    ///
+    /// Default `false` so an existing install (written by a ryra
+    /// version that pre-dates the backup feature) reads back as
+    /// not-enabled rather than as malformed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub backup_enabled: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// Load metadata.toml for an installed service. Returns `None` if the
@@ -46,4 +58,52 @@ pub fn load_metadata(service_name: &str) -> Result<Option<Metadata>> {
         source,
     })?;
     Ok(Some(meta))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_enabled_defaults_false_on_legacy_metadata() {
+        // Pre-feature metadata files have no `backup_enabled` key.
+        let toml_src = r#"
+registry = "bundled"
+"#;
+        let meta: Metadata = toml::from_str(toml_src).expect("parse");
+        assert!(!meta.backup_enabled);
+    }
+
+    #[test]
+    fn backup_enabled_round_trips() {
+        let meta = Metadata {
+            registry: "bundled".into(),
+            url: None,
+            auth: None,
+            provides: vec![],
+            backup_enabled: true,
+        };
+        let text = toml::to_string(&meta).expect("serialize");
+        assert!(
+            text.contains("backup_enabled = true"),
+            "serialized form: {text}"
+        );
+        let parsed: Metadata = toml::from_str(&text).expect("parse");
+        assert!(parsed.backup_enabled);
+    }
+
+    #[test]
+    fn backup_enabled_false_is_omitted_from_serialization() {
+        // Reduce visual noise for the common case (every existing
+        // service today): when off, the field shouldn't appear at all.
+        let meta = Metadata {
+            registry: "bundled".into(),
+            url: None,
+            auth: None,
+            provides: vec![],
+            backup_enabled: false,
+        };
+        let text = toml::to_string(&meta).expect("serialize");
+        assert!(!text.contains("backup_enabled"), "got: {text}");
+    }
 }

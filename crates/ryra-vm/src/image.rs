@@ -64,7 +64,8 @@ impl Distro {
         match self {
             // Runtime: podman, podman-compose (compose services), uidmap (rootless
             // namespaces), systemd-container (machined), git (registry fetch).
-            // Test-only: curl (HTTP assertions), postgresql-client (postgres tests).
+            // Test-only: curl (HTTP assertions), postgresql-client (postgres tests),
+            // restic (backup tests).
             Distro::Debian13 => &[
                 "podman",
                 "podman-compose",
@@ -73,6 +74,7 @@ impl Distro {
                 "systemd-container",
                 "curl",
                 "postgresql-client",
+                "restic",
             ],
             // Fedora: uidmap is part of shadow-utils (already installed).
             Distro::Fedora43 => &[
@@ -81,6 +83,7 @@ impl Distro {
                 "git",
                 "systemd-container",
                 "curl",
+                "restic",
             ],
         }
     }
