@@ -44,7 +44,7 @@ const features = [
     icon: "key",
     tag: "06",
     title: "One login across every service.",
-    body: "Any OIDC-capable service in the registry gets bundled SSO via Authelia: clients registered, callbacks set, env vars injected.",
+    body: "Any OIDC-capable service in the registry gets SSO via Authelia: clients registered, callbacks set, env vars injected.",
   },
 ];
 
@@ -128,7 +128,7 @@ const principles = [
             </h1>
             <p class="lede">
               Scaffolds <strong>rootless</strong>, <strong>daemonless</strong> <strong>podman</strong> containers wired with the same authorization system (<strong>SSO</strong>), e-mail system (<strong>SMTP</strong>), and <strong>automatic end-to-end encrypted backups</strong>.
-              The bundled registry covers useful services, each <strong>tested</strong> in a fresh virtual machine, and the
+              The default registry covers useful services, each <strong>tested</strong> in a fresh virtual machine, and the
               test framework is simple enough that you can have an AI add new services and prove they work the same way.
             </p>
             <div class="cta-row">
@@ -254,7 +254,7 @@ const principles = [
           </div>
 
           <p class="section-sub examples-lead">
-            Run <code>ryra search</code> or view <a href="/services/">available services</a> to see what's in the bundled
+            Run <code>ryra search</code> or view <a href="/services/">available services</a> to see what's in the default
             registry. A few of the highlights:
           </p>
 
@@ -315,7 +315,7 @@ const principles = [
                 </p>
                 <pre class="example-cmd"><code><span class="p">$</span> ryra add openclaw</code></pre>
                 <p class="example-foot">
-                  More in the bundled registry. <a href="/services/">Browse them all →</a>
+                  More in the default registry. <a href="/services/">Browse them all →</a>
                 </p>
               </div>
               <div class="example-visual">
@@ -388,7 +388,7 @@ const principles = [
                 <span class="example-tag">/06</span>
                 <h3>One login across the stack.</h3>
                 <p>
-                  Add the bundled SSO provider with one command. Every service that speaks OpenID Connect hooks
+                  Add the SSO provider with one command. Every service that speaks OpenID Connect hooks
                   into it on <code>ryra add</code> after that. One sign-in for files, photos, tasks, the lot.
                 </p>
                 <pre class="example-cmd"><code><span class="p">$</span> ryra add seafile immich</code></pre>
