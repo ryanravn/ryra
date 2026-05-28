@@ -72,6 +72,15 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Prefix every commit subject with a type: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `ci:`.
 
+## Releasing
+
+Two steps, both on `main`:
+
+1. Bump the workspace version in `Cargo.toml` (and matching path-dep versions in `crates/ryra-test/Cargo.toml` + `crates/ryra/Cargo.toml`), commit as `chore: vX.Y.Z`, push. CI publishes to crates.io.
+2. Tag locally and push from your own identity — *not* from CI: `git tag v0.4.0 && git push origin v0.4.0`. The tag push triggers `build-linux` + `release-version`, which builds .deb/.rpm/.pacman, signs them, creates the GitHub release, and dispatches `deploy-pages` to refresh the apt/rpm/pacman repos.
+
+The split is deliberate: tags pushed by `GITHUB_TOKEN` (i.e. from a workflow) do not trigger downstream workflows, so auto-tagging from `publish-crates` silently skips the build chain. Push the tag yourself.
+
 ## Architecture
 
 - `ryra-core`: pure library, no CLI deps, no sudo, no side effects beyond file I/O to user-owned config
