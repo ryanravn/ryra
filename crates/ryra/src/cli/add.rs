@@ -10,7 +10,7 @@ use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
 use ryra_core::registry::service_def::{AuthKind, HttpsRequirement, ServiceKind};
 use ryra_core::{
-    Capability, REGISTRY_BUNDLED, Warning, WellKnownService, find_installed_provider,
+    Capability, REGISTRY_DEFAULT, Warning, WellKnownService, find_installed_provider,
     service_provides,
 };
 
@@ -229,7 +229,7 @@ pub async fn run(
 
         // Warn about untrusted registry services — they can run arbitrary
         // scripts via quadlet ExecStartPre/Post and mount host directories.
-        if service_ref.registry_name() != REGISTRY_BUNDLED && !yes && !dry_run {
+        if service_ref.registry_name() != REGISTRY_DEFAULT && !yes && !dry_run {
             warn_untrusted_service(&reg_service.service_dir, service, interactive)?;
         }
 
@@ -757,9 +757,9 @@ pub async fn run(
                     host_port,
                 } => {
                     println!(
-                        "  {} --url was set for {service_name} but no bundled reverse proxy \
-                         (Caddy) is installed. Ryra will template {url} into the service but \
-                         won't configure routing — point your own reverse proxy (nginx, \
+                        "  {} --url was set for {service_name} but no ryra-managed reverse \
+                         proxy (Caddy) is installed. Ryra will template {url} into the service \
+                         but won't configure routing — point your own reverse proxy (nginx, \
                          Cloudflare Tunnel, Tailscale Funnel, etc.) at 127.0.0.1:{host_port}, \
                          or run `ryra add caddy` to let ryra handle it.",
                         super::style::note()
@@ -2017,7 +2017,7 @@ fn resolve_auth_kind(
     })
 }
 
-/// Warn about services from untrusted (non-bundled) registries.
+/// Warn about services from untrusted (non-default) registries.
 /// Shows scripts and volume mounts that will run on the host, requires y/n.
 fn warn_untrusted_service(
     service_dir: &std::path::Path,

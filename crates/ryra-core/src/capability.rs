@@ -58,13 +58,14 @@ impl std::fmt::Display for Capability {
 
 /// Whether a service named `name` provides the given capability,
 /// resolved by reading its `[capabilities] provides` declaration from
-/// the bundled registry.
+/// the cached default registry on disk.
 ///
-/// Returns `false` if the registry isn't available, the service isn't
-/// in the bundled registry, or the file fails to parse — capability
-/// dispatch on uninstalled, unknown names is not a query we answer.
-/// Call sites that already hold a [`crate::registry::service_def::ServiceDef`]
-/// should call [`def_provides`] instead to skip the round-trip.
+/// Returns `false` if the default registry hasn't been cloned yet, the
+/// service isn't in the default registry, or the file fails to parse —
+/// capability dispatch on uninstalled, unknown names is not a query we
+/// answer. Call sites that already hold a
+/// [`crate::registry::service_def::ServiceDef`] should call
+/// [`def_provides`] instead to skip the round-trip.
 pub fn service_provides(name: &str, cap: Capability) -> bool {
     lookup_provides_from_registry(name)
         .map(|provides| provides.contains(&cap))
@@ -85,15 +86,39 @@ pub fn installed_provides(svc: &InstalledService, cap: Capability) -> bool {
     svc.provides.contains(&cap)
 }
 
-/// Read `[capabilities] provides` for a registry-known service. Returns
-/// `None` if the registry isn't extracted yet, the service isn't in the
-/// bundled registry, or the file fails to parse — callers fall back to
-/// the static well-known map.
+/// Read `[capabilities] provides` for a service in the default registry.
+///
+/// Reads from the on-disk cache at `<cache>/default/<name>/service.toml`
+/// (populated by the first `ryra add`/`ryra search`) or from the
+/// `RYRA_REGISTRY_DIR` override directory. Returns `None` if the
+/// registry hasn't been cloned yet, the service isn't in the default
+/// registry, or the file fails to parse — capability dispatch on
+/// uninstalled, unknown names is not a query we answer.
+///
+/// Intentionally sync: callers (e.g. `retroactive_network_joins`) run in
+/// sync contexts and only need the cached snapshot, not a fresh git
+/// clone. The first `ryra add` populates the cache, so by the time any
+/// installed-services workflow asks "does X provide Y," the on-disk
+/// registry directory is already there.
 fn lookup_provides_from_registry(name: &str) -> Option<Vec<Capability>> {
     let paths = crate::config::ConfigPaths::resolve().ok()?;
-    paths.ensure_cache_dir().ok()?;
-    let bundled_dir = crate::registry::bundled::ensure_bundled(&paths.cache_dir).ok()?;
-    let entry = crate::registry::find_service(&bundled_dir, name).ok()?;
+
+    // Mirror resolve_default_registry_dir's env-override logic so an
+    // RYRA_REGISTRY_DIR=/path/to/registry can serve capability lookups
+    // before any clone has happened.
+    let registry_dir = if let Ok(override_path) = std::env::var(crate::paths::REGISTRY_DIR_ENV)
+        && let Some(p) = Some(std::path::PathBuf::from(override_path)).filter(|p| p.is_dir())
+    {
+        p
+    } else {
+        paths.cache_dir.join("default")
+    };
+
+    if !registry_dir.exists() {
+        return None;
+    }
+
+    let entry = crate::registry::find_service(&registry_dir, name).ok()?;
     Some(entry.def.capabilities.provides)
 }
 

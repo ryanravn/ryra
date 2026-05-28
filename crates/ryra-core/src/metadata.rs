@@ -96,7 +96,7 @@ mod tests {
     fn backup_enabled_defaults_false_on_legacy_metadata() {
         // Pre-feature metadata files have no `backup_enabled` key.
         let toml_src = r#"
-registry = "bundled"
+registry = "default"
 "#;
         let meta: Metadata = toml::from_str(toml_src).expect("parse");
         assert!(!meta.backup_enabled);
@@ -105,7 +105,7 @@ registry = "bundled"
     #[test]
     fn backup_enabled_round_trips() {
         let meta = Metadata {
-            registry: "bundled".into(),
+            registry: "default".into(),
             url: None,
             auth: None,
             provides: vec![],
@@ -127,7 +127,7 @@ registry = "bundled"
         // Reduce visual noise for the common case (every existing
         // service today): when off, the field shouldn't appear at all.
         let meta = Metadata {
-            registry: "bundled".into(),
+            registry: "default".into(),
             url: None,
             auth: None,
             provides: vec![],

@@ -130,7 +130,7 @@ pub enum Warning {
         assigned_port: u16,
         reason: String,
     },
-    /// `--url` was passed but no bundled reverse proxy (Caddy) is installed.
+    /// `--url` was passed but no ryra-managed reverse proxy (Caddy) is installed.
     /// Ryra still templates the URL into env vars and OIDC config, but routing
     /// is the user's responsibility (nginx, Cloudflare Tunnel, Tailscale Funnel,
     /// external load balancer, etc.).

@@ -5,7 +5,7 @@
 
 > Self-host anything, automatically test it works.
 
-Ryra scaffolds **rootless**, **daemonless** **podman** containers wired with the same authorization system (**SSO**) and e-mail system with **SMTP**. The bundled registry covers useful services, each **end-to-end tested** in a fresh virtual machine, and the test framework is simple enough that you can have an AI add new services and prove they work the same way.
+Ryra scaffolds **rootless**, **daemonless** **podman** containers wired with the same authorization system (**SSO**) and e-mail system with **SMTP**. The [default registry](https://github.com/ryanravn/ryra-registry) covers useful services, each **end-to-end tested** in a fresh virtual machine, and the test framework is simple enough that you can have an AI add new services and prove they work the same way.
 
 [Website](https://ryra.dev) · [Docs](https://ryra.dev/intro/) · [Services](https://ryra.dev/services/)
 
@@ -98,11 +98,11 @@ ryra add openclaw
 
 <img src="site/public/screenshots/custom.webp" alt="A service.toml definition" width="900" />
 
-The registry is plain TOML and quadlet files. Drop a definition in for your own app, point ryra at your registry, and install it the same way as anything bundled.
+The registry is plain TOML and quadlet files. Drop a definition in for your own app, point ryra at your registry, and install it the same way as anything in the default registry.
 
 ## Services
 
-Run `ryra search` for the full list, or browse the [services catalog](https://ryra.dev/services/). The bundled registry includes Immich, Forgejo, Vaultwarden, Nextcloud, Twenty CRM, Paperless-ngx, Synapse, Supabase, Open WebUI, Authelia, Uptime Kuma, Caddy, DocuSeal, Zammad, Seafile, Vikunja, OpenClaw, and more.
+Run `ryra search` for the full list, or browse the [services catalog](https://ryra.dev/services/). The default registry includes Immich, Forgejo, Vaultwarden, Nextcloud, Twenty CRM, Paperless-ngx, Synapse, Supabase, Open WebUI, Authelia, Uptime Kuma, Caddy, DocuSeal, Zammad, Seafile, Vikunja, OpenClaw, and more.
 
 ## Documentation
 

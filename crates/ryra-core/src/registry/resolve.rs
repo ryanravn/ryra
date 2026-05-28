@@ -2,16 +2,19 @@ use std::path::{Path, PathBuf};
 
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
+use crate::paths::{DEFAULT_REGISTRY_URL, REGISTRY_DIR_ENV};
 use crate::registry;
 
 /// A reference to a service in a registry.
 ///
-/// - `Bundled("forgejo")` — refers to a service in the embedded bundled registry
-/// - `Custom { registry: "acme", service: "forgejo" }` — refers to a service in a named custom registry
+/// - `Default("forgejo")` — refers to a service in the project-managed
+///   default registry (cloned from [`DEFAULT_REGISTRY_URL`]).
+/// - `Custom { registry: "acme", service: "forgejo" }` — refers to a
+///   service in a user-added custom registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceRef {
-    /// A service from the embedded bundled registry. E.g., `forgejo`.
-    Bundled(String),
+    /// A service from the default registry. E.g., `forgejo`.
+    Default(String),
     /// A service from a named custom registry. E.g., `acme/forgejo`.
     Custom { registry: String, service: String },
 }
@@ -19,7 +22,7 @@ pub enum ServiceRef {
 impl ServiceRef {
     /// Parse a service reference from a string.
     ///
-    /// - `"forgejo"` → `Bundled("forgejo")`
+    /// - `"forgejo"` → `Default("forgejo")`
     /// - `"acme/forgejo"` → `Custom { registry: "acme", service: "forgejo" }`
     /// - `""`, `"/forgejo"`, `"acme/"`, `"acme/sub/forgejo"` → error
     pub fn parse(input: &str) -> Result<Self> {
@@ -34,7 +37,7 @@ impl ServiceRef {
                         "service reference cannot be empty".to_string(),
                     ))
                 } else {
-                    Ok(ServiceRef::Bundled(name.to_string()))
+                    Ok(ServiceRef::Default((*name).to_string()))
                 }
             }
             [registry, service] => {
@@ -49,8 +52,8 @@ impl ServiceRef {
                     )));
                 }
                 Ok(ServiceRef::Custom {
-                    registry: registry.to_string(),
-                    service: service.to_string(),
+                    registry: (*registry).to_string(),
+                    service: (*service).to_string(),
                 })
             }
             _ => Err(Error::InvalidServiceRef(format!(
@@ -62,25 +65,45 @@ impl ServiceRef {
     /// Returns the service name part of this reference.
     pub fn service_name(&self) -> &str {
         match self {
-            ServiceRef::Bundled(name) => name,
+            ServiceRef::Default(name) => name,
             ServiceRef::Custom { service, .. } => service,
         }
     }
 
     /// Returns the registry name for this reference.
     ///
-    /// Returns `"bundled"` for bundled services.
+    /// Returns `"default"` for default-registry services.
     pub fn registry_name(&self) -> &str {
         match self {
-            ServiceRef::Bundled(_) => "bundled",
+            ServiceRef::Default(_) => crate::paths::REGISTRY_DEFAULT,
             ServiceRef::Custom { registry, .. } => registry,
         }
     }
 }
 
+/// Resolve the on-disk directory of the default registry.
+///
+/// If `RYRA_REGISTRY_DIR` is set to an existing directory, that path is
+/// returned as-is (no clone, no pull) — the escape hatch tests use to inject
+/// `/opt/ryra-test-registry` inside the VM without network access. Otherwise
+/// the registry is cloned (or pulled) from [`DEFAULT_REGISTRY_URL`] into
+/// `<cache_dir>/default/`.
+pub async fn resolve_default_registry_dir(cache_dir: &Path) -> Result<PathBuf> {
+    if let Ok(override_path) = std::env::var(REGISTRY_DIR_ENV) {
+        let path = PathBuf::from(override_path);
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
+
+    let dest = cache_dir.join("default");
+    registry::fetch::clone_or_pull(DEFAULT_REGISTRY_URL, &dest).await?;
+    Ok(dest)
+}
+
 /// Resolve the registry directory for a service reference.
 ///
-/// - For `Bundled`: extracts the bundled registry to `<cache_dir>/bundled/` if needed.
+/// - For `Default`: see [`resolve_default_registry_dir`].
 /// - For `Custom`: looks up the registry name in `config.registries` and clones/pulls it.
 pub async fn resolve_registry_dir(
     service_ref: &ServiceRef,
@@ -88,7 +111,7 @@ pub async fn resolve_registry_dir(
     cache_dir: &Path,
 ) -> Result<PathBuf> {
     match service_ref {
-        ServiceRef::Bundled(_) => registry::bundled::ensure_bundled(cache_dir),
+        ServiceRef::Default(_) => resolve_default_registry_dir(cache_dir).await,
         ServiceRef::Custom { registry, .. } => {
             let entry = config
                 .registries
@@ -105,7 +128,7 @@ pub async fn resolve_registry_dir(
 
 /// Resolve a service from a registry, returning its definition and directory.
 ///
-/// - For `Bundled`: finds the service in the embedded bundled registry.
+/// - For `Default`: finds the service in the default registry.
 /// - For `Custom`: finds the service in the named custom registry.
 pub async fn resolve_service(
     service_ref: &ServiceRef,
@@ -121,11 +144,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_bundled_service() {
+    fn parse_default_service() {
         let r = ServiceRef::parse("forgejo").expect("should parse");
-        assert_eq!(r, ServiceRef::Bundled("forgejo".to_string()));
+        assert_eq!(r, ServiceRef::Default("forgejo".to_string()));
         assert_eq!(r.service_name(), "forgejo");
-        assert_eq!(r.registry_name(), "bundled");
+        assert_eq!(r.registry_name(), "default");
     }
 
     #[test]
@@ -177,5 +200,26 @@ mod tests {
             msg.contains("invalid"),
             "expected 'invalid' in error message, got: {msg}"
         );
+    }
+
+    #[test]
+    fn env_override_returns_path_directly() {
+        // SAFETY: this test sets a process-global env var; running multiple
+        // env-mutating tests in parallel within the same process can race.
+        // Cargo runs tests in threads, so we scope to a tempdir that
+        // exists for the duration of the call.
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cache = tempfile::TempDir::new().expect("cache tempdir");
+        // SAFETY: tests in this module are single-threaded by Cargo's
+        // default scheduler; setting env here doesn't escape the call.
+        unsafe { std::env::set_var(REGISTRY_DIR_ENV, tmp.path()) };
+
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+        let resolved = rt
+            .block_on(resolve_default_registry_dir(cache.path()))
+            .expect("resolve");
+        assert_eq!(resolved, tmp.path());
+
+        unsafe { std::env::remove_var(REGISTRY_DIR_ENV) };
     }
 }

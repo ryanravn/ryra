@@ -57,8 +57,8 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
 
 /// Warn if tests are being loaded from a custom registry.
 fn warn_untrusted_repo(registry_name: &str, yes: bool) -> Result<()> {
-    // Bundled registry is always trusted
-    if registry_name == ryra_core::REGISTRY_BUNDLED || registry_name.is_empty() {
+    // The default registry is always trusted
+    if registry_name == ryra_core::REGISTRY_DEFAULT || registry_name.is_empty() {
         return Ok(());
     }
 

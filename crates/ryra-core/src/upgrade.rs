@@ -34,7 +34,7 @@ use crate::manifest;
 use crate::metadata::load_metadata;
 use crate::registry::resolve::ServiceRef;
 use crate::{
-    AddResult, PlanMode, REGISTRY_BUNDLED, Step, add_service, is_service_installed,
+    AddResult, PlanMode, REGISTRY_DEFAULT, Step, add_service, is_service_installed,
     resolve_registry_dir, service_home,
 };
 
@@ -130,8 +130,8 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
         None => Exposure::Loopback,
     };
 
-    let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_BUNDLED {
-        ServiceRef::Bundled(service_name.to_string())
+    let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_DEFAULT {
+        ServiceRef::Default(service_name.to_string())
     } else {
         ServiceRef::Custom {
             registry: metadata.registry.clone(),

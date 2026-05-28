@@ -10,9 +10,26 @@ use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
-/// Sentinel value for `InstalledService.repo` meaning "shipped with ryra"
-/// rather than a user-added custom registry.
-pub const REGISTRY_BUNDLED: &str = "bundled";
+/// Sentinel value for `InstalledService.repo` meaning "came from the
+/// default registry" (the project-managed git repo at
+/// [`DEFAULT_REGISTRY_URL`]) rather than a user-added custom registry.
+pub const REGISTRY_DEFAULT: &str = "default";
+
+/// Git URL of the default service registry. Cloned on first
+/// `ryra add`/`ryra search` into `<cache>/default/` and updated by
+/// `ryra registry update`.
+///
+/// Tests and dev workflows can short-circuit the clone by setting
+/// [`REGISTRY_DIR_ENV`] to a local directory; the resolver uses that
+/// path verbatim instead.
+pub const DEFAULT_REGISTRY_URL: &str = "https://github.com/ryanravn/ryra-registry.git";
+
+/// Env var that, when set to an existing directory, replaces the git
+/// fetch entirely — ryra uses that directory as the default registry
+/// verbatim (no clone, no pull). The E2E test harness sets this to
+/// `/opt/ryra-test-registry` inside the VM; dev workflows can point it
+/// at a local checkout to iterate without committing/pushing.
+pub const REGISTRY_DIR_ENV: &str = "RYRA_REGISTRY_DIR";
 
 /// Resolve the user's home directory, falling back to $HOME.
 pub(crate) fn home_dir() -> Result<PathBuf> {

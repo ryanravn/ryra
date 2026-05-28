@@ -20,7 +20,7 @@ use console::style;
 use dialoguer::{Confirm, Input, Password};
 use serde::{Deserialize, Serialize};
 
-use ryra_core::REGISTRY_BUNDLED;
+use ryra_core::REGISTRY_DEFAULT;
 use ryra_core::backup::{
     BackupRestorePlan, BackupRunPlan, list_backup_enabled, plan_backup_restore, plan_backup_run,
 };
@@ -189,16 +189,16 @@ pub async fn run(action: BackupAction) -> Result<()> {
 
 /// Resolve the registry directory for an installed service. Reads
 /// `metadata.toml` to learn which registry the service came from
-/// (bundled vs. custom name), then asks ryra-core to materialise that
-/// registry on disk (extract bundled, git pull custom).
+/// (default vs. custom name), then asks ryra-core to materialise that
+/// registry on disk (git clone/pull).
 async fn resolve_repo_dir_for_install(service_name: &str) -> Result<PathBuf> {
     let meta = load_metadata(service_name)?.ok_or_else(|| {
         anyhow!(ryra_core::error::Error::ServiceNotInstalled(
             service_name.to_string()
         ))
     })?;
-    let service_ref = if meta.registry.is_empty() || meta.registry == REGISTRY_BUNDLED {
-        ServiceRef::Bundled(service_name.to_string())
+    let service_ref = if meta.registry.is_empty() || meta.registry == REGISTRY_DEFAULT {
+        ServiceRef::Default(service_name.to_string())
     } else {
         ServiceRef::Custom {
             registry: meta.registry,

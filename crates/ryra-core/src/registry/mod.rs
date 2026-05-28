@@ -1,4 +1,3 @@
-pub mod bundled;
 pub mod fetch;
 pub mod manage;
 pub mod resolve;

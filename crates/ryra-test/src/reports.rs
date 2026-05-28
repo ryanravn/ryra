@@ -127,7 +127,7 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
             // The trace viewer requires http:// - file:// can't load the trace
             // zips - so surface the `show-report` command, not the path.
             println!(
-                "    browser: cd crates/ryra-core/registry/tests/browser && bunx playwright show-report {display}/{}/playwright",
+                "    browser: cd registry/tests/browser && bunx playwright show-report {display}/{}/playwright",
                 r.name
             );
         }

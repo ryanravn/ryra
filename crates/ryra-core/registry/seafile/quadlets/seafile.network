@@ -1,5 +1,0 @@
-[Unit]
-Description=Seafile network
-
-[Network]
-NetworkName=seafile

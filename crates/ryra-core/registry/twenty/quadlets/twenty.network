@@ -1,5 +1,0 @@
-[Unit]
-Description=Twenty network
-
-[Network]
-NetworkName=twenty

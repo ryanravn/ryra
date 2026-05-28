@@ -37,7 +37,10 @@ pub use exposure::{Exposure, is_public_url, is_tailscale_url};
 pub use generate::GeneratedFile;
 pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
-pub use paths::{REGISTRY_BUNDLED, metadata_path, quadlet_dir, service_data_root, service_home};
+pub use paths::{
+    DEFAULT_REGISTRY_URL, REGISTRY_DEFAULT, REGISTRY_DIR_ENV, metadata_path, quadlet_dir,
+    service_data_root, service_home,
+};
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, TrackedEnv, Warning};
 pub use upgrade::{
     BackupSnapshot, DEFAULT_BACKUP_KEEP, DiffEntry, DiffKind, DiffResult, EnvAddition,
@@ -59,8 +62,8 @@ pub async fn resolve_registry_dir(service_ref: &registry::resolve::ServiceRef) -
 
 /// Build a ServiceRef from an installed service's stored registry name.
 pub fn service_ref_from_installed(installed: &InstalledService) -> registry::resolve::ServiceRef {
-    if installed.repo.is_empty() || installed.repo == REGISTRY_BUNDLED {
-        registry::resolve::ServiceRef::Bundled(installed.name.clone())
+    if installed.repo.is_empty() || installed.repo == REGISTRY_DEFAULT {
+        registry::resolve::ServiceRef::Default(installed.name.clone())
     } else {
         registry::resolve::ServiceRef::Custom {
             registry: installed.repo.clone(),
@@ -787,7 +790,7 @@ pub fn add_service(
             }));
             steps.push(Step::ReloadCaddy);
         } else if let Some(primary) = host_port {
-            // --url was passed but no bundled reverse proxy is installed.
+            // --url was passed but no ryra-managed reverse proxy is installed.
             // Templating and OIDC still work, but the user is responsible for
             // routing <url> → 127.0.0.1:<primary> via nginx / Cloudflare Tunnel
             // / Tailscale Funnel / etc.

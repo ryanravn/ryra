@@ -338,8 +338,8 @@ async fn load_registry_group_names(
     registry: &str,
 ) -> anyhow::Result<Vec<(String, String)>> {
     use ryra_core::registry::resolve::ServiceRef;
-    let service_ref = if registry.is_empty() || registry == ryra_core::REGISTRY_BUNDLED {
-        ServiceRef::Bundled(service.to_string())
+    let service_ref = if registry.is_empty() || registry == ryra_core::REGISTRY_DEFAULT {
+        ServiceRef::Default(service.to_string())
     } else {
         ServiceRef::Custom {
             registry: registry.to_string(),

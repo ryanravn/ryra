@@ -13,7 +13,7 @@ pub async fn run(query: Option<&str>, registry: Option<&str>) -> Result<()> {
             ryra_core::resolve_registry_dir(&service_ref).await?
         }
         None => {
-            let service_ref = ServiceRef::Bundled(String::new());
+            let service_ref = ServiceRef::Default(String::new());
             ryra_core::resolve_registry_dir(&service_ref).await?
         }
     };

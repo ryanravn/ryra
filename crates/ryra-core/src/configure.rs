@@ -44,7 +44,7 @@ use crate::registry::service_def::{AuthKind, EnvFormat};
 use crate::system::secret;
 use crate::upgrade::{DiffEntry, DiffKind, DiffResult, EnvAddition};
 use crate::{
-    AddResult, PlanMode, REGISTRY_BUNDLED, Step, WellKnownService, add_service, authelia, caddy,
+    AddResult, PlanMode, REGISTRY_DEFAULT, Step, WellKnownService, add_service, authelia, caddy,
     config, is_service_installed, list_installed, manifest, quadlet_dir, registry,
     resolve_registry_dir, service_home,
 };
@@ -216,8 +216,8 @@ pub async fn configure_service(
     let target_backup: bool = overrides.backup.unwrap_or(current_backup);
     let target_auth: bool = overrides.auth.unwrap_or(current_auth);
 
-    let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_BUNDLED {
-        ServiceRef::Bundled(service_name.to_string())
+    let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_DEFAULT {
+        ServiceRef::Default(service_name.to_string())
     } else {
         ServiceRef::Custom {
             registry: metadata.registry.clone(),

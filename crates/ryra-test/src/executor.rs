@@ -22,25 +22,43 @@ pub trait Executor: Send + Sync {
     async fn fetch_dir(&self, remote_path: &str, local_path: &Path) -> Result<()>;
 }
 
+/// Path inside the VM where the test runner scps the registry fixtures.
+/// Set as `RYRA_REGISTRY_DIR` so every `ryra` invocation resolves the
+/// default registry to this local copy instead of cloning from GitHub.
+pub const VM_REGISTRY_PATH: &str = "/opt/ryra-test-registry";
+
+/// Build the env-var prefix the executors prepend to every command so
+/// `ryra` resolves the default registry against the test fixtures dir
+/// instead of cloning from the internet on each test.
+fn registry_env_prefix(path: &str) -> String {
+    format!("export {}={}; ", ryra_core::REGISTRY_DIR_ENV, path)
+}
+
 /// Executes commands inside a QEMU VM via SSH.
 pub struct VmExecutor<'a> {
     pub vm: &'a Machine,
+    env_prefix: String,
 }
 
 impl<'a> VmExecutor<'a> {
     pub fn new(vm: &'a Machine) -> Self {
-        Self { vm }
+        Self {
+            vm,
+            env_prefix: registry_env_prefix(VM_REGISTRY_PATH),
+        }
     }
 }
 
 #[async_trait]
 impl Executor for VmExecutor<'_> {
     async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
-        self.vm.exec(cmd).await
+        let wrapped = format!("{}{cmd}", self.env_prefix);
+        self.vm.exec(&wrapped).await
     }
 
     async fn exec_streaming(&self, cmd: &str, prefix: &str) -> Result<ExecOutput> {
-        self.vm.exec_streaming(cmd, prefix).await
+        let wrapped = format!("{}{cmd}", self.env_prefix);
+        self.vm.exec_streaming(&wrapped, prefix).await
     }
 
     async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
@@ -57,13 +75,42 @@ impl Executor for VmExecutor<'_> {
 }
 
 /// Executes commands directly on the host machine.
-pub struct LocalExecutor;
+///
+/// Carries an optional `RYRA_REGISTRY_DIR` override prepended to every
+/// command — bare-mode tests use this to point ryra at the in-repo
+/// `registry/` checkout instead of cloning from GitHub on each run.
+pub struct LocalExecutor {
+    env_prefix: String,
+}
+
+impl LocalExecutor {
+    /// Construct a LocalExecutor that prepends `RYRA_REGISTRY_DIR=<path>`
+    /// to every command, so `ryra` resolves the default registry to the
+    /// local checkout under test.
+    pub fn with_registry(registry_path: &Path) -> Self {
+        Self {
+            env_prefix: registry_env_prefix(&registry_path.display().to_string()),
+        }
+    }
+}
+
+impl Default for LocalExecutor {
+    /// LocalExecutor with no registry override — only useful when the
+    /// commands run don't touch `ryra`. Most callers want
+    /// [`LocalExecutor::with_registry`].
+    fn default() -> Self {
+        Self {
+            env_prefix: String::new(),
+        }
+    }
+}
 
 #[async_trait]
 impl Executor for LocalExecutor {
     async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
+        let wrapped = format!("{}{cmd}", self.env_prefix);
         let output = tokio::process::Command::new("bash")
-            .args(["-c", cmd])
+            .args(["-c", &wrapped])
             .output()
             .await
             .with_context(|| format!("failed to exec locally: {cmd}"))?;
@@ -84,8 +131,9 @@ impl Executor for LocalExecutor {
     async fn exec_streaming(&self, cmd: &str, prefix: &str) -> Result<ExecOutput> {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
+        let wrapped = format!("{}{cmd}", self.env_prefix);
         let mut child = tokio::process::Command::new("bash")
-            .args(["-c", cmd])
+            .args(["-c", &wrapped])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -187,28 +235,28 @@ mod tests {
 
     #[tokio::test]
     async fn local_executor_runs_command() {
-        let exec = LocalExecutor;
+        let exec = LocalExecutor::default();
         let out = exec.exec("echo hello").await.unwrap();
         assert_eq!(out.stdout.trim(), "hello");
     }
 
     #[tokio::test]
     async fn local_executor_fails_on_bad_command() {
-        let exec = LocalExecutor;
+        let exec = LocalExecutor::default();
         let result = exec.exec("false").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn local_executor_streams_output() {
-        let exec = LocalExecutor;
+        let exec = LocalExecutor::default();
         let out = exec.exec_streaming("echo streamed", "test").await.unwrap();
         assert_eq!(out.stdout.trim(), "streamed");
     }
 
     #[tokio::test]
     async fn local_wait_for_nonexistent_service_times_out() {
-        let exec = LocalExecutor;
+        let exec = LocalExecutor::default();
         let result = exec
             .wait_for_service(
                 "definitely-not-a-real-unit-xyz123.service",

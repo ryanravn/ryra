@@ -226,7 +226,7 @@ mod tests {
     /// Capability list a known-by-name service in these tests provides.
     /// Used to populate both `InstalledService::provides` and
     /// `AuthBridgeParams::service_provides` without depending on the
-    /// bundled registry being available in tempdirs.
+    /// default registry being cloned in tempdirs.
     fn provides_for(name: &str) -> &'static [Capability] {
         match name {
             "authelia" => &[Capability::OidcProvider, Capability::ForwardAuthProvider],
@@ -243,7 +243,7 @@ mod tests {
         InstalledService {
             name: name.into(),
             version: "0.1.0".into(),
-            repo: "bundled".into(),
+            repo: "default".into(),
             ports: BTreeMap::new(),
             auth_kind: None,
             exposure,

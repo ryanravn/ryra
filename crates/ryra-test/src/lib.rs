@@ -408,8 +408,8 @@ fn resolve_registry_path(explicit: Option<&PathBuf>) -> Result<PathBuf> {
     }
 
     let candidates = [
-        PathBuf::from("crates/ryra-core/registry"),
         PathBuf::from("registry"),
+        PathBuf::from("crates/ryra-core/registry"),
     ];
     for c in &candidates {
         if c.exists() {
@@ -454,8 +454,7 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     // Need a registry path for dependency resolution even with local projects
-    let registry_path =
-        registry_path.unwrap_or_else(|_| PathBuf::from("crates/ryra-core/registry"));
+    let registry_path = registry_path.unwrap_or_else(|_| PathBuf::from("registry"));
 
     if args.list {
         // Respect positional filters: `ryra test --list whoami` shows only
@@ -874,13 +873,13 @@ async fn run_interactive_vm(
 }
 
 /// Clean host state between bare-mode tests: uninstall all ryra-managed
-/// services and remove the bundled registry cache (which can be polluted by
+/// services and remove the default-registry cache (which can be polluted by
 /// tests like diff-whoami that intentionally mutate it).
 async fn reset_bare_state(executor: &crate::executor::LocalExecutor) {
     use crate::executor::Executor;
     let _ = executor.exec("ryra reset -y").await;
     let _ = executor
-        .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/ryra/bundled\"")
+        .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/services/default\"")
         .await;
 }
 
@@ -891,7 +890,7 @@ async fn run_bare(
     registry_path: &Path,
 ) -> Result<()> {
     let wall_clock = std::time::Instant::now();
-    let executor = crate::executor::LocalExecutor;
+    let executor = crate::executor::LocalExecutor::with_registry(registry_path);
     let mut results = Vec::new();
     let single_test = to_run.len() == 1;
 

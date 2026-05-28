@@ -8,7 +8,7 @@
 //! `[capabilities] provides = [...]` in its own `service.toml`, and
 //! installed services carry the persisted snapshot on
 //! [`crate::config::schema::InstalledService::provides`]. This enum
-//! survives only as a typed handle to the bundled providers' *names*,
+//! survives only as a typed handle to the default-registry providers' *names*,
 //! used by code paths that emit network names (`<svc>.network`),
 //! seed provider-specific config files (caddy's `tls.caddy`), or read
 //! their on-disk artifacts (authelia's `.env`).
