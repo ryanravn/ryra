@@ -748,13 +748,22 @@ fn build_configure_steps(
             .map(Exposure::from_url)
             .as_ref()
             .and_then(|e| e.tailscale_svc_name())
-        && let Some(port) = result.allocated_ports.first().map(|(_, p)| *p)
     {
-        tailscale_enable_steps.push(Step::TailscaleSetup);
-        tailscale_enable_steps.push(Step::TailscaleEnable {
-            svc_name,
-            host_port: port,
-        });
+        let primary = result
+            .allocated_ports
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("http"))
+            .or_else(|| result.allocated_ports.first())
+            .map(|(_, p)| *p);
+        let ts_ports =
+            crate::plan::tailscale_ports(&service_def.ports, &result.allocated_ports, primary);
+        if !ts_ports.is_empty() {
+            tailscale_enable_steps.push(Step::TailscaleSetup);
+            tailscale_enable_steps.push(Step::TailscaleEnable {
+                svc_name,
+                ports: ts_ports,
+            });
+        }
     }
 
     let any_file_change = !writes.is_empty() || !removals.is_empty() || !url_teardown.is_empty();
@@ -1080,12 +1089,9 @@ fn clone_step(step: &Step) -> Step {
             dst: dst.clone(),
         },
         Step::TailscaleSetup => Step::TailscaleSetup,
-        Step::TailscaleEnable {
-            svc_name,
-            host_port,
-        } => Step::TailscaleEnable {
+        Step::TailscaleEnable { svc_name, ports } => Step::TailscaleEnable {
             svc_name: svc_name.clone(),
-            host_port: *host_port,
+            ports: ports.clone(),
         },
         Step::TailscaleDisable { svc_name } => Step::TailscaleDisable {
             svc_name: svc_name.clone(),

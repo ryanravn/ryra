@@ -958,6 +958,22 @@ pub async fn run(
             }
             println!("  Config:  {}", home_dir.display());
 
+            // Mail-capable service installed without a configured SMTP relay:
+            // its email features (account verification, login codes, password
+            // resets, notifications) silently won't send. Flag once at install
+            // so the user isn't mystified later — e.g. Ente gates both signup
+            // and every new login on an emailed code, which otherwise only
+            // lands in the service logs.
+            if reg_service.def.integrations.smtp && !enable_smtp {
+                println!();
+                println!(
+                    "  Note: no SMTP configured — email features (e.g. account verification /"
+                );
+                println!(
+                    "        login codes) won't send. Wire mail with: ryra configure {service} --smtp"
+                );
+            }
+
             let env_path = home_dir.join(".env");
             println!();
             println!("Commands:");

@@ -167,6 +167,16 @@ pub struct PortDef {
     pub host_port: Option<u16>,
     #[serde(default)]
     pub protocol: PortProtocol,
+    /// When set and the service is exposed with `--tailscale`, this port is
+    /// served over the service's Tailscale vIP on the given HTTPS port (e.g.
+    /// `443` for the web root, `8080` for an API). Tailnet-only `serve`
+    /// accepts arbitrary ports, so the value is usually the port's own number
+    /// (or `443` for the one port that should answer at the bare hostname).
+    /// Ports without this stay loopback-only. Reachable in templates via
+    /// `{{service.port_url.<name>}}`. Multi-port services (e.g. ente: a web
+    /// UI plus a separate API) need this so each endpoint gets its own URL.
+    #[serde(default)]
+    pub tailscale_https: Option<u16>,
 }
 
 /// How an env var is presented to the user during `ryra add`.
@@ -199,6 +209,15 @@ pub enum EnvFormat {
     String,
     /// Hexadecimal characters only.
     Hex,
+    /// Standard base64 encoding of N random bytes (`length` = byte count,
+    /// default 32). Use for binary keys that the service base64-decodes to a
+    /// fixed byte length — e.g. Ente's libsodium keys (32-byte encryption,
+    /// 64-byte hash). A plain `string`/`hex` value decodes to the wrong length.
+    Base64,
+    /// URL-safe base64 (`-_` instead of `+/`) of N random bytes. Same use as
+    /// `base64`, but for services that decode with URL-safe base64 — e.g.
+    /// Ente's `jwt.secret` (Go `base64.URLEncoding`), which rejects `+`/`/`.
+    Base64Url,
     /// UUID v4.
     Uuid,
     /// HS256-signed JWT. Requires `jwt_role` and `jwt_signing_key` on the env var.
@@ -444,10 +463,33 @@ impl ServiceDef {
         // --- Duplicate names ---
 
         let mut seen_ports = std::collections::HashSet::new();
+        let mut seen_ts_https = std::collections::HashSet::new();
         for p in &self.ports {
             if !seen_ports.insert(&p.name) {
                 errors.push(format!("duplicate port name '{}'", p.name));
             }
+            // Two ports can't be served on the same Tailscale HTTPS port —
+            // the second `tailscale serve --https=<p>` would clobber the first.
+            if let Some(https) = p.tailscale_https
+                && !seen_ts_https.insert(https)
+            {
+                errors.push(format!(
+                    "two ports map to the same tailscale_https port {https}"
+                ));
+            }
+        }
+        // If any port opts into Tailscale exposure, exactly one must own 443 —
+        // that's the web root answering at the bare `<svc>.<tailnet>.ts.net`.
+        let ts_ports: Vec<&PortDef> =
+            self.ports.iter().filter(|p| p.tailscale_https.is_some()).collect();
+        if !ts_ports.is_empty()
+            && ts_ports.iter().filter(|p| p.tailscale_https == Some(443)).count() != 1
+        {
+            errors.push(
+                "services exposing ports over Tailscale must mark exactly one port \
+                 tailscale_https = 443 (the web root)"
+                    .to_string(),
+            );
         }
 
         // Every env var name (top-level + every group member) must be unique
@@ -622,6 +664,75 @@ mod backup_tests {
 
     fn parse(toml_src: &str) -> ServiceDef {
         toml::from_str(toml_src).expect("parse")
+    }
+
+    #[test]
+    fn tailscale_https_requires_exactly_one_root() {
+        // Two tailscale-exposed ports but neither owns 443 → rejected.
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[ports]]
+name = "http"
+container_port = 8080
+tailscale_https = 8080
+
+[[ports]]
+name = "photos"
+container_port = 3000
+tailscale_https = 3000
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("tailscale_https = 443"), "got: {err}");
+    }
+
+    #[test]
+    fn tailscale_https_duplicate_port_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[ports]]
+name = "a"
+container_port = 1
+tailscale_https = 443
+
+[[ports]]
+name = "b"
+container_port = 2
+tailscale_https = 443
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("same tailscale_https"), "got: {err}");
+    }
+
+    #[test]
+    fn tailscale_https_one_root_plus_api_validates() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[ports]]
+name = "http"
+container_port = 8080
+tailscale_https = 8080
+
+[[ports]]
+name = "photos"
+container_port = 3000
+tailscale_https = 443
+"#,
+        );
+        svc.validate().expect("one 443 root + one api port is valid");
     }
 
     #[test]

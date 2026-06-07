@@ -35,6 +35,18 @@ fn smtp_no_tls(value: &str) -> String {
     }
 }
 
+/// Convert SMTP security value to Ente museum's `encryption` field.
+/// Museum treats "tls" as STARTTLS and "ssl" as implicit TLS (SMTPS);
+/// an empty value disables encryption. starttls → tls, force_tls → ssl,
+/// off → "" (plaintext).
+fn ente_smtp_encryption(value: &str) -> String {
+    match value {
+        "starttls" => "tls".to_string(),
+        "force_tls" => "ssl".to_string(),
+        _ => String::new(),
+    }
+}
+
 /// Render a template string with the given context variables.
 ///
 /// Runs in strict mode: any `{{ foo.bar }}` that isn't in the context errors
@@ -57,6 +69,9 @@ pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<
     });
     env.add_filter("smtp_no_tls", |value: &str| -> String {
         smtp_no_tls(value)
+    });
+    env.add_filter("ente_smtp_encryption", |value: &str| -> String {
+        ente_smtp_encryption(value)
     });
     // Standard-base64 encode a string. Used by services (e.g. Zammad) whose
     // entrypoints expect a base64-encoded JSON payload as an env var.
@@ -225,6 +240,20 @@ mod tests {
         ctx.insert("smtp.security".into(), "off".into());
         let result = render("{{ smtp.security | forgejo_protocol }}", &ctx)?;
         assert_eq!(result, "smtp");
+        Ok(())
+    }
+
+    #[test]
+    fn ente_smtp_encryption_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("smtp.security".into(), "starttls".into());
+        assert_eq!(render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?, "tls");
+
+        ctx.insert("smtp.security".into(), "force_tls".into());
+        assert_eq!(render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?, "ssl");
+
+        ctx.insert("smtp.security".into(), "off".into());
+        assert_eq!(render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?, "");
         Ok(())
     }
 

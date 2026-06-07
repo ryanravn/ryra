@@ -340,6 +340,7 @@ mod tests {
                 container_port: 80,
                 host_port: None,
                 protocol: Default::default(),
+                tailscale_https: None,
             }],
             env: vec![],
             env_groups: vec![],

@@ -15,6 +15,8 @@ fn default_length(format: &EnvFormat) -> Option<usize> {
     match format {
         EnvFormat::String => Some(32),
         EnvFormat::Hex => Some(64),
+        // Byte count (not output chars) — 32 random bytes → 44 base64 chars.
+        EnvFormat::Base64 | EnvFormat::Base64Url => Some(32),
         EnvFormat::Uuid | EnvFormat::JwtHs256 => None,
     }
 }
@@ -36,6 +38,22 @@ pub fn generate(format: &EnvFormat, length: Option<u32>) -> String {
             let default = default_length(format).unwrap_or(64);
             let len = length.map(|l| l as usize).unwrap_or(default);
             random_string(HEX, len)
+        }
+        EnvFormat::Base64 => {
+            // `length` is the number of random *bytes*; the output is their
+            // standard-base64 encoding (what `openssl rand -base64 N` produces).
+            let default = default_length(format).unwrap_or(32);
+            let n = length.map(|l| l as usize).unwrap_or(default);
+            let mut bytes = vec![0u8; n];
+            rand::rng().fill(&mut bytes[..]);
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        }
+        EnvFormat::Base64Url => {
+            let default = default_length(format).unwrap_or(32);
+            let n = length.map(|l| l as usize).unwrap_or(default);
+            let mut bytes = vec![0u8; n];
+            rand::rng().fill(&mut bytes[..]);
+            base64::engine::general_purpose::URL_SAFE.encode(&bytes)
         }
         EnvFormat::Uuid => {
             let mut rng = rand::rng();
@@ -151,6 +169,39 @@ mod tests {
         let s = generate(&EnvFormat::String, Some(48));
         assert_eq!(s.len(), 48);
         assert!(s.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn base64_decodes_to_requested_byte_length() {
+        // Ente needs exactly 32-byte (encryption) and 64-byte (hash) keys.
+        for bytes in [32u32, 64] {
+            let s = generate(&EnvFormat::Base64, Some(bytes));
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(&s)
+                .expect("valid standard base64");
+            assert_eq!(decoded.len(), bytes as usize);
+        }
+    }
+
+    #[test]
+    fn base64_default_is_32_bytes() {
+        let s = generate(&EnvFormat::Base64, None);
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&s)
+            .expect("valid base64");
+        assert_eq!(decoded.len(), 32);
+    }
+
+    #[test]
+    fn base64url_uses_url_safe_alphabet() {
+        // Ente's jwt.secret is decoded with Go's base64.URLEncoding, which
+        // rejects '+' and '/'. URL-safe output must never contain them.
+        let s = generate(&EnvFormat::Base64Url, Some(32));
+        assert!(!s.contains('+') && !s.contains('/'), "url-safe: {s}");
+        let decoded = base64::engine::general_purpose::URL_SAFE
+            .decode(&s)
+            .expect("valid url-safe base64");
+        assert_eq!(decoded.len(), 32);
     }
 
     #[test]

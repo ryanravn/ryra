@@ -233,10 +233,7 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::TailscaleSetup => tailscale_services::ensure_setup(),
-        Step::TailscaleEnable {
-            svc_name,
-            host_port,
-        } => tailscale_services::enable(svc_name, *host_port),
+        Step::TailscaleEnable { svc_name, ports } => tailscale_services::enable(svc_name, ports),
         Step::TailscaleDisable { svc_name } => tailscale_services::disable(svc_name),
     }
 }
@@ -409,9 +406,17 @@ mod tailscale_services {
     /// `svc_name` is the part after `svc:` — already host-scoped at
     /// planning time (`<service>-<host>`). See `Step::TailscaleEnable`
     /// for why scoping happens upstream.
-    pub fn enable(svc_name: &str, host_port: u16) -> Result<()> {
+    pub fn enable(svc_name: &str, ports: &[ryra_core::TailscalePort]) -> Result<()> {
         let ts = token()?;
         let key = &ts.admin_api_key;
+
+        // Advertise every served port on the service vIP. A single-port
+        // web app yields `["tcp:443"]`; a multi-endpoint service like ente
+        // (web UI on 443 + API on 8080) yields `["tcp:443","tcp:8080"]`.
+        let tcp_ports: Vec<String> = ports
+            .iter()
+            .map(|p| format!("tcp:{}", p.https_port))
+            .collect();
 
         // Tailscale's PUT endpoint creates a fresh service when none
         // exists (auto-assigning IPv4 + IPv6) but treats subsequent PUTs
@@ -432,14 +437,17 @@ mod tailscale_services {
                 serde_json::json!({
                     "name": format!("svc:{svc_name}"),
                     "tags": [SERVICE_TAG],
-                    "ports": ["tcp:443"],
+                    "ports": tcp_ports,
                     "addrs": addrs,
                 })
                 .to_string()
             }
-            404 => format!(
-                r#"{{"name":"svc:{svc_name}","tags":["{SERVICE_TAG}"],"ports":["tcp:443"]}}"#
-            ),
+            404 => serde_json::json!({
+                "name": format!("svc:{svc_name}"),
+                "tags": [SERVICE_TAG],
+                "ports": tcp_ports,
+            })
+            .to_string(),
             _ => bail!("check service svc:{svc_name} failed (HTTP {get_code}): {get_body}"),
         };
         let (code, resp) = curl("PUT", &url, key, Some(&body))?;
@@ -455,62 +463,57 @@ mod tailscale_services {
         // ACL write when the entry is already present from a prior run.
         ensure_service_autoapprover(key, svc_name)?;
 
-        // Advertise the service from this host. Try `sudo -n` first to
-        // avoid prompting when the cache is fresh; on a TTY, fall back
-        // to interactive sudo (which prompts for the password).
+        // Advertise each port from this host. Try `sudo -n` first to avoid
+        // prompting when the cache is fresh; on a TTY, fall back to
+        // interactive sudo (which prompts for the password).
         //
         // Both stdout and stderr are inherited so the user sees what
         // happens — the previous suppress-everything-and-trust-exit-codes
         // pattern silently swallowed real failures (sudo password
         // required, tag not propagated, etc.) leaving the install with
         // a working URL line printed at the end but no actual route.
-        let target = format!("http://127.0.0.1:{host_port}");
         let svc_arg = format!("--service=svc:{svc_name}");
-        let serve_cmd = || format!("sudo tailscale serve --bg {svc_arg} --https=443 {target}");
+        let mut announced_sudo = false;
+        for p in ports {
+            let target = format!("http://127.0.0.1:{}", p.host_port);
+            let https = format!("--https={}", p.https_port);
+            let serve_cmd =
+                || format!("sudo tailscale serve --bg {svc_arg} {https} {target}");
 
-        let mut status = Command::new("sudo")
-            .args([
-                "-n",
-                "tailscale",
-                "serve",
-                "--bg",
-                &svc_arg,
-                "--https=443",
-                &target,
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .with_context(|| "failed to spawn sudo")?;
-        if !status.success() {
-            use std::io::IsTerminal;
-            if !std::io::stdin().is_terminal() {
+            let mut status = Command::new("sudo")
+                .args(["-n", "tailscale", "serve", "--bg", &svc_arg, &https, &target])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .with_context(|| "failed to spawn sudo")?;
+            if !status.success() {
+                use std::io::IsTerminal;
+                if !std::io::stdin().is_terminal() {
+                    bail!(
+                        "tailscale serve requires sudo and stdin is not a TTY.\n\
+                         Run manually: {}",
+                        serve_cmd()
+                    );
+                }
+                if !announced_sudo {
+                    println!();
+                    println!(
+                        "  Configuring `tailscale serve` (sudo may prompt for your password)…"
+                    );
+                    announced_sudo = true;
+                }
+                status = Command::new("sudo")
+                    .args(["tailscale", "serve", "--bg", &svc_arg, &https, &target])
+                    .status()
+                    .with_context(|| "failed to spawn sudo")?;
+            }
+            if !status.success() {
                 bail!(
-                    "tailscale serve requires sudo and stdin is not a TTY.\n\
-                     Run manually: {}",
+                    "sudo tailscale serve failed (exit {}). Run manually:\n  {}",
+                    status.code().unwrap_or(-1),
                     serve_cmd()
                 );
             }
-            println!();
-            println!("  Configuring `tailscale serve` (sudo may prompt for your password)…");
-            status = Command::new("sudo")
-                .args([
-                    "tailscale",
-                    "serve",
-                    "--bg",
-                    &svc_arg,
-                    "--https=443",
-                    &target,
-                ])
-                .status()
-                .with_context(|| "failed to spawn sudo")?;
-        }
-        if !status.success() {
-            bail!(
-                "sudo tailscale serve failed (exit {}). Run manually:\n  {}",
-                status.code().unwrap_or(-1),
-                serve_cmd()
-            );
         }
 
         // Verify: tailscale's exit code from `serve` is reportedly
@@ -528,8 +531,7 @@ mod tailscale_services {
             if !stdout.contains(&format!("svc:{svc_name}")) {
                 bail!(
                     "tailscale serve completed but svc:{svc_name} is not in the local serve config.\n\
-                     Inspect with `sudo tailscale serve status`; reapply with:\n  {}",
-                    serve_cmd()
+                     Inspect with `sudo tailscale serve status`."
                 );
             }
         }

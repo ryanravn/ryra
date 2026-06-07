@@ -41,7 +41,7 @@ pub use paths::{
     DEFAULT_REGISTRY_URL, REGISTRY_DEFAULT, REGISTRY_DIR_ENV, metadata_path, quadlet_dir,
     service_data_root, service_home,
 };
-pub use plan::{AddResult, RemoveResult, ResetResult, Step, TrackedEnv, Warning};
+pub use plan::{AddResult, RemoveResult, ResetResult, Step, TailscalePort, TrackedEnv, Warning};
 pub use upgrade::{
     BackupSnapshot, DEFAULT_BACKUP_KEEP, DiffEntry, DiffKind, DiffResult, EnvAddition,
     RevertResult, UpgradeResult, diff_service, list_backups, prune_backups, revert_service,
@@ -668,10 +668,7 @@ pub fn add_service(
     // `TailscaleEnable` defines the service via admin API and runs
     // `tailscale serve --service=...` from the host. No sidecar
     // containers, no per-service tailscaled.
-    if mode == PlanMode::Add
-        && tailscale_enabled
-        && let Some(port) = host_port
-    {
+    if mode == PlanMode::Add && tailscale_enabled {
         // Scope the Tailscale Service name by host (`<service>-<host>`)
         // — Tailscale Services are global per tailnet, so without the
         // suffix two ryra machines that both `ryra add vikunja --tailscale`
@@ -686,11 +683,17 @@ pub fn add_service(
                  expected `https://<service>-<host>.<tailnet>.ts.net/`"
             ))
         })?;
-        steps.push(Step::TailscaleSetup);
-        steps.push(Step::TailscaleEnable {
-            svc_name,
-            host_port: port,
-        });
+        // A multi-port service (e.g. ente: web UI + API) serves each
+        // tailscale_https port; single-port services serve their primary
+        // port at the web root. Empty only when there are no ports at all.
+        let ts_ports = plan::tailscale_ports(&reg_service.def.ports, &resolved_ports, host_port);
+        if !ts_ports.is_empty() {
+            steps.push(Step::TailscaleSetup);
+            steps.push(Step::TailscaleEnable {
+                svc_name,
+                ports: ts_ports,
+            });
+        }
     }
 
     // 4. Write config files from bundle

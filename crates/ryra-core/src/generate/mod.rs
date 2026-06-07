@@ -75,6 +75,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
             }
         }
     }
+    insert_port_urls(&mut ctx, params.service_def, params.resolved_ports, params.url);
     let rendered_env = render_env_vars(
         params.service_def,
         &ctx,
@@ -93,6 +94,66 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
     }
 
     Ok(EnvOutput { env_file, ctx })
+}
+
+/// Insert `service.port_url.<name>` for every declared port — the URL at
+/// which that specific port is reachable from a browser.
+///
+/// For single-endpoint services every port resolves to `external_url`.
+/// Multi-port services (ente: web UI on 443, API on 8080, served on separate
+/// Tailscale HTTPS ports) get a distinct URL per port, so a template like
+/// `ENTE_API_ORIGIN = {{service.port_url.http}}` points at the API endpoint
+/// while the bare hostname serves the UI — in every exposure mode (loopback,
+/// raw `--url`, or `--tailscale`).
+fn insert_port_urls(
+    ctx: &mut BTreeMap<String, String>,
+    service_def: &ServiceDef,
+    resolved_ports: &[(String, u16)],
+    url: Option<&str>,
+) {
+    // The primary port (named "http", else the first) answers at the root
+    // URL — for it, `port_url` is exactly `external_url` outside Tailscale.
+    let primary = service_def
+        .ports
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("http"))
+        .or_else(|| service_def.ports.first())
+        .map(|p| p.name.clone());
+    let parsed = url.and_then(|u| url::Url::parse(u).ok());
+    let host = parsed.as_ref().and_then(|u| u.host_str()).map(str::to_string);
+    let scheme = parsed.as_ref().map(|u| u.scheme().to_string());
+    let is_ts = host.as_deref().is_some_and(|h| h.ends_with(".ts.net"));
+    let external_url = ctx.get("service.external_url").cloned();
+
+    for p in &service_def.ports {
+        let host_port = resolved_ports
+            .iter()
+            .find(|(n, _)| n == &p.name)
+            .map(|(_, hp)| *hp)
+            .or(p.host_port)
+            .unwrap_or(p.container_port);
+        let is_primary = primary.as_deref() == Some(p.name.as_str());
+        let port_url = if let (true, Some(https), Some(h)) =
+            (is_ts, p.tailscale_https, host.as_deref())
+        {
+            // Tailscale: this port answers at the service hostname on its
+            // HTTPS port (443 is the bare hostname, no explicit port).
+            if https == 443 {
+                format!("https://{h}")
+            } else {
+                format!("https://{h}:{https}")
+            }
+        } else if is_primary && let Some(ext) = &external_url {
+            ext.clone()
+        } else if let (Some(s), Some(h)) = (scheme.as_deref(), host.as_deref()) {
+            // Non-primary port under a raw `--url`: directly published at the
+            // same host on its own host port.
+            format!("{s}://{h}:{host_port}")
+        } else {
+            format!("http://127.0.0.1:{host_port}")
+        };
+        ctx.insert(format!("service.port_url.{}", p.name), port_url);
+    }
 }
 
 /// Build the .env file for a service.
@@ -270,6 +331,7 @@ mod tests {
                 container_port: 80,
                 host_port: None,
                 protocol: Default::default(),
+                tailscale_https: None,
             }],
             env: vec![
                 EnvVar {
@@ -328,6 +390,69 @@ mod tests {
             ],
         });
         def
+    }
+
+    /// Two-endpoint service like ente: museum API ("http") served over
+    /// Tailscale on :8080, Photos UI ("photos") at the bare hostname (:443).
+    fn multiport_def() -> ServiceDef {
+        let mut def = minimal_service_def();
+        def.ports = vec![
+            PortDef {
+                name: "http".into(),
+                container_port: 8080,
+                host_port: None,
+                protocol: Default::default(),
+                tailscale_https: Some(8080),
+            },
+            PortDef {
+                name: "photos".into(),
+                container_port: 3000,
+                host_port: None,
+                protocol: Default::default(),
+                tailscale_https: Some(443),
+            },
+        ];
+        def
+    }
+
+    fn port_urls(url: Option<&str>, external_url: &str) -> BTreeMap<String, String> {
+        let def = multiport_def();
+        let resolved = vec![("http".to_string(), 8080u16), ("photos".to_string(), 10002u16)];
+        let mut ctx = BTreeMap::new();
+        ctx.insert("service.external_url".to_string(), external_url.to_string());
+        insert_port_urls(&mut ctx, &def, &resolved, url);
+        ctx
+    }
+
+    #[test]
+    fn port_url_loopback_uses_host_ports() {
+        // No --url: primary == external_url (localhost), others at 127.0.0.1:<port>.
+        let ctx = port_urls(None, "http://127.0.0.1:8080");
+        assert_eq!(ctx["service.port_url.http"], "http://127.0.0.1:8080");
+        assert_eq!(ctx["service.port_url.photos"], "http://127.0.0.1:10002");
+    }
+
+    #[test]
+    fn port_url_raw_ip_url_exposes_each_port() {
+        // Raw --url at a tailnet IP: museum == the url, photos directly published.
+        let ctx = port_urls(Some("http://100.69.58.21:8080"), "http://100.69.58.21:8080");
+        assert_eq!(ctx["service.port_url.http"], "http://100.69.58.21:8080");
+        assert_eq!(ctx["service.port_url.photos"], "http://100.69.58.21:10002");
+    }
+
+    #[test]
+    fn port_url_tailscale_splits_root_and_api() {
+        // --tailscale: photos answers at the bare hostname, museum on :8080.
+        let url = "https://ente-debian.cobbler-tuna.ts.net";
+        let ctx = port_urls(Some(url), url);
+        assert_eq!(
+            ctx["service.port_url.http"],
+            "https://ente-debian.cobbler-tuna.ts.net:8080"
+        );
+        assert_eq!(
+            ctx["service.port_url.photos"],
+            "https://ente-debian.cobbler-tuna.ts.net"
+        );
     }
 
     fn gen_with_group(

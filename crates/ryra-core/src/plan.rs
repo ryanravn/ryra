@@ -6,6 +6,54 @@ use std::path::PathBuf;
 
 use crate::generate::GeneratedFile;
 
+/// One port served over a service's Tailscale vIP: TLS-terminated at
+/// `https_port` on the service hostname, proxied to `http://127.0.0.1:<host_port>`.
+/// The entry with `https_port == 443` answers at the bare hostname (web root).
+#[derive(Debug, Clone)]
+pub struct TailscalePort {
+    pub https_port: u16,
+    pub host_port: u16,
+}
+
+/// Resolve which ports a service exposes over its Tailscale vIP.
+///
+/// Ports declaring `tailscale_https` are each served on that HTTPS port,
+/// mapped to their resolved host port. A service that declares none (every
+/// single-port web app — seafile, authelia, …) falls back to serving its
+/// primary port at the web root (`443`), preserving the original behaviour.
+pub fn tailscale_ports(
+    ports: &[crate::registry::service_def::PortDef],
+    resolved: &[(String, u16)],
+    primary_host_port: Option<u16>,
+) -> Vec<TailscalePort> {
+    let mapped: Vec<TailscalePort> = ports
+        .iter()
+        .filter_map(|p| {
+            let https_port = p.tailscale_https?;
+            let host_port = resolved
+                .iter()
+                .find(|(n, _)| n == &p.name)
+                .map(|(_, hp)| *hp)
+                .or(p.host_port)?;
+            Some(TailscalePort {
+                https_port,
+                host_port,
+            })
+        })
+        .collect();
+    if !mapped.is_empty() {
+        return mapped;
+    }
+    primary_host_port
+        .map(|host_port| {
+            vec![TailscalePort {
+                https_port: 443,
+                host_port,
+            }]
+        })
+        .unwrap_or_default()
+}
+
 /// A discrete operation that the CLI executes.
 pub enum Step {
     /// Write a file.
@@ -59,7 +107,10 @@ pub enum Step {
     /// planning time (`<service>-<host>`) so two ryra hosts on the
     /// same tailnet can run independent copies of a service without
     /// colliding on the global Tailscale Service namespace.
-    TailscaleEnable { svc_name: String, host_port: u16 },
+    TailscaleEnable {
+        svc_name: String,
+        ports: Vec<TailscalePort>,
+    },
     /// Stop advertising a Tailscale Service on this host and delete
     /// its definition via the admin API. Used in `ryra remove --purge`
     /// and `ryra reset` for tailscale-enabled services. `svc_name`
@@ -95,12 +146,16 @@ impl Step {
             }
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
             Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),
-            Step::TailscaleEnable {
-                svc_name,
-                host_port,
-            } => format!(
-                "tailscale serve --service=svc:{svc_name} --https=443 http://127.0.0.1:{host_port}"
-            ),
+            Step::TailscaleEnable { svc_name, ports } => ports
+                .iter()
+                .map(|p| {
+                    format!(
+                        "tailscale serve --service=svc:{svc_name} --https={} http://127.0.0.1:{}",
+                        p.https_port, p.host_port
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" && "),
             Step::TailscaleDisable { svc_name } => {
                 format!("tailscale serve --service=svc:{svc_name} off + delete service")
             }
@@ -181,4 +236,50 @@ pub struct RemoveResult {
 
 pub struct ResetResult {
     pub steps: Vec<Step>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::service_def::{PortDef, PortProtocol};
+
+    fn port(name: &str, container: u16, ts: Option<u16>) -> PortDef {
+        PortDef {
+            name: name.into(),
+            container_port: container,
+            host_port: None,
+            protocol: PortProtocol::default(),
+            tailscale_https: ts,
+        }
+    }
+
+    #[test]
+    fn single_port_service_falls_back_to_primary_on_443() {
+        // No port declares tailscale_https → primary served at the web root.
+        let ports = vec![port("http", 80, None)];
+        let resolved = vec![("http".to_string(), 10001u16)];
+        let out = tailscale_ports(&ports, &resolved, Some(10001));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].https_port, 443);
+        assert_eq!(out[0].host_port, 10001);
+    }
+
+    #[test]
+    fn multiport_maps_each_declared_port_to_its_resolved_host_port() {
+        let ports = vec![
+            port("http", 8080, Some(8080)),
+            port("photos", 3000, Some(443)),
+        ];
+        let resolved = vec![("http".to_string(), 8080u16), ("photos".to_string(), 10002u16)];
+        let mut out = tailscale_ports(&ports, &resolved, Some(8080));
+        out.sort_by_key(|p| p.https_port);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].https_port, out[0].host_port), (443, 10002)); // photos root
+        assert_eq!((out[1].https_port, out[1].host_port), (8080, 8080)); // museum api
+    }
+
+    #[test]
+    fn no_ports_and_no_primary_yields_empty() {
+        assert!(tailscale_ports(&[], &[], None).is_empty());
+    }
 }
