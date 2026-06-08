@@ -120,6 +120,31 @@ enum Command {
         #[arg(long, short = 'l')]
         long: bool,
     },
+    /// Start an installed service (and its sidecars).
+    Start {
+        /// Service name. Omit and pass --all to start every installed service.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        service: Option<String>,
+        /// Start every installed service.
+        #[arg(long, short = 'a')]
+        all: bool,
+        /// Show what would happen without making changes.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Stop an installed service (and its sidecars). Data is untouched —
+    /// `ryra start` brings it back. Use `ryra remove` to uninstall.
+    Stop {
+        /// Service name. Omit and pass --all to stop every installed service.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        service: Option<String>,
+        /// Stop every installed service.
+        #[arg(long, short = 'a')]
+        all: bool,
+        /// Show what would happen without making changes.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Global overview: config path, SMTP / auth providers, service count.
     Status,
     /// Manage custom registries
@@ -127,15 +152,23 @@ enum Command {
         #[command(subcommand)]
         action: RegistryAction,
     },
-    /// Run tests for a service
+    /// Run tests for a service. Runs the full lifecycle on this host by
+    /// default; pass --vm to run in an isolated throwaway VM instead.
     Test {
         /// Test name filters
         names: Vec<String>,
-        /// Run against live services instead of a fresh VM
+        /// Run the full add/assert/remove lifecycle in a fresh, throwaway
+        /// QEMU VM instead of on this host. Slower, needs KVM, but isolated.
+        #[arg(long)]
+        vm: bool,
+        /// Run assertions against an already-installed service on this host
+        /// (no add/remove). Requires --service. Non-mutating.
         #[arg(long)]
         live: bool,
-        /// Run lifecycle tests directly on the host without a VM
-        #[arg(long)]
+        /// Deprecated: the host is now the default target, so this is a
+        /// no-op kept for backward compatibility (CI, scripts). Use --vm
+        /// to opt into a VM instead.
+        #[arg(long, hide = true)]
         no_vm: bool,
         /// Service to test (live mode)
         #[arg(long)]
@@ -421,6 +454,32 @@ async fn main() -> anyhow::Result<()> {
             };
             cli::configure::run(service, flags).await?
         }
+        Command::Start {
+            ref service,
+            all,
+            dry_run,
+        } => {
+            cli::lifecycle::run(
+                service.as_deref(),
+                all,
+                ryra_core::Lifecycle::Start,
+                dry_run,
+            )
+            .await?
+        }
+        Command::Stop {
+            ref service,
+            all,
+            dry_run,
+        } => {
+            cli::lifecycle::run(
+                service.as_deref(),
+                all,
+                ryra_core::Lifecycle::Stop,
+                dry_run,
+            )
+            .await?
+        }
         Command::Status => cli::status::run().await?,
         Command::List { all, long } => cli::list::run(all, long)?,
         Command::Search {
@@ -429,8 +488,9 @@ async fn main() -> anyhow::Result<()> {
         } => cli::search::run(query.as_deref(), registry.as_deref()).await?,
         Command::Test {
             ref names,
+            vm,
             live,
-            no_vm,
+            no_vm: _,
             retest,
             ref service,
             ref test,
@@ -456,8 +516,8 @@ async fn main() -> anyhow::Result<()> {
                 service: service.as_deref(),
                 test_filter: test.as_deref(),
                 project: project.as_ref(),
-                vm: !live && !no_vm,
-                no_vm,
+                vm,
+                live,
                 retest,
                 keep_alive,
                 yes,

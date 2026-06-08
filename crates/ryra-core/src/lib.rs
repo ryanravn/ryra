@@ -1115,6 +1115,69 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     })
 }
 
+/// A lifecycle transition applied to an installed service's unit family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lifecycle {
+    Start,
+    Stop,
+}
+
+/// Plan a start/stop of an installed service's full unit family (main
+/// container + sidecars). Errors with [`Error::ServiceNotInstalled`] if
+/// the service isn't installed.
+///
+/// systemd cascades *start* through `Requires=`, but never cascades
+/// *stop* — so every `.container` unit is named explicitly and the steps
+/// are ordered to respect dependencies: the main app unit stops first
+/// (before its db/cache sidecars) and starts last (after them).
+pub fn lifecycle_steps(service_name: &str, action: Lifecycle) -> Result<Vec<Step>> {
+    // Same validation + error surface as `remove_service`.
+    build_installed_from_metadata(service_name)
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    let mut units = service_container_units(service_name)?;
+    match action {
+        // Main unit first → stops before the sidecars it depends on.
+        Lifecycle::Stop => units.sort_by_key(|u| u != service_name),
+        // Main unit last → starts after the sidecars it depends on.
+        Lifecycle::Start => units.sort_by_key(|u| u == service_name),
+    }
+
+    Ok(units
+        .into_iter()
+        .map(|unit| match action {
+            Lifecycle::Start => Step::StartService { unit },
+            Lifecycle::Stop => Step::StopService { unit },
+        })
+        .collect())
+}
+
+/// systemd unit base names of every `.container` quadlet belonging to a
+/// service (main container, sidecars, and the `ts-<svc>` tailscale
+/// sidecar). Mirrors the family scan in [`remove_service`].
+fn service_container_units(service_name: &str) -> Result<Vec<String>> {
+    let quadlet_path = quadlet_dir()?;
+    let name_pool = scan_managed_services().unwrap_or_default();
+    let all_names: Vec<&str> = name_pool.iter().map(|s| s.as_str()).collect();
+
+    let mut units = Vec::new();
+    if quadlet_path.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&quadlet_path)
+    {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            if !quadlet_belongs_to(&name, service_name, &all_names) {
+                continue;
+            }
+            if name.ends_with(".container") {
+                units.push(name.trim_end_matches(".container").to_string());
+            }
+        }
+    }
+    Ok(units)
+}
+
 /// Parameters for [`record_pending`].
 pub struct RecordPendingParams<'a> {
     pub service_name: &'a str,
