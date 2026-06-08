@@ -75,7 +75,12 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
             }
         }
     }
-    insert_port_urls(&mut ctx, params.service_def, params.resolved_ports, params.url);
+    insert_port_urls(
+        &mut ctx,
+        params.service_def,
+        params.resolved_ports,
+        params.url,
+    );
     let rendered_env = render_env_vars(
         params.service_def,
         &ctx,
@@ -120,7 +125,10 @@ fn insert_port_urls(
         .or_else(|| service_def.ports.first())
         .map(|p| p.name.clone());
     let parsed = url.and_then(|u| url::Url::parse(u).ok());
-    let host = parsed.as_ref().and_then(|u| u.host_str()).map(str::to_string);
+    let host = parsed
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(str::to_string);
     let scheme = parsed.as_ref().map(|u| u.scheme().to_string());
     let is_ts = host.as_deref().is_some_and(|h| h.ends_with(".ts.net"));
     let external_url = ctx.get("service.external_url").cloned();
@@ -133,25 +141,24 @@ fn insert_port_urls(
             .or(p.host_port)
             .unwrap_or(p.container_port);
         let is_primary = primary.as_deref() == Some(p.name.as_str());
-        let port_url = if let (true, Some(https), Some(h)) =
-            (is_ts, p.tailscale_https, host.as_deref())
-        {
-            // Tailscale: this port answers at the service hostname on its
-            // HTTPS port (443 is the bare hostname, no explicit port).
-            if https == 443 {
-                format!("https://{h}")
+        let port_url =
+            if let (true, Some(https), Some(h)) = (is_ts, p.tailscale_https, host.as_deref()) {
+                // Tailscale: this port answers at the service hostname on its
+                // HTTPS port (443 is the bare hostname, no explicit port).
+                if https == 443 {
+                    format!("https://{h}")
+                } else {
+                    format!("https://{h}:{https}")
+                }
+            } else if is_primary && let Some(ext) = &external_url {
+                ext.clone()
+            } else if let (Some(s), Some(h)) = (scheme.as_deref(), host.as_deref()) {
+                // Non-primary port under a raw `--url`: directly published at the
+                // same host on its own host port.
+                format!("{s}://{h}:{host_port}")
             } else {
-                format!("https://{h}:{https}")
-            }
-        } else if is_primary && let Some(ext) = &external_url {
-            ext.clone()
-        } else if let (Some(s), Some(h)) = (scheme.as_deref(), host.as_deref()) {
-            // Non-primary port under a raw `--url`: directly published at the
-            // same host on its own host port.
-            format!("{s}://{h}:{host_port}")
-        } else {
-            format!("http://127.0.0.1:{host_port}")
-        };
+                format!("http://127.0.0.1:{host_port}")
+            };
         ctx.insert(format!("service.port_url.{}", p.name), port_url);
     }
 }
@@ -417,7 +424,10 @@ mod tests {
 
     fn port_urls(url: Option<&str>, external_url: &str) -> BTreeMap<String, String> {
         let def = multiport_def();
-        let resolved = vec![("http".to_string(), 8080u16), ("photos".to_string(), 10002u16)];
+        let resolved = vec![
+            ("http".to_string(), 8080u16),
+            ("photos".to_string(), 10002u16),
+        ];
         let mut ctx = BTreeMap::new();
         ctx.insert("service.external_url".to_string(), external_url.to_string());
         insert_port_urls(&mut ctx, &def, &resolved, url);

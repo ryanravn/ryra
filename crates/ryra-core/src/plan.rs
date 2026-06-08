@@ -270,7 +270,10 @@ mod tests {
             port("http", 8080, Some(8080)),
             port("photos", 3000, Some(443)),
         ];
-        let resolved = vec![("http".to_string(), 8080u16), ("photos".to_string(), 10002u16)];
+        let resolved = vec![
+            ("http".to_string(), 8080u16),
+            ("photos".to_string(), 10002u16),
+        ];
         let mut out = tailscale_ports(&ports, &resolved, Some(8080));
         out.sort_by_key(|p| p.https_port);
         assert_eq!(out.len(), 2);

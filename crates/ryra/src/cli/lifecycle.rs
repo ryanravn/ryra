@@ -9,12 +9,7 @@ use super::apply;
 /// `service` and `all` are mutually exclusive and exactly one is required
 /// — clap enforces this at the arg layer, so reaching here with neither is
 /// a defensive `bail!`.
-pub async fn run(
-    service: Option<&str>,
-    all: bool,
-    action: Lifecycle,
-    dry_run: bool,
-) -> Result<()> {
+pub async fn run(service: Option<&str>, all: bool, action: Lifecycle, dry_run: bool) -> Result<()> {
     let targets: Vec<String> = if all {
         let installed = ryra_core::list_installed()?;
         if installed.is_empty() {

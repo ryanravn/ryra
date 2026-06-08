@@ -477,11 +477,18 @@ mod tailscale_services {
         for p in ports {
             let target = format!("http://127.0.0.1:{}", p.host_port);
             let https = format!("--https={}", p.https_port);
-            let serve_cmd =
-                || format!("sudo tailscale serve --bg {svc_arg} {https} {target}");
+            let serve_cmd = || format!("sudo tailscale serve --bg {svc_arg} {https} {target}");
 
             let mut status = Command::new("sudo")
-                .args(["-n", "tailscale", "serve", "--bg", &svc_arg, &https, &target])
+                .args([
+                    "-n",
+                    "tailscale",
+                    "serve",
+                    "--bg",
+                    &svc_arg,
+                    &https,
+                    &target,
+                ])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()

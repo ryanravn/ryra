@@ -480,10 +480,17 @@ impl ServiceDef {
         }
         // If any port opts into Tailscale exposure, exactly one must own 443 —
         // that's the web root answering at the bare `<svc>.<tailnet>.ts.net`.
-        let ts_ports: Vec<&PortDef> =
-            self.ports.iter().filter(|p| p.tailscale_https.is_some()).collect();
+        let ts_ports: Vec<&PortDef> = self
+            .ports
+            .iter()
+            .filter(|p| p.tailscale_https.is_some())
+            .collect();
         if !ts_ports.is_empty()
-            && ts_ports.iter().filter(|p| p.tailscale_https == Some(443)).count() != 1
+            && ts_ports
+                .iter()
+                .filter(|p| p.tailscale_https == Some(443))
+                .count()
+                != 1
         {
             errors.push(
                 "services exposing ports over Tailscale must mark exactly one port \
@@ -732,7 +739,8 @@ container_port = 3000
 tailscale_https = 443
 "#,
         );
-        svc.validate().expect("one 443 root + one api port is valid");
+        svc.validate()
+            .expect("one 443 root + one api port is valid");
     }
 
     #[test]

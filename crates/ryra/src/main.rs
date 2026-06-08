@@ -472,13 +472,8 @@ async fn main() -> anyhow::Result<()> {
             all,
             dry_run,
         } => {
-            cli::lifecycle::run(
-                service.as_deref(),
-                all,
-                ryra_core::Lifecycle::Stop,
-                dry_run,
-            )
-            .await?
+            cli::lifecycle::run(service.as_deref(), all, ryra_core::Lifecycle::Stop, dry_run)
+                .await?
         }
         Command::Status => cli::status::run().await?,
         Command::List { all, long } => cli::list::run(all, long)?,

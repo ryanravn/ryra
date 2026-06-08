@@ -247,13 +247,22 @@ mod tests {
     fn ente_smtp_encryption_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut ctx = BTreeMap::new();
         ctx.insert("smtp.security".into(), "starttls".into());
-        assert_eq!(render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?, "tls");
+        assert_eq!(
+            render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?,
+            "tls"
+        );
 
         ctx.insert("smtp.security".into(), "force_tls".into());
-        assert_eq!(render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?, "ssl");
+        assert_eq!(
+            render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?,
+            "ssl"
+        );
 
         ctx.insert("smtp.security".into(), "off".into());
-        assert_eq!(render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?, "");
+        assert_eq!(
+            render("{{ smtp.security | ente_smtp_encryption }}", &ctx)?,
+            ""
+        );
         Ok(())
     }
 
