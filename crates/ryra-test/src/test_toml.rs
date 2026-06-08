@@ -136,7 +136,6 @@ pub enum StepDef {
     Remove {
         service: String,
     },
-    Reset,
     Wait {
         service: String,
         #[serde(default = "default_timeout")]
@@ -234,7 +233,6 @@ impl std::fmt::Display for StepDef {
         match self {
             StepDef::Add { service, .. } => write!(f, "add {service}"),
             StepDef::Remove { service } => write!(f, "remove {service}"),
-            StepDef::Reset => write!(f, "reset"),
             StepDef::Wait { service, .. } => write!(f, "wait {service}"),
             StepDef::Shell { name, .. } => write!(f, "shell: {name}"),
             StepDef::Http { name, url, .. } => {
@@ -266,7 +264,7 @@ impl StepDef {
     pub fn is_setup(&self) -> bool {
         matches!(
             self,
-            StepDef::Add { .. } | StepDef::Remove { .. } | StepDef::Reset | StepDef::Wait { .. }
+            StepDef::Add { .. } | StepDef::Remove { .. } | StepDef::Wait { .. }
         )
     }
 
@@ -298,7 +296,6 @@ impl StepDef {
                 }
             }
             StepDef::Remove { service } => lines.push(format!("ryra remove --purge {service}")),
-            StepDef::Reset => lines.push("ryra reset".to_string()),
             StepDef::Wait { service, timeout } => {
                 lines.push(format!("wait for {service}.service  (timeout={timeout}s)"));
             }
@@ -659,9 +656,6 @@ action = "remove"
 service = "whoami"
 
 [[steps]]
-action = "reset"
-
-[[steps]]
 action = "wait"
 service = "whoami"
 
@@ -682,12 +676,11 @@ spec = "test.spec.ts"
         let parsed = TestToml::parse(&path).expect("parse");
         assert!(parsed.steps[0].is_setup(), "add should be setup");
         assert!(parsed.steps[1].is_setup(), "remove should be setup");
-        assert!(parsed.steps[2].is_setup(), "reset should be setup");
-        assert!(parsed.steps[3].is_setup(), "wait should be setup");
-        assert!(!parsed.steps[4].is_setup(), "shell should not be setup");
-        assert!(!parsed.steps[5].is_setup(), "http should not be setup");
+        assert!(parsed.steps[2].is_setup(), "wait should be setup");
+        assert!(!parsed.steps[3].is_setup(), "shell should not be setup");
+        assert!(!parsed.steps[4].is_setup(), "http should not be setup");
         assert!(
-            !parsed.steps[6].is_setup(),
+            !parsed.steps[5].is_setup(),
             "playwright should not be setup"
         );
     }

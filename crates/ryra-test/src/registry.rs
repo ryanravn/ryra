@@ -69,7 +69,6 @@ impl DiscoveredTest {
                     let kind = match step {
                         StepDef::Add { .. } => "add",
                         StepDef::Remove { .. } => "remove",
-                        StepDef::Reset => "reset",
                         StepDef::Wait { .. } => "wait",
                         StepDef::Shell { .. } => "shell",
                         StepDef::Http { .. } => "http",

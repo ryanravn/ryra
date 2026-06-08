@@ -13,7 +13,7 @@ pub struct TestRunParams<'a> {
     pub test_filter: Option<&'a str>,
     pub project: Option<&'a std::path::PathBuf>,
     pub vm: bool,
-    pub no_vm: bool,
+    pub live: bool,
     pub retest: bool,
     pub keep_alive: bool,
     pub yes: bool,
@@ -24,18 +24,17 @@ pub struct TestRunParams<'a> {
 }
 
 pub async fn run(params: TestRunParams<'_>) -> Result<()> {
-    if params.no_vm {
-        return run_no_vm(
-            params.names,
-            params.verbose,
-            params.list,
-            params.retest,
-            params.project,
-        )
-        .await;
+    // Host runs (default bare mode and `--live`) mutate THIS machine and run
+    // arbitrary registry commands — require consent. `--vm`/`--keep-alive`
+    // run in a throwaway VM, and `--list` only prints, so neither needs it.
+    let host_run = !(params.vm || params.keep_alive || params.list);
+    if host_run {
+        confirm_host_run(params.yes)?;
     }
 
-    if params.vm || params.keep_alive || params.list || params.project.is_some() {
+    // VM is opt-in (`--vm`). `--keep-alive` is inherently a VM operation
+    // (boot a VM and hold it for interactive debugging), so it implies one.
+    if params.vm || params.keep_alive {
         return run_vm(
             params.names,
             params.keep_alive,
@@ -47,12 +46,64 @@ pub async fn run(params: TestRunParams<'_>) -> Result<()> {
         .await;
     }
 
-    match params.service {
-        Some(service) => {
-            run_live_service(service, params.test_filter, params.yes, params.verbose).await
-        }
-        None => anyhow::bail!("specify a service name with --service <name>"),
+    // `--live`: run only the assertion commands against a service that's
+    // already installed on this host — no add/remove.
+    if params.live {
+        return match params.service {
+            Some(service) => {
+                run_live_service(service, params.test_filter, params.yes, params.verbose).await
+            }
+            None => anyhow::bail!("--live requires --service <name>"),
+        };
     }
+
+    // Default: run the full add/assert/remove lifecycle on this host.
+    run_no_vm(
+        params.names,
+        params.verbose,
+        params.list,
+        params.retest,
+        params.project,
+    )
+    .await
+}
+
+/// Require explicit consent before running tests on the real host. Unlike
+/// `--vm` (a throwaway VM), host tests mutate THIS machine: they install,
+/// purge, and reinstall the services each test declares, and run arbitrary
+/// shell/HTTP commands from the registry. Unrelated services and their data
+/// are left untouched, but the user should still opt in. Mirrors
+/// `warn_untrusted_repo`: `-y` skips, interactive prompts, non-interactive
+/// without `-y` refuses.
+fn confirm_host_run(yes: bool) -> Result<()> {
+    if yes {
+        return Ok(());
+    }
+
+    if !super::is_interactive() {
+        anyhow::bail!(
+            "refusing to run tests on this host without confirmation.\n\
+             Host tests install/purge services and run arbitrary commands from the registry.\n\
+             Re-run with -y to confirm, or use --vm to run in a throwaway VM."
+        );
+    }
+
+    eprintln!(
+        "About to run tests on THIS host (not a VM).\n\
+         This installs, purges, and reinstalls the services each test declares,\n\
+         and runs arbitrary shell/HTTP commands from the registry against your\n\
+         real machine. Unrelated services and their data are left untouched.\n"
+    );
+    let confirm = dialoguer::Confirm::new()
+        .with_prompt("Continue?")
+        .default(false)
+        .interact()?;
+
+    if !confirm {
+        anyhow::bail!("aborted");
+    }
+
+    Ok(())
 }
 
 /// Warn if tests are being loaded from a custom registry.

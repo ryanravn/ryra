@@ -872,12 +872,30 @@ async fn run_interactive_vm(
     Ok(())
 }
 
-/// Clean host state between bare-mode tests: uninstall all ryra-managed
-/// services and remove the default-registry cache (which can be polluted by
-/// tests like diff-whoami that intentionally mutate it).
-async fn reset_bare_state(executor: &crate::executor::LocalExecutor) {
+/// Clean host state before a bare-mode test runs. Bare mode shares the
+/// *real* host's ryra state, so this MUST NOT run a global `ryra reset` —
+/// that deletes every installed service and the entire
+/// `~/.local/share/services` data root, including services the user installed
+/// for real and never asked us to touch. Instead we purge only the services
+/// this specific test declares (it is about to recreate them anyway). Any
+/// other service — and all of its data — is left untouched.
+///
+/// The default-registry cache is also cleared, since tests like diff-whoami
+/// intentionally mutate it. That's a cache, not user data.
+async fn reset_bare_state(
+    executor: &crate::executor::LocalExecutor,
+    test: &registry::DiscoveredTest,
+) {
     use crate::executor::Executor;
-    let _ = executor.exec("ryra reset -y").await;
+    // Purge in reverse install order so dependents go before dependencies.
+    let mut services = test.services();
+    services.reverse();
+    for svc in services {
+        println!("  cleaning up {svc} (purge) before test");
+        let _ = executor
+            .exec(&format!("ryra remove --purge {svc} -y"))
+            .await;
+    }
     let _ = executor
         .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/services/default\"")
         .await;
@@ -900,13 +918,14 @@ async fn run_bare(
         let name = test.name().to_string();
         println!("---- START {name} (bare) ----");
 
-        // Reset host state between tests so one test's leftover services or
-        // cache pollution doesn't cascade into the next. Bare mode shares the
-        // host's ryra config/cache across all tests — unlike VM mode where
-        // each test gets a fresh VM. Failures here are non-fatal: the first
-        // reset may find nothing to clean, and test assertions will surface
-        // any real setup failures.
-        reset_bare_state(&executor).await;
+        // Clean up only this test's own services before it runs, so a stale
+        // install from a previous run doesn't cascade into the next. Bare mode
+        // shares the host's ryra state across all tests — unlike VM mode where
+        // each test gets a fresh VM — so we scope cleanup to the test's
+        // declared services and never global-reset the host. Failures here are
+        // non-fatal: a not-installed service is a no-op, and test assertions
+        // will surface any real setup failures.
+        reset_bare_state(&executor, test).await;
 
         let start = std::time::Instant::now();
         let result = match test {

@@ -414,8 +414,21 @@ async fn run_browser_step(
          done",
         loader = load_env_shell("\"$__f\"")
     );
+    // Expose inbucket to the spec as INBUCKET_URL when it's installed. Browser
+    // specs that read a mailed code (verification/OTT) consume this via the
+    // inbucket.ts helper — Playwright has no email primitive, so the runner
+    // owns service-layout discovery (which .env, which port) in one place
+    // rather than every spec hard-coding ~/.local/share/services/inbucket/.env.
+    // `;`-separated (not `&&`) so a missing inbucket leaves INBUCKET_URL unset
+    // without aborting the command. A step's own `env` (exported below)
+    // overrides this.
+    let inbucket_export = "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP \
+         $HOME/.local/share/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
+         [ -n \"$INBUCKET_PORT\" ] && \
+         export INBUCKET_URL=\"http://127.0.0.1:$INBUCKET_PORT\"; ";
     let cmd = format!(
         "{env_loop} && \
+         {inbucket_export}\
          DEST=\"$HOME/.local/share/services/test-reports/{test_name_esc}/playwright\" && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
@@ -469,7 +482,7 @@ async fn run_browser_step(
 /// Execute a lifecycle test — interleaved actions and assertions.
 ///
 /// Unlike `run_registry_test`, this processes a sequence of typed steps
-/// (add, remove, reset, wait, run, assert) rather than "add all then test".
+/// (add, remove, wait, run, assert) rather than "add all then test".
 pub async fn run_lifecycle_test(
     vm: &dyn Executor,
     name: &str,
@@ -544,15 +557,6 @@ pub async fn run_lifecycle_test(
                     120,
                 )
                 .await;
-                print_event_result(&p, &event);
-                if event.outcome.is_fail() {
-                    failed = true;
-                }
-                events.push(event);
-            }
-            StepDef::Reset => {
-                println!("{p}  ryra reset...");
-                let event = run_event(vm, EventKind::Step, "ryra reset -y", 120).await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
