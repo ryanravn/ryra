@@ -75,10 +75,13 @@ pub enum BackupAction {
         /// Service name(s). Omit to back up every enabled install.
         services: Vec<String>,
     },
-    /// Restore a service's user data from a snapshot.
+    /// Restore from a snapshot. With a service name, restores just that
+    /// install's folder. With no name, performs full disaster recovery:
+    /// every service in the repo is restored, re-linked, and started
+    /// (needs your `preferences.toml` in place for the repo creds).
     Restore {
-        /// Service name.
-        service: String,
+        /// Service name. Omit to restore everything (disaster recovery).
+        service: Option<String>,
         /// Specific restic snapshot id (hex prefix). Omit to use the
         /// newest snapshot tagged for this service.
         #[arg(long)]
@@ -180,7 +183,10 @@ pub async fn run(action: BackupAction) -> Result<()> {
             .await
         }
         BackupAction::Run { services } => run_backup(services).await,
-        BackupAction::Restore { service, at, force } => restore(service, at, force).await,
+        BackupAction::Restore { service, at, force } => match service {
+            Some(svc) => restore(svc, at, force).await,
+            None => restore_all(at).await,
+        },
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
         BackupAction::Schedule { interval } => schedule(interval).await,
@@ -596,6 +602,7 @@ async fn restore(service: String, at: Option<String>, force: bool) -> Result<()>
     if config.backup.is_none() {
         bail!("no backup repository configured: run `ryra backup configure` first");
     }
+
     let repo_dir = resolve_repo_dir_for_install(&service).await?;
     let snapshot = at.unwrap_or_else(|| "latest".to_string());
     let plan = plan_backup_restore(&service, &snapshot, &config, &repo_dir)?;
@@ -625,6 +632,179 @@ async fn restore(service: String, at: Option<String>, force: bool) -> Result<()>
         style("done:").green().bold(),
         plan.service_name,
         style(format!("systemctl --user restart {}", plan.service_name)).cyan()
+    );
+    Ok(())
+}
+
+/// Infra/auth services come up before apps so the reverse proxy and
+/// OIDC provider are ready when apps start. Lower sorts earlier.
+fn restore_priority(service: &str) -> u8 {
+    match service {
+        "caddy" => 0,
+        "authelia" | "minio" => 1,
+        _ => 2,
+    }
+}
+
+/// Distinct services with snapshots in the repo, read from the
+/// `service:<name>` tags on `restic snapshots --json`.
+fn list_repo_services(
+    repo: &str,
+    password: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<String>> {
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("snapshots")
+        .arg("--json")
+        .arg("--repo")
+        .arg(repo)
+        .env("RESTIC_PASSWORD", password);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let output = cmd.output().context("spawning `restic snapshots`")?;
+    if !output.status.success() {
+        bail!(
+            "restic snapshots failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[derive(Deserialize)]
+    struct Snap {
+        #[serde(default)]
+        tags: Vec<String>,
+    }
+    let snaps: Vec<Snap> = serde_json::from_slice(&output.stdout)
+        .with_context(|| "parsing `restic snapshots --json` output")?;
+    let mut set = std::collections::BTreeSet::new();
+    for s in snaps {
+        for t in s.tags {
+            if let Some(name) = t.strip_prefix("service:") {
+                set.insert(name.to_string());
+            }
+        }
+    }
+    Ok(set.into_iter().collect())
+}
+
+/// Re-create quadlet symlinks for a restored service — every
+/// `*.container`/`*.network`/`*.volume` in the service home gets linked
+/// into `~/.config/containers/systemd/`, matching `ryra add`. Idempotent.
+fn link_quadlets(home: &Path, quadlet_dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(home)
+        .with_context(|| format!("reading {}", home.display()))?
+        .flatten()
+    {
+        let name = entry.file_name();
+        let n = name.to_string_lossy();
+        if n.ends_with(".container") || n.ends_with(".network") || n.ends_with(".volume") {
+            let link = quadlet_dir.join(&name);
+            if std::fs::symlink_metadata(&link).is_ok() {
+                std::fs::remove_file(&link).ok();
+            }
+            std::os::unix::fs::symlink(entry.path(), &link).with_context(|| {
+                format!("symlink {} -> {}", link.display(), entry.path().display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn run_systemctl(args: &[&str]) -> Result<()> {
+    let mut full = vec!["--user"];
+    full.extend_from_slice(args);
+    let status = std::process::Command::new("systemctl")
+        .args(&full)
+        .status()
+        .context("spawning systemctl")?;
+    if !status.success() {
+        bail!(
+            "systemctl {} exited with {}",
+            args.join(" "),
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+/// Full disaster recovery: restore every service folder in the repo,
+/// re-link quadlets, bring the stack up, and import any DB dumps. The
+/// only prerequisite is the user's kept `preferences.toml` (the repo
+/// location + password) — everything else lives in the repo.
+async fn restore_all(at: Option<String>) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let settings = config.backup.clone().ok_or_else(|| {
+        anyhow!(
+            "no backup repository configured. Put your saved `preferences.toml` at {} \
+             (it carries the repo location + password), then re-run `ryra backup restore`.",
+            paths.config_file.display()
+        )
+    })?;
+
+    let repo = settings.backend.restic_repo();
+    let env: std::collections::BTreeMap<String, String> = settings
+        .backend
+        .env()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    let snapshot = at.unwrap_or_else(|| "latest".to_string());
+
+    let mut services = list_repo_services(&repo, &settings.password, &env)?;
+    if services.is_empty() {
+        bail!("no service snapshots found in {repo}");
+    }
+    services.sort_by_key(|s| (restore_priority(s), s.clone()));
+
+    println!(
+        "{} {}",
+        style("disaster recovery — restoring:").cyan().bold(),
+        services.join(", ")
+    );
+
+    // 1. Lay every folder back (whole-folder snapshots: config + data).
+    for svc in &services {
+        let plan = BackupRestorePlan {
+            service_name: svc.clone(),
+            service_home: ryra_core::service_home(svc)?,
+            repo: repo.clone(),
+            password: settings.password.clone(),
+            env: env.clone(),
+            snapshot: snapshot.clone(),
+            pre_restore_hook: None,
+            post_restore_hook: None,
+        };
+        println!("\n{} {svc}", style("restoring folder:").cyan());
+        restic_restore(&plan)?;
+    }
+
+    // 2. Re-link quadlets for all of them, then reload systemd once.
+    let quadlet_dir = ryra_core::quadlet_dir()?;
+    std::fs::create_dir_all(&quadlet_dir)
+        .with_context(|| format!("creating {}", quadlet_dir.display()))?;
+    for svc in &services {
+        link_quadlets(&ryra_core::service_home(svc)?, &quadlet_dir)?;
+    }
+    run_systemctl(&["daemon-reload"])?;
+
+    // 3. Start each service (infra first); run its restore-post hook
+    //    against the now-running stack. Dump services import their SQL
+    //    here; cold-stop services just re-sequence their startup.
+    for svc in &services {
+        let home = ryra_core::service_home(svc)?;
+        println!("\n{} {svc}", style("starting:").cyan());
+        run_systemctl(&["start", &format!("{svc}.service")])?;
+        let hook = home.join("configs").join("scripts").join("restore-post.sh");
+        if hook.exists() {
+            run_hook("post_restore", svc, &hook, &home)?;
+        }
+    }
+
+    println!(
+        "\n{} {} service(s) restored and started.",
+        style("done:").green().bold(),
+        services.len()
     );
     Ok(())
 }

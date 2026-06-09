@@ -17,13 +17,13 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use crate::config::ConfigPaths;
 use crate::config::schema::{BackupBackend, Config};
-use crate::data::classify::classify_home_dir;
 use crate::error::{Error, Result};
 use crate::metadata::{Metadata, load_metadata};
 use crate::paths::service_home;
 use crate::registry;
-use crate::registry::service_def::{BackupConfig, ServiceDef};
+use crate::registry::service_def::ServiceDef;
 
 const SERVICE_TOML_FILENAME: &str = "service.toml";
 
@@ -95,7 +95,16 @@ pub fn plan_backup_run(
     }
 
     let home = service_home(service_name)?;
-    let (paths, excludes) = resolve_paths(&svc.def, &home)?;
+    let (mut paths, excludes) = resolve_paths(&svc.def, &home)?;
+
+    // Every snapshot also carries the global `preferences.toml` (repo
+    // creds, SMTP, auth, generated secrets). It's tiny and restic dedups
+    // it across services, so the cost is ~nothing — and it means any
+    // single service snapshot is enough to restore the global config.
+    let prefs = ConfigPaths::resolve()?.config_file;
+    if prefs.exists() {
+        paths.push(prefs);
+    }
 
     let manifest_sha = manifest_sha256(&svc.service_dir);
     let mut tags = vec![format!("service:{service_name}")];
@@ -210,6 +219,7 @@ fn load_install_metadata(service_name: &str) -> Result<Metadata> {
     load_metadata(service_name)?.ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))
 }
 
+
 /// Resolve the set of absolute paths to feed restic, plus the list of
 /// `--exclude` patterns.
 ///
@@ -225,34 +235,68 @@ fn resolve_paths(def: &ServiceDef, home: &Path) -> Result<(Vec<PathBuf>, Vec<Str
     let backup = def.backup.as_ref();
     let excludes: Vec<String> = backup.map(|b| b.exclude.clone()).unwrap_or_default();
 
+    // Whole-folder backup: capture the entire service home in one path.
+    // This carries config (`.env`, `metadata.toml`, quadlets, rendered
+    // configs) alongside data, so a restore reconstructs the install
+    // without re-running `ryra add` — that's the difference between
+    // "restore and go" and a hand rebuild.
+    //
+    // Database consistency is the hooks' job, not the path list's:
+    //  - dump services (`backup-pre.sh` → mariadb-dump/pg_dump into
+    //    `.backup/`) list their *live* DB dir in `[backup].exclude` so
+    //    the consistent dump is authoritative, not the changing files;
+    //  - cold-stop services stop the DB before the snapshot, so its dir
+    //    is already consistent and is captured as part of the folder.
+    //
+    // `exclude` also drops regenerable caches. An explicit
+    // `[backup].paths` still narrows the capture for the rare service
+    // that needs it, but the default — and the recommendation — is the
+    // whole folder.
     if let Some(b) = backup
         && !b.paths.is_empty()
     {
-        let abs: Vec<PathBuf> = b.paths.iter().map(|p| home.join(p)).collect();
+        // A curated `paths` list keeps regenerable junk (thumbnails,
+        // transcodes) out of the snapshot — honour it for *data*, but
+        // always add the config artifacts so a restore can still
+        // reconstruct the install without `ryra add`.
+        let mut abs: Vec<PathBuf> = b.paths.iter().map(|p| home.join(p)).collect();
+        abs.extend(config_artifacts(home));
+        abs.sort();
+        abs.dedup();
         return Ok((abs, excludes));
     }
 
-    // Default: classifier-derived data paths.
-    let (data, _ephemeral) = classify_home_dir(home)?;
-    let mut paths: Vec<PathBuf> = data;
-
-    // If a hook is declared, it writes to .backup/ — include it if
-    // present at backup time. We add it conditionally rather than
-    // unconditionally so a service that never created the dir doesn't
-    // make restic complain about a missing path.
-    if backup.is_some_and(has_any_backup_hook) {
-        let dump_dir = home.join(".backup");
-        if dump_dir.exists() && !paths.iter().any(|p| p == &dump_dir) {
-            paths.push(dump_dir);
-        }
-    }
-
-    paths.sort();
-    Ok((paths, excludes))
+    Ok((vec![home.to_path_buf()], excludes))
 }
 
-fn has_any_backup_hook(b: &BackupConfig) -> bool {
-    b.pre_backup.is_some() || b.post_backup.is_some()
+/// The config artifacts that must travel with every backup so a restore
+/// reconstructs the install without re-running `ryra add`: the generated
+/// `.env`, `metadata.toml`, the render manifest, the rendered `configs/`
+/// tree, and the quadlet unit files. Only existing paths are returned so
+/// the list feeds straight to restic. (Services with no explicit
+/// `paths` capture the whole folder, which already covers all of these.)
+fn config_artifacts(home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for f in [".env", "metadata.toml", "service.manifest"] {
+        let p = home.join(f);
+        if p.exists() {
+            out.push(p);
+        }
+    }
+    let configs = home.join("configs");
+    if configs.is_dir() {
+        out.push(configs);
+    }
+    if let Ok(entries) = std::fs::read_dir(home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let n = name.to_string_lossy();
+            if n.ends_with(".container") || n.ends_with(".network") || n.ends_with(".volume") {
+                out.push(entry.path());
+            }
+        }
+    }
+    out
 }
 
 fn hook_path(home: &Path, filename: &str) -> PathBuf {
