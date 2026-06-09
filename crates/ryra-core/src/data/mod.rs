@@ -7,6 +7,17 @@ pub mod volumes;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::registry::service_def::Runtime;
+
+/// Whether `name` is an installed native service: its install record says
+/// `runtime = native` and the systemd --user unit is present. Cheap (one
+/// metadata read + one `exists`), so it's fine to call per candidate.
+fn native_installed(name: &str) -> bool {
+    matches!(crate::metadata::load_metadata(name), Ok(Some(m)) if m.runtime == Runtime::Native)
+        && crate::systemd_user_dir()
+            .map(|d| d.join(format!("{name}.service")).exists())
+            .unwrap_or(false)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceStatus {
@@ -94,10 +105,11 @@ pub fn enumerate_all() -> Result<Vec<ServiceData>> {
 
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        // Marker present → installed. Marker absent but home dir or
-        // volumes still around → orphan (typically left by a Preserve
-        // mode `ryra remove`, awaiting `--purge`).
-        let status = if managed_via_marker.contains(&name) {
+        // Installed = a podman service with our quadlet marker, OR a native
+        // service whose systemd --user unit is present. Marker/unit absent but
+        // home dir or volumes still around → orphan (typically left by a
+        // Preserve-mode `ryra remove`, awaiting `--purge`).
+        let status = if managed_via_marker.contains(&name) || native_installed(&name) {
             ServiceStatus::Installed
         } else {
             ServiceStatus::Orphan

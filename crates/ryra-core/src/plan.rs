@@ -99,6 +99,10 @@ pub enum Step {
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
     CopyFile { src: PathBuf, dst: PathBuf },
+    /// Run a build command in `dir` (e.g. `cargo build --release`) to produce
+    /// a `runtime = "native"` service's binary. Runs at apply time, before the
+    /// binary is installed (`CopyFile`) and the unit started.
+    Build { dir: PathBuf, command: String },
     /// First-time Tailscale Services setup on this tailnet: ensure ACL
     /// has `tag:ryra-host` + `tag:ryra-service` tagOwners and the
     /// services autoApprover entry, then apply `tag:ryra-host` to the
@@ -154,6 +158,7 @@ impl Step {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
+            Step::Build { dir, command } => format!("(cd {} && {command})", dir.display()),
             Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),
             Step::TailscaleEnable { svc_name, ports } => ports
                 .iter()

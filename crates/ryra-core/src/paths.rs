@@ -99,3 +99,14 @@ pub fn quadlet_dir() -> Result<PathBuf> {
     };
     Ok(base.join("containers").join("systemd"))
 }
+
+/// systemd `--user` unit directory: `~/.config/systemd/user`. Where native
+/// (non-quadlet) service units are linked so `systemctl --user` finds them —
+/// the analogue of [`quadlet_dir`] for `runtime = "native"` services.
+pub fn systemd_user_dir() -> Result<PathBuf> {
+    let base = match dirs::config_dir() {
+        Some(d) => d,
+        None => home_dir()?.join(".config"),
+    };
+    Ok(base.join("systemd").join("user"))
+}

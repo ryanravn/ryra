@@ -240,9 +240,32 @@ async fn execute(step: &Step) -> Result<()> {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create parent dir {}", parent.display()))?;
             }
-            std::fs::copy(src, dst).with_context(|| {
-                format!("failed to copy {} -> {}", src.display(), dst.display())
+            // Copy to a temp sibling, then atomically rename over `dst`. Rename
+            // succeeds even when `dst` is a *running* binary (a direct overwrite
+            // fails with ETXTBSY) — the live process keeps the old inode while
+            // new starts pick up the new one. Also makes every copy atomic, so
+            // a crash mid-copy can't leave a half-written file.
+            let tmp = dst.with_extension("ryra-tmp");
+            std::fs::copy(src, &tmp).with_context(|| {
+                format!("failed to copy {} -> {}", src.display(), tmp.display())
             })?;
+            std::fs::rename(&tmp, dst).with_context(|| {
+                format!("failed to install {} -> {}", tmp.display(), dst.display())
+            })?;
+            Ok(())
+        }
+        Step::Build { dir, command } => {
+            println!("  building: {command}");
+            // Inherit stdio so the user sees compiler progress/errors live.
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(dir)
+                .status()
+                .with_context(|| format!("failed to launch build command in {}", dir.display()))?;
+            if !status.success() {
+                anyhow::bail!("build command failed in {}: {command}", dir.display());
+            }
             Ok(())
         }
         Step::TailscaleSetup => tailscale_services::ensure_setup(),

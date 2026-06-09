@@ -1089,6 +1089,10 @@ fn clone_step(step: &Step) -> Step {
             src: src.clone(),
             dst: dst.clone(),
         },
+        Step::Build { dir, command } => Step::Build {
+            dir: dir.clone(),
+            command: command.clone(),
+        },
         Step::TailscaleSetup => Step::TailscaleSetup,
         Step::TailscaleEnable { svc_name, ports } => Step::TailscaleEnable {
             svc_name: svc_name.clone(),

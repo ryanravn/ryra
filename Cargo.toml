@@ -1,5 +1,10 @@
 [workspace]
 members = ["crates/ryra-core", "crates/ryra", "crates/ryra-vm", "crates/ryra-test"]
+# The registry is a separate repo (submodule) of service definitions, some of
+# which are standalone Rust crates ryra builds in place. Keep the whole registry
+# out of ryra's own cargo workspace so those build independently, exactly as a
+# user's service would when its registry is cloned on its own.
+exclude = ["registry"]
 resolver = "3"
 default-members = ["crates/ryra"]
 

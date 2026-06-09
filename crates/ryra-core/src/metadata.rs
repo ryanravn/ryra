@@ -5,7 +5,7 @@
 use crate::capability::Capability;
 use crate::error::{Error, Result};
 use crate::paths::metadata_path;
-use crate::registry::service_def::AuthKind;
+use crate::registry::service_def::{AuthKind, Runtime};
 
 /// Per-install record persisted to `~/.local/share/services/<name>/metadata.toml`.
 ///
@@ -55,6 +55,13 @@ pub struct Metadata {
     /// empty list reads back as "no groups were toggled").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enabled_groups: Vec<String>,
+    /// How this service runs: a podman container (default) or a native binary
+    /// under systemd --user. Recorded at install time so post-install commands
+    /// (remove, list, status, backup) stay runtime-aware from the install
+    /// record alone, never depending on the registry (which may drift or be
+    /// gone). Absent in legacy installs reads back as `Podman`.
+    #[serde(default, skip_serializing_if = "Runtime::is_podman")]
+    pub runtime: Runtime,
 }
 
 fn is_false(b: &bool) -> bool {

@@ -36,6 +36,10 @@ pub struct ServiceDef {
     /// Carries hooks (pre/post dump) and exclude lists.
     #[serde(default)]
     pub backup: Option<BackupConfig>,
+    /// Build/run config for `runtime = "native"` services. Required when the
+    /// runtime is native, forbidden otherwise (enforced in `validate()`).
+    #[serde(default)]
+    pub build: Option<BuildConfig>,
 }
 
 /// Capability declarations on a service.
@@ -89,6 +93,10 @@ pub struct ServiceMeta {
     /// Whether this service requires HTTPS to function.
     #[serde(default)]
     pub https: HttpsRequirement,
+    /// How this service runs: a podman container (default) or a native binary
+    /// under systemd --user.
+    #[serde(default)]
+    pub runtime: Runtime,
 }
 
 /// What role this service plays in the system.
@@ -98,6 +106,43 @@ pub enum ServiceKind {
     #[default]
     Application,
     Infrastructure,
+}
+
+/// How a service is realized on the host.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Runtime {
+    /// A rootless podman container via a quadlet (`Image=`). The default, and
+    /// what every catalog service uses.
+    #[default]
+    Podman,
+    /// A binary run directly under `systemd --user`, no container. Built from
+    /// source in the service folder when `[build].command` is set, or a
+    /// prebuilt binary shipped in the folder. Gets the same port/data/env
+    /// contract as a container service.
+    Native,
+}
+
+impl Runtime {
+    /// Whether this is the default podman runtime. Used as a serde
+    /// `skip_serializing_if` so podman installs don't carry a redundant
+    /// `runtime = "podman"` in their metadata.
+    pub fn is_podman(&self) -> bool {
+        matches!(self, Runtime::Podman)
+    }
+}
+
+/// Build + run configuration for a `runtime = "native"` service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildConfig {
+    /// Command run in the service folder to produce the binary (e.g.
+    /// `cargo build --release`). Omit when `bin` is a prebuilt binary already
+    /// present in the folder.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Path, relative to the service folder, to the binary ryra installs and
+    /// runs as `ExecStart`. For a release cargo build, `target/release/<name>`.
+    pub bin: String,
 }
 
 /// CPU architecture for container images.
@@ -603,6 +648,33 @@ impl ServiceDef {
                     errors.push(format!(
                         "backup path {p:?} must be a relative path within the service home"
                     ));
+                }
+            }
+        }
+
+        // --- Runtime / build consistency ---
+        // Make "native without a build target" and "podman with a build
+        // section" unrepresentable past load: a native service needs to know
+        // which binary to run; a podman service has no business declaring one.
+        match self.service.runtime {
+            Runtime::Native => match &self.build {
+                None => errors.push(
+                    "runtime = \"native\" requires a [build] section with a `bin`".to_string(),
+                ),
+                Some(b) if b.bin.trim().is_empty() => {
+                    errors.push("[build].bin must not be empty".to_string())
+                }
+                Some(b) if b.bin.starts_with('/') || b.bin.contains("..") => errors.push(format!(
+                    "[build].bin {:?} must be a relative path within the service folder",
+                    b.bin
+                )),
+                Some(_) => {}
+            },
+            Runtime::Podman => {
+                if self.build.is_some() {
+                    errors.push(
+                        "[build] is only valid for runtime = \"native\" services".to_string(),
+                    );
                 }
             }
         }

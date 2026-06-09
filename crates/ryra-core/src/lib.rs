@@ -39,7 +39,7 @@ pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
 pub use paths::{
     CONFIG_DIR_ENV, DATA_DIR_ENV, DEFAULT_REGISTRY_URL, REGISTRY_DEFAULT, REGISTRY_DIR_ENV,
-    metadata_path, quadlet_dir, service_data_root, service_home,
+    metadata_path, quadlet_dir, service_data_root, service_home, systemd_user_dir,
 };
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, TailscalePort, TrackedEnv, Warning};
 pub use upgrade::{
@@ -579,7 +579,30 @@ pub fn add_service(
         backup_enabled: enable_backup,
         smtp_enabled: enable_smtp,
         enabled_groups: enabled_groups.iter().cloned().collect(),
+        runtime: reg_service.def.service.runtime.clone(),
     };
+
+    // Native services have no quadlet bundle / image: build the binary, install
+    // it, write a plain systemd --user unit, and start it. Returns here so the
+    // entire podman path below stays untouched. Reuses everything already
+    // computed: home_dir, the generated .env (`output`), ports, and metadata.
+    if reg_service.def.service.runtime == registry::service_def::Runtime::Native {
+        let tracked_envs = collect_static_envs(&reg_service.def, &output.ctx, enabled_groups)?;
+        let allocated_ports = resolved_ports.clone();
+        let generated_secrets = collect_generated_secrets(&reg_service.def, env_overrides);
+        return build_native_add(NativeAddParams {
+            service_name,
+            reg_service: &reg_service,
+            home_dir: &home_dir,
+            output,
+            install_metadata: &install_metadata,
+            registry_name,
+            url,
+            tracked_envs,
+            allocated_ports,
+            generated_secrets,
+        });
+    }
 
     // Process quadlet bundle from registry
     let bundle =
@@ -918,6 +941,152 @@ pub fn add_service(
     })
 }
 
+/// Secret names referenced by a service's env templates (for the install
+/// summary; values live in `.env`, not state). Shared by add paths.
+fn collect_generated_secrets(
+    def: &registry::service_def::ServiceDef,
+    env_overrides: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = def
+        .env
+        .iter()
+        .filter(|e| !env_overrides.contains_key(&e.name))
+        .flat_map(|e| generate::extract_secret_refs(&e.value))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Inputs for [`build_native_add`] — grouped to keep the signature sane.
+struct NativeAddParams<'a> {
+    service_name: &'a str,
+    reg_service: &'a registry::RegistryService,
+    home_dir: &'a Path,
+    output: generate::EnvOutput,
+    install_metadata: &'a Metadata,
+    registry_name: &'a str,
+    url: Option<&'a str>,
+    tracked_envs: Vec<TrackedEnv>,
+    allocated_ports: Vec<(String, u16)>,
+    generated_secrets: Vec<String>,
+}
+
+/// Plan a `runtime = "native"` install: build the binary (unless prebuilt),
+/// install it, write the service `.env`, render a plain `systemd --user` unit
+/// and link it, then start. No image, no quadlet — but the same `.env`
+/// contract (`SERVICE_PORT_HTTP`, etc.) and the same `service_home` the rest of
+/// ryra (Caddy routing, whole-folder backups) already understands.
+fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
+    let NativeAddParams {
+        service_name,
+        reg_service,
+        home_dir,
+        output,
+        install_metadata,
+        registry_name,
+        url,
+        tracked_envs,
+        allocated_ports,
+        generated_secrets,
+    } = p;
+
+    let build = reg_service.def.build.as_ref().ok_or_else(|| {
+        Error::Bundle(format!(
+            "native service '{service_name}' is missing its [build] section"
+        ))
+    })?;
+
+    // The installed binary keeps the source artifact's filename.
+    let bin_name = Path::new(&build.bin)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| Error::Bundle(format!("invalid [build].bin: {}", build.bin)))?;
+    let bin_dst = home_dir.join("bin").join(&bin_name);
+
+    let env_content = output.env_file.content.clone();
+    let mut steps = Vec::new();
+
+    // Service home + its data/ (state) and bin/ (the installed binary).
+    steps.push(Step::CreateDir(home_dir.to_path_buf()));
+    steps.push(Step::CreateDir(home_dir.join("data")));
+    steps.push(Step::CreateDir(home_dir.join("bin")));
+
+    // Compile (skipped for a prebuilt binary), then install the artifact.
+    if let Some(command) = &build.command {
+        steps.push(Step::Build {
+            dir: reg_service.service_dir.clone(),
+            command: command.clone(),
+        });
+    }
+    steps.push(Step::CopyFile {
+        src: reg_service.service_dir.join(&build.bin),
+        dst: bin_dst.clone(),
+    });
+
+    // Install record + the generated .env (carries SERVICE_PORT_HTTP).
+    steps.push(Step::WriteFile(GeneratedFile {
+        path: metadata_path(service_name)?,
+        content: toml::to_string_pretty(install_metadata)?,
+    }));
+    steps.push(Step::WriteFile(output.env_file));
+
+    // The unit: real file in the service home, symlinked into the systemd
+    // --user dir so the unit is found on daemon-reload (mirrors quadlets).
+    let unit_name = format!("{service_name}.service");
+    let unit_path = home_dir.join(&unit_name);
+    steps.push(Step::WriteFile(GeneratedFile {
+        path: unit_path.clone(),
+        content: native_unit(home_dir, &bin_dst, &reg_service.def.service.description),
+    }));
+    steps.push(Step::Symlink {
+        link: systemd_user_dir()?.join(&unit_name),
+        target: unit_path,
+    });
+
+    steps.push(Step::DaemonReload);
+    steps.push(Step::StartService {
+        unit: service_name.to_string(),
+    });
+
+    Ok(AddResult {
+        steps,
+        warnings: Vec::new(),
+        repo_url: registry_name.to_string(),
+        allocated_ports,
+        generated_secrets,
+        env_content,
+        url: url.map(|u| u.to_string()),
+        tracked_envs,
+    })
+}
+
+/// Render a plain `systemd --user` unit for a native service. `EnvironmentFile`
+/// supplies the service `.env` (so `SERVICE_PORT_HTTP` and friends are present);
+/// `SERVICE_HOME` points the process at its data dir, matching the contract a
+/// container service gets via the quadlet.
+fn native_unit(home_dir: &Path, bin: &Path, description: &str) -> String {
+    let home = home_dir.display();
+    format!(
+        "[Unit]\n\
+         Description={description}\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         WorkingDirectory={home}\n\
+         EnvironmentFile={home}/.env\n\
+         Environment=SERVICE_HOME={home}\n\
+         ExecStart={bin}\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         \n\
+         [Install]\n\
+         WantedBy=default.target\n",
+        bin = bin.display(),
+    )
+}
+
 /// Check if a quadlet filename belongs to a service.
 ///
 /// Matches `{service_name}.container`, `{service_name}-db.volume`, etc.
@@ -967,6 +1136,17 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let installed_owned = build_installed_from_metadata(service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
     let installed = &installed_owned;
+
+    // Native services have no quadlets / podman objects: tear down the
+    // systemd --user unit and (on purge) the home dir. Runtime comes from the
+    // install record, so this works without the registry. Mirrors the native
+    // add path's early return.
+    if let Ok(Some(meta)) = metadata::load_metadata(service_name)
+        && meta.runtime == registry::service_def::Runtime::Native
+    {
+        let url = installed.exposure.url().map(|s| s.to_string());
+        return remove_native_service(service_name, mode, url);
+    }
 
     // Stop all units belonging to this service (main + sidecars).
     // Quadlet files named {service_name}.ext or {service_name}-sidecar.ext.
@@ -1136,6 +1316,47 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     })
 }
 
+/// Tear down a `runtime = "native"` install: stop its `systemd --user` unit,
+/// drop the unit symlink, reload, and remove either the whole home (purge) or
+/// just the rebuildable/ephemeral bits (preserve keeps `data/` + the install
+/// record). The dual of [`build_native_add`].
+fn remove_native_service(
+    service_name: &str,
+    mode: RemoveMode,
+    url: Option<String>,
+) -> Result<RemoveResult> {
+    let home = service_home(service_name)?;
+    let unit_name = format!("{service_name}.service");
+    let mut steps = vec![
+        Step::StopService {
+            unit: service_name.to_string(),
+        },
+        Step::RemoveFile(systemd_user_dir()?.join(&unit_name)),
+        Step::DaemonReload,
+    ];
+
+    match mode {
+        RemoveMode::Purge => steps.push(Step::RemoveDir(home)),
+        RemoveMode::Preserve => {
+            // Keep data/ and metadata.toml; drop the rebuildable binary, the
+            // generated .env, and the unit file (all re-created on re-add).
+            for child in ["bin", ".env", unit_name.as_str()] {
+                let p = home.join(child);
+                match std::fs::metadata(&p) {
+                    Ok(m) if m.is_dir() => steps.push(Step::RemoveDir(p)),
+                    _ => steps.push(Step::RemoveFile(p)),
+                }
+            }
+        }
+    }
+
+    Ok(RemoveResult {
+        steps,
+        service_name: service_name.to_string(),
+        url,
+    })
+}
+
 /// A lifecycle transition applied to an installed service's unit family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifecycle {
@@ -1155,6 +1376,19 @@ pub fn lifecycle_steps(service_name: &str, action: Lifecycle) -> Result<Vec<Step
     // Same validation + error surface as `remove_service`.
     build_installed_from_metadata(service_name)
         .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    // Native services are a single systemd --user unit named after the service
+    // (no sidecars / quadlets).
+    if matches!(
+        metadata::load_metadata(service_name),
+        Ok(Some(m)) if m.runtime == registry::service_def::Runtime::Native
+    ) {
+        let unit = service_name.to_string();
+        return Ok(vec![match action {
+            Lifecycle::Start => Step::StartService { unit },
+            Lifecycle::Stop => Step::StopService { unit },
+        }]);
+    }
 
     let mut units = service_container_units(service_name)?;
     match action {
@@ -1530,6 +1764,31 @@ pub fn reset() -> Result<ResetResult> {
         }
     }
 
+    // 1b. Native services keep their unit in the systemd --user dir, not the
+    // quadlet dir, so the scan above misses them. Sweep ryra's native installs:
+    // each home dir whose install record says `runtime = native` gets its unit
+    // stopped and its `systemd/user` symlink removed (before the reload below
+    // unloads it, and before step 4 wipes the data root).
+    let user_unit_dir = systemd_user_dir()?;
+    if let Ok(root) = service_data_root()
+        && let Ok(entries) = std::fs::read_dir(&root)
+    {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if matches!(
+                metadata::load_metadata(&name),
+                Ok(Some(m)) if m.runtime == registry::service_def::Runtime::Native
+            ) {
+                steps.push(Step::StopService { unit: name.clone() });
+                steps.push(Step::RemoveFile(
+                    user_unit_dir.join(format!("{name}.service")),
+                ));
+            }
+        }
+    }
+
     // 2. Reload user systemd after removing quadlets
     steps.push(Step::DaemonReload);
 
@@ -1614,13 +1873,20 @@ pub fn status() -> config::status::RyraStatus {
 /// instead of failing with "service is not installed". Same source of
 /// truth as [`list_installed`].
 pub fn is_service_installed(name: &str) -> bool {
-    let has_quadlet = scan_managed_services()
-        .map(|names| names.iter().any(|n| n == name))
-        .unwrap_or(false);
-    if !has_quadlet {
+    // The install record says whether (and how) a service is installed. Native
+    // services have no quadlet — their presence is the systemd --user unit;
+    // podman services are the marker'd quadlet. No metadata → not installed.
+    let Ok(Some(meta)) = metadata::load_metadata(name) else {
         return false;
+    };
+    match meta.runtime {
+        registry::service_def::Runtime::Native => systemd_user_dir()
+            .map(|d| d.join(format!("{name}.service")).exists())
+            .unwrap_or(false),
+        registry::service_def::Runtime::Podman => scan_managed_services()
+            .map(|names| names.iter().any(|n| n == name))
+            .unwrap_or(false),
     }
-    metadata_path(name).map(|p| p.exists()).unwrap_or(false)
 }
 
 /// Scan the user's quadlet directory for ryra-managed services. A
@@ -1730,7 +1996,25 @@ fn build_installed_from_metadata(service_name: &str) -> Option<InstalledService>
 /// scan can't see (e.g. partially-rolled-out installs from older
 /// ryra versions before metadata headers landed).
 pub fn list_installed() -> Result<Vec<InstalledService>> {
-    let names = scan_managed_services().unwrap_or_default();
+    let mut names: std::collections::BTreeSet<String> = scan_managed_services()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    // Native services carry no quadlet marker. Pick them up from the data root:
+    // any home dir that `is_service_installed` confirms (runtime-aware) and that
+    // the quadlet scan didn't already catch.
+    if let Ok(root) = service_data_root()
+        && let Ok(entries) = std::fs::read_dir(&root)
+    {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && !names.contains(name)
+                && is_service_installed(name)
+            {
+                names.insert(name.to_string());
+            }
+        }
+    }
     let out: Vec<InstalledService> = names
         .iter()
         .filter_map(|n| build_installed_from_metadata(n))
