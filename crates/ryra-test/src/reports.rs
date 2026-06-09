@@ -4,10 +4,13 @@ use anyhow::{Context, Result};
 
 use crate::scenario::{Outcome, ScenarioResult};
 
-/// Root directory where test reports for the previous run live.
+/// Root directory where test reports for the previous run live: under the
+/// host-test sandbox (`~/.local/share/services-test/reports/`), alongside the
+/// service data and ledger, so the whole test footprint is one folder.
 pub fn reports_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("$HOME is not set")?;
-    Ok(PathBuf::from(home).join("services/test-reports"))
+    crate::test_sandbox_root()
+        .map(|root| root.join("reports"))
+        .context("cannot resolve test sandbox root ($HOME unset)")
 }
 
 /// Wipe the reports directory so only results from this run remain.
@@ -34,7 +37,14 @@ pub fn save_run_results(results: &[ScenarioResult]) -> Result<()> {
         .as_secs();
 
     let passed = results.iter().filter(|r| r.passed()).count();
-    let failed = results.len() - passed;
+    let failed = results
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Skipped))
+        .count();
 
     // Run-level summary.json - simple hand-written JSON (no serde_json dep).
     let mut json = String::new();
@@ -42,6 +52,7 @@ pub fn save_run_results(results: &[ScenarioResult]) -> Result<()> {
     json.push_str(&format!("  \"timestamp\": {timestamp},\n"));
     json.push_str(&format!("  \"passed\": {passed},\n"));
     json.push_str(&format!("  \"failed\": {failed},\n"));
+    json.push_str(&format!("  \"skipped\": {skipped},\n"));
     json.push_str(&format!("  \"total\": {},\n", results.len()));
     json.push_str("  \"tests\": [\n");
     for (i, r) in results.iter().enumerate() {
@@ -71,8 +82,21 @@ pub fn save_run_results(results: &[ScenarioResult]) -> Result<()> {
     Ok(())
 }
 
+/// Format a duration as a compact human string, e.g. `1091s` → `18m 11s`,
+/// `45s` → `45s`, `3725s` → `1h 2m 5s`.
+pub fn humanize_secs(total: u64) -> String {
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 /// Print the end-of-run results summary and point the user at file locations.
-pub fn print_results_paths(results: &[ScenarioResult]) {
+pub fn print_results_paths(results: &[ScenarioResult], wall_clock: std::time::Duration) {
     let dir = match reports_dir() {
         Ok(d) => d,
         Err(_) => return,
@@ -96,17 +120,21 @@ pub fn print_results_paths(results: &[ScenarioResult]) {
         .count();
     let total = results.len();
 
-    println!("\nResults: {passed}/{total} passed ({failed} failed)");
+    let elapsed = humanize_secs(wall_clock.as_secs());
+    println!("\nResults: {passed}/{total} passed ({failed} failed) in {elapsed}");
     println!("  dir:     {display}/");
     println!("  summary: cat {display}/summary.json");
 
     if failed > 0 {
-        println!("\n  Failed:");
+        println!("\n  Failed ({failed}):");
         for r in results
             .iter()
             .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
         {
-            println!("    - {}", r.name);
+            println!("    ✗ {} ({:.1}s)", r.name, r.duration.as_secs_f64());
+            if let Some(why) = r.failure_summary() {
+                println!("        {why}");
+            }
         }
     }
 

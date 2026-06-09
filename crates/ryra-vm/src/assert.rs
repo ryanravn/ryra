@@ -85,8 +85,14 @@ impl Machine {
         Ok(())
     }
 
-    pub async fn wait_for_service(&self, unit: &str, timeout: std::time::Duration) -> Result<()> {
-        let start = std::time::Instant::now();
+    pub async fn wait_for_service(
+        &self,
+        unit: &str,
+        timeout: std::time::Duration,
+        prefix: &str,
+    ) -> Result<()> {
+        let mut progress = crate::progress::WaitProgress::new(unit, "systemctl is-active", timeout)
+            .with_prefix(prefix);
         loop {
             let cmd = format!(
                 "s=$(systemctl --user is-active {unit} 2>/dev/null); \
@@ -111,13 +117,14 @@ impl Machine {
                 }
             }
 
-            if start.elapsed() > timeout {
+            if progress.timed_out() {
                 bail!(
                     "timed out waiting for {unit} to become active after {}s",
                     timeout.as_secs()
                 );
             }
 
+            progress.tick();
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }

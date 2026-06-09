@@ -38,8 +38,8 @@ pub use generate::GeneratedFile;
 pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
 pub use paths::{
-    DEFAULT_REGISTRY_URL, REGISTRY_DEFAULT, REGISTRY_DIR_ENV, metadata_path, quadlet_dir,
-    service_data_root, service_home,
+    CONFIG_DIR_ENV, DATA_DIR_ENV, DEFAULT_REGISTRY_URL, REGISTRY_DEFAULT, REGISTRY_DIR_ENV,
+    metadata_path, quadlet_dir, service_data_root, service_home,
 };
 pub use plan::{AddResult, RemoveResult, ResetResult, Step, TailscalePort, TrackedEnv, Warning};
 pub use upgrade::{
@@ -973,6 +973,7 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
     let quadlet_path = quadlet_dir()?;
     let mut steps = Vec::new();
     let mut volume_names = Vec::new();
+    let mut networks: Vec<String> = Vec::new();
     let mut has_named_volumes = false;
     // Quadlet directory scan is authoritative — captures every
     // ryra-managed service so the "is foo-bar a sibling service?"
@@ -1010,6 +1011,15 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
             if name.ends_with(".container") {
                 let unit = name.trim_end_matches(".container").to_string();
                 steps.push(Step::StopService { unit });
+            }
+            if name.ends_with(".network") {
+                // Stop the generated `<net>-network` oneshot, and remember the
+                // network so it can be dropped once every container is down.
+                let net = name.trim_end_matches(".network").to_string();
+                steps.push(Step::StopService {
+                    unit: format!("{net}-network"),
+                });
+                networks.push(net);
             }
             if name.ends_with(".volume") {
                 has_named_volumes = true;
@@ -1067,6 +1077,17 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
 
     // Reload systemd after removing quadlet files
     steps.push(Step::DaemonReload);
+
+    // Drop the service's podman networks now that all its containers are
+    // stopped and the network units unloaded. `ryra remove` previously left
+    // these behind — it deleted the `.network` file but never the network
+    // itself — and the leak broke the next install: the regenerated network
+    // unit's `podman network create` hit the still-present network and failed.
+    // Best-effort — a network still used by another service is correctly
+    // skipped (the rm fails and is ignored by the executor).
+    for net in networks {
+        steps.push(Step::RemoveNetwork { name: net });
+    }
 
     match mode {
         RemoveMode::Purge => {
@@ -1382,6 +1403,7 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
     // symlinks, so a re-`ryra add` after purge starts clean instead
     // of seeing a leftover `.volume` and re-prompting about orphan data.
     let mut had_quadlet = false;
+    let mut networks: Vec<String> = Vec::new();
     if let Ok(qdir) = quadlet_dir()
         && qdir.is_dir()
         && let Ok(entries) = std::fs::read_dir(&qdir)
@@ -1401,8 +1423,11 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
                 let unit = name.trim_end_matches(".container").to_string();
                 steps.push(Step::StopService { unit });
             } else if name.ends_with(".network") {
-                let unit = format!("{}-network", name.trim_end_matches(".network"));
-                steps.push(Step::StopService { unit });
+                let net = name.trim_end_matches(".network").to_string();
+                steps.push(Step::StopService {
+                    unit: format!("{net}-network"),
+                });
+                networks.push(net);
             } else if name.ends_with(".volume") {
                 let unit = format!("{}-volume", name.trim_end_matches(".volume"));
                 steps.push(Step::StopService { unit });
@@ -1413,6 +1438,10 @@ pub fn orphan_purge_steps(svc: &data::ServiceData) -> Vec<Step> {
     }
     if had_quadlet {
         steps.push(Step::DaemonReload);
+    }
+    // Drop the podman networks once the containers are down (see remove_service).
+    for net in networks {
+        steps.push(Step::RemoveNetwork { name: net });
     }
 
     for path in &svc.data_paths {
@@ -1458,6 +1487,7 @@ pub fn reset() -> Result<ResetResult> {
     // 1. Stop and remove only ryra-managed quadlet files (scoped by installed service names)
     let quadlet_path = quadlet_dir()?;
     let all_names: Vec<&str> = managed_names.iter().map(|s| s.as_str()).collect();
+    let mut networks: Vec<String> = Vec::new();
     if quadlet_path.is_dir()
         && let Ok(entries) = std::fs::read_dir(&quadlet_path)
     {
@@ -1478,8 +1508,11 @@ pub fn reset() -> Result<ResetResult> {
                 steps.push(Step::StopService { unit });
             }
             if name.ends_with(".network") {
-                let unit = format!("{}-network", name.trim_end_matches(".network"));
-                steps.push(Step::StopService { unit });
+                let net = name.trim_end_matches(".network").to_string();
+                steps.push(Step::StopService {
+                    unit: format!("{net}-network"),
+                });
+                networks.push(net);
             }
             if name.ends_with(".volume") {
                 let vol = name.trim_end_matches(".volume").to_string();
@@ -1499,6 +1532,12 @@ pub fn reset() -> Result<ResetResult> {
 
     // 2. Reload user systemd after removing quadlets
     steps.push(Step::DaemonReload);
+
+    // 2b. Drop the podman networks now that every container is stopped and the
+    // network units unloaded (see remove_service for why the leak matters).
+    for net in networks {
+        steps.push(Step::RemoveNetwork { name: net });
+    }
 
     // 3. Remove podman volumes for every ryra-visible service — installed
     // and orphaned. `enumerate_all` walks both the quadlet markers and the

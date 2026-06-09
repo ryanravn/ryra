@@ -18,9 +18,14 @@ impl ConfigPaths {
         let home = dirs::home_dir()
             .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))
             .ok_or(Error::HomeDirNotFound)?;
-        let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| home.join(".config"))
-            .join("services");
+        // RYRA_CONFIG_DIR overrides where preferences.toml lives (used by the
+        // test harness to isolate host runs from the user's real credentials).
+        let config_dir = match std::env::var_os(crate::paths::CONFIG_DIR_ENV) {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => dirs::config_dir()
+                .unwrap_or_else(|| home.join(".config"))
+                .join("services"),
+        };
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| home.join(".cache"))
             .join("services");

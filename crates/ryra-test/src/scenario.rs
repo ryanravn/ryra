@@ -73,6 +73,32 @@ impl ScenarioResult {
     pub fn passed(&self) -> bool {
         self.outcome.is_pass()
     }
+
+    /// A one-line summary of *why* this test failed: the failing step's
+    /// description plus the first line of its error. Falls back to the
+    /// top-level message for setup failures that produced no events. Returns
+    /// `None` when the test didn't fail.
+    pub fn failure_summary(&self) -> Option<String> {
+        let Outcome::Failed(top) = &self.outcome else {
+            return None;
+        };
+        let one_line = |s: &str| -> String {
+            let first = s.lines().next().unwrap_or("").trim();
+            if first.chars().count() > 100 {
+                format!("{}…", first.chars().take(99).collect::<String>())
+            } else {
+                first.to_string()
+            }
+        };
+        // Prefer the specific failing step/assert over the generic top-level
+        // message, so the reader sees which step broke and how.
+        for ev in &self.events {
+            if let Outcome::Failed(msg) = &ev.outcome {
+                return Some(format!("{}: {}", ev.description, one_line(msg)));
+            }
+        }
+        Some(one_line(top))
+    }
 }
 
 impl fmt::Display for ScenarioResult {

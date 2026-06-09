@@ -2,6 +2,7 @@ mod assert;
 pub mod image;
 pub mod machine;
 pub mod ports;
+pub mod progress;
 
 use std::process::Stdio;
 

@@ -263,6 +263,17 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             }
         }
 
+        // When the service-data root is overridden (RYRA_DATA_DIR — the host
+        // test sandbox), the registry templates' hardcoded
+        // `%h/.local/share/services/...` bind-mount, EnvironmentFile, and
+        // ExecStartPre/Post paths must follow the data root too. Otherwise the
+        // container would mount the *real* services dir while ryra writes the
+        // `.env`/configs into the sandbox — a split between where data is read
+        // and written. No-op for normal installs (override is None).
+        if let Some(root) = crate::paths::data_dir_override() {
+            content = content.replace("%h/.local/share/services", &root.to_string_lossy());
+        }
+
         // Real files live under service_home; the caller emits Step::Symlink
         // afterwards to expose them at the systemd-mandated quadlet path.
         quadlet_files.push(GeneratedFile {

@@ -14,18 +14,35 @@ pub trait Executor: Send + Sync {
     /// Run a command, streaming stdout/stderr to the terminal.
     async fn exec_streaming(&self, cmd: &str, prefix: &str) -> Result<ExecOutput>;
 
-    /// Wait for a systemd user service to become active.
-    async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()>;
+    /// Wait for a systemd user service to become active. `prefix` is the line
+    /// prefix for the wait's progress heartbeat, so it aligns with surrounding
+    /// test output (e.g. `"[my-test]     "`).
+    async fn wait_for_service(&self, unit: &str, timeout: Duration, prefix: &str) -> Result<()>;
 
     /// Copy a directory from the execution environment to the host.
     /// No-op for local execution (files are already on the host).
     async fn fetch_dir(&self, remote_path: &str, local_path: &Path) -> Result<()>;
+
+    /// Directory, *in this executor's environment*, where a browser step's
+    /// Playwright HTML report should be written. The runner points Playwright
+    /// here and then [`fetch_dir`]s it into the host's canonical reports dir.
+    /// For local execution the two are the same path (so the fetch is a no-op);
+    /// for a VM it's a VM-internal staging path that gets copied out.
+    fn playwright_out_dir(&self, test_name: &str) -> String;
 }
 
 /// Path inside the VM where the test runner scps the registry fixtures.
 /// Set as `RYRA_REGISTRY_DIR` so every `ryra` invocation resolves the
 /// default registry to this local copy instead of cloning from GitHub.
 pub const VM_REGISTRY_PATH: &str = "/opt/ryra-test-registry";
+
+/// `podman inspect --format` template: prints `yes` when the container
+/// declares a healthcheck, `no` otherwise. The wait loop uses this to decide
+/// whether to actively probe health (`podman healthcheck run`, which forces an
+/// immediate check rather than waiting for the scheduled interval) or fall
+/// back to unit-active. Interpolated as a value, so its Go-template `{{…}}`
+/// braces aren't reprocessed by Rust's `format!`.
+const HEALTH_DEFINED_FMT: &str = "{{if .State.Health}}yes{{else}}no{{end}}";
 
 /// Build the env-var prefix the executors prepend to every command so
 /// `ryra` resolves the default registry against the test fixtures dir
@@ -61,8 +78,8 @@ impl Executor for VmExecutor<'_> {
         self.vm.exec_streaming(&wrapped, prefix).await
     }
 
-    async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
-        self.vm.wait_for_service(unit, timeout).await
+    async fn wait_for_service(&self, unit: &str, timeout: Duration, prefix: &str) -> Result<()> {
+        self.vm.wait_for_service(unit, timeout, prefix).await
     }
 
     async fn fetch_dir(&self, remote_path: &str, local_path: &Path) -> Result<()> {
@@ -71,6 +88,12 @@ impl Executor for VmExecutor<'_> {
             tokio::fs::create_dir_all(parent).await.ok();
         }
         scp_dir_from_vm(self.vm, remote_path, local_path).await
+    }
+
+    fn playwright_out_dir(&self, test_name: &str) -> String {
+        // VM-internal staging path; the runner copies it to the host's
+        // reports dir afterwards. The VM user is always `ryra`.
+        format!("/home/ryra/.local/share/services-test/reports/{test_name}/playwright")
     }
 }
 
@@ -88,9 +111,46 @@ impl LocalExecutor {
     /// to every command, so `ryra` resolves the default registry to the
     /// local checkout under test.
     pub fn with_registry(registry_path: &Path) -> Self {
-        Self {
-            env_prefix: registry_env_prefix(&registry_path.display().to_string()),
+        let mut env_prefix = String::new();
+        // Run the *same* ryra we're part of, not whatever (possibly stale)
+        // `ryra` is on the user's PATH. `ryra test` is a subcommand of the ryra
+        // binary, so the running executable IS the up-to-date ryra — put its
+        // directory first on PATH so `ryra add/remove/...` in tests resolve to
+        // it. Without this, `cargo run test` would drive an old installed ryra
+        // that doesn't honour RYRA_DATA_DIR/RYRA_CONFIG_DIR and the sandbox
+        // would silently diverge from where data actually lands.
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            env_prefix.push_str(&format!("export PATH=\"{}:$PATH\"; ", dir.display()));
         }
+        env_prefix.push_str(&registry_env_prefix(&registry_path.display().to_string()));
+        Self { env_prefix }
+    }
+
+    /// Also export `RYRA_CONFIG_DIR=<path>` on every command, isolating
+    /// `preferences.toml` into a throwaway dir so host tests never read or
+    /// clobber the user's real SMTP/auth/backup credentials.
+    pub fn with_config_dir(mut self, config_dir: &Path) -> Self {
+        self.env_prefix.push_str(&format!(
+            "export {}={}; ",
+            ryra_core::CONFIG_DIR_ENV,
+            config_dir.display()
+        ));
+        self
+    }
+
+    /// Also export `RYRA_DATA_DIR=<path>` on every command, so test service
+    /// deployments (data, `.env`, configs, and the quadlet files ryra writes
+    /// into `service_home`) land in the sandbox instead of the user's real
+    /// `~/.local/share/services/`.
+    pub fn with_data_dir(mut self, data_dir: &Path) -> Self {
+        self.env_prefix.push_str(&format!(
+            "export {}={}; ",
+            ryra_core::DATA_DIR_ENV,
+            data_dir.display()
+        ));
+        self
     }
 }
 
@@ -196,29 +256,56 @@ impl Executor for LocalExecutor {
         })
     }
 
-    async fn wait_for_service(&self, unit: &str, timeout: Duration) -> Result<()> {
-        let start = std::time::Instant::now();
+    async fn wait_for_service(&self, unit: &str, timeout: Duration, prefix: &str) -> Result<()> {
+        // The container is named after the unit (ContainerName=<svc>).
+        let container = unit.trim_end_matches(".service");
+        let mut progress =
+            ryra_vm::progress::WaitProgress::new(unit, "systemctl + healthcheck", timeout)
+                .with_prefix(prefix);
         loop {
+            // One round-trip: unit active/failed + an *active* health probe.
+            // When the container declares a healthcheck we run it immediately
+            // (`podman healthcheck run`) instead of reading the passively-
+            // scheduled status — otherwise we'd wait up to the health interval
+            // (often 30s) for the first check. No healthcheck → "none".
             let cmd = format!(
                 "a=$(systemctl --user is-active {unit} 2>/dev/null || true); \
                  f=$(systemctl --user is-failed {unit} 2>/dev/null || true); \
-                 echo \"$a|$f\""
+                 if [ \"$(podman inspect --format '{HEALTH_DEFINED_FMT}' {container} 2>/dev/null)\" = yes ]; then \
+                   podman healthcheck run {container} >/dev/null 2>&1 && h=healthy || h=unhealthy; \
+                 else h=none; fi; \
+                 echo \"$a|$f|$h\""
             );
             let out = self.exec(&cmd).await?;
             let line = out.stdout.trim();
             let mut parts = line.split('|');
             let active = parts.next().unwrap_or("");
             let failed = parts.next().unwrap_or("");
+            let health = parts.next().unwrap_or("");
 
-            if active == "active" {
-                return Ok(());
-            }
             if failed == "failed" {
                 anyhow::bail!("service {unit} entered failed state");
             }
-            if start.elapsed() > timeout {
-                anyhow::bail!("service {unit} not active after {}s", timeout.as_secs());
+            if active == "active" {
+                // Health-aware readiness: when the container declares a
+                // HealthCmd, wait for `healthy` rather than just "unit
+                // started" — that's what makes the next step reliable on slow
+                // machines and catches services that start then die (the unit
+                // flips active for a beat before a fatal startup check). No
+                // healthcheck → unit-active is the best signal we have.
+                match health {
+                    "healthy" | "none" | "" => return Ok(()),
+                    // "starting" / "unhealthy" — keep polling until timeout.
+                    _ => {}
+                }
             }
+            if progress.timed_out() {
+                anyhow::bail!(
+                    "service {unit} not ready after {}s (active={active}, health={health})",
+                    timeout.as_secs()
+                );
+            }
+            progress.tick();
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
@@ -226,6 +313,14 @@ impl Executor for LocalExecutor {
     async fn fetch_dir(&self, _remote_path: &str, _local_path: &Path) -> Result<()> {
         // No-op: in local mode the "remote" path is already on the host.
         Ok(())
+    }
+
+    fn playwright_out_dir(&self, test_name: &str) -> String {
+        // Local mode: write straight to the host's canonical reports dir, so
+        // the subsequent no-op fetch finds it already in place.
+        crate::reports::reports_dir()
+            .map(|d| d.join(test_name).join("playwright").display().to_string())
+            .unwrap_or_else(|_| format!("/tmp/ryra-test-reports/{test_name}/playwright"))
     }
 }
 
@@ -261,6 +356,7 @@ mod tests {
             .wait_for_service(
                 "definitely-not-a-real-unit-xyz123.service",
                 Duration::from_secs(2),
+                "  ",
             )
             .await;
         assert!(result.is_err());

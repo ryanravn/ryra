@@ -83,6 +83,14 @@ pub enum Step {
     RemoveDir(PathBuf),
     /// Remove a podman named volume.
     RemoveVolume { name: String },
+    /// Remove a podman network. Best-effort: skipped when the network is
+    /// still in use by another service (which is the correct outcome) or
+    /// already gone. `ryra remove` emits this after stopping a service's
+    /// `<svc>-network` unit, because stopping a `RemainAfterExit` network
+    /// oneshot leaves the podman network behind — and that leak makes the
+    /// next install fail (its regenerated network unit's `podman network
+    /// create` hits the existing network).
+    RemoveNetwork { name: String },
     /// Create a directory (with parents).
     CreateDir(PathBuf),
     /// Wait for a file to appear (with timeout).
@@ -141,6 +149,7 @@ impl Step {
             Step::RemoveDir(path) => format!("rm -rf {}", path.display()),
             Step::CreateDir(path) => format!("mkdir -p {}", path.display()),
             Step::RemoveVolume { name } => format!("podman volume rm {name}"),
+            Step::RemoveNetwork { name } => format!("podman network rm {name}"),
             Step::WaitForFile { path, timeout_secs } => {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }

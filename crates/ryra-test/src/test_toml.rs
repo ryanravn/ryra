@@ -26,6 +26,14 @@ pub struct TestMeta {
     /// service requirements. Use for tests that run many services and need
     /// more headroom than the sum of individual recommendations.
     pub ram: Option<u32>,
+    /// Declares that this test performs privileged operations (shells out to
+    /// `sudo`). When true, the bare runner acquires sudo credentials once up
+    /// front so captured, non-TTY steps don't fail trying to prompt mid-run.
+    /// The runner already auto-detects the common case — writing `*.internal`
+    /// hostnames to `/etc/hosts` for OIDC/HTTPS URLs — so most tests never set
+    /// this; it's the escape hatch for any *other* sudo a test needs.
+    #[serde(default)]
+    pub requires_sudo: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +74,10 @@ pub struct TestDef {
     pub browser: bool,
     /// Per-test RAM override (MB). File-level `[test] ram` still works.
     pub ram: Option<u32>,
+    /// Per-test `requires_sudo`. File-level `[test] requires_sudo` still works;
+    /// either being true marks the test as needing elevated privileges.
+    #[serde(default)]
+    pub requires_sudo: bool,
 }
 
 fn default_timeout() -> u64 {
@@ -457,6 +469,11 @@ impl TestToml {
     /// Explicit RAM override (MB) from [test] metadata, if set.
     pub fn ram_override(&self) -> Option<u32> {
         self.test.as_ref().and_then(|t| t.ram)
+    }
+
+    /// File-level `[test] requires_sudo` flag.
+    pub fn requires_sudo(&self) -> bool {
+        self.test.as_ref().is_some_and(|t| t.requires_sudo)
     }
 
     /// The test name from [test] metadata, or the file stem as a fallback.

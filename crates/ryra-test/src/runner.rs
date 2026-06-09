@@ -7,6 +7,13 @@ use crate::registry::{DiscoveredTest, TestEntry};
 use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
 use crate::test_toml::StepDef;
 
+/// Shell expansion for the service-data root: the `RYRA_DATA_DIR` override
+/// (the host test sandbox, or a user's relocated services dir) or the default
+/// `~/.local/share/services`. The runner and registry tests resolve every
+/// service-data path through this so it works under the sandbox, in a VM
+/// (where the var is unset and it falls back), and for normal installs.
+const DATA_ROOT_SH: &str = "${RYRA_DATA_DIR:-$HOME/.local/share/services}";
+
 fn print_event_result(prefix: &str, event: &Event) {
     let elapsed = format!("{:.1}s", event.duration.as_secs_f64());
     match &event.outcome {
@@ -24,9 +31,21 @@ fn print_event_result(prefix: &str, event: &Event) {
 /// 3. If quadlets are present, copies them to systemd dir, reloads, starts them
 /// 4. Sources `.env` files
 /// 5. Runs each test command via SSH, checks exit code
-pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> ScenarioResult {
+pub async fn run_registry_test(
+    vm: &dyn Executor,
+    test: &DiscoveredTest,
+    prefixed: bool,
+) -> ScenarioResult {
     let start = Instant::now();
     let name = test.name();
+    // Line prefix: `[name] ` when output from parallel tests interleaves on one
+    // terminal, empty when a `---- START name ----` banner already scopes the
+    // block (serial bare runs). See run_lifecycle_test for the same convention.
+    let p = if prefixed {
+        format!("[{name}] ")
+    } else {
+        String::new()
+    };
     let mut events = Vec::new();
     let mut failed = false;
 
@@ -63,7 +82,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
     // Deploy each registry service
     if !failed {
         for service in services {
-            println!("[{name}]   ryra add {service}...");
+            println!("{p}  ryra add {service}...");
             let step_event = run_event(
                 vm,
                 EventKind::Step,
@@ -71,7 +90,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
                 300,
             )
             .await;
-            print_event_result(name, &step_event);
+            print_event_result(&p, &step_event);
 
             if step_event.outcome.is_fail() {
                 failed = true;
@@ -81,9 +100,9 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
             events.push(step_event);
 
             // Wait for service to be active
-            println!("[{name}]   waiting for {service} to start...");
-            let wait_event = wait_for_service(vm, service).await;
-            print_event_result(name, &wait_event);
+            println!("{p}  waiting for {service} to start...");
+            let wait_event = wait_for_service(vm, &p, service).await;
+            print_event_result(&p, &wait_event);
             if wait_event.outcome.is_fail() {
                 failed = true;
                 events.push(wait_event);
@@ -97,18 +116,17 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
     // beyond what systemd "active" indicates).
     if !failed {
         for service in services {
-            let port_cmd = format!(
-                "grep PORT $HOME/.local/share/services/{service}/.env 2>/dev/null | cut -d= -f2"
-            );
+            let port_cmd =
+                format!("grep PORT {DATA_ROOT_SH}/{service}/.env 2>/dev/null | cut -d= -f2");
             if let Ok(out) = vm.exec(&port_cmd).await {
                 for port in out.stdout.trim().lines() {
                     let port = port.trim();
                     if port.is_empty() {
                         continue;
                     }
-                    println!("[{name}]   waiting for port {port}...");
-                    let port_event = wait_for_port(vm, name, port).await;
-                    print_event_result(name, &port_event);
+                    println!("{p}  waiting for port {port}...");
+                    let port_event = wait_for_port(vm, &p, port).await;
+                    print_event_result(&p, &port_event);
                     if port_event.outcome.is_fail() {
                         failed = true;
                         events.push(port_event);
@@ -125,7 +143,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
 
     // Deploy quadlet files if present
     if !failed && !quadlets.is_empty() {
-        println!("[{name}]   deploying quadlet files...");
+        println!("{p}  deploying quadlet files...");
         let deploy_cmd = "\
             mkdir -p $HOME/.config/containers/systemd && \
             cp /opt/ryra-test-project/*.container $HOME/.config/containers/systemd/ 2>/dev/null; \
@@ -134,7 +152,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
             cp /opt/ryra-test-project/*.pod $HOME/.config/containers/systemd/ 2>/dev/null; \
             systemctl --user daemon-reload";
         let deploy_event = run_event(vm, EventKind::Step, deploy_cmd, 30).await;
-        print_event_result(name, &deploy_event);
+        print_event_result(&p, &deploy_event);
         if deploy_event.outcome.is_fail() {
             failed = true;
         }
@@ -149,10 +167,10 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
                 .collect();
 
             for svc in &quadlet_services {
-                println!("[{name}]   starting {svc}...");
+                println!("{p}  starting {svc}...");
                 let start_cmd = format!("systemctl --user start {svc}.service");
                 let start_event = run_event(vm, EventKind::Step, &start_cmd, 120).await;
-                print_event_result(name, &start_event);
+                print_event_result(&p, &start_event);
                 if start_event.outcome.is_fail() {
                     failed = true;
                     events.push(start_event);
@@ -160,9 +178,9 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
                 }
                 events.push(start_event);
 
-                println!("[{name}]   waiting for {svc}...");
-                let wait_event = wait_for_service(vm, svc).await;
-                print_event_result(name, &wait_event);
+                println!("{p}  waiting for {svc}...");
+                let wait_event = wait_for_service(vm, &p, svc).await;
+                print_event_result(&p, &wait_event);
                 if wait_event.outcome.is_fail() {
                     failed = true;
                     events.push(wait_event);
@@ -201,13 +219,13 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
                 Outcome::Skipped,
                 Duration::ZERO,
             ));
-            println!("[{name}]   skip  {}", test_entry.name);
+            println!("{p}  skip  {}", test_entry.name);
             continue;
         }
 
-        println!("[{name}]   test  {}...", test_entry.name);
+        println!("{p}  test  {}...", test_entry.name);
         let event = run_test_entry(vm, test_entry, &env_prefix).await;
-        print_event_result(name, &event);
+        print_event_result(&p, &event);
         if event.outcome.is_fail() {
             failed = true;
         }
@@ -216,7 +234,7 @@ pub async fn run_registry_test(vm: &dyn Executor, test: &DiscoveredTest) -> Scen
 
     // Dump diagnostics on failure
     if failed {
-        dump_diagnostics(vm, name, &test.services()).await;
+        dump_diagnostics(vm, &p, &test.services()).await;
     }
 
     let outcome = if failed {
@@ -307,7 +325,7 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
         DiscoveredTest::Simple { setup, .. } => {
             if setup.services.len() == 1 {
                 Ok(load_env_shell(&format!(
-                    "$HOME/.local/share/services/{}/.env",
+                    "{DATA_ROOT_SH}/{}/.env",
                     setup.services[0]
                 )))
             } else if setup.services.len() > 1 {
@@ -320,7 +338,7 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
                         "while IFS='=' read -r key val; do \
                          case \"$key\" in \"\"|\\#*) continue ;; esac; \
                          export {prefix}__$key=\"$val\"; \
-                         done < $HOME/.local/share/services/{service}/.env"
+                         done < {DATA_ROOT_SH}/{service}/.env"
                     ));
                 }
                 Ok(lines.join(" && "))
@@ -336,13 +354,17 @@ async fn build_env_prefix(_vm: &dyn Executor, test: &DiscoveredTest) -> Result<S
 }
 
 /// Wait for a service's systemd unit to become active (default 60s timeout).
-async fn wait_for_service(vm: &dyn Executor, service: &str) -> Event {
-    wait_for_service_with_timeout(vm, service, 60).await
+async fn wait_for_service(vm: &dyn Executor, prefix: &str, service: &str) -> Event {
+    wait_for_service_with_timeout(vm, prefix, service, 60).await
 }
 
 /// Wait for a service's systemd unit to become active with a custom timeout.
+/// `prefix` is the test's line prefix (`"[name] "` in parallel runs, empty when
+/// a banner already scopes the output), used to align the wait's heartbeat with
+/// surrounding lines.
 async fn wait_for_service_with_timeout(
     vm: &dyn Executor,
+    prefix: &str,
     service: &str,
     timeout_secs: u64,
 ) -> Event {
@@ -350,7 +372,9 @@ async fn wait_for_service_with_timeout(
     let timeout = Duration::from_secs(timeout_secs);
 
     let unit = format!("{service}.service");
-    let result = vm.wait_for_service(&unit, timeout).await;
+    let result = vm
+        .wait_for_service(&unit, timeout, &format!("{prefix}    "))
+        .await;
 
     let outcome = match result {
         Ok(()) => Outcome::Passed,
@@ -392,7 +416,11 @@ async fn run_browser_step(
     let browser_dir = format!("{}/tests/browser", registry_path.display());
     let browser_dir_esc = shell_escape(&browser_dir);
     let spec_esc = shell_escape(spec);
-    let test_name_esc = shell_escape(test_name);
+    // Where Playwright writes its HTML report, in the execution environment.
+    // Local = the host reports dir directly; VM = a staging path fetched out
+    // below. Either way the report ends up under services-test/reports/.
+    let out_dir = vm.playwright_out_dir(test_name);
+    let out_dir_esc = shell_escape(&out_dir);
 
     // Shell command:
     // 1. Source all service .env files so port vars (PORT_HTTP etc.) are
@@ -409,7 +437,7 @@ async fn run_browser_step(
     // Per-file safe .env load — same rationale as load_env_shell(): raw
     // `.` would choke on values with whitespace (supabase `DB_AFTER_*`, etc.)
     let env_loop = format!(
-        "for __f in $HOME/.local/share/services/*/.env; do \
+        "for __f in {DATA_ROOT_SH}/*/.env; do \
            [ -f \"$__f\" ] && {loader}; \
          done",
         loader = load_env_shell("\"$__f\"")
@@ -422,14 +450,16 @@ async fn run_browser_step(
     // `;`-separated (not `&&`) so a missing inbucket leaves INBUCKET_URL unset
     // without aborting the command. A step's own `env` (exported below)
     // overrides this.
-    let inbucket_export = "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP \
-         $HOME/.local/share/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
+    let inbucket_export = format!(
+        "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP \
+         {DATA_ROOT_SH}/inbucket/.env 2>/dev/null | cut -d= -f2); \
          [ -n \"$INBUCKET_PORT\" ] && \
-         export INBUCKET_URL=\"http://127.0.0.1:$INBUCKET_PORT\"; ";
+         export INBUCKET_URL=\"http://127.0.0.1:$INBUCKET_PORT\"; "
+    );
     let cmd = format!(
         "{env_loop} && \
          {inbucket_export}\
-         DEST=\"$HOME/.local/share/services/test-reports/{test_name_esc}/playwright\" && \
+         DEST={out_dir_esc} && \
          mkdir -p \"$DEST\" && \
          cd '{browser_dir_esc}' && \
          if [ ! -d node_modules ]; then \
@@ -455,18 +485,14 @@ async fn run_browser_step(
         Err(_) => Outcome::Failed(format!("timed out after {timeout_secs}s")),
     };
 
-    // Pull the playwright report out of the execution environment so it lives
-    // at the canonical host path regardless of VM or bare mode. No-op on bare.
-    // We always try — even on failure, because traces on failure are the
-    // most valuable ones to inspect.
-    if let Ok(home) = std::env::var("HOME") {
-        let local_dir = std::path::PathBuf::from(&home)
-            .join("services/test-reports")
-            .join(test_name)
-            .join("playwright");
-        let remote_dir =
-            format!("/home/ryra/.local/share/services/test-reports/{test_name}/playwright");
-        if let Err(e) = vm.fetch_dir(&remote_dir, &local_dir).await {
+    // Pull the report into the host's canonical reports dir
+    // (services-test/reports/<test>/playwright), regardless of VM or bare mode.
+    // On a VM this copies from the staging path; on bare it's a no-op because
+    // Playwright already wrote straight there. We always try — even on failure,
+    // because traces on failure are the most valuable ones to inspect.
+    if let Ok(reports) = crate::reports::reports_dir() {
+        let local_dir = reports.join(test_name).join("playwright");
+        if let Err(e) = vm.fetch_dir(&out_dir, &local_dir).await {
             eprintln!("warning: failed to fetch playwright report: {e:#}");
         }
     }
@@ -488,19 +514,22 @@ pub async fn run_lifecycle_test(
     name: &str,
     steps: &[StepDef],
     verbose: bool,
-    single_test: bool,
+    prefixed: bool,
     registry_path: &std::path::Path,
     retest: bool,
 ) -> ScenarioResult {
     let start = Instant::now();
     let mut events = Vec::new();
     let mut failed = false;
-    let p = if single_test {
-        String::new()
-    } else {
+    // Line prefix: `[name] ` when output from parallel tests interleaves on one
+    // terminal, empty when a `---- START name ----` banner already scopes the
+    // block (serial bare runs).
+    let p = if prefixed {
         format!("[{name}] ")
+    } else {
+        String::new()
     };
-    let stream_prefix = if single_test { "" } else { name };
+    let stream_prefix = if prefixed { name } else { "" };
 
     for step in steps {
         // In retest mode, skip setup steps and only run test/assertion steps.
@@ -565,7 +594,7 @@ pub async fn run_lifecycle_test(
             }
             StepDef::Wait { service, timeout } => {
                 println!("{p}  waiting for {service}...");
-                let event = wait_for_service_with_timeout(vm, service, *timeout).await;
+                let event = wait_for_service_with_timeout(vm, &p, service, *timeout).await;
                 print_event_result(&p, &event);
                 if event.outcome.is_fail() {
                     failed = true;
@@ -614,9 +643,9 @@ pub async fn run_lifecycle_test(
                 // URL uses double quotes so shell variables expand.
                 let url_esc = url.replace('"', r#"\""#);
                 let env_source = match service {
-                    Some(svc) => load_env_shell(&format!("$HOME/.local/share/services/{svc}/.env")),
+                    Some(svc) => load_env_shell(&format!("{DATA_ROOT_SH}/{svc}/.env")),
                     None => format!(
-                        "for __f in $HOME/.local/share/services/*/.env; do [ -f \"$__f\" ] && {}; done",
+                        "for __f in {DATA_ROOT_SH}/*/.env; do [ -f \"$__f\" ] && {}; done",
                         load_env_shell("\"$__f\"")
                     ),
                 };
@@ -714,7 +743,7 @@ pub async fn run_lifecycle_test(
                     None => String::new(),
                 };
                 let cmd = format!(
-                    "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP $HOME/.local/share/services/inbucket/.env 2>/dev/null | cut -d= -f2); \
+                    "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP {DATA_ROOT_SH}/inbucket/.env 2>/dev/null | cut -d= -f2); \
                      [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/.local/share/services/inbucket/.env'; exit 2; }}; \
                      BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
                      [ -n \"$BODY\" ] && [ \"$BODY\" != '[]' ]{contains_check}"
@@ -842,10 +871,12 @@ async fn run_step_with_poll(
 ///
 /// Uses bash `/dev/tcp` to test actual TCP connectivity through to the
 /// container, not just whether rootlessport is listening on the host side.
-async fn wait_for_port(vm: &dyn Executor, test_name: &str, port: &str) -> Event {
+async fn wait_for_port(vm: &dyn Executor, prefix: &str, port: &str) -> Event {
     let t = Instant::now();
     let timeout = Duration::from_secs(60);
-    let mut last_log = std::time::Instant::now();
+    let mut progress =
+        ryra_vm::progress::WaitProgress::new(format!("port {port}"), "tcp connect", timeout)
+            .with_prefix(format!("{prefix}    "));
     // First few seconds: rootlessport is listening but the container app
     // may not be ready yet. A successful bash /dev/tcp probe means the
     // connection made it all the way to the container.
@@ -860,7 +891,7 @@ async fn wait_for_port(vm: &dyn Executor, test_name: &str, port: &str) -> Event 
             );
         }
 
-        if t.elapsed() > timeout {
+        if progress.timed_out() {
             return Event::bare(
                 format!("port {port} ready"),
                 EventKind::Step,
@@ -872,30 +903,25 @@ async fn wait_for_port(vm: &dyn Executor, test_name: &str, port: &str) -> Event 
             );
         }
 
-        if last_log.elapsed().as_secs() >= 10 {
-            println!(
-                "[{test_name}]     still waiting for port {port}... ({:.0}s)",
-                t.elapsed().as_secs_f64()
-            );
-            last_log = std::time::Instant::now();
-        }
-
+        progress.tick();
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
 }
 
-/// Dump diagnostic info for each service when a test fails.
-async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str]) {
-    println!("[{test_name}] --- diagnostics ---");
+/// Dump diagnostic info for each service when a test fails. `prefix` is the
+/// test's line prefix (see run_registry_test) so diagnostics align with the
+/// rest of the test's output.
+async fn dump_diagnostics(vm: &dyn Executor, prefix: &str, services: &[&str]) {
+    println!("{prefix}--- diagnostics ---");
     for svc in services {
         // Systemd service status
         let cmd = format!("systemctl --user status {svc}.service 2>&1 | head -20 || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
-                println!("[{test_name}]   [{svc}] systemd status:");
+                println!("{prefix}  [{svc}] systemd status:");
                 for line in trimmed.lines() {
-                    println!("[{test_name}]     {line}");
+                    println!("{prefix}    {line}");
                 }
             }
         }
@@ -905,9 +931,9 @@ async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str])
         if let Ok(out) = vm.exec(cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
-                println!("[{test_name}]   [{svc}] containers: {trimmed}");
+                println!("{prefix}  [{svc}] containers: {trimmed}");
             } else {
-                println!("[{test_name}]   [{svc}] containers: (none)");
+                println!("{prefix}  [{svc}] containers: (none)");
             }
         }
 
@@ -916,19 +942,19 @@ async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str])
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
-                println!("[{test_name}]   [{svc}] logs:");
+                println!("{prefix}  [{svc}] logs:");
                 for line in trimmed.lines().take(30) {
-                    println!("[{test_name}]     {line}");
+                    println!("{prefix}    {line}");
                 }
             }
         }
 
         // Env file
-        let cmd = format!("cat $HOME/.local/share/services/{svc}/.env 2>&1 | grep PORT || true");
+        let cmd = format!("cat {DATA_ROOT_SH}/{svc}/.env 2>&1 | grep PORT || true");
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
             if !trimmed.is_empty() {
-                println!("[{test_name}]   [{svc}] ports: {trimmed}");
+                println!("{prefix}  [{svc}] ports: {trimmed}");
             }
         }
 
@@ -942,13 +968,13 @@ async fn dump_diagnostics(vm: &dyn Executor, test_name: &str, services: &[&str])
         );
         if let Ok(out) = vm.exec(&cmd).await {
             let trimmed = out.stdout.trim();
-            println!("[{test_name}]   [{svc}] network:");
+            println!("{prefix}  [{svc}] network:");
             for line in trimmed.lines() {
-                println!("[{test_name}]     {line}");
+                println!("{prefix}    {line}");
             }
         }
     }
-    println!("[{test_name}] --- end diagnostics ---");
+    println!("{prefix}--- end diagnostics ---");
 }
 
 /// Run a command in the VM with real-time output streaming and return an Event.

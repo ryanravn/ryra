@@ -207,6 +207,19 @@ async fn execute(step: &Step) -> Result<()> {
                 Ok(())
             })
         }
+        Step::RemoveNetwork { name } => {
+            // Best-effort: the network may not exist, or may still be in use by
+            // another service — in which case leaving it is the correct outcome.
+            // Either way a failure here must not abort the removal.
+            with_simple_spinner(&format!("removing network {name}"), || {
+                let _ = Command::new("podman")
+                    .args(["network", "rm", name])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                Ok(())
+            })
+        }
         Step::CreateDir(path) => std::fs::create_dir_all(path)
             .with_context(|| format!("failed to create directory {}", path.display())),
         Step::WaitForFile { path, timeout_secs } => {

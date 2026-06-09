@@ -629,7 +629,8 @@ async fn prepare_image(
     } else {
         std::time::Duration::from_secs(900)
     };
-    let start = std::time::Instant::now();
+    let mut progress = crate::progress::WaitProgress::new("image SSH", "ssh", timeout)
+        .with_heartbeat(std::time::Duration::from_secs(30));
     let port_str = ssh_port.to_string();
     loop {
         let result = Command::new("ssh")
@@ -662,7 +663,7 @@ async fn prepare_image(
             break;
         }
 
-        if start.elapsed() > timeout {
+        if progress.timed_out() {
             let _ = qemu.kill().await;
             anyhow::bail!(
                 "timed out waiting for SSH during image preparation after {}s\n  \
@@ -672,13 +673,7 @@ async fn prepare_image(
             );
         }
 
-        if start.elapsed().as_secs().is_multiple_of(30) && start.elapsed().as_secs() > 0 {
-            println!(
-                "  preparing image... ({:.0}s elapsed)",
-                start.elapsed().as_secs_f64()
-            );
-        }
-
+        progress.tick();
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
@@ -954,7 +949,8 @@ async fn create_snapshot(
 
     // Wait for SSH
     let timeout = std::time::Duration::from_secs(if use_kvm { 120 } else { 600 });
-    let start = std::time::Instant::now();
+    let mut progress = crate::progress::WaitProgress::new("snapshot SSH", "ssh", timeout)
+        .with_heartbeat(std::time::Duration::from_secs(30));
     loop {
         let result = Command::new("ssh")
             .args([
@@ -985,10 +981,11 @@ async fn create_snapshot(
         {
             break;
         }
-        if start.elapsed() > timeout {
+        if progress.timed_out() {
             let _ = qemu.kill().await;
             anyhow::bail!("timed out waiting for SSH during snapshot creation");
         }
+        progress.tick();
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 

@@ -89,11 +89,30 @@ fn confirm_host_run(yes: bool) -> Result<()> {
     }
 
     eprintln!(
-        "About to run tests on THIS host (not a VM).\n\
-         This installs, purges, and reinstalls the services each test declares,\n\
-         and runs arbitrary shell/HTTP commands from the registry against your\n\
-         real machine. Unrelated services and their data are left untouched.\n"
+        "About to run tests on THIS host (not a VM).\n\n\
+         These tests run arbitrary shell and HTTP commands from the registry\n\
+         against your real machine, and they install, start, stop, purge, and\n\
+         reinstall the services each test declares. Services you already\n\
+         installed are detected and left untouched (those tests are skipped),\n\
+         but anything a test installs is removed again when it finishes.\n"
     );
+
+    // Running the registry's arbitrary commands as root hands the whole machine
+    // to whatever code the test executes. Warn hard — louder still under sudo,
+    // which we can detect from the env sudo sets.
+    if std::env::var_os("SUDO_USER").is_some() || std::env::var_os("SUDO_UID").is_some() {
+        eprintln!(
+            "  !! You appear to be running under sudo. Do NOT do this unless you\n     \
+             have audited the exact registry code you're about to run and trust\n     \
+             it completely — as root these commands own your entire machine.\n"
+        );
+    } else {
+        eprintln!(
+            "  Do not run this under sudo / as root unless you have audited the\n  \
+             registry you're using: the test commands run with your privileges.\n"
+        );
+    }
+
     let confirm = dialoguer::Confirm::new()
         .with_prompt("Continue?")
         .default(false)

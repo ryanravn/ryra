@@ -5,7 +5,9 @@ mod runner;
 mod scenario;
 pub mod test_toml;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -14,7 +16,7 @@ use tokio::sync::Semaphore;
 use ryra_vm::image::Distro;
 use ryra_vm::machine::{self, Machine, SpawnOpts};
 use ryra_vm::{image, ports};
-use scenario::ScenarioResult;
+use scenario::{Outcome, ScenarioResult};
 
 /// Install a Ctrl-C handler that kills all active VMs and exits.
 fn install_signal_handler() {
@@ -29,8 +31,9 @@ fn install_signal_handler() {
 }
 
 extern "C" fn signal_handler(_sig: libc::c_int) {
-    // Write to stderr manually (signal-safe)
-    let msg = b"\nInterrupted - shutting down VMs...\n";
+    // Write to stderr manually (signal-safe). Stay mode-agnostic here —
+    // cleanup_all_vms reports the VM count only when there's actually one.
+    let msg = b"\nInterrupted\n";
     unsafe {
         libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
     }
@@ -313,25 +316,40 @@ fn print_summary(results: &[ScenarioResult], wall_clock: std::time::Duration) {
     println!("  Results");
     println!("========================================\n");
 
-    for result in results {
+    // Only the *failures* get their full step trace dumped here — that's the
+    // bit you actually need to read inline. Passing tests would just spew
+    // every step's captured stdout; their full logs are saved to
+    // `reports/<test>/run.log` and pointed at by the path summary below.
+    let any_failed = results.iter().any(|r| r.outcome.is_fail());
+    for result in results.iter().filter(|r| r.outcome.is_fail()) {
         print!("{result}");
+    }
+    if any_failed {
+        println!();
     }
 
     let passed = results.iter().filter(|r| r.passed()).count();
-    let failed = results.len() - passed;
+    let failed = results
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|r| matches!(r.outcome, Outcome::Skipped))
+        .count();
 
     println!("----------------------------------------");
     println!(
-        "{passed} passed, {failed} failed, {} total ({:.0}s wall clock)",
+        "{passed} passed, {failed} failed, {skipped} skipped, {} total ({} wall clock)",
         results.len(),
-        wall_clock.as_secs_f64()
+        reports::humanize_secs(wall_clock.as_secs()),
     );
     println!("========================================");
 }
 
-fn save_results(results: &[ScenarioResult]) -> Result<()> {
+fn save_results(results: &[ScenarioResult], wall_clock: std::time::Duration) -> Result<()> {
     reports::save_run_results(results)?;
-    reports::print_results_paths(results);
+    reports::print_results_paths(results, wall_clock);
     Ok(())
 }
 
@@ -603,6 +621,10 @@ pub async fn run(args: Args) -> Result<()> {
     // (works under --parallel, order-independent).
     let progress_done = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let progress_passed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Start-order counter so each VM START line carries an [N/total] marker
+    // too. Under --parallel this is the order tests *begin*, not finish, but
+    // it still tells you how far into the run you are at a glance.
+    let progress_started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     for test in to_run {
         let permit = semaphore.clone().acquire_owned().await?;
@@ -638,6 +660,7 @@ pub async fn run(args: Args) -> Result<()> {
         let has_quadlets = test.has_quadlets();
         let progress_done = progress_done.clone();
         let progress_passed = progress_passed.clone();
+        let progress_started = progress_started.clone();
         // Extract quadlet_dir before spawning task (DiscoveredTest isn't Send)
         let quadlet_dir = match test {
             registry::DiscoveredTest::Simple { setup, .. } => setup.quadlet_dir.clone(),
@@ -654,7 +677,9 @@ pub async fn run(args: Args) -> Result<()> {
             let id = machine::random_id();
             let ssh_port = ports::allocate_ssh_port();
             let start = std::time::Instant::now();
-            println!("[{name}] ---- VM START ryra-test-{id} (ssh port {ssh_port}, {test_memory}MB RAM) ----");
+            let started =
+                progress_started.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            println!("[{name}] ---- VM START [{started}/{total_tests}] ryra-test-{id} (ssh port {ssh_port}, {test_memory}MB RAM) ----");
 
             // All fallible work lives in an inner async block so every exit
             // path — including early returns for VM-boot or file-copy failures —
@@ -740,10 +765,10 @@ pub async fn run(args: Args) -> Result<()> {
                 let vm_registry = std::path::Path::new("/opt/ryra-test-registry");
                 let result = match &test {
                     registry::DiscoveredTest::Lifecycle { steps, .. } => {
-                        runner::run_lifecycle_test(&executor, &name, steps, verbose, single_test, vm_registry, false).await
+                        runner::run_lifecycle_test(&executor, &name, steps, verbose, !single_test, vm_registry, false).await
                     }
                     registry::DiscoveredTest::Simple { .. } => {
-                        runner::run_registry_test(&executor, &test).await
+                        runner::run_registry_test(&executor, &test, !single_test).await
                     }
                 };
 
@@ -824,8 +849,9 @@ pub async fn run(args: Args) -> Result<()> {
         results.push(handle.await?);
     }
 
-    print_summary(&results, wall_clock.elapsed());
-    save_results(&results)?;
+    let total_elapsed = wall_clock.elapsed();
+    print_summary(&results, total_elapsed);
+    save_results(&results, total_elapsed)?;
 
     if results.iter().any(|r| !r.passed()) {
         std::process::exit(1);
@@ -872,60 +898,398 @@ async fn run_interactive_vm(
     Ok(())
 }
 
-/// Clean host state before a bare-mode test runs. Bare mode shares the
-/// *real* host's ryra state, so this MUST NOT run a global `ryra reset` —
-/// that deletes every installed service and the entire
-/// `~/.local/share/services` data root, including services the user installed
-/// for real and never asked us to touch. Instead we purge only the services
-/// this specific test declares (it is about to recreate them anyway). Any
-/// other service — and all of its data — is left untouched.
-///
-/// The default-registry cache is also cleared, since tests like diff-whoami
-/// intentionally mutate it. That's a cache, not user data.
-async fn reset_bare_state(
-    executor: &crate::executor::LocalExecutor,
-    test: &registry::DiscoveredTest,
-) {
+/// Root of the host-test sandbox. Everything a host run reads or writes that
+/// isn't a quadlet symlink lives under here, on real disk: service data
+/// (`services/`), the preferences sandbox (`config/`), the ledger, and run
+/// reports (`reports/`). It's `~/.local/share/services-test/` (honouring
+/// `XDG_DATA_HOME`), a sibling of the real `~/.local/share/services/`, so the
+/// whole test footprint is one folder you can `rm -rf`. `None` if `$HOME` is
+/// unset.
+pub(crate) fn test_sandbox_root() -> Option<PathBuf> {
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(v) if !v.is_empty() => PathBuf::from(v),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
+    };
+    Some(base.join("services-test"))
+}
+
+/// Path to the host-managed-services ledger: the services this harness has
+/// installed on the host but not yet torn down. Persisted across runs so a
+/// later run can tell *its own* leftovers (from an aborted run — safe to
+/// reclaim) apart from services the user installed for real (must never be
+/// touched). Lives in the sandbox root (real disk — it must survive reboots,
+/// so never `/tmp`). Returns `None` only if `$HOME` is unset.
+fn host_ledger_path() -> Option<PathBuf> {
+    Some(test_sandbox_root()?.join("ledger"))
+}
+
+/// Load the ledger (newline-separated service names). Missing file → empty.
+fn ledger_load() -> BTreeSet<String> {
+    let Some(path) = host_ledger_path() else {
+        return BTreeSet::new();
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(s) => s
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect(),
+        Err(_) => BTreeSet::new(),
+    }
+}
+
+/// Persist the ledger. Best-effort: a write failure only degrades the
+/// next run to the *conservative* side (it would treat our leftovers as
+/// user-owned and skip them rather than delete anything), so we warn but
+/// don't abort the test run.
+fn ledger_save(set: &BTreeSet<String>) {
+    let Some(path) = host_ledger_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("warning: could not create ledger dir: {e}");
+        return;
+    }
+    let body = set.iter().cloned().collect::<Vec<_>>().join("\n");
+    if let Err(e) = std::fs::write(&path, body) {
+        eprintln!("warning: could not write host-managed-services ledger: {e}");
+    }
+}
+
+/// Purge a test's own services from the host, dependents before
+/// dependencies (reverse install order). Failures are non-fatal: a
+/// not-installed service is a no-op. Callers guarantee these services are
+/// harness-owned (never user-installed), so purging is always safe.
+async fn purge_services(executor: &crate::executor::LocalExecutor, svcs: &[String], when: &str) {
     use crate::executor::Executor;
-    // Purge in reverse install order so dependents go before dependencies.
-    let mut services = test.services();
-    services.reverse();
-    for svc in services {
-        println!("  cleaning up {svc} (purge) before test");
+    for svc in svcs.iter().rev() {
+        println!("  cleaning up {svc} (purge) {when}");
         let _ = executor
             .exec(&format!("ryra remove --purge {svc} -y"))
             .await;
     }
-    let _ = executor
-        .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/services/default\"")
-        .await;
+}
+
+/// Snapshot the ryra-managed services currently installed on the host.
+/// A scan failure degrades to "none" so the caller never deletes blindly.
+fn scan_installed() -> BTreeSet<String> {
+    match ryra_core::scan_managed_services() {
+        Ok(v) => v.into_iter().collect(),
+        Err(e) => {
+            eprintln!("warning: could not scan installed services ({e}); assuming none");
+            BTreeSet::new()
+        }
+    }
+}
+
+/// Collect every `<label>.internal` hostname appearing in `s` into `out`.
+fn scan_internal_hosts(s: &str, out: &mut BTreeSet<String>) {
+    const SUFFIX: &str = ".internal";
+    let bytes = s.as_bytes();
+    for (idx, _) in s.match_indices(SUFFIX) {
+        let mut start = idx;
+        while start > 0 {
+            let c = bytes[start - 1];
+            if c.is_ascii_alphanumeric() || c == b'-' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        if start < idx {
+            out.insert(s[start..idx + SUFFIX.len()].to_ascii_lowercase());
+        }
+    }
+}
+
+/// The `*.internal` hostnames the selected tests will actually contact, so the
+/// runner can prime sudo (for `/etc/hosts` writes) *only* when a needed host is
+/// missing — never on a run whose hosts already resolve.
+///
+/// Walks parsed lifecycle steps (`add` args/env, shell bodies, http
+/// url/body/headers, playwright env) and reads each referenced playwright spec
+/// file — its `*.internal` URL default catches auto-promoted hosts that never
+/// appear in the toml. Simple tests (basic 127.0.0.1 installs) are scanned too,
+/// cheaply, for completeness.
+fn referenced_internal_hosts(
+    tests: &[&registry::DiscoveredTest],
+    registry_path: &Path,
+) -> BTreeSet<String> {
+    use crate::test_toml::StepDef;
+    let browser_dir = registry_path.join("tests").join("browser");
+    let mut out = BTreeSet::new();
+    for t in tests {
+        match t {
+            registry::DiscoveredTest::Lifecycle { steps, .. } => {
+                for step in steps {
+                    match step {
+                        StepDef::Add { args, env, .. } => {
+                            if let Some(a) = args {
+                                scan_internal_hosts(a, &mut out);
+                            }
+                            env.values().for_each(|v| scan_internal_hosts(v, &mut out));
+                        }
+                        StepDef::Shell { run, .. } => scan_internal_hosts(run, &mut out),
+                        StepDef::Http {
+                            url, body, headers, ..
+                        } => {
+                            scan_internal_hosts(url, &mut out);
+                            if let Some(b) = body {
+                                scan_internal_hosts(b, &mut out);
+                            }
+                            headers
+                                .values()
+                                .for_each(|v| scan_internal_hosts(v, &mut out));
+                        }
+                        StepDef::Playwright { spec, env, .. } => {
+                            env.values().for_each(|v| scan_internal_hosts(v, &mut out));
+                            if let Ok(txt) = std::fs::read_to_string(browser_dir.join(spec)) {
+                                scan_internal_hosts(&txt, &mut out);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            registry::DiscoveredTest::Simple { tests: entries, .. } => {
+                for e in entries {
+                    scan_internal_hosts(&e.run, &mut out);
+                    e.env
+                        .values()
+                        .for_each(|v| scan_internal_hosts(v, &mut out));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The `*.internal` hostnames the selected tests contact that don't already
+/// resolve via `/etc/hosts` — the ones ryra will have to add (a privileged
+/// write). Empty when every contacted host already resolves.
+fn missing_internal_hosts(needed: &BTreeSet<String>) -> Vec<String> {
+    let hosts = std::fs::read_to_string("/etc/hosts").unwrap_or_default();
+    let present = |h: &str| {
+        hosts.lines().any(|l| {
+            let l = l.trim();
+            !l.starts_with('#') && l.split_whitespace().any(|w| w == h)
+        })
+    };
+    needed.iter().filter(|h| !present(h)).cloned().collect()
+}
+
+/// Acquire sudo once, up front, for a run that has privileged steps — so the
+/// `sudo -n` those steps issue (inside captured, non-TTY shells that can't
+/// themselves prompt) succeed silently for the whole run.
+///
+/// "Privileged steps" is a general notion, not a hosts special-case: a run
+/// qualifies if it must add `*.internal` hostnames to `/etc/hosts` (detected
+/// automatically) *or* any selected test declares `requires_sudo` (the escape
+/// hatch for tests that shell out to sudo for any other reason). `reasons` is
+/// the human-readable list of why; empty means nothing privileged → no-op.
+///
+/// Returns a keep-alive task that refreshes the credential every 60s for the
+/// run's duration (sudo's default `timestamp_timeout` is far shorter than a
+/// full suite). Behaviour:
+/// - No reasons → `None`; sudo is never touched.
+/// - Passwordless sudo → `None`; per-step `sudo -n` already works.
+/// - Password required + a TTY → one prompt here, listing the reasons.
+/// - Password required + no TTY (CI capturing output) → `None`, degrade
+///   gracefully. CI uses `--vm`, which provisions its own passwordless sudo.
+async fn acquire_run_sudo(reasons: &[String]) -> Option<tokio::task::JoinHandle<()>> {
+    use std::io::IsTerminal;
+    use std::time::Duration;
+
+    if reasons.is_empty() {
+        return None;
+    }
+
+    let passwordless = tokio::process::Command::new("sudo")
+        .args(["-n", "true"])
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if passwordless {
+        return None;
+    }
+    if !std::io::stderr().is_terminal() {
+        return None;
+    }
+
+    eprintln!("\n  This run needs sudo for:");
+    for r in reasons {
+        eprintln!("    - {r}");
+    }
+    eprintln!("  Caching sudo once so it doesn't prompt mid-test:");
+    let primed = tokio::process::Command::new("sudo")
+        .arg("-v")
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !primed {
+        eprintln!("  (skipped — privileged steps may fail; they'll say which.)\n");
+        return None;
+    }
+
+    Some(tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            // `-n`: a keep-alive must never block on a prompt. If the cache
+            // ever lapses, the next privileged step re-warms it itself.
+            let _ = tokio::process::Command::new("sudo")
+                .args(["-n", "-v"])
+                .status()
+                .await;
+        }
+    }))
 }
 
 /// Run tests directly on the host without a VM.
+///
+/// Bare mode shares the *real* host's ryra state, so isolation is built
+/// from three guarantees:
+///   1. Preferences are redirected to a throwaway dir (`RYRA_CONFIG_DIR`),
+///      so tests never read or clobber the user's SMTP/auth/backup creds.
+///   2. Services the user already installed are detected up front and left
+///      strictly untouched; any test that would install over one is skipped.
+///   3. Every test purges its own services afterwards so they don't pile up
+///      and exhaust RAM — and a ledger records harness-owned installs so a
+///      later run can reclaim leftovers from an aborted run.
 async fn run_bare(
     args: &Args,
     to_run: &[&registry::DiscoveredTest],
     registry_path: &Path,
 ) -> Result<()> {
+    use crate::executor::Executor;
     let wall_clock = std::time::Instant::now();
-    let executor = crate::executor::LocalExecutor::with_registry(registry_path);
+
+    // Acquire sudo once, up front, if (and only if) this run has privileged
+    // steps: `*.internal` hostnames the tests contact that aren't in /etc/hosts
+    // yet (ryra adds them), or a test that declares `requires_sudo`. Held warm
+    // for the run so captured, non-TTY steps' `sudo -n` succeed; aborted before
+    // we return. A run with nothing privileged never touches sudo.
+    let mut sudo_reasons: Vec<String> = Vec::new();
+    let missing_hosts = missing_internal_hosts(&referenced_internal_hosts(to_run, registry_path));
+    if !missing_hosts.is_empty() {
+        sudo_reasons.push(format!(
+            "adding {} to /etc/hosts (OIDC/HTTPS service URLs)",
+            missing_hosts.join(", ")
+        ));
+    }
+    let sudo_tests: Vec<&str> = to_run
+        .iter()
+        .filter(|t| t.requires_sudo())
+        .map(|t| t.name())
+        .collect();
+    if !sudo_tests.is_empty() {
+        sudo_reasons.push(format!(
+            "test(s) that declare requires_sudo: {}",
+            sudo_tests.join(", ")
+        ));
+    }
+    let sudo_keepalive = acquire_run_sudo(&sudo_reasons).await;
+
+    // 1. Sandbox the whole run under ~/.local/share/services-test/ (real disk,
+    //    a sibling of the real services dir). Service data, preferences, the
+    //    ledger, and reports all live here — one folder, one wipe. Only the
+    //    quadlet *symlinks* land outside it, in the systemd-mandated dir. Tests
+    //    resolve data paths through ${RYRA_DATA_DIR:-…}, so they find the
+    //    sandbox here and fall back to the real dir under --vm / normal use.
+    let sandbox = test_sandbox_root().context("cannot resolve test sandbox root ($HOME unset)")?;
+    let data_dir = sandbox.join("services");
+    let config_dir = sandbox.join("config");
+    // Fresh preferences each run so a previous run's SMTP/auth/backup config
+    // can't leak in. Service data is managed per-service (reclaimed/torn down);
+    // the ledger persists; reports are wiped at run start.
+    let _ = std::fs::remove_dir_all(&config_dir);
+    std::fs::create_dir_all(&config_dir)
+        .with_context(|| format!("failed to create {}", config_dir.display()))?;
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("failed to create {}", data_dir.display()))?;
+    let executor = crate::executor::LocalExecutor::with_registry(registry_path)
+        .with_config_dir(&config_dir)
+        .with_data_dir(&data_dir);
+
+    // 2. Anything installed that we didn't install is the user's — off-limits.
+    let mut ledger = ledger_load();
+    let installed = scan_installed();
+    let user_owned: BTreeSet<String> = installed.difference(&ledger).cloned().collect();
+    if !user_owned.is_empty() {
+        let list = user_owned.iter().cloned().collect::<Vec<_>>().join(", ");
+        println!(
+            "Leaving {} already-installed service(s) untouched: {list}",
+            user_owned.len()
+        );
+        println!("  Tests installing these are skipped. If they're leftovers from an aborted run,");
+        println!("  purge them yourself with `ryra remove --purge <name> -y`.");
+    }
+
+    // 3. Reclaim our own leftovers from a previous aborted run (frees RAM).
+    let leftovers: Vec<String> = ledger.intersection(&installed).cloned().collect();
+    for svc in &leftovers {
+        println!("  reclaiming leftover {svc} (purge) from a previous run");
+        let _ = executor
+            .exec(&format!("ryra remove --purge {svc} -y"))
+            .await;
+        ledger.remove(svc);
+    }
+    if !leftovers.is_empty() {
+        ledger_save(&ledger);
+    }
+
     let mut results = Vec::new();
-    let single_test = to_run.len() == 1;
+    let total = to_run.len();
+    println!("\nRunning {total} tests on host (bare mode)\n");
 
-    println!("\nRunning {} tests on host (bare mode)\n", to_run.len());
-
-    for test in to_run {
+    for (idx, test) in to_run.iter().enumerate() {
+        let n = idx + 1;
         let name = test.name().to_string();
-        println!("---- START {name} (bare) ----");
+        let svcs: Vec<String> = test.services().iter().map(|s| s.to_string()).collect();
 
-        // Clean up only this test's own services before it runs, so a stale
-        // install from a previous run doesn't cascade into the next. Bare mode
-        // shares the host's ryra state across all tests — unlike VM mode where
-        // each test gets a fresh VM — so we scope cleanup to the test's
-        // declared services and never global-reset the host. Failures here are
-        // non-fatal: a not-installed service is a no-op, and test assertions
-        // will surface any real setup failures.
-        reset_bare_state(&executor, test).await;
+        // Skip any test that would install over a user-owned service.
+        if let Some(conflict) = svcs.iter().find(|s| user_owned.contains(*s)) {
+            println!(
+                "---- SKIP [{n}/{total}] {name}: '{conflict}' already installed (left untouched) ----"
+            );
+            results.push(ScenarioResult {
+                name,
+                events: Vec::new(),
+                duration: Duration::ZERO,
+                outcome: Outcome::Skipped,
+            });
+            continue;
+        }
+
+        println!("---- START [{n}/{total}] {name} (bare) ----");
+
+        // Record intent before installing, so an abort mid-test still leaves a
+        // breadcrumb the next run can reclaim.
+        for svc in &svcs {
+            ledger.insert(svc.clone());
+        }
+        ledger_save(&ledger);
+
+        // Reset the preferences sandbox so a previous test's `--smtp`/`--auth`/
+        // backup config can't leak in. This matters: a `--smtp=inbucket` test
+        // writes SMTP into preferences.toml, and without a reset the *next*
+        // `--smtp` add sees SMTP already configured and skips installing
+        // inbucket — so its mail step finds nothing. Per-test, not per-run.
+        let _ = std::fs::remove_dir_all(&config_dir);
+        let _ = std::fs::create_dir_all(&config_dir);
+
+        // Pre-clean this test's own services (a stale install from a crashed
+        // earlier run of the same test shouldn't cascade in). The default-
+        // registry cache is also cleared — tests like diff-whoami mutate it,
+        // and it's a cache, not user data.
+        purge_services(&executor, &svcs, "before test").await;
+        let _ = executor
+            .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/services/default\"")
+            .await;
 
         let start = std::time::Instant::now();
         let result = match test {
@@ -935,29 +1299,61 @@ async fn run_bare(
                     &name,
                     steps,
                     args.verbose,
-                    single_test,
+                    // Bare runs are serial and each test is bracketed by a
+                    // `---- START name ----` banner, so the per-line prefix is
+                    // redundant — drop it.
+                    false,
                     registry_path,
                     args.retest,
                 )
                 .await
             }
             registry::DiscoveredTest::Simple { .. } => {
-                runner::run_registry_test(&executor, test).await
+                runner::run_registry_test(&executor, test, false).await
             }
         };
 
         let status = if result.passed() { "PASS" } else { "FAIL" };
         println!(
-            "---- END {name} ({status}, {:.1}s) ----",
+            "---- END [{n}/{total}] {name} ({status}, {:.1}s) ----",
             start.elapsed().as_secs_f64()
         );
+
+        // Tear down everything this test put on the host so nothing
+        // accumulates and eats RAM — pass or fail. That's the declared
+        // services (purged first, in reverse order so dependents go before
+        // dependencies) plus anything installed as a side-effect with no
+        // explicit add step (e.g. inbucket via `--smtp=inbucket`). The
+        // leftover sweep is safe: `user_owned` was fixed at startup and is
+        // never in the set, so we only ever remove this test's own footprint.
+        purge_services(&executor, &svcs, "after test").await;
+        let leaked: Vec<String> = scan_installed()
+            .into_iter()
+            .filter(|s| !user_owned.contains(s) && !svcs.contains(s))
+            .collect();
+        if !leaked.is_empty() {
+            purge_services(&executor, &leaked, "after test (side-effect)").await;
+        }
+        for svc in svcs.iter().chain(leaked.iter()) {
+            ledger.remove(svc);
+        }
+        ledger_save(&ledger);
+
         results.push(result);
     }
 
-    print_summary(&results, wall_clock.elapsed());
-    save_results(&results)?;
+    if let Some(h) = sudo_keepalive {
+        h.abort();
+    }
 
-    if results.iter().any(|r| !r.passed()) {
+    let total_elapsed = wall_clock.elapsed();
+    print_summary(&results, total_elapsed);
+    save_results(&results, total_elapsed)?;
+
+    if results
+        .iter()
+        .any(|r| matches!(r.outcome, Outcome::Failed(_)))
+    {
         std::process::exit(1);
     }
 

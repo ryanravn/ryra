@@ -17,6 +17,7 @@ pub enum DiscoveredTest {
         tests: Vec<TestEntry>,
         browser: bool,
         ram_override: Option<u32>,
+        requires_sudo: bool,
     },
     /// Lifecycle tests: interleaved actions and assertions.
     Lifecycle {
@@ -25,6 +26,7 @@ pub enum DiscoveredTest {
         steps: Vec<StepDef>,
         browser: bool,
         ram_override: Option<u32>,
+        requires_sudo: bool,
     },
 }
 
@@ -155,6 +157,14 @@ impl DiscoveredTest {
         match self {
             DiscoveredTest::Simple { browser, .. } => *browser,
             DiscoveredTest::Lifecycle { browser, .. } => *browser,
+        }
+    }
+
+    /// Whether this test declared `requires_sudo` (file- or test-level).
+    pub fn requires_sudo(&self) -> bool {
+        match self {
+            DiscoveredTest::Simple { requires_sudo, .. } => *requires_sudo,
+            DiscoveredTest::Lifecycle { requires_sudo, .. } => *requires_sudo,
         }
     }
 
@@ -390,6 +400,7 @@ fn discover_from_test_toml(
                 steps: t.steps.clone(),
                 browser: t.browser || parsed.needs_browser(),
                 ram_override: t.ram.or(parsed.ram_override()),
+                requires_sudo: t.requires_sudo || parsed.requires_sudo(),
             });
         }
         return Ok(out);
@@ -404,6 +415,7 @@ fn discover_from_test_toml(
     };
     let browser = parsed.needs_browser();
     let ram_override = parsed.ram_override();
+    let requires_sudo = parsed.requires_sudo();
 
     if parsed.is_lifecycle() {
         return Ok(vec![DiscoveredTest::Lifecycle {
@@ -412,6 +424,7 @@ fn discover_from_test_toml(
             steps: parsed.steps.clone(),
             browser,
             ram_override,
+            requires_sudo,
         }]);
     }
 
@@ -447,6 +460,7 @@ fn discover_from_test_toml(
         tests,
         browser,
         ram_override,
+        requires_sudo,
     }])
 }
 

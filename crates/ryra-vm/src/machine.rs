@@ -615,26 +615,17 @@ impl Machine {
     }
 
     async fn wait_for_ssh(&self, timeout: std::time::Duration) -> Result<()> {
-        let start = std::time::Instant::now();
         let mut ssh_args = self.ssh_args();
         // Override ConnectTimeout to 3s for probing
         if let Some(pos) = ssh_args.iter().position(|a| a == "ConnectTimeout=10") {
             ssh_args[pos] = "ConnectTimeout=3".into();
         }
         ssh_args.push("true".into());
-        let mut last_log = std::time::Instant::now();
+        let mut progress = crate::progress::WaitProgress::new("SSH", "ssh", timeout)
+            .with_prefix(format!("  [{}] ", self.name))
+            .with_heartbeat(std::time::Duration::from_secs(30));
 
         loop {
-            // Log progress every 30 seconds
-            if last_log.elapsed().as_secs() >= 30 {
-                println!(
-                    "  [{}] still waiting for SSH... ({:.0}s elapsed)",
-                    self.name,
-                    start.elapsed().as_secs_f64()
-                );
-                last_log = std::time::Instant::now();
-            }
-
             // Try a real SSH command (not just TCP connect)
             let result = Command::new("ssh")
                 .args(&ssh_args)
@@ -649,7 +640,7 @@ impl Machine {
                 return Ok(());
             }
 
-            if start.elapsed() > timeout {
+            if progress.timed_out() {
                 anyhow::bail!(
                     "timed out waiting for SSH on {}:{} after {}s\n  \
                      Check serial log: {}/serial.log",
@@ -660,6 +651,7 @@ impl Machine {
                 );
             }
 
+            progress.tick();
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     }

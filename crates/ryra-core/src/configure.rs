@@ -1079,6 +1079,7 @@ fn clone_step(step: &Step) -> Step {
         Step::RemoveFile(p) => Step::RemoveFile(p.clone()),
         Step::RemoveDir(p) => Step::RemoveDir(p.clone()),
         Step::RemoveVolume { name } => Step::RemoveVolume { name: name.clone() },
+        Step::RemoveNetwork { name } => Step::RemoveNetwork { name: name.clone() },
         Step::CreateDir(p) => Step::CreateDir(p.clone()),
         Step::WaitForFile { path, timeout_secs } => Step::WaitForFile {
             path: path.clone(),

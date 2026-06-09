@@ -164,6 +164,12 @@ Always prefer podman-native and quadlet-native features over workarounds:
 
 ## Debugging
 
+**Prefer iterative checks over static timeouts.** When waiting for something to become ready (a service to come up, a port to bind, a file to appear, a health endpoint to answer), poll the actual condition in a loop instead of sleeping a fixed amount and hoping. The loop should:
+- **check the real readiness signal**, not a proxy — e.g. probe the container's health (`podman healthcheck run`) or hit the endpoint, not just "the systemd unit went active";
+- **tell the user what it's doing** while it waits — what it's checking, that it's still checking, and the attempt count — so a long wait never looks like a hang;
+- **exit the instant the condition is met**, so fast machines aren't penalized and slow machines still succeed.
+A static timeout is the *bound* on the loop, not the wait itself. Reserve a genuinely long static timeout for the rare case where there's no cheaper signal to poll (and say why in a comment).
+
 **Never increase timeouts before identifying the root cause.** When a test times out, check logs first to understand *why* it's slow — don't just bump the number. Only increase a timeout after you've confirmed the issue is genuinely timing-related (e.g., a heavy image pull or slow SPA hydration) and there's no underlying bug. Timeouts mask real issues and make tests slow.
 
 When tests fail or services error, **always check logs first** before proposing fixes:
@@ -179,20 +185,29 @@ This applies during development too — when a service fails after `ryra add`, c
 
 E2E coverage is scoped to flows that cross service boundaries — primarily SMTP delivery and OIDC login. Services without those integrations (e.g. Synapse, Vaultwarden when added without `--auth`) don't need a dedicated E2E test; a simple install assertion is enough.
 
+### Run modes
+
+`ryra test` runs against **this host by default** — there is no implicit VM. The mode is selected by flags on `ryra test` itself:
+
+- **default** (no flag): full `add` → assert → `remove`/purge lifecycle **on this host**. It installs, purges, and reinstalls each service the test declares, and runs arbitrary shell/HTTP commands from the registry against the real machine. Unrelated services and their data are left untouched. Mutating — gated by `confirm_host_run`: an interactive prompt, or a hard refusal in non-interactive shells unless `-y` is passed.
+- `--vm`: run the same full lifecycle inside a fresh, throwaway QEMU VM instead of on the host. Slower, needs KVM, but isolated — the host is never touched. This is what CI uses.
+- `--live`: run **only the assertion steps** against a service that is already installed on this host (no add/remove). Requires `--service <name>`. Non-mutating.
+- `--no-vm` is a hidden, deprecated no-op kept for backward compatibility (the host is already the default). Don't use it in new scripts.
+
+`--vm` answers *where* (disposable VM vs. host); `--live` answers *what* (assert-only vs. full lifecycle).
+
 Key points:
 
-- Tests run inside ephemeral QEMU VMs — each test gets a fresh Linux install with its own kernel
-- `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image (flags on the test runner binary, not `ryra test`)
+- `--distro=debian-13` (default) or `--distro=fedora-43` selects the VM base image (flags on the test runner binary, not `ryra test`; only relevant under `--vm`/`--keep-alive`)
 - Test runner lives in `crates/ryra-test/`, VM orchestration in `crates/ryra-vm/`
 - Tests are defined in `registry/` via `[[tests]]` in service.toml and lifecycle test files in `registry/tests/`
-- VMs use cloud images + cloud-init for setup, SSH for command execution
+- Under `--vm`, VMs use cloud images + cloud-init for setup, SSH for command execution, get a fresh Linux install with their own kernel, and VM memory is auto-sized per test based on `[requirements.ram]` in each service's service.toml
 - `--parallel=N` controls concurrency (default 1), each VM gets a unique SSH port
-- VM memory is auto-sized per test based on `[requirements.ram]` in each service's service.toml
 - KVM is required for reasonable speed (`--no-kvm` works but is ~10x slower, flag on test runner binary)
-- `--keep-alive` keeps the VM running after tests for interactive debugging
+- `--keep-alive` boots a VM and keeps it running after tests for interactive debugging (inherently a `--vm` operation)
 - `--verbose` dumps the serial log on failure
-- Host prerequisites (Debian/Ubuntu): `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
-- Host prerequisites (Fedora): `qemu-system-aarch64 qemu-img edk2-aarch64 genisoimage openssh-clients curl`
+- VM host prerequisites (Debian/Ubuntu): `qemu-system-arm qemu-utils qemu-efi-aarch64 genisoimage openssh-client curl`
+- VM host prerequisites (Fedora): `qemu-system-aarch64 qemu-img edk2-aarch64 genisoimage openssh-clients curl`
 
 ### Test types
 

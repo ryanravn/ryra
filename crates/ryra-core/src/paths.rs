@@ -31,6 +31,34 @@ pub const DEFAULT_REGISTRY_URL: &str = "https://github.com/ryanravn/ryra-registr
 /// at a local checkout to iterate without committing/pushing.
 pub const REGISTRY_DIR_ENV: &str = "RYRA_REGISTRY_DIR";
 
+/// Env var that, when set, overrides the directory holding
+/// `preferences.toml` (normally `~/.config/services/`). The E2E test
+/// harness points this at a throwaway dir for host (bare-mode) runs so
+/// tests never read or clobber the user's real SMTP/auth/backup
+/// credentials. Only the preferences/config dir moves — service data
+/// (`~/.local/share/services`) and quadlets (`~/.config/containers/systemd`)
+/// stay put, because `systemctl --user` reads those from fixed locations.
+pub const CONFIG_DIR_ENV: &str = "RYRA_CONFIG_DIR";
+
+/// Env var that, when set, overrides the service-data root (normally
+/// `~/.local/share/services/`). The host test harness points this at a
+/// sandbox (`~/.local/share/services-test/services/`) so test deployments
+/// never share a directory with the user's real services. Because ryra
+/// stores each quadlet *inside* `service_home` and only symlinks it into
+/// the systemd quadlet dir, moving this also moves the unit files; the
+/// quadlet *symlink* still lands in the fixed `~/.config/containers/systemd`.
+pub const DATA_DIR_ENV: &str = "RYRA_DATA_DIR";
+
+/// The active `RYRA_DATA_DIR` override, if any. `None` for normal installs
+/// (the common case) — callers use that to keep behaviour byte-identical
+/// when no sandbox is requested.
+pub(crate) fn data_dir_override() -> Option<PathBuf> {
+    match std::env::var_os(DATA_DIR_ENV) {
+        Some(v) if !v.is_empty() => Some(PathBuf::from(v)),
+        _ => None,
+    }
+}
+
 /// Resolve the user's home directory, falling back to $HOME.
 pub(crate) fn home_dir() -> Result<PathBuf> {
     dirs::home_dir()
@@ -41,6 +69,9 @@ pub(crate) fn home_dir() -> Result<PathBuf> {
 /// Root directory holding every installed service's home dir:
 /// `~/.local/share/services/`.
 pub fn service_data_root() -> Result<PathBuf> {
+    if let Some(dir) = data_dir_override() {
+        return Ok(dir);
+    }
     let base = match dirs::data_dir() {
         Some(d) => d,
         None => home_dir()?.join(".local").join("share"),
