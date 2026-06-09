@@ -13,6 +13,8 @@ Ryra is a CLI tool that deploys self-hosted services on a single Linux machine u
 
 Instead of writing Docker Compose files, reverse proxy configs, and systemd units by hand, you run `ryra add <service>` and Ryra scaffolds everything from a curated registry of service definitions.
 
+Or point Ryra at your own project: `ryra init` scaffolds a `service.toml`, `ryra add .` runs your code under systemd. See [Run Your Own Code](/guides/your-own-code/).
+
 ```sh
 curl -fsSL https://ryra.dev/install.sh | sh
 ```

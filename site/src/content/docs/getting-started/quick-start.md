@@ -65,3 +65,5 @@ Optional flags on `ryra add`:
 - `--smtp=inbucket` for a local test inbox; for a real relay set `[smtp]` in `~/.config/services/preferences.toml`
 
 `ryra remove <service>` to uninstall. Data is preserved; add `--purge` to wipe it too.
+
+Building your own service instead of installing one? See [Run Your Own Code](/guides/your-own-code/).

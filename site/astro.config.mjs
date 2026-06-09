@@ -96,6 +96,7 @@ export default defineConfig({
         {
           label: "Guides",
           items: [
+            { label: "Run Your Own Code", slug: "guides/your-own-code" },
             { label: "Exposure Modes", slug: "guides/exposure-modes" },
           ],
         },

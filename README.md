@@ -28,6 +28,9 @@ Works on Debian, Ubuntu, Fedora, Arch, and any Linux with systemd and Podman.
 ```sh
 ryra search           # browse the registry
 ryra add <service>    # install one
+
+ryra init             # ...or scaffold your own project
+ryra add .            # and run your own code on ryra
 ```
 
 ## What it does
