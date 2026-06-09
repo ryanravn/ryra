@@ -219,7 +219,6 @@ fn load_install_metadata(service_name: &str) -> Result<Metadata> {
     load_metadata(service_name)?.ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))
 }
 
-
 /// Resolve the set of absolute paths to feed restic, plus the list of
 /// `--exclude` patterns.
 ///
@@ -365,7 +364,7 @@ mod tests {
     use super::*;
     use crate::config::schema::{BackupBackend, BackupSettings};
     use crate::registry::service_def::{
-        Arch, HttpsRequirement, IntegrationFlags, PortDef, ServiceDef, ServiceMeta,
+        Arch, BackupConfig, HttpsRequirement, IntegrationFlags, PortDef, ServiceDef, ServiceMeta,
     };
 
     fn def_with_backup(backup_section: Option<BackupConfig>) -> ServiceDef {
@@ -400,59 +399,68 @@ mod tests {
     }
 
     #[test]
-    fn resolve_paths_uses_classifier_when_paths_empty() {
+    fn resolve_paths_whole_folder_when_paths_empty() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
-        std::fs::create_dir(home.join("data")).unwrap();
-        std::fs::create_dir(home.join("cache")).unwrap();
-        // No manifest — classifier treats everything as data.
+        // No explicit `paths` → capture the whole service folder.
         let def = def_with_backup(Some(BackupConfig::default()));
         let (paths, excludes) = resolve_paths(&def.clone(), home).unwrap();
-        let names: Vec<String> = paths
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert!(names.contains(&"data".to_string()), "got {names:?}");
-        assert!(names.contains(&"cache".to_string()), "got {names:?}");
+        assert_eq!(paths, vec![home.to_path_buf()]);
         assert!(excludes.is_empty());
     }
 
     #[test]
-    fn resolve_paths_honours_explicit_list() {
+    fn resolve_paths_explicit_list_plus_config_artifacts() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
+        // Config artifacts present in the home travel with the data.
+        std::fs::write(home.join(".env"), "x").unwrap();
+        std::fs::write(home.join("metadata.toml"), "x").unwrap();
         let def = def_with_backup(Some(BackupConfig {
             paths: vec!["data/uploads".into(), ".backup/db.sql".into()],
             exclude: vec!["data/uploads/cache".into()],
             ..Default::default()
         }));
         let (paths, excludes) = resolve_paths(&def, home).unwrap();
-        assert_eq!(
-            paths,
-            vec![home.join("data/uploads"), home.join(".backup/db.sql")]
+        // Curated data paths honoured...
+        assert!(paths.contains(&home.join("data/uploads")), "got {paths:?}");
+        assert!(
+            paths.contains(&home.join(".backup/db.sql")),
+            "got {paths:?}"
         );
+        // ...and config artifacts added so a restore can rebuild the install.
+        assert!(paths.contains(&home.join(".env")), "got {paths:?}");
+        assert!(paths.contains(&home.join("metadata.toml")), "got {paths:?}");
         assert_eq!(excludes, vec!["data/uploads/cache"]);
     }
 
     #[test]
-    fn resolve_paths_includes_dot_backup_when_hook_declared() {
+    fn config_artifacts_collects_env_metadata_quadlets_configs() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
-        std::fs::create_dir(home.join("data")).unwrap();
-        std::fs::create_dir(home.join(".backup")).unwrap();
-        // Hook declared but no explicit paths → classifier output
-        // plus .backup/.
-        let def = def_with_backup(Some(BackupConfig {
-            pre_backup: Some("dump.sh".into()),
-            ..Default::default()
-        }));
-        let (paths, _) = resolve_paths(&def, home).unwrap();
-        let names: Vec<String> = paths
+        std::fs::write(home.join(".env"), "x").unwrap();
+        std::fs::write(home.join("metadata.toml"), "x").unwrap();
+        std::fs::write(home.join("service.manifest"), "x").unwrap();
+        std::fs::write(home.join("demo.container"), "x").unwrap();
+        std::fs::write(home.join("demo.network"), "x").unwrap();
+        std::fs::create_dir(home.join("configs")).unwrap();
+        let names: Vec<String> = config_artifacts(home)
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
-        assert!(names.contains(&".backup".to_string()), "got {names:?}");
-        assert!(names.contains(&"data".to_string()), "got {names:?}");
+        for want in [
+            ".env",
+            "metadata.toml",
+            "service.manifest",
+            "demo.container",
+            "demo.network",
+            "configs",
+        ] {
+            assert!(
+                names.contains(&want.to_string()),
+                "{want} missing: {names:?}"
+            );
+        }
     }
 
     #[test]
