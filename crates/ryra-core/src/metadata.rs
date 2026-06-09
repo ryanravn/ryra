@@ -119,6 +119,7 @@ registry = "default"
             backup_enabled: true,
             smtp_enabled: true,
             enabled_groups: vec![],
+            runtime: Default::default(),
         };
         let text = toml::to_string(&meta).expect("serialize");
         assert!(
@@ -141,6 +142,7 @@ registry = "default"
             backup_enabled: false,
             smtp_enabled: true,
             enabled_groups: vec![],
+            runtime: Default::default(),
         };
         let text = toml::to_string(&meta).expect("serialize");
         assert!(!text.contains("backup_enabled"), "got: {text}");
