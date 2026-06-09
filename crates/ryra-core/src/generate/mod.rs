@@ -332,6 +332,8 @@ mod tests {
                 architecture: vec![],
                 https: Default::default(),
                 runtime: Default::default(),
+                run: None,
+                build: None,
             },
             requirements: None,
             ports: vec![PortDef {
@@ -369,7 +371,6 @@ mod tests {
             integrations: Default::default(),
             capabilities: Default::default(),
             backup: None,
-            build: None,
         }
     }
 

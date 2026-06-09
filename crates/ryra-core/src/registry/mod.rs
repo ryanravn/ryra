@@ -22,6 +22,15 @@ pub fn find_service(repo_dir: &Path, name: &str) -> Result<RegistryService> {
     let service_toml = svc_dir.join("service.toml");
 
     if !service_toml.exists() {
+        // Project layout: `repo_dir/service.toml` directly (no `<name>/`
+        // subdir), used when `repo_dir` is itself a single-service project.
+        // Accept it when its declared name matches what was requested.
+        if repo_dir.join("service.toml").exists() {
+            let project = load_project_service(repo_dir)?;
+            if project.def.service.name == name {
+                return Ok(project);
+            }
+        }
         return Err(Error::ServiceNotFound {
             name: name.to_string(),
             suggestions: suggest_close_names(repo_dir, name),
@@ -44,6 +53,34 @@ pub fn find_service(repo_dir: &Path, name: &str) -> Result<RegistryService> {
     Ok(RegistryService {
         def,
         service_dir: svc_dir,
+    })
+}
+
+/// Load a single-service project: `<dir>/service.toml` (no `<name>/` subdir),
+/// the way `cargo` reads the `Cargo.toml` in your cwd. The service name comes
+/// from inside the file. Used for `ryra add .` / `ryra add ./path`.
+pub fn load_project_service(dir: &Path) -> Result<RegistryService> {
+    let service_toml = dir.join("service.toml");
+    if !service_toml.exists() {
+        return Err(Error::ServiceNotFound {
+            name: format!("no service.toml in {}", dir.display()),
+            suggestions: Vec::new(),
+        });
+    }
+    let contents = std::fs::read_to_string(&service_toml).map_err(|source| Error::FileRead {
+        path: service_toml.clone(),
+        source,
+    })?;
+    let def: ServiceDef = toml::from_str(&contents).map_err(|source| Error::TomlParse {
+        path: service_toml,
+        source,
+    })?;
+    if let Err(msg) = def.validate() {
+        return Err(Error::ConfigValidation(msg));
+    }
+    Ok(RegistryService {
+        def,
+        service_dir: dir.to_path_buf(),
     })
 }
 

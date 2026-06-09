@@ -377,6 +377,8 @@ mod tests {
                 architecture: vec![Arch::Amd64, Arch::Arm64],
                 https: HttpsRequirement::default(),
                 runtime: Default::default(),
+                run: None,
+                build: None,
             },
             requirements: None,
             ports: vec![PortDef {
@@ -396,7 +398,6 @@ mod tests {
             },
             capabilities: Default::default(),
             backup: backup_section,
-            build: None,
         }
     }
 

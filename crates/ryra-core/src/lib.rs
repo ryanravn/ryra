@@ -991,38 +991,31 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
         generated_secrets,
     } = p;
 
-    let build = reg_service.def.build.as_ref().ok_or_else(|| {
+    let run = reg_service.def.service.run.as_ref().ok_or_else(|| {
         Error::Bundle(format!(
-            "native service '{service_name}' is missing its [build] section"
+            "native service '{service_name}' is missing its `run` command"
         ))
     })?;
-
-    // The installed binary keeps the source artifact's filename.
-    let bin_name = Path::new(&build.bin)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .ok_or_else(|| Error::Bundle(format!("invalid [build].bin: {}", build.bin)))?;
-    let bin_dst = home_dir.join("bin").join(&bin_name);
+    let build = reg_service.def.service.build.as_ref();
 
     let env_content = output.env_file.content.clone();
+    let source_dir = reg_service.service_dir.clone();
     let mut steps = Vec::new();
 
-    // Service home + its data/ (state) and bin/ (the installed binary).
+    // The service home holds STATE only: data/, .env, the unit, the install
+    // record. The service itself runs from its source dir (no binary copy), so
+    // a plain `target/release/app`, `bun run src/index.ts`, or `cargo watch`
+    // all work the same and a rebuild lands where the unit already looks.
     steps.push(Step::CreateDir(home_dir.to_path_buf()));
     steps.push(Step::CreateDir(home_dir.join("data")));
-    steps.push(Step::CreateDir(home_dir.join("bin")));
 
-    // Compile (skipped for a prebuilt binary), then install the artifact.
-    if let Some(command) = &build.command {
+    // Optional build/prepare step (cargo build, bun install) in the source dir.
+    if let Some(command) = build {
         steps.push(Step::Build {
-            dir: reg_service.service_dir.clone(),
+            dir: source_dir.clone(),
             command: command.clone(),
         });
     }
-    steps.push(Step::CopyFile {
-        src: reg_service.service_dir.join(&build.bin),
-        dst: bin_dst.clone(),
-    });
 
     // Install record + the generated .env (carries SERVICE_PORT_HTTP).
     steps.push(Step::WriteFile(GeneratedFile {
@@ -1037,7 +1030,12 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
     let unit_path = home_dir.join(&unit_name);
     steps.push(Step::WriteFile(GeneratedFile {
         path: unit_path.clone(),
-        content: native_unit(home_dir, &bin_dst, &reg_service.def.service.description),
+        content: native_unit(
+            home_dir,
+            &source_dir,
+            run,
+            &reg_service.def.service.description,
+        ),
     }));
     steps.push(Step::Symlink {
         link: systemd_user_dir()?.join(&unit_name),
@@ -1065,8 +1063,17 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
 /// supplies the service `.env` (so `SERVICE_PORT_HTTP` and friends are present);
 /// `SERVICE_HOME` points the process at its data dir, matching the contract a
 /// container service gets via the quadlet.
-fn native_unit(home_dir: &Path, bin: &Path, description: &str) -> String {
+fn native_unit(home_dir: &Path, source_dir: &Path, run: &str, description: &str) -> String {
     let home = home_dir.display();
+    let source = source_dir.display();
+    // ExecStart via `sh -c 'exec <run>'` so a binary path (`target/release/app`),
+    // an interpreter command (`bun run src/index.ts`), and a watcher
+    // (`cargo watch -x run`) all work the same. `exec` replaces the shell so
+    // systemd tracks the real PID and stop/restart reach the process.
+    //
+    // A user-level unit's PATH is minimal, so toolchains installed under $HOME
+    // (bun, cargo, deno, go, pipx) wouldn't be found. Prepend the common ones
+    // (%h = the user's home) so `run = "bun ..."` / `"cargo ..."` just work.
     format!(
         "[Unit]\n\
          Description={description}\n\
@@ -1074,16 +1081,16 @@ fn native_unit(home_dir: &Path, bin: &Path, description: &str) -> String {
          \n\
          [Service]\n\
          Type=simple\n\
-         WorkingDirectory={home}\n\
+         WorkingDirectory={source}\n\
          EnvironmentFile={home}/.env\n\
          Environment=SERVICE_HOME={home}\n\
-         ExecStart={bin}\n\
+         Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/.bun/bin:%h/.deno/bin:%h/go/bin:/usr/local/bin:/usr/bin:/bin\n\
+         ExecStart=/bin/sh -c 'exec {run}'\n\
          Restart=always\n\
          RestartSec=5\n\
          \n\
          [Install]\n\
          WantedBy=default.target\n",
-        bin = bin.display(),
     )
 }
 

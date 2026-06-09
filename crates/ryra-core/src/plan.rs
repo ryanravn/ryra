@@ -99,9 +99,9 @@ pub enum Step {
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
     CopyFile { src: PathBuf, dst: PathBuf },
-    /// Run a build command in `dir` (e.g. `cargo build --release`) to produce
-    /// a `runtime = "native"` service's binary. Runs at apply time, before the
-    /// binary is installed (`CopyFile`) and the unit started.
+    /// Run a build/prepare command in `dir` (e.g. `cargo build --release`,
+    /// `bun install`) for a `runtime = "native"` service. Runs at apply time
+    /// in the service's source dir, before the unit is (re)started.
     Build { dir: PathBuf, command: String },
     /// First-time Tailscale Services setup on this tailnet: ensure ACL
     /// has `tag:ryra-host` + `tag:ryra-service` tagOwners and the

@@ -71,6 +71,10 @@ pub enum Issue {
     /// A service is installed (has a marker'd quadlet) but lacks a
     /// `metadata.toml`. Pre-metadata.toml install — reinstall to migrate.
     MissingMetadata { service: String },
+    /// A `runtime = "native"` service was installed from a local project dir
+    /// that no longer exists (the user deleted or moved their repo). The unit
+    /// runs from that dir, so it can't start or rebuild (a zombie install).
+    NativeSourceMissing { service: String, source: PathBuf },
     /// `loginctl --user enable-linger` hasn't been run, so user-level
     /// services don't survive logout / reboot.
     LingerNotEnabled,
@@ -93,6 +97,7 @@ impl Issue {
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
             Issue::MissingMetadata { .. } => Severity::Info,
+            Issue::NativeSourceMissing { .. } => Severity::Warning,
             Issue::IntegrityScanFailed { .. } => Severity::Warning,
         }
     }
@@ -188,6 +193,19 @@ impl fmt::Display for Issue {
                      \n\
                      Fix (reinstall to migrate):\n  \
                        ryra remove --purge {service} && ryra add {service}",
+                )
+            }
+            Issue::NativeSourceMissing { service, source } => {
+                write!(
+                    f,
+                    "{service} (native) runs from {} but that directory is gone \
+                     (deleted or moved). It can't start or rebuild.\n\
+                     \n\
+                     Fix (restore the source, then re-render):\n  \
+                       # put the project back at {}, then: ryra upgrade {service}\n  \
+                       # or drop the install: ryra remove --purge {service}",
+                    source.display(),
+                    source.display(),
                 )
             }
             Issue::LingerNotEnabled => {
@@ -398,6 +416,37 @@ fn check_install_integrity() -> Vec<Issue> {
                     .is_some_and(|resolved| resolved == path);
                 if !symlink_ok {
                     out.push(Issue::OrphanQuadletFile { path });
+                }
+            }
+        }
+    }
+
+    // Native services run from their source dir (recorded in metadata as the
+    // install's `registry`, which for a local-path install holds the project
+    // path). Quadlet scans above never see them, so check separately that the
+    // source still exists: a deleted/moved repo leaves a zombie install.
+    if let Ok(root) = crate::paths::service_data_root()
+        && let Ok(entries) = std::fs::read_dir(&root)
+    {
+        for entry in entries.flatten() {
+            let Some(svc) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let Ok(Some(meta)) = crate::metadata::load_metadata(&svc) else {
+                continue;
+            };
+            if meta.runtime != crate::registry::service_def::Runtime::Native {
+                continue;
+            }
+            // Only local-path installs record a filesystem path here; registry
+            // installs record a registry name (ryra-managed, not user-deletable).
+            if crate::registry::resolve::is_path_like(&meta.registry) {
+                let source = PathBuf::from(&meta.registry);
+                if !source.is_dir() {
+                    out.push(Issue::NativeSourceMissing {
+                        service: svc,
+                        source,
+                    });
                 }
             }
         }

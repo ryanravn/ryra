@@ -167,8 +167,22 @@ pub async fn run(
         None
     };
 
+    // Local installs are explicit: `ryra add .` (not a bare `ryra add`), so the
+    // command always names what it's installing — a registry ref or a path.
+    if services.is_empty() {
+        bail!(
+            "name a service (e.g. `ryra add forgejo`), or run `ryra add .` in a project directory that has a service.toml"
+        );
+    }
+
     for service_input in services {
-        let service_ref = ServiceRef::parse(service_input)?;
+        // A path-like arg (`.`, `./x`, `/abs`, or an existing dir) installs the
+        // project's `service.toml` directly; otherwise it's a registry ref.
+        let service_ref = if ryra_core::registry::resolve::is_path_like(service_input) {
+            ryra_core::registry::resolve::path_ref(std::path::Path::new(service_input))?
+        } else {
+            ServiceRef::parse(service_input)?
+        };
         let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
         let service = service_ref.service_name();
 
@@ -229,7 +243,11 @@ pub async fn run(
 
         // Warn about untrusted registry services — they can run arbitrary
         // scripts via quadlet ExecStartPre/Post and mount host directories.
-        if service_ref.registry_name() != REGISTRY_DEFAULT && !yes && !dry_run {
+        if !matches!(service_ref, ServiceRef::Path { .. })
+            && service_ref.registry_name() != REGISTRY_DEFAULT
+            && !yes
+            && !dry_run
+        {
             warn_untrusted_service(&reg_service.service_dir, service, interactive)?;
         }
 

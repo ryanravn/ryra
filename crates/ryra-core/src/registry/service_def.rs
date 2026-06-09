@@ -36,10 +36,6 @@ pub struct ServiceDef {
     /// Carries hooks (pre/post dump) and exclude lists.
     #[serde(default)]
     pub backup: Option<BackupConfig>,
-    /// Build/run config for `runtime = "native"` services. Required when the
-    /// runtime is native, forbidden otherwise (enforced in `validate()`).
-    #[serde(default)]
-    pub build: Option<BuildConfig>,
 }
 
 /// Capability declarations on a service.
@@ -93,10 +89,22 @@ pub struct ServiceMeta {
     /// Whether this service requires HTTPS to function.
     #[serde(default)]
     pub https: HttpsRequirement,
-    /// How this service runs: a podman container (default) or a native binary
+    /// How this service runs: a podman container (default) or a native process
     /// under systemd --user.
     #[serde(default)]
     pub runtime: Runtime,
+    /// `runtime = "native"` only: the command ryra runs as the service (the
+    /// unit's `ExecStart`), executed in the service's source dir. A binary
+    /// (`target/release/app`), an interpreter (`bun run src/index.ts`), or a
+    /// watcher (`bun --watch run …`) for save-and-reload. Required for native,
+    /// forbidden for podman (enforced in `validate()`).
+    #[serde(default)]
+    pub run: Option<String>,
+    /// `runtime = "native"` only: optional command run in the source dir before
+    /// the service starts and on every `ryra upgrade` (e.g. `cargo build
+    /// --release`, `bun install`). Omit when `run` needs no build step.
+    #[serde(default)]
+    pub build: Option<String>,
 }
 
 /// What role this service plays in the system.
@@ -116,10 +124,9 @@ pub enum Runtime {
     /// what every catalog service uses.
     #[default]
     Podman,
-    /// A binary run directly under `systemd --user`, no container. Built from
-    /// source in the service folder when `[build].command` is set, or a
-    /// prebuilt binary shipped in the folder. Gets the same port/data/env
-    /// contract as a container service.
+    /// A process run directly under `systemd --user`, no container. ryra runs
+    /// the service's `run` command in its source dir (after the optional
+    /// `build` step), with the same port/data/env contract a container gets.
     Native,
 }
 
@@ -130,19 +137,6 @@ impl Runtime {
     pub fn is_podman(&self) -> bool {
         matches!(self, Runtime::Podman)
     }
-}
-
-/// Build + run configuration for a `runtime = "native"` service.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildConfig {
-    /// Command run in the service folder to produce the binary (e.g.
-    /// `cargo build --release`). Omit when `bin` is a prebuilt binary already
-    /// present in the folder.
-    #[serde(default)]
-    pub command: Option<String>,
-    /// Path, relative to the service folder, to the binary ryra installs and
-    /// runs as `ExecStart`. For a release cargo build, `target/release/<name>`.
-    pub bin: String,
 }
 
 /// CPU architecture for container images.
@@ -513,6 +507,14 @@ impl ServiceDef {
             if !seen_ports.insert(&p.name) {
                 errors.push(format!("duplicate port name '{}'", p.name));
             }
+            // `container_port = 0` is the "fill in later" placeholder `ryra init`
+            // writes for a blank port. Refuse to install until it's a real port.
+            if p.container_port == 0 {
+                errors.push(format!(
+                    "port '{}' has container_port = 0 — fill in the port your service listens on",
+                    p.name
+                ));
+            }
             // Two ports can't be served on the same Tailscale HTTPS port —
             // the second `tailscale serve --https=<p>` would clobber the first.
             if let Some(https) = p.tailscale_https
@@ -657,23 +659,20 @@ impl ServiceDef {
         // section" unrepresentable past load: a native service needs to know
         // which binary to run; a podman service has no business declaring one.
         match self.service.runtime {
-            Runtime::Native => match &self.build {
+            Runtime::Native => match &self.service.run {
                 None => errors.push(
-                    "runtime = \"native\" requires a [build] section with a `bin`".to_string(),
+                    "runtime = \"native\" requires a `run` command under [service]".to_string(),
                 ),
-                Some(b) if b.bin.trim().is_empty() => {
-                    errors.push("[build].bin must not be empty".to_string())
+                Some(run) if run.trim().is_empty() => {
+                    errors.push("[service].run must not be empty".to_string())
                 }
-                Some(b) if b.bin.starts_with('/') || b.bin.contains("..") => errors.push(format!(
-                    "[build].bin {:?} must be a relative path within the service folder",
-                    b.bin
-                )),
                 Some(_) => {}
             },
             Runtime::Podman => {
-                if self.build.is_some() {
+                if self.service.run.is_some() || self.service.build.is_some() {
                     errors.push(
-                        "[build] is only valid for runtime = \"native\" services".to_string(),
+                        "`run` / `build` are only valid for runtime = \"native\" services"
+                            .to_string(),
                     );
                 }
             }

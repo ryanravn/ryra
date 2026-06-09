@@ -17,6 +17,40 @@ pub enum ServiceRef {
     Default(String),
     /// A service from a named custom registry. E.g., `acme/forgejo`.
     Custom { registry: String, service: String },
+    /// A local project directory whose `service.toml` lives at its root
+    /// (`ryra add .` / `ryra add ./path`). `dir` is absolute; `name` is the
+    /// `[service].name` read from the file.
+    Path { dir: PathBuf, name: String },
+}
+
+/// Whether a CLI argument is a local project path rather than a registry
+/// reference. Purely *syntactic* — a path must carry an explicit marker (`.`,
+/// `..`, `./`, `../`, `/`, `~`), exactly like `./script` vs `script` in a shell.
+///
+/// Deliberately does NOT probe the filesystem: if a bare name like `forgejo`
+/// resolved to a local `./forgejo/` folder whenever one happened to exist, the
+/// meaning of `ryra add forgejo` would depend on your cwd, and a planted
+/// `forgejo/service.toml` (which can run arbitrary build/run commands) could
+/// hijack a trusted registry name. A bare word is always a registry ref.
+pub fn is_path_like(input: &str) -> bool {
+    input == "."
+        || input == ".."
+        || input.starts_with("./")
+        || input.starts_with("../")
+        || input.starts_with('/')
+        || input.starts_with('~')
+}
+
+/// Build a [`ServiceRef::Path`] from a directory, reading its `service.toml`
+/// for the canonical service name. The path is absolutized so the install
+/// record survives a later `cd`.
+pub fn path_ref(dir: &Path) -> Result<ServiceRef> {
+    let svc = registry::load_project_service(dir)?;
+    let abs = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    Ok(ServiceRef::Path {
+        dir: abs,
+        name: svc.def.service.name,
+    })
 }
 
 impl ServiceRef {
@@ -67,16 +101,20 @@ impl ServiceRef {
         match self {
             ServiceRef::Default(name) => name,
             ServiceRef::Custom { service, .. } => service,
+            ServiceRef::Path { name, .. } => name,
         }
     }
 
     /// Returns the registry name for this reference.
     ///
-    /// Returns `"default"` for default-registry services.
+    /// Returns `"default"` for default-registry services. For a local path
+    /// install it returns the project directory, which is what gets recorded in
+    /// metadata so `ryra upgrade` can re-read the same `service.toml`.
     pub fn registry_name(&self) -> &str {
         match self {
             ServiceRef::Default(_) => crate::paths::REGISTRY_DEFAULT,
             ServiceRef::Custom { registry, .. } => registry,
+            ServiceRef::Path { dir, .. } => dir.to_str().unwrap_or("local"),
         }
     }
 }
@@ -111,6 +149,8 @@ pub async fn resolve_registry_dir(
     cache_dir: &Path,
 ) -> Result<PathBuf> {
     match service_ref {
+        // A local project: the directory *is* the source, no clone/pull.
+        ServiceRef::Path { dir, .. } => Ok(dir.clone()),
         ServiceRef::Default(_) => resolve_default_registry_dir(cache_dir).await,
         ServiceRef::Custom { registry, .. } => {
             let entry = config
@@ -149,6 +189,20 @@ mod tests {
         assert_eq!(r, ServiceRef::Default("forgejo".to_string()));
         assert_eq!(r.service_name(), "forgejo");
         assert_eq!(r.registry_name(), "default");
+    }
+
+    #[test]
+    fn path_detection_is_syntactic_only() {
+        // Explicit markers → local path.
+        for p in [".", "..", "./app", "../app", "/abs/app", "~/app"] {
+            assert!(is_path_like(p), "{p} should be treated as a path");
+        }
+        // Bare names and registry refs are NEVER paths, regardless of what
+        // directories exist in the cwd. This is the security property: a planted
+        // `./forgejo/` folder can't hijack `ryra add forgejo`.
+        for name in ["forgejo", "acme/forgejo", "caddy", "my-app", "a/b"] {
+            assert!(!is_path_like(name), "{name} must stay a registry ref");
+        }
     }
 
     #[test]

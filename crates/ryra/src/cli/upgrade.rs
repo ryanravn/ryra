@@ -49,7 +49,7 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
         }
     }
 
-    let any_change = plans.iter().any(|p| !p.diff.is_clean());
+    let any_change = plans.iter().any(|p| !p.diff.is_clean() || p.force_apply);
     if !any_change {
         println!("Everything up to date.");
         return Ok(());
@@ -94,7 +94,7 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
     }
 
     for plan in &plans {
-        if plan.diff.is_clean() {
+        if plan.diff.is_clean() && !plan.force_apply {
             continue;
         }
         println!();
@@ -235,6 +235,15 @@ fn prompt_and_patch_env_additions(plan: &mut UpgradeResult) -> Result<()> {
 fn print_summary(plans: &[UpgradeResult]) {
     for plan in plans {
         if plan.diff.is_clean() {
+            // Native services rebuild from source even with a clean config
+            // diff; say so rather than showing an empty entry.
+            if plan.force_apply {
+                println!(
+                    "{}  {}",
+                    style(&plan.service).bold(),
+                    style("(rebuild from source)").dim()
+                );
+            }
             continue;
         }
         println!("{}", style(&plan.service).bold());

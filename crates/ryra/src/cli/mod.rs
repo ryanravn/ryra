@@ -4,6 +4,7 @@ pub mod backup;
 pub mod configure;
 pub mod diff;
 pub mod doctor;
+pub mod init;
 pub mod lifecycle;
 pub mod linger;
 pub mod list;

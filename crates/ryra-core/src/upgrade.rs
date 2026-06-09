@@ -132,6 +132,12 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
 
     let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_DEFAULT {
         ServiceRef::Default(service_name.to_string())
+    } else if crate::registry::resolve::is_path_like(&metadata.registry) {
+        // Local-path install: re-read ./service.toml from the recorded project dir.
+        ServiceRef::Path {
+            dir: PathBuf::from(&metadata.registry),
+            name: service_name.to_string(),
+        }
     } else {
         ServiceRef::Custom {
             registry: metadata.registry.clone(),
@@ -537,6 +543,15 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
         unit: service_name.to_string(),
     });
 
+    // Native services rebuild from source on upgrade (the `Build` step) and
+    // restart. A source change leaves the rendered config clean, so force the
+    // apply; otherwise the CLI would short-circuit on the clean diff and never
+    // rebuild. The plan already ends in RestartService.
+    let force_apply = matches!(
+        crate::metadata::load_metadata(service_name),
+        Ok(Some(m)) if m.runtime == crate::registry::service_def::Runtime::Native
+    );
+
     Ok(UpgradeResult {
         service: service_name.to_string(),
         diff,
@@ -547,6 +562,7 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
         // future callers need it. Keep it empty for now to avoid
         // confusing consumers.
         planned_files: planned,
+        force_apply,
     })
 }
 
@@ -557,6 +573,10 @@ pub struct UpgradeResult {
     /// `None` when no files would be overwritten or removed.
     pub backup_dir: Option<PathBuf>,
     pub planned_files: BTreeMap<PathBuf, String>,
+    /// Apply even when the config diff is clean. True for native services: a
+    /// source rebuild isn't visible in the rendered config, so the plan must
+    /// still run (the `SyncBinary` step then no-ops if the binary is unchanged).
+    pub force_apply: bool,
 }
 
 /// One available backup snapshot for a service.

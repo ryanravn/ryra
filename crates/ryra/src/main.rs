@@ -25,8 +25,9 @@ enum Command {
     },
     /// Add and start a service
     Add {
-        /// Service name(s) from registry (e.g., "forgejo" or "acme/forgejo")
-        #[arg(required = true, num_args = 1..)]
+        /// Service(s): a registry name ("forgejo" / "acme/forgejo"), a local
+        /// project path ("." / "./path"), or omit to use ./service.toml here.
+        #[arg(num_args = 0..)]
         services: Vec<String>,
         /// Public URL for this service (e.g., https://docs.example.com)
         #[arg(long)]
@@ -212,6 +213,23 @@ enum Command {
     },
     /// Diagnose environment + install state and report issues with fixes
     Doctor,
+    /// Scaffold a ryra service.toml + test.toml in the current project.
+    ///
+    /// Additive (like `git init`): detects the project type (Cargo.toml / Bun
+    /// package.json) to infer the run/build commands, prompts for name +
+    /// description + port (defaults pre-filled), and writes the two files. Never
+    /// touches your source. Then `ryra add` runs it.
+    Init {
+        /// Service name (default: current directory name)
+        #[arg(long)]
+        name: Option<String>,
+        /// HTTP port the service listens on (skips the prompt)
+        #[arg(long)]
+        port: Option<u16>,
+        /// Accept all defaults without prompting
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Preview what `ryra upgrade` would change. Read-only.
     Diff {
         /// Service name(s). Omit to diff every installed service.
@@ -404,6 +422,11 @@ async fn main() -> anyhow::Result<()> {
         } => cli::remove::run(services, all, orphans, yes, dry_run, purge).await?,
         Command::Reset { yes, dry_run } => cli::reset::run(yes, dry_run).await?,
         Command::Doctor => cli::doctor::run()?,
+        Command::Init {
+            ref name,
+            port,
+            yes,
+        } => cli::init::run(name.as_deref(), port, yes)?,
         Command::Diff { ref services } => cli::diff::run(services).await?,
         Command::Upgrade {
             ref services,
