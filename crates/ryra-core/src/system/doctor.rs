@@ -75,6 +75,16 @@ pub enum Issue {
     /// that no longer exists (the user deleted or moved their repo). The unit
     /// runs from that dir, so it can't start or rebuild (a zombie install).
     NativeSourceMissing { service: String, source: PathBuf },
+    /// A quadlet references an `EnvironmentFile=` that doesn't exist on
+    /// disk. The unit fails to start, or starts with every `${SERVICE_*}`
+    /// var expanding to an empty string. Usually means the service's data
+    /// dir was moved or renamed (e.g. `mv grafana grafana-test`) or the
+    /// `.env` was deleted by hand.
+    BrokenEnvFileRef {
+        service: String,
+        quadlet: PathBuf,
+        env_file: PathBuf,
+    },
     /// `loginctl --user enable-linger` hasn't been run, so user-level
     /// services don't survive logout / reboot.
     LingerNotEnabled,
@@ -95,6 +105,7 @@ impl Issue {
             }
             Issue::TailscaleCliMissing | Issue::TailscaleNotLoggedIn => Severity::Warning,
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
+            Issue::BrokenEnvFileRef { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
             Issue::MissingMetadata { .. } => Severity::Info,
             Issue::NativeSourceMissing { .. } => Severity::Warning,
@@ -162,11 +173,14 @@ impl fmt::Display for Issue {
                 write!(
                     f,
                     "{} is a dangling symlink → {} (target missing).\n\
-                     The service's data dir was deleted but the systemd unit pointer wasn't.\n\
+                     The service's data dir was moved, renamed, or deleted, but the \
+                     systemd unit pointer wasn't updated.\n\
                      \n\
-                     Fix:\n  \
-                       rm {}",
+                     Fix (restore the dir if it was moved, or drop the unit):\n  \
+                       # put the data dir back so {} exists again\n  \
+                       # or: rm {}",
                     link.display(),
+                    target.display(),
                     target.display(),
                     link.display(),
                 )
@@ -206,6 +220,29 @@ impl fmt::Display for Issue {
                        # or drop the install: ryra remove --purge {service}",
                     source.display(),
                     source.display(),
+                )
+            }
+            Issue::BrokenEnvFileRef {
+                service,
+                quadlet,
+                env_file,
+            } => {
+                write!(
+                    f,
+                    "{} references EnvironmentFile={} but that file doesn't exist.\n\
+                     The unit can't start — and ${{SERVICE_HOME}}/${{SERVICE_PORT_*}} in it \
+                     would expand to empty strings.\n\
+                     Usually the service's data dir was moved or renamed, or the .env was deleted.\n\
+                     \n\
+                     Fix (restore the path, or reinstall):\n  \
+                       # put the data back at {}, then: systemctl --user restart {service}\n  \
+                       # or: ryra remove --purge {service} && ryra add {service}",
+                    quadlet.display(),
+                    env_file.display(),
+                    env_file
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("?"))
+                        .display(),
                 )
             }
             Issue::LingerNotEnabled => {
@@ -321,6 +358,37 @@ fn check_linger_enabled() -> bool {
 /// home dirs: dangling symlinks, orphan quadlet files, and installed
 /// services missing `metadata.toml`. Returns the issues in the order
 /// they're discovered.
+/// Scan a generated `.container` file for `EnvironmentFile=` lines whose
+/// target doesn't exist. `%h` is resolved like systemd would; a leading `-`
+/// (systemd's ignore-missing marker) means absence is by design — skipped.
+fn broken_env_file_refs(service: &str, quadlet_path: &std::path::Path) -> Vec<Issue> {
+    let Ok(content) = std::fs::read_to_string(quadlet_path) else {
+        return Vec::new();
+    };
+    let Ok(home) = crate::home_dir() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let Some(value) = line.trim().strip_prefix("EnvironmentFile=") else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() || value.starts_with('-') {
+            continue;
+        }
+        let resolved = PathBuf::from(value.replace("%h", &home.to_string_lossy()));
+        if !resolved.exists() && !out.iter().any(|i| matches!(i, Issue::BrokenEnvFileRef { env_file, .. } if *env_file == resolved)) {
+            out.push(Issue::BrokenEnvFileRef {
+                service: service.to_string(),
+                quadlet: quadlet_path.to_path_buf(),
+                env_file: resolved,
+            });
+        }
+    }
+    out
+}
+
 fn check_install_integrity() -> Vec<Issue> {
     let mut out = Vec::new();
     let Ok(quadlet) = crate::quadlet_dir() else {
@@ -415,7 +483,10 @@ fn check_install_integrity() -> Vec<Issue> {
                     })
                     .is_some_and(|resolved| resolved == path);
                 if !symlink_ok {
-                    out.push(Issue::OrphanQuadletFile { path });
+                    out.push(Issue::OrphanQuadletFile { path: path.clone() });
+                }
+                if n.ends_with(".container") {
+                    out.extend(broken_env_file_refs(svc, &path));
                 }
             }
         }
