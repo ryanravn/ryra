@@ -1112,25 +1112,6 @@ async fn scp_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> R
     Ok(())
 }
 
-/// SCP a local directory recursively into the VM at the given remote path.
-async fn scp_dir_to_vm(machine: &Machine, local_path: &Path, remote_path: &str) -> Result<()> {
-    let dest = format!("ryra@{}:{remote_path}", machine.ssh_host);
-    let mut args = scp_base_args(machine);
-    args.push("-r".into());
-    args.push(local_path.to_string_lossy().into_owned());
-    args.push(dest);
-
-    let status = Command::new("scp")
-        .args(&args)
-        .status()
-        .await
-        .with_context(|| format!("failed to SCP {} to VM", local_path.display()))?;
-    if !status.success() {
-        anyhow::bail!("SCP of {} failed", local_path.display());
-    }
-    Ok(())
-}
-
 /// SCP a remote directory recursively from the VM to the given local path.
 /// The local parent directory must exist; the remote directory contents are
 /// written into `local_path`.
@@ -1166,35 +1147,68 @@ pub async fn copy_ryra_to_vm(machine: &Machine, ryra_bin: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy test fixtures into a running VM via SCP.
+/// Copy test fixtures into a running VM.
 ///
 /// The fixtures_dir contains service directories (e.g. whoami/, postgres/).
 /// These get copied into /opt/ryra-test-registry/ so ryra can find them
 /// at /opt/ryra-test-registry/whoami/service.toml etc.
+///
+/// Packed as one tarball (single SCP) that excludes host-side playwright
+/// artifacts. The `node_modules` exclusion matters for correctness, not
+/// just transfer size: if the host's `registry/tests/browser/node_modules`
+/// were copied in, browser tests would run the host's playwright version
+/// against the browser image's baked chromium cache and fail on any
+/// version skew (playwright binaries are looked up by build number, e.g.
+/// `chromium_headless_shell-1217` vs a baked `-1223`). With no
+/// `node_modules` present, the runner symlinks
+/// `/opt/playwright/node_modules`, which always matches the baked
+/// browsers because both were installed in the same image-prep step.
 pub async fn copy_fixtures_to_vm(machine: &Machine, fixtures_dir: &Path) -> Result<()> {
     if !fixtures_dir.exists() {
         return Ok(());
     }
 
-    // Create destination dir (needs sudo — /opt is root-owned, chown to ryra user)
-    machine
-        .exec(
-            "sudo mkdir -p /opt/ryra-test-registry && sudo chown ryra:ryra /opt/ryra-test-registry",
-        )
-        .await?;
-
-    // SCP each service dir individually to avoid nesting issues
-    // (scp -r dir/ remote:dest/ creates dest/dir/, not dest/contents/)
-    let mut entries = tokio::fs::read_dir(fixtures_dir)
+    let tar_path = std::env::temp_dir().join(format!(
+        "ryra-test-registry-{}-{}.tar",
+        std::process::id(),
+        machine.ssh_port
+    ));
+    let status = Command::new("tar")
+        .args([
+            "--exclude=node_modules",
+            "--exclude=test-results",
+            "--exclude=playwright-report",
+            "-cf",
+        ])
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(fixtures_dir)
+        .arg(".")
+        .status()
         .await
-        .context("failed to read fixtures directory")?;
-
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        scp_dir_to_vm(machine, &path, "/opt/ryra-test-registry/").await?;
+        .context("failed to run tar for the test registry")?;
+    if !status.success() {
+        let _ = tokio::fs::remove_file(&tar_path).await;
+        anyhow::bail!("tar of {} failed", fixtures_dir.display());
     }
 
-    Ok(())
+    let copy_result = async {
+        scp_to_vm(machine, &tar_path, "/tmp/ryra-test-registry.tar").await?;
+        // /opt is root-owned: create + chown to the ryra user, then unpack.
+        machine
+            .exec(
+                "sudo mkdir -p /opt/ryra-test-registry && \
+                 sudo chown ryra:ryra /opt/ryra-test-registry && \
+                 tar -xf /tmp/ryra-test-registry.tar -C /opt/ryra-test-registry && \
+                 rm /tmp/ryra-test-registry.tar",
+            )
+            .await
+            .map(|_| ())
+    }
+    .await;
+    // The local tarball is scratch either way; clean up before surfacing errors.
+    let _ = tokio::fs::remove_file(&tar_path).await;
+    copy_result
 }
 
 /// Copy a local project directory (quadlet files + test.toml) into a running VM.
