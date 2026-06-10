@@ -327,8 +327,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
         // `.env` ryra never wrote. On default setups the paths are equal
         // and the quadlet is used exactly as authored.
         if data_root != canonical_data_root {
-            content =
-                content.replace("%h/.local/share/services", &data_root.to_string_lossy());
+            content = content.replace("%h/.local/share/services", &data_root.to_string_lossy());
         }
 
         // Stamp every generated quadlet with a provenance marker so

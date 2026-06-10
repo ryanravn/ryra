@@ -378,7 +378,11 @@ fn broken_env_file_refs(service: &str, quadlet_path: &std::path::Path) -> Vec<Is
             continue;
         }
         let resolved = PathBuf::from(value.replace("%h", &home.to_string_lossy()));
-        if !resolved.exists() && !out.iter().any(|i| matches!(i, Issue::BrokenEnvFileRef { env_file, .. } if *env_file == resolved)) {
+        if !resolved.exists()
+            && !out.iter().any(
+                |i| matches!(i, Issue::BrokenEnvFileRef { env_file, .. } if *env_file == resolved),
+            )
+        {
             out.push(Issue::BrokenEnvFileRef {
                 service: service.to_string(),
                 quadlet: quadlet_path.to_path_buf(),
