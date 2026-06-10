@@ -166,10 +166,17 @@ fn retroactive_network_joins(
             if content.contains(&marker) {
                 continue;
             }
+            // The quadlet dir holds symlinks into service homes — patch the
+            // real file, not the link: atomic_write (correctly) refuses to
+            // overwrite a symlink with a regular file.
+            let real_path = match std::fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
             let updated =
                 generate::bundle::inject_networks(&content, std::slice::from_ref(&network_name));
             steps.push(Step::WriteFile(GeneratedFile {
-                path,
+                path: real_path,
                 content: updated,
             }));
             // Unit name is the .container filename minus extension; systemd's
