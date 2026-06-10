@@ -32,20 +32,41 @@ pub fn target_file_path(store_name: &str, consumer_name: &str) -> Result<PathBuf
 }
 
 /// Step writing the file_sd scrape target for a `[metrics]`-declaring
-/// service. `None` when the def declares no metrics endpoint.
-pub fn scrape_target_step(store_name: &str, consumer: &ServiceDef) -> Result<Option<Step>> {
+/// service. `None` when the def declares no metrics endpoint, or when a
+/// host-network service's resolved port isn't known.
+///
+/// `resolved_host_port` is the host port allocated for the `[metrics]`
+/// port entry — only consulted for `host_network = true` services, whose
+/// target is `host.containers.internal:<host_port>` (they can't join the
+/// store's bridge network, so container DNS doesn't apply).
+pub fn scrape_target_step(
+    store_name: &str,
+    consumer: &ServiceDef,
+    resolved_host_port: Option<u16>,
+) -> Result<Option<Step>> {
     let Some(metrics) = &consumer.metrics else {
         return Ok(None);
     };
     let name = &consumer.service.name;
-    let Some(port) = consumer.ports.iter().find(|p| p.name == metrics.port) else {
-        // validate() rejects this at load time; never reached for defs
-        // that came through the normal parse path.
-        return Ok(None);
+    let target = if metrics.host_network {
+        let Some(host_port) = resolved_host_port else {
+            // Without the resolved port there is nothing valid to write.
+            // Reached only when an installed service's .env is missing
+            // its SERVICE_PORT_* line — a broken install that `ryra
+            // doctor` flags; don't compound it with a bogus target.
+            return Ok(None);
+        };
+        format!("host.containers.internal:{host_port}")
+    } else {
+        let Some(port) = consumer.ports.iter().find(|p| p.name == metrics.port) else {
+            // validate() rejects this at load time; never reached for
+            // defs that came through the normal parse path.
+            return Ok(None);
+        };
+        format!("{name}:{}", port.container_port)
     };
     let content = format!(
-        "[{{\"targets\": [\"{name}:{port}\"], \"labels\": {{\"service\": \"{name}\", \"__metrics_path__\": \"{path}\"}}}}]\n",
-        port = port.container_port,
+        "[{{\"targets\": [\"{target}\"], \"labels\": {{\"service\": \"{name}\", \"__metrics_path__\": \"{path}\"}}}}]\n",
         path = metrics.path,
     );
     Ok(Some(Step::WriteFile(GeneratedFile {
@@ -103,21 +124,42 @@ mod tests {
     #[test]
     fn scrape_target_uses_container_port_and_default_path() {
         let def = def_with_metrics("forgejo", "http", 3000);
-        let step = scrape_target_step("prometheus", &def)
+        let step = scrape_target_step("prometheus", &def, Some(38123))
             .unwrap_or_else(|e| unreachable!("step build should not fail: {e}"));
         let Some(Step::WriteFile(file)) = step else {
             unreachable!("expected a WriteFile step")
         };
+        // Bridge-network service: container DNS + container port; the
+        // resolved host port is irrelevant.
         assert!(file.content.contains("\"forgejo:3000\""));
         assert!(file.content.contains("\"__metrics_path__\": \"/metrics\""));
         assert!(file.path.ends_with("prometheus/targets/forgejo.json"));
     }
 
     #[test]
+    fn host_network_target_uses_host_gateway_and_host_port() {
+        let mut def = def_with_metrics("node-exporter", "http", 9100);
+        if let Some(m) = def.metrics.as_mut() {
+            m.host_network = true;
+        }
+        let step = scrape_target_step("prometheus", &def, Some(9100))
+            .unwrap_or_else(|e| unreachable!("step build should not fail: {e}"));
+        let Some(Step::WriteFile(file)) = step else {
+            unreachable!("expected a WriteFile step")
+        };
+        assert!(file.content.contains("\"host.containers.internal:9100\""));
+
+        // Unknown host port → no target rather than a bogus one.
+        let none = scrape_target_step("prometheus", &def, None)
+            .unwrap_or_else(|e| unreachable!("step build should not fail: {e}"));
+        assert!(none.is_none());
+    }
+
+    #[test]
     fn no_metrics_decl_no_step() {
         let mut def = def_with_metrics("plain", "http", 80);
         def.metrics = None;
-        let step = scrape_target_step("prometheus", &def)
+        let step = scrape_target_step("prometheus", &def, None)
             .unwrap_or_else(|e| unreachable!("step build should not fail: {e}"));
         assert!(step.is_none());
     }

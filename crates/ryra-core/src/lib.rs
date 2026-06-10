@@ -263,11 +263,22 @@ fn retroactive_metrics_wiring(
         let Some(def) = capability::lookup_registry_def(&svc.name) else {
             continue;
         };
-        let mut wired = false;
         let mut dashboard_wired = false;
-        if let Ok(Some(step)) = metrics_bridge::scrape_target_step(store_name, &def) {
+        let mut needs_join = false;
+        // Host-network consumers (node-exporter) are scraped via the host
+        // gateway at their *resolved* host port, parsed back out of the
+        // installed .env — and they never join the store's bridge network
+        // (Network=host conflicts with bridge networks).
+        let metrics_host_port = def.metrics.as_ref().and_then(|m| {
+            upgrade::read_existing_ports(&svc.name)
+                .ok()
+                .and_then(|ports| ports.get(&m.port.to_ascii_lowercase()).copied())
+        });
+        if let Ok(Some(step)) =
+            metrics_bridge::scrape_target_step(store_name, &def, metrics_host_port)
+        {
             steps.push(step);
-            wired = true;
+            needs_join = def.metrics.as_ref().is_some_and(|m| !m.host_network);
         }
         if def
             .capabilities
@@ -277,10 +288,10 @@ fn retroactive_metrics_wiring(
             && let Ok(step) = metrics_bridge::datasource_step(&svc.name, store_name, port)
         {
             steps.push(step);
-            wired = true;
             dashboard_wired = true;
+            needs_join = true;
         }
-        if !wired {
+        if !needs_join {
             continue;
         }
         let join_steps =
@@ -704,7 +715,13 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         && reg_service.def.integrations.smtp
         && !reg_service.def.mappings.smtp.is_empty()
         && config.smtp.is_some();
-    let wants_metrics = reg_service.def.metrics.is_some()
+    // Host-network metrics services (node-exporter) can't join a bridge
+    // network — their scrape target goes via the host gateway instead.
+    let wants_metrics = reg_service
+        .def
+        .metrics
+        .as_ref()
+        .is_some_and(|m| !m.host_network)
         || capability::def_provides(&reg_service.def, Capability::MetricsDashboard);
     let extra_networks = resolve_extra_networks(
         service_name,
@@ -1032,7 +1049,15 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // everything already on the machine.
     if mode == PlanMode::Add {
         if let Some(store) = &metrics_store {
-            if let Some(step) = metrics_bridge::scrape_target_step(store, &reg_service.def)? {
+            let metrics_host_port = reg_service.def.metrics.as_ref().and_then(|m| {
+                resolved_ports
+                    .iter()
+                    .find(|(n, _)| n == &m.port)
+                    .map(|(_, p)| *p)
+            });
+            if let Some(step) =
+                metrics_bridge::scrape_target_step(store, &reg_service.def, metrics_host_port)?
+            {
                 steps.push(step);
             }
             if capability::def_provides(&reg_service.def, Capability::MetricsDashboard)

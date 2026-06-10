@@ -53,6 +53,13 @@ pub struct MetricsDef {
     /// HTTP path of the endpoint.
     #[serde(default = "default_metrics_path")]
     pub path: String,
+    /// The service runs with `Network=host` (e.g. node-exporter, which
+    /// needs the real interfaces). It can't join the store's bridge
+    /// network, so the scrape target addresses the podman host gateway
+    /// (`host.containers.internal`) at the *resolved host port* instead
+    /// of container DNS.
+    #[serde(default)]
+    pub host_network: bool,
 }
 
 fn default_metrics_path() -> String {

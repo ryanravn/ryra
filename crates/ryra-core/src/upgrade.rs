@@ -222,8 +222,9 @@ fn read_existing_env_keys(service_name: &str) -> Result<BTreeMap<String, String>
 
 /// Parse `SERVICE_PORT_<NAME>=<port>` lines out of an installed service's
 /// `.env`. Returns a name → port map (lowercased name, matching the
-/// `[[ports]]` definition in service.toml).
-fn read_existing_ports(service_name: &str) -> Result<BTreeMap<String, u16>> {
+/// `[[ports]]` definition in service.toml). Also used by the metrics
+/// bridge to resolve host-network scrape targets retroactively.
+pub(crate) fn read_existing_ports(service_name: &str) -> Result<BTreeMap<String, u16>> {
     let env_path = service_home(service_name)?.join(".env");
     let mut overrides = BTreeMap::new();
     let content = match std::fs::read_to_string(&env_path) {
