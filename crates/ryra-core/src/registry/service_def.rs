@@ -133,6 +133,12 @@ pub struct ServiceMeta {
     /// --release`, `bun install`). Omit when `run` needs no build step.
     #[serde(default)]
     pub build: Option<String>,
+    /// Free-text guidance printed once after a successful `ryra add` —
+    /// truly-unavoidable manual steps (initial web wizard, recommended
+    /// dashboard imports). Keep it short; everything automatable should
+    /// be automated instead.
+    #[serde(default)]
+    pub post_install: Option<String>,
 }
 
 /// What role this service plays in the system.

@@ -379,6 +379,7 @@ mod tests {
                 runtime: Default::default(),
                 run: None,
                 build: None,
+                post_install: None,
             },
             requirements: None,
             ports: vec![PortDef {

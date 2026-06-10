@@ -1038,6 +1038,16 @@ pub async fn run(request: AddRequest) -> Result<()> {
             println!("  systemctl --user restart {service}  # restart (picks up .env changes)");
             println!("  journalctl --user-unit {service}.service -f  # follow logs");
 
+            // Registry-authored guidance for the manual steps that can't be
+            // automated (web wizards, recommended dashboard imports, …).
+            if let Some(notes) = &reg_service.def.service.post_install {
+                println!();
+                println!("Next steps:");
+                for line in notes.trim_end().lines() {
+                    println!("  {line}");
+                }
+            }
+
             // Caddy-only: tell the user which TLS mode they got and where
             // to switch to a different one. The snippet path is the only
             // thing they need to know to swap in Cloudflare DNS-01,

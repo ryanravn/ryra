@@ -154,7 +154,7 @@ Available when `--auth` is used and an auth provider (authelia) is installed:
 
 ## Service Configuration Philosophy
 
-Prefer environment variables and declarative config for all service setup. When a service can't be fully configured through envs alone (e.g., it requires plugin installation, API calls, or config file generation), use quadlet `ExecStartPre=` / `ExecStartPost=` scripts to automate those steps. The goal is that `ryra add <service>` is turnkey — the user shouldn't need to manually configure the service afterward. If some manual steps are truly unavoidable (e.g., initial web wizard, admin account creation via UI), document them clearly in the service description and guide the user through them after installation.
+Prefer environment variables and declarative config for all service setup. When a service can't be fully configured through envs alone (e.g., it requires plugin installation, API calls, or config file generation), use quadlet `ExecStartPre=` / `ExecStartPost=` scripts to automate those steps. The goal is that `ryra add <service>` is turnkey — the user shouldn't need to manually configure the service afterward. If some manual steps are truly unavoidable (e.g., initial web wizard, recommended dashboard imports), put them in `post_install` under `[service]` — printed once as "Next steps:" after a successful `ryra add`.
 
 ## Podman & Quadlet-Native Solutions
 
