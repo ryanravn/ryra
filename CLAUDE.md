@@ -129,7 +129,7 @@ When `ryra add <service> --auth` is called:
 
 ### Pre-start and post-start scripts
 
-Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash %h/.local/share/services/<service>/configs/scripts/<script>.sh`.
+Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash ${SERVICE_HOME}/configs/scripts/<script>.sh`.
 
 The service's `.env` file is loaded by the quadlet `EnvironmentFile=` directive, so env vars like `$SERVICE_PORT_HTTP`, `$OAUTH_CLIENT_ID`, etc. are available to ExecStartPost scripts. Scripts access bind-mounted volumes via `$SERVICE_HOME` (pointing to `~/.local/share/services/<service>/`).
 
@@ -153,9 +153,22 @@ Always prefer podman-native and quadlet-native features over workarounds:
 
 - **Networking**: Use podman networks for cross-container DNS resolution instead of `AddHost` with hardcoded IPs. Services with `--auth` join the auth provider's network for direct HTTP communication.
 - **Service discovery**: Containers on the same network can resolve each other by container name (e.g., `systemd-authelia`). Use this instead of `host.containers.internal` or IP addresses
-- **Volumes**: Bind-mount everything under `~/.local/share/services/<svc>/<role>/` (db-data, data, media, etc.). Don't ship `.volume` files — named volumes hide state in podman's namespace and split the user's backup target. Use `Volume=%h/.local/share/services/<svc>/<role>:/container/path:Z,U`.
+- **Volumes**: Bind-mount everything under `~/.local/share/services/<svc>/<role>/` (db-data, data, media, etc.). Don't ship `.volume` files — named volumes hide state in podman's namespace and split the user's backup target. Use `Volume=${SERVICE_HOME}/<role>:/container/path:Z,U`.
 - **Dependencies**: Use `After=` and `Requires=` in quadlet `[Unit]` sections for startup ordering
 - **Health checks**: Use quadlet `HealthCmd=` instead of custom wait scripts
+
+### Quadlets are plain podman files
+
+Registry quadlets are NOT templates. Ryra uses them exactly as authored (plus additive injections: networks, `--auth` volumes, ExecStartPre). They work without ryra too: copy the `.container` file into `~/.config/containers/systemd/` and write the `.env` by hand. Requires podman >= 5.3 (quadlet passes port values through to the podman command line instead of validating them; systemd then expands `${...}` in the generated `ExecStart=` from the `[Service]` section's `EnvironmentFile=`).
+
+The contract:
+
+- `${SERVICE_PORT_<NAME>}` — resolved host port for the `[[ports]]` entry `<name>`, from the `.env`. Works in `PublishPort=`, `Volume=`, `ExecStartPre/Post=`. Core validates every reference against declared ports at add time (an undefined var would silently expand to "" at runtime).
+- `${SERVICE_HOME}` — the service's data dir (`~/.local/share/services/<svc>`), from the `.env`. Use it for all bind mounts and script paths.
+- `EnvironmentFile=%h/.local/share/services/<svc>/.env` — the one literal path in the unit. Systemd resolves `EnvironmentFile=` before any env exists, so it cannot be env-based; `%h` is a native systemd specifier. Both `[Container]` (container env) and `[Service]` (expansion + ExecStartPre/Post env) need the line.
+- `${POSTGRES_USER}`-style vars in `HealthCmd=` expand inside the container at runtime, as before.
+
+Never add install-time rewrites of quadlet content in core. The single exception: when the resolved data root differs from the canonical `~/.local/share/services` (the `RYRA_DATA_DIR` test sandbox, or a custom `XDG_DATA_HOME`), core repoints the `EnvironmentFile=` path so the unit reads the `.env` ryra actually wrote. Default setups use the file byte-for-byte (plus provenance header and injections).
 
 ## System Dependencies
 

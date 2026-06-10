@@ -4,6 +4,13 @@ use crate::error::{Error, Result};
 use crate::generate::GeneratedFile;
 
 /// Parameters for [`process_quadlet_bundle`].
+///
+/// Registry quadlets are plain podman files, used exactly as authored.
+/// `${SERVICE_PORT_*}` / `${SERVICE_HOME}` are runtime env expansions:
+/// quadlet passes them through to the generated `ExecStart=podman run ...`
+/// line (podman >= 5.3), where systemd expands them from the `[Service]`
+/// section's `EnvironmentFile=` — the `.env` ryra writes. The quadlet
+/// therefore also works without ryra: copy it, write the `.env` by hand.
 pub struct ProcessBundleParams<'a> {
     pub service_dir: &'a Path,
     pub service_name: &'a str,
@@ -13,10 +20,11 @@ pub struct ProcessBundleParams<'a> {
     pub podman_args: &'a [String],
     /// Extra ExecStartPre commands to inject into [Service] section.
     pub extra_exec_start_pre: &'a [String],
-    /// Port variable expansions (e.g., `SERVICE_PORT_HTTP` → `8080`).
-    /// Quadlet `PublishPort=${VAR}:container_port` directives need literal
-    /// values because systemd doesn't expand EnvironmentFile vars in directives.
-    pub port_vars: &'a [(String, String)],
+    /// Declared `[[ports]]` names from service.toml. Every
+    /// `${SERVICE_PORT_<NAME>}` in a quadlet must match one — runtime env
+    /// expansion can't catch typos (an undefined var expands to ""), so
+    /// this is validated here, at the boundary.
+    pub port_names: &'a [String],
 }
 
 /// Result of processing a quadlet bundle from the registry.
@@ -56,15 +64,89 @@ pub fn extract_images(files: &[GeneratedFile]) -> Vec<String> {
     images
 }
 
+/// Validate the runtime env references a quadlet relies on.
+///
+/// Rejects leftover `{{...}}` template syntax (quadlets are plain podman
+/// files, not templates) and any `${SERVICE_PORT_<NAME>}` that doesn't match
+/// a declared `[[ports]]` entry. systemd expands an undefined var to an empty
+/// string at runtime, which produces a confusingly broken unit — so the typo
+/// is caught here, at add time, instead.
+fn validate_quadlet_env_refs(
+    content: &str,
+    file_name: &str,
+    params: &ProcessBundleParams<'_>,
+) -> Result<()> {
+    if content.contains("{{") {
+        return Err(Error::Bundle(format!(
+            "quadlet '{}' for service '{}' contains '{{{{...}}}}' template syntax — quadlets \
+             are plain podman files; use runtime env vars (${{SERVICE_PORT_<NAME>}}, \
+             ${{SERVICE_HOME}}) instead",
+            file_name, params.service_name
+        )));
+    }
+    let mut rest = content;
+    while let Some(idx) = rest.find("${SERVICE_PORT_") {
+        let tail = &rest[idx + "${SERVICE_PORT_".len()..];
+        let Some(end) = tail.find('}') else { break };
+        let var_name = &tail[..end];
+        if !params
+            .port_names
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(var_name))
+        {
+            return Err(Error::Bundle(format!(
+                "quadlet '{}' for service '{}' references ${{SERVICE_PORT_{}}} but \
+                 service.toml declares no [[ports]] entry named '{}'",
+                file_name,
+                params.service_name,
+                var_name,
+                var_name.to_lowercase()
+            )));
+        }
+        rest = &tail[end..];
+    }
+
+    // ${SERVICE_*} vars expand in the generated ExecStart from *service-level*
+    // env — a `[Container]` EnvironmentFile only feeds the container. A unit
+    // that uses the vars without a `[Service]` EnvironmentFile would expand
+    // them to empty strings at runtime, silently mounting wrong paths.
+    let uses_service_vars =
+        content.contains("${SERVICE_HOME}") || content.contains("${SERVICE_PORT_");
+    if uses_service_vars && !section_has_line(content, "[Service]", "EnvironmentFile=") {
+        return Err(Error::Bundle(format!(
+            "quadlet '{}' for service '{}' uses ${{SERVICE_*}} vars but has no \
+             EnvironmentFile= in its [Service] section — systemd would expand them \
+             to empty strings",
+            file_name, params.service_name
+        )));
+    }
+    Ok(())
+}
+
+/// Whether `section` (e.g. `[Service]`) contains a line starting with `prefix`.
+fn section_has_line(content: &str, section: &str, prefix: &str) -> bool {
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed == section;
+        } else if in_section && trimmed.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Extract host directories from bind mount `Volume=` lines in `.container` files.
 /// Bind mounts are `Volume=/host/path:/container/path:flags` (NOT `.volume:` references).
 /// These directories must exist before the container starts.
 ///
-/// Expands `%h` to the user's home directory (systemd specifier).
-/// File bind mounts (host path has a file extension like `.crt`, `.yml`) are skipped —
-/// only directory mounts need pre-creation.
+/// Expands `%h` (systemd specifier) and `${SERVICE_HOME}` (runtime env from
+/// the service `.env`) — ryra knows both values at install time, and the
+/// dirs must exist before the unit first starts.
 pub fn extract_bind_mount_dirs(
     files: &[GeneratedFile],
+    service_home: &Path,
 ) -> crate::error::Result<Vec<std::path::PathBuf>> {
     let home = crate::home_dir()?;
     let mut dirs = Vec::new();
@@ -86,8 +168,10 @@ pub fn extract_bind_mount_dirs(
                     if host_path.is_empty() {
                         continue;
                     }
-                    // Expand %h systemd specifier to actual home directory
-                    let expanded = host_path.replace("%h", &home.to_string_lossy());
+                    // Expand %h systemd specifier and ${SERVICE_HOME}
+                    let expanded = host_path
+                        .replace("%h", &home.to_string_lossy())
+                        .replace("${SERVICE_HOME}", &service_home.to_string_lossy());
                     // Skip file bind mounts — only directories need pre-creation.
                     let path = std::path::Path::new(&expanded);
                     if path.extension().is_some() {
@@ -204,6 +288,8 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
 
     let mut quadlet_files = Vec::new();
     let service_home = crate::service_home(params.service_name)?;
+    let data_root = crate::paths::service_data_root()?;
+    let canonical_data_root = crate::home_dir()?.join(".local/share/services");
 
     let entries = std::fs::read_dir(&quadlets_dir).map_err(|source| Error::FileRead {
         path: quadlets_dir.clone(),
@@ -229,6 +315,21 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             .file_name()
             .ok_or_else(|| Error::Bundle(format!("invalid file path: {}", path.display())))?
             .to_string_lossy();
+
+        validate_quadlet_env_refs(&content, &file_name, params)?;
+
+        // The registry's canonical `EnvironmentFile=%h/.local/share/services/
+        // <svc>/.env` is the one literal path in the unit (systemd resolves
+        // EnvironmentFile= before any env exists, so it can't be
+        // `${SERVICE_HOME}`-based). When the host resolves the data root
+        // somewhere else — the RYRA_DATA_DIR test sandbox, or a custom
+        // XDG_DATA_HOME — the line must follow, or the unit would read a
+        // `.env` ryra never wrote. On default setups the paths are equal
+        // and the quadlet is used exactly as authored.
+        if data_root != canonical_data_root {
+            content =
+                content.replace("%h/.local/share/services", &data_root.to_string_lossy());
+        }
 
         // Stamp every generated quadlet with a provenance marker so
         // `ryra remove` and `ryra list` can tell registry-managed files
@@ -256,22 +357,6 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
                     );
                 }
             }
-            // Expand ${SERVICE_PORT_*} in PublishPort lines — systemd doesn't
-            // expand EnvironmentFile vars in quadlet directives.
-            for (var, val) in params.port_vars {
-                content = content.replace(&format!("${{{var}}}"), val);
-            }
-        }
-
-        // When the service-data root is overridden (RYRA_DATA_DIR — the host
-        // test sandbox), the registry templates' hardcoded
-        // `%h/.local/share/services/...` bind-mount, EnvironmentFile, and
-        // ExecStartPre/Post paths must follow the data root too. Otherwise the
-        // container would mount the *real* services dir while ryra writes the
-        // `.env`/configs into the sandbox — a split between where data is read
-        // and written. No-op for normal installs (override is None).
-        if let Some(root) = crate::paths::data_dir_override() {
-            content = content.replace("%h/.local/share/services", &root.to_string_lossy());
         }
 
         // Real files live under service_home; the caller emits Step::Symlink
@@ -293,7 +378,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     quadlet_files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let images = extract_images(&quadlet_files);
-    let bind_mount_dirs = extract_bind_mount_dirs(&quadlet_files)?;
+    let bind_mount_dirs = extract_bind_mount_dirs(&quadlet_files, &service_home)?;
     let config_files = process_configs(params.service_dir, &service_home)?;
     let files = collect_files(params.service_dir, &service_home)?;
 
@@ -512,7 +597,7 @@ mod tests {
             extra_volumes: &[],
             podman_args: &[],
             extra_exec_start_pre: &[],
-            port_vars: &[],
+            port_names: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("quadlets/ directory not found"));
@@ -529,7 +614,7 @@ mod tests {
 
         std::fs::write(
             quadlets_dir.join("app.container"),
-            "[Container]\nImage=nginx:latest\nVolume=%h/.local/share/services/myservice/data:/data\n\n[Service]\nRestart=always\n",
+            "[Container]\nImage=nginx:latest\nPublishPort=${SERVICE_PORT_HTTP}:80\nVolume=${SERVICE_HOME}/data:/data\n\n[Service]\nEnvironmentFile=%h/.local/share/services/myservice/.env\nRestart=always\n",
         )
         .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
 
@@ -546,7 +631,7 @@ mod tests {
             extra_volumes: &[],
             podman_args: &[],
             extra_exec_start_pre: &[],
-            port_vars: &[],
+            port_names: &["http".to_string()],
         };
 
         let bundle = process_quadlet_bundle(&params)
@@ -555,19 +640,28 @@ mod tests {
         assert_eq!(bundle.quadlet_files.len(), 2);
         assert_eq!(bundle.images, vec!["nginx:latest".to_string()]);
 
-        // Check content is preserved as-is (no placeholder substitution)
         let container_file = bundle
             .quadlet_files
             .iter()
             .find(|f| f.path.to_string_lossy().ends_with(".container"))
             .unwrap_or_else(|| unreachable!("container file must exist"));
+        // ${...} is runtime env — the quadlet passes through unmodified.
         assert!(
             container_file
                 .content
-                .contains("%h/.local/share/services/myservice/data:/data")
+                .contains("PublishPort=${SERVICE_PORT_HTTP}:80")
+        );
+        assert!(
+            container_file
+                .content
+                .contains("Volume=${SERVICE_HOME}/data:/data")
         );
         // Check network injection happened
         assert!(container_file.content.contains("Network=caddy.network"));
+        // ${SERVICE_HOME} bind mounts resolve to the service home dir.
+        let service_home = crate::service_home("myservice")
+            .unwrap_or_else(|e| unreachable!("service_home should resolve in tests: {e}"));
+        assert!(bundle.bind_mount_dirs.contains(&service_home.join("data")));
 
         // Network file should NOT have network injection
         let network_file = bundle
@@ -594,10 +688,94 @@ mod tests {
             extra_volumes: &[],
             podman_args: &[],
             extra_exec_start_pre: &[],
-            port_vars: &[],
+            port_names: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));
+    }
+
+    #[test]
+    fn undeclared_port_var_errors() {
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
+        let service_dir = tmp.path().join("svc");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
+        std::fs::write(
+            quadlets_dir.join("svc.container"),
+            "[Container]\nImage=nginx\nPublishPort=${SERVICE_PORT_HTPP}:80\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "svc",
+            extra_networks: &[],
+            extra_volumes: &[],
+            podman_args: &[],
+            extra_exec_start_pre: &[],
+            port_names: &["http".to_string()],
+        };
+        let err = process_quadlet_bundle(&params).unwrap_err();
+        assert!(err.to_string().contains("SERVICE_PORT_HTPP"));
+        assert!(err.to_string().contains("no [[ports]] entry"));
+    }
+
+    #[test]
+    fn service_vars_without_service_envfile_errors() {
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
+        let service_dir = tmp.path().join("svc");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
+        // ${SERVICE_HOME} volume but EnvironmentFile only in [Container]:
+        // expansion happens from service-level env, so this must error.
+        std::fs::write(
+            quadlets_dir.join("svc.container"),
+            "[Container]\nImage=nginx\nVolume=${SERVICE_HOME}/data:/data\nEnvironmentFile=%h/.local/share/services/svc/.env\n\n[Service]\nRestart=always\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "svc",
+            extra_networks: &[],
+            extra_volumes: &[],
+            podman_args: &[],
+            extra_exec_start_pre: &[],
+            port_names: &["http".to_string()],
+        };
+        let err = process_quadlet_bundle(&params).unwrap_err();
+        assert!(err.to_string().contains("[Service] section"));
+    }
+
+    #[test]
+    fn leftover_template_syntax_errors() {
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
+        let service_dir = tmp.path().join("svc");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
+        std::fs::write(
+            quadlets_dir.join("svc.container"),
+            "[Container]\nImage=nginx\nPublishPort={{ports.http}}:80\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "svc",
+            extra_networks: &[],
+            extra_volumes: &[],
+            podman_args: &[],
+            extra_exec_start_pre: &[],
+            port_names: &["http".to_string()],
+        };
+        let err = process_quadlet_bundle(&params).unwrap_err();
+        assert!(err.to_string().contains("plain podman files"));
     }
 
     #[test]
@@ -650,19 +828,21 @@ mod tests {
         let files = vec![
             GeneratedFile {
                 path: PathBuf::from("/q/immich.container"),
-                content: "Volume=%h/.local/share/services/immich/upload:/data:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
+                content: "Volume=${SERVICE_HOME}/upload:/data:Z\nVolume=%h/backups:/backups:Z\nVolume=immich-db-data.volume:/var/lib/postgresql/data:U\n".to_string(),
             },
             GeneratedFile {
                 path: PathBuf::from("/q/immich.network"),
                 content: "[Network]\n".to_string(),
             },
         ];
-        let dirs = extract_bind_mount_dirs(&files).unwrap();
+        let service_home = PathBuf::from(format!("{home}/.local/share/services/immich"));
+        let dirs = extract_bind_mount_dirs(&files, &service_home).unwrap();
         assert_eq!(
             dirs,
-            vec![PathBuf::from(format!(
-                "{home}/.local/share/services/immich/upload"
-            ))]
+            vec![
+                service_home.join("upload"),
+                PathBuf::from(format!("{home}/backups")),
+            ]
         );
     }
 
@@ -672,7 +852,7 @@ mod tests {
             path: PathBuf::from("/q/svc.container"),
             content: "Volume=svc-data.volume:/data:U\n".to_string(),
         }];
-        let dirs = extract_bind_mount_dirs(&files).unwrap();
+        let dirs = extract_bind_mount_dirs(&files, Path::new("/srv/svc")).unwrap();
         assert!(dirs.is_empty());
     }
 
@@ -682,7 +862,7 @@ mod tests {
             path: PathBuf::from("/q/svc.container"),
             content: "Volume=/path/to/ca.crt:/etc/ssl/certs/ca.crt:ro,Z\nVolume=/path/to/config:/config:Z\n".to_string(),
         }];
-        let dirs = extract_bind_mount_dirs(&files).unwrap();
+        let dirs = extract_bind_mount_dirs(&files, Path::new("/srv/svc")).unwrap();
         // Only the directory mount, not the .crt file mount
         assert_eq!(dirs, vec![PathBuf::from("/path/to/config")]);
     }

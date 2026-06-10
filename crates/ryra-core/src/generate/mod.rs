@@ -83,6 +83,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         params.resolved_ports,
         params.exposure.url(),
     );
+
     let rendered_env = render_env_vars(
         params.service_def,
         &ctx,

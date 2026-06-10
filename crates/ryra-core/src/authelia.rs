@@ -89,15 +89,19 @@ pub fn register_oidc_client(
         },
     };
 
-    // Build redirect_uris from mappings and common callback paths
-    let redirect_url_from_mappings = service_def
-        .mappings
-        .auth
-        .get("OAUTH_REDIRECT_URL")
-        .map(|v| {
-            v.replace("{{service.url}}", &base_url)
-                .replace("{{service.external_url}}", &base_url)
-        });
+    // Build redirect_uris from mappings and common callback paths. The
+    // mapping value is a template; render it with service.url /
+    // service.external_url pinned to the resolved base_url, because an
+    // explicit `url` argument overrides whatever the context carries.
+    let redirect_url_from_mappings = match service_def.mappings.auth.get("OAUTH_REDIRECT_URL") {
+        Some(v) => {
+            let mut render_ctx = ctx.clone();
+            render_ctx.insert("service.url".into(), base_url.clone());
+            render_ctx.insert("service.external_url".into(), base_url.clone());
+            Some(crate::generate::template::render(v, &render_ctx)?)
+        }
+        None => None,
+    };
     let mut redirect_uris = Vec::new();
     if let Some(ref url) = redirect_url_from_mappings {
         redirect_uris.push(url.clone());

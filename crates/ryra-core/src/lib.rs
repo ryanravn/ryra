@@ -601,17 +601,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
 
     let podman_args: Vec<String> = Vec::new();
 
-    // Build port variable expansions for quadlet PublishPort directives.
-    // Each port has its own resolved host port (see `resolved_ports` above).
-    let port_vars: Vec<(String, String)> = resolved_ports
-        .iter()
-        .map(|(name, port)| {
-            (
-                format!("SERVICE_PORT_{}", name.to_uppercase()),
-                port.to_string(),
-            )
-        })
-        .collect();
+    // Declared port names, for validating ${SERVICE_PORT_*} quadlet refs.
+    let port_names: Vec<String> = resolved_ports.iter().map(|(n, _)| n.clone()).collect();
 
     // Build install metadata persisted to `metadata.toml` in service_home.
     // This is what makes service state authoritative for "what's installed
@@ -667,7 +658,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             extra_volumes: &extra_volumes,
             podman_args: &podman_args,
             extra_exec_start_pre: &extra_exec_start_pre,
-            port_vars: &port_vars,
+            port_names: &port_names,
         })?;
 
     // Generate warnings
