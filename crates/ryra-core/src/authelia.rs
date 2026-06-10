@@ -415,8 +415,9 @@ pub fn configure_auth_from_installed(
     }
 
     // Find the port from the quadlet-derived InstalledService view. Select
-    // by name, matching `auth_config`'s rule for fresh installs.
-    let installed_all = crate::list_installed().unwrap_or_default();
+    // by name, matching `auth_config`'s rule for fresh installs. A failed
+    // listing propagates rather than silently configuring port 9091.
+    let installed_all = crate::list_installed()?;
     let port = crate::find_installed_provider(&installed_all, crate::Capability::OidcProvider)
         .and_then(|s| s.ports.get("http").copied())
         .unwrap_or(DEFAULT_HTTP_PORT);

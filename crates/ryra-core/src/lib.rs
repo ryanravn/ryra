@@ -274,10 +274,10 @@ pub enum PlanMode {
 ///
 /// Replaces the `(Option<AuthKind>, bool)` pair that previously travelled
 /// through the planner, where `enable_auth = false` with a `Some` kind was
-/// representable but meaningless. The two consumers read different facets:
-/// [`Self::enabled`] drives the auth fabric (network joins, the auth
-/// bridge, the no-native-OIDC validation), [`Self::native_kind`] drives
-/// OIDC env templating and client registration.
+/// representable but meaningless. Frontends resolve "--auth on a service
+/// with no native kinds" before constructing this (error, or a no-op note
+/// for the OIDC provider itself), so a choice always round-trips through
+/// `metadata.toml` as `Option<AuthKind>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthChoice {
     /// No auth integration.
@@ -285,24 +285,21 @@ pub enum AuthChoice {
     /// Auth with the service's native OIDC integration: OIDC env vars are
     /// templated and a client is registered with the provider.
     Native(registry::service_def::AuthKind),
-    /// Auth requested for a service that declares no native auth kinds.
-    /// The planner accepts this only when the service itself provides
-    /// OIDC (the provider doesn't act as a client of itself) and rejects
-    /// anything else with [`Error::NoOidcSupport`].
-    Requested,
 }
 
 impl AuthChoice {
-    /// True when the user asked for auth at all, natively or not.
+    /// True when the user asked for auth. Drives the auth fabric:
+    /// network joins, the auth bridge, the no-native-OIDC validation.
     pub fn enabled(&self) -> bool {
         !matches!(self, AuthChoice::None)
     }
 
-    /// The native OIDC kind, when the service has one.
+    /// The native OIDC kind, when the service has one. Drives OIDC env
+    /// templating and client registration.
     pub fn native_kind(&self) -> Option<&registry::service_def::AuthKind> {
         match self {
             AuthChoice::Native(kind) => Some(kind),
-            AuthChoice::None | AuthChoice::Requested => None,
+            AuthChoice::None => None,
         }
     }
 }

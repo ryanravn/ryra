@@ -161,8 +161,6 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
     let result = add_service(crate::AddServiceParams {
         service_name,
         exposure: &exposure,
-        // Metadata only records a native kind — `Requested` (auth on the
-        // provider itself) isn't persisted, so re-renders treat it as off.
         auth: match metadata.auth.clone() {
             Some(kind) => crate::AuthChoice::Native(kind),
             None => crate::AuthChoice::None,

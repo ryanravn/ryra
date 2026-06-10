@@ -192,9 +192,15 @@ pub async fn run(request: AddRequest) -> Result<()> {
         .config_file
         .exists();
 
-    // Auto-install authelia for --auth
+    // Auto-install authelia for --auth — unless a requested service IS the
+    // auth provider, in which case `ryra add authelia --auth` would
+    // auto-install authelia here and then fail the actual add with
+    // "already installed".
+    let installing_provider = services
+        .iter()
+        .any(|s| service_provides(s, Capability::OidcProvider));
     if !dry_run {
-        ensure_dependencies(auth, tailscale, interactive).await?;
+        ensure_dependencies(auth && !installing_provider, tailscale, interactive).await?;
     }
 
     // --smtp=<provider>: non-interactive equivalent of the prompts below.
@@ -208,20 +214,14 @@ pub async fn run(request: AddRequest) -> Result<()> {
 
     let paths = ryra_core::config::ConfigPaths::resolve()?;
 
-    // Serialize concurrent `ryra add --auth` runs so two processes don't
-    // clobber each other's client entries when editing authelia's
-    // configuration.yml in-memory then writing it back. The lock is
-    // released when _auth_lock drops at end of this function.
-    let _auth_lock = if auth && !dry_run {
-        paths.ensure_dirs()?;
-        let lock_path = paths.config_dir.join(".authelia-oidc.lock");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)?;
-        file.lock()?;
-        Some(file)
+    // Serialize concurrent auth-enabled `ryra add` runs so two processes
+    // don't clobber each other's client entries when editing authelia's
+    // configuration.yml in-memory then writing it back. Taken here for the
+    // --auth flag; the per-service loop takes it lazily when auth is chosen
+    // at the interactive prompt instead. Released when auth_lock drops at
+    // end of this function.
+    let mut auth_lock = if auth && !dry_run {
+        Some(acquire_auth_lock(&paths)?)
     } else {
         None
     };
@@ -371,6 +371,32 @@ pub async fn run(request: AddRequest) -> Result<()> {
             &reg_service.def.integrations.auth,
             config.auth.is_some(),
         )?;
+
+        // The user's auth decision as one typed value. --auth on a service
+        // with no native OIDC kinds fails fast here, before any prompts
+        // burn the user's time. The auth provider itself is the exception:
+        // it doesn't act as a client of itself, so --auth is a no-op note.
+        let auth_choice = match (&auth_kind, auth) {
+            (Some(kind), _) => ryra_core::AuthChoice::Native(kind.clone()),
+            (None, true) => {
+                if service_provides(service, Capability::OidcProvider) {
+                    println!(
+                        "  Note: {service} is the auth provider itself; --auth has no effect."
+                    );
+                    ryra_core::AuthChoice::None
+                } else {
+                    return Err(ryra_core::error::Error::NoOidcSupport(service.to_string()).into());
+                }
+            }
+            (None, false) => ryra_core::AuthChoice::None,
+        };
+
+        // Auth chosen at the interactive prompt (no --auth flag) registers
+        // an OIDC client too — take the cross-process lock if the flag path
+        // didn't already.
+        if auth_kind.is_some() && auth_lock.is_none() && !dry_run {
+            auth_lock = Some(acquire_auth_lock(&paths)?);
+        }
 
         // Resolve exposure BEFORE auto-installing authelia so the provider
         // inherits the parent's choice. Picking the two separately let users
@@ -531,7 +557,17 @@ pub async fn run(request: AddRequest) -> Result<()> {
         // through to authelia's own exposure resolution since custom URLs
         // are per-service and can't be inherited).
         if will_install_authelia {
-            if !ensure_auth_for_add(&mut config, &paths, dry_run, exposure.is_tailscale()).await? {
+            // A dry run must not mutate anything, but this path installs
+            // authelia and/or writes [auth] into preferences.toml (the
+            // configure-from-installed branch used to do so even under
+            // --dry-run). Bail with instructions instead.
+            if dry_run {
+                bail!(
+                    "--auth needs a configured auth provider, which --dry-run won't set up.\n\
+                     Run `ryra add authelia` first, then re-run with --dry-run."
+                );
+            }
+            if !ensure_auth_for_add(&mut config, &paths, exposure.is_tailscale()).await? {
                 return Ok(());
             }
             // Reload — ensure_auth_for_add may have installed authelia
@@ -664,14 +700,6 @@ pub async fn run(request: AddRequest) -> Result<()> {
                 None
             };
 
-        // The user's auth decision as one typed value: a native kind when
-        // the service has one, `Requested` when --auth was passed for a
-        // service without native kinds (core validates that), off otherwise.
-        let auth_choice = match (&auth_kind, auth) {
-            (Some(kind), _) => ryra_core::AuthChoice::Native(kind.clone()),
-            (None, true) => ryra_core::AuthChoice::Requested,
-            (None, false) => ryra_core::AuthChoice::None,
-        };
         let no_port_overrides = BTreeMap::new();
         // One params builder for both the initial attempt and the
         // post-cleanup retry, so the two calls can't drift apart.
@@ -1712,6 +1740,23 @@ async fn prompt_exposure_for(
     }
 }
 
+/// Open and lock the cross-process OIDC registration lock file. Serializes
+/// concurrent auth-enabled `ryra add` runs that edit authelia's
+/// configuration.yml in-memory and write it back, so one process's client
+/// entry can't be clobbered by another's. Released when the returned file
+/// drops.
+fn acquire_auth_lock(paths: &ryra_core::config::ConfigPaths) -> Result<std::fs::File> {
+    paths.ensure_dirs()?;
+    let lock_path = paths.config_dir.join(".authelia-oidc.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)?;
+    file.lock()?;
+    Ok(file)
+}
+
 /// Fire a one-time security note when preferences.toml just acquired its
 /// first credential (SMTP, Tailscale token, etc.). Compares pre- and
 /// post-save state so the message only prints on the transition, not on
@@ -1807,10 +1852,11 @@ async fn ensure_dependencies(auth: bool, tailscale: bool, interactive: bool) -> 
 
 /// Ensure auth is configured, possibly installing authelia inline.
 /// Returns true if auth is ready, false if user cancelled.
+/// Never called under --dry-run (the caller bails first): every branch
+/// here either installs authelia or writes [auth] to preferences.toml.
 async fn ensure_auth_for_add(
     config: &mut Config,
     paths: &ConfigPaths,
-    dry_run: bool,
     parent_tailscale: bool,
 ) -> Result<bool> {
     match prompts::ensure_auth_configured(config, paths).await? {
@@ -1840,10 +1886,9 @@ async fn ensure_auth_for_add(
             // For Tailscale: pass --tailscale through.
             // For Custom: fall through (custom URLs are per-service — authelia
             // gets its own exposure prompt).
-            Box::pin(run(AddRequest {
-                dry_run,
-                ..AddRequest::dependency(WellKnownService::Authelia).tailscale(parent_tailscale)
-            }))
+            Box::pin(run(
+                AddRequest::dependency(WellKnownService::Authelia).tailscale(parent_tailscale)
+            ))
             .await?;
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
