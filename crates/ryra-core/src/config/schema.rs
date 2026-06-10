@@ -172,6 +172,27 @@ pub struct SmtpCredentials {
     pub security: SmtpSecurity,
 }
 
+/// Inbucket's internal SMTP container port. Services on the shared podman
+/// network reach inbucket by container name, so this (not the host-side
+/// `PublishPort=`) is what goes into `config.smtp`.
+pub const INBUCKET_SMTP_PORT: u16 = 2500;
+
+impl SmtpCredentials {
+    /// SMTP settings for a ryra-managed inbucket install: target the
+    /// container by name on the shared podman network, no auth, no TLS.
+    /// (The host port isn't reachable from `--no-hosts` containers.)
+    pub fn inbucket() -> Self {
+        Self {
+            host: "inbucket".to_string(),
+            port: INBUCKET_SMTP_PORT,
+            username: String::new(),
+            password: String::new(),
+            from: "noreply@example.com".to_string(),
+            security: SmtpSecurity::Off,
+        }
+    }
+}
+
 /// SMTP transport security mode.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

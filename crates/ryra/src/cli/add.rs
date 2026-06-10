@@ -8,7 +8,7 @@ use ryra_core::caddy::AcmeMode;
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::Config;
 use ryra_core::registry::resolve::ServiceRef;
-use ryra_core::registry::service_def::{AuthKind, HttpsRequirement, ServiceKind};
+use ryra_core::registry::service_def::{AuthKind, ServiceKind};
 use ryra_core::{
     Capability, REGISTRY_DEFAULT, Warning, WellKnownService, find_installed_provider,
     service_provides,
@@ -19,10 +19,6 @@ use super::prompts;
 
 /// Default port for Caddy's HTTPS listener.
 const DEFAULT_CADDY_HTTPS_PORT: u16 = 8443;
-/// Default port for Authelia's HTTP listener.
-const DEFAULT_AUTHELIA_PORT: u16 = 9091;
-/// Inbucket's internal SMTP container port.
-const INBUCKET_SMTP_PORT: u16 = 2500;
 
 /// Non-interactive choice for `--smtp=…` on `ryra add`.
 ///
@@ -38,19 +34,82 @@ pub enum SmtpProvider {
     Inbucket,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    services: &[String],
-    url: Option<&str>,
-    auth: bool,
-    smtp: Option<SmtpProvider>,
-    enable: &[String],
-    tailscale: bool,
-    backup: bool,
-    acme: Option<&AcmeMode>,
-    dry_run: bool,
-    yes: bool,
-) -> Result<()> {
+/// How the user asked the service to be reachable, before resolution.
+/// One value instead of the `(Option<url>, bool tailscale)` pair, so
+/// "--url and --tailscale at once" is unrepresentable for every caller
+/// (clap's `conflicts_with` only protects the top-level parse).
+#[derive(Debug, Clone, Default)]
+pub enum ExposureRequest {
+    /// No explicit flag: resolve via policy and prompts (Caddy
+    /// auto-derive, the exposure prompt, or loopback).
+    #[default]
+    Auto,
+    /// Explicit `--url <X>`.
+    Url(String),
+    /// Explicit `--tailscale`.
+    Tailscale,
+}
+
+/// One `ryra add` invocation, typed. Built from clap flags in main, and
+/// by the dependency auto-installs (caddy / authelia / inbucket) here.
+#[derive(Debug, Clone, Default)]
+pub struct AddRequest {
+    pub services: Vec<String>,
+    pub exposure: ExposureRequest,
+    pub auth: bool,
+    pub smtp: Option<SmtpProvider>,
+    pub enable: Vec<String>,
+    pub backup: bool,
+    pub acme: Option<AcmeMode>,
+    pub dry_run: bool,
+    pub yes: bool,
+}
+
+impl AddRequest {
+    /// A non-interactive install of a well-known dependency (caddy,
+    /// authelia, inbucket) triggered from inside another add: `--yes`,
+    /// auto exposure, nothing else enabled. Callers layer extras on with
+    /// struct-update syntax (`AddRequest { acme: …, ..Self::dependency(…) }`).
+    fn dependency(service: WellKnownService) -> Self {
+        Self {
+            services: vec![service.to_string()],
+            yes: true,
+            ..Self::default()
+        }
+    }
+
+    /// Propagate a parent install's `--tailscale` choice to a dependency,
+    /// so e.g. authelia inherits the exposure of the service that pulled
+    /// it in.
+    fn tailscale(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.exposure = ExposureRequest::Tailscale;
+        }
+        self
+    }
+}
+
+pub async fn run(request: AddRequest) -> Result<()> {
+    let AddRequest {
+        services,
+        exposure: exposure_request,
+        auth,
+        smtp,
+        enable,
+        backup,
+        acme,
+        dry_run,
+        yes,
+    } = request;
+    // Convenience views of the exposure request for the guards and the
+    // per-service resolution below. The typed request already rules out
+    // the url+tailscale combination.
+    let url: Option<&str> = match &exposure_request {
+        ExposureRequest::Url(u) => Some(u),
+        ExposureRequest::Auto | ExposureRequest::Tailscale => None,
+    };
+    let tailscale = matches!(exposure_request, ExposureRequest::Tailscale);
+
     if url.is_some() && services.len() > 1 {
         bail!("--url can only be used when adding a single service");
     }
@@ -175,7 +234,7 @@ pub async fn run(
         );
     }
 
-    for service_input in services {
+    for service_input in &services {
         // A path-like arg (`.`, `./x`, `/abs`, or an existing dir) installs the
         // project's `service.toml` directly; otherwise it's a registry ref.
         let service_ref = if ryra_core::registry::resolve::is_path_like(service_input) {
@@ -282,34 +341,13 @@ pub async fn run(
                     prompts::SmtpSetupChoice::Inbucket => {
                         if !ryra_core::is_service_installed("inbucket") {
                             println!("\nInstalling inbucket...\n");
-                            Box::pin(run(
-                                &[WellKnownService::Inbucket.to_string()],
-                                None,
-                                false,
-                                None,
-                                &[],
-                                false,
-                                false,
-                                None,
-                                false,
-                                true,
-                            ))
-                            .await?;
+                            Box::pin(run(AddRequest::dependency(WellKnownService::Inbucket)))
+                                .await?;
                             // Reload — inbucket install modified config on disk
                             config = ryra_core::config::load_or_default(&paths.config_file)?;
                         }
-                        // Use container name for SMTP host — services on the
-                        // caddy network can reach inbucket directly. The host
-                        // port isn't reachable from --no-hosts containers.
                         let had_secrets_before = config.has_secrets();
-                        config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
-                            host: "inbucket".to_string(),
-                            port: INBUCKET_SMTP_PORT, // inbucket's internal container port
-                            username: String::new(),
-                            password: String::new(),
-                            from: "noreply@example.com".to_string(),
-                            security: ryra_core::config::schema::SmtpSecurity::Off,
-                        });
+                        config.smtp = Some(ryra_core::config::schema::SmtpCredentials::inbucket());
                         paths.ensure_dirs()?;
                         ryra_core::config::save_config(&paths.config_file, &config)?;
                         println!(
@@ -339,11 +377,11 @@ pub async fn run(
         // mismatch (authelia local + service tailnet → tailnet clients can't
         // reach `authelia.internal` for OIDC redirects). One prompt, one
         // decision, propagated.
-        let needs_https = needs_https(
-            reg_service.def.service.https.clone(),
-            auth_kind.is_some(),
-            url,
-        );
+        let needs_https = reg_service
+            .def
+            .service
+            .https
+            .needs_https(auth_kind.is_some(), url);
 
         // True iff this run will auto-install authelia. Used both to show a
         // "(authelia will inherit this choice)" hint in the exposure prompt
@@ -376,7 +414,7 @@ pub async fn run(
         let exposure: ryra_core::Exposure = if let Some(u) = url {
             ryra_core::Exposure::from_url(u)
         } else if tailscale {
-            let ts_url = derive_tailscale_url(service)?;
+            let ts_url = ryra_core::system::tailscale::derive_service_url(service)?;
             println!("→ Using {ts_url} (Tailscale)");
             ryra_core::Exposure::Tailscale { url: ts_url }
         } else if needs_https {
@@ -420,11 +458,9 @@ pub async fn run(
         } else {
             ryra_core::Exposure::Loopback
         };
-        // Derive locals for downstream code that still threads the legacy
-        // shape (env templating, OIDC client registration). Goes away as
-        // each call site migrates to take `&Exposure` directly.
+        // Resolved-exposure view for the rest of this iteration: the
+        // browser-visible URL, if the variant carries one.
         let url: Option<&str> = exposure.url();
-        let tailscale_enabled: bool = exposure.is_tailscale();
 
         // Auto-install Caddy when the user gives a public URL but Caddy
         // isn't installed yet. Without this, the install would succeed
@@ -435,10 +471,10 @@ pub async fn run(
         let need_caddy_for_public_url = url.is_some_and(ryra_core::is_public_url)
             && !caddy_already_installed
             && !service_provides(service, Capability::ReverseProxy)
-            && !tailscale_enabled
+            && !exposure.is_tailscale()
             && !dry_run;
         if need_caddy_for_public_url {
-            let chosen = match acme {
+            let chosen = match acme.as_ref() {
                 Some(mode) => Some(TlsHandling::LetsEncrypt(mode.clone())),
                 None if interactive => Some(prompt_tls_for_public_url(url.unwrap_or("")).await?),
                 None => None,
@@ -449,36 +485,16 @@ pub async fn run(
                         dns_preflight_for_acme(u, interactive).await?;
                     }
                     println!("\nInstalling caddy (Let's Encrypt mode)...\n");
-                    Box::pin(run(
-                        &[WellKnownService::Caddy.to_string()],
-                        None,
-                        false,
-                        None,
-                        &[],
-                        false,
-                        false,
-                        Some(&mode),
-                        false,
-                        true,
-                    ))
+                    Box::pin(run(AddRequest {
+                        acme: Some(mode),
+                        ..AddRequest::dependency(WellKnownService::Caddy)
+                    }))
                     .await?;
                     config = ryra_core::config::load_or_default(&paths.config_file)?;
                 }
                 Some(TlsHandling::SelfSigned) => {
                     println!("\nInstalling caddy (self-signed LAN mode)...\n");
-                    Box::pin(run(
-                        &[WellKnownService::Caddy.to_string()],
-                        None,
-                        false,
-                        None,
-                        &[],
-                        false,
-                        false,
-                        None,
-                        false,
-                        true,
-                    ))
-                    .await?;
+                    Box::pin(run(AddRequest::dependency(WellKnownService::Caddy))).await?;
                     config = ryra_core::config::load_or_default(&paths.config_file)?;
                 }
                 Some(TlsHandling::External) | None => {
@@ -505,17 +521,17 @@ pub async fn run(
         // than the service we're about to add. Local-only authelia + tailnet
         // service silently breaks OIDC redirects for off-host clients.
         if auth_kind.is_some() && config.auth.is_some() {
-            check_auth_exposure_compat(&config, service, url)?;
+            ryra_core::check_auth_exposure_compat(&config, service, url)?;
         }
 
         // If the user chose auth but no provider is configured, install one,
-        // passing `tailscale_enabled` so authelia inherits the parent's
+        // passing the tailscale choice so authelia inherits the parent's
         // exposure (Local → caddy already up from the prompt → auto-derives
         // `*.internal`; Tailscale → propagates --tailscale; Custom → falls
         // through to authelia's own exposure resolution since custom URLs
         // are per-service and can't be inherited).
         if will_install_authelia {
-            if !ensure_auth_for_add(&mut config, &paths, dry_run, tailscale_enabled).await? {
+            if !ensure_auth_for_add(&mut config, &paths, dry_run, exposure.is_tailscale()).await? {
                 return Ok(());
             }
             // Reload — ensure_auth_for_add may have installed authelia
@@ -536,7 +552,7 @@ pub async fn run(
             .iter()
             .map(|g| g.name.as_str())
             .collect();
-        for g in enable {
+        for g in &enable {
             if !known_group_names.contains(g.as_str()) {
                 let hint = if known_group_names.is_empty() {
                     format!("service '{service}' defines no env_groups")
@@ -568,7 +584,7 @@ pub async fn run(
                 &reg_service.def,
                 None,
                 auth_kind.as_ref(),
-                url,
+                &exposure,
                 enable_smtp,
             )?;
             prompt_ctx = Some(default_ctx.clone());
@@ -641,30 +657,43 @@ pub async fn run(
         // proxy itself — after that, the TLS snippet is user-managed.
         // Filter so it only flows for the reverse-proxy service (the
         // top-level guard already rejects other combos).
-        let acme_for_service = if service_provides(service, Capability::ReverseProxy) {
-            acme
-        } else {
-            None
+        let acme_for_service: Option<&AcmeMode> =
+            if service_provides(service, Capability::ReverseProxy) {
+                acme.as_ref()
+            } else {
+                None
+            };
+
+        // The user's auth decision as one typed value: a native kind when
+        // the service has one, `Requested` when --auth was passed for a
+        // service without native kinds (core validates that), off otherwise.
+        let auth_choice = match (&auth_kind, auth) {
+            (Some(kind), _) => ryra_core::AuthChoice::Native(kind.clone()),
+            (None, true) => ryra_core::AuthChoice::Requested,
+            (None, false) => ryra_core::AuthChoice::None,
+        };
+        let no_port_overrides = BTreeMap::new();
+        // One params builder for both the initial attempt and the
+        // post-cleanup retry, so the two calls can't drift apart.
+        let make_params = || ryra_core::AddServiceParams {
+            service_name: service,
+            exposure: &exposure,
+            auth: auth_choice.clone(),
+            enable_smtp,
+            enable_backup: backup,
+            env_overrides: &env_overrides,
+            enabled_groups: &enabled_groups,
+            registry_name: service_ref.registry_name(),
+            repo_dir: &repo_dir,
+            pre_built_ctx: prompt_ctx.clone(),
+            port_in_use: &super::is_port_in_use,
+            acme_mode: acme_for_service,
+            mode: ryra_core::PlanMode::Add,
+            port_overrides: &no_port_overrides,
         };
 
         // If a previous add failed partway, clean up before retrying.
-        let result = match ryra_core::add_service(
-            service,
-            &exposure,
-            auth_kind.clone(),
-            auth || auth_kind.is_some(),
-            enable_smtp,
-            backup,
-            &env_overrides,
-            &enabled_groups,
-            service_ref.registry_name(),
-            &repo_dir,
-            prompt_ctx.clone(),
-            &super::is_port_in_use,
-            acme_for_service,
-            ryra_core::PlanMode::Add,
-            &BTreeMap::new(),
-        ) {
+        let result = match ryra_core::add_service(make_params()) {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 // Two cases land here: a previous `ryra add` crashed mid-way
                 // (config entry with installed=false), or the user ran
@@ -720,31 +749,13 @@ pub async fn run(
                 // doesn't depend on any pool that the killed previous
                 // install might have reserved.)
                 // Retry now that the partial state is gone
-                ryra_core::add_service(
-                    service,
-                    &exposure,
-                    auth_kind.clone(),
-                    auth || auth_kind.is_some(),
-                    enable_smtp,
-                    backup,
-                    &env_overrides,
-                    &enabled_groups,
-                    service_ref.registry_name(),
-                    &repo_dir,
-                    prompt_ctx.clone(),
-                    &super::is_port_in_use,
-                    acme_for_service,
-                    ryra_core::PlanMode::Add,
-                    &BTreeMap::new(),
-                )?
+                ryra_core::add_service(make_params())?
             }
             other => other?,
         };
 
-        // (--tailscale: the per-service sidecar quadlet — `ts-<service>` —
-        // gets generated by add_service when `tailscale_enabled` is set.
-        // No host-side `tailscale serve` step is needed; each service has
-        // its own tailscaled now.)
+        // (Tailscale exposures: add_service emits the TailscaleSetup /
+        // TailscaleEnable steps itself; nothing extra to do here.)
 
         // Show warnings and confirm
         // Show port reassignment notes + reverse-proxy hints (both informational).
@@ -908,7 +919,7 @@ pub async fn run(
             // *.ts.net for free, and External hostnames are the user's
             // DNS to manage.
             if let Some(service_url) = result.url.as_deref()
-                && service_url_is_caddy_local(service_url)
+                && ryra_core::is_caddy_local_url(service_url)
             {
                 setup_host_access(service, &[service_url]);
             }
@@ -1481,93 +1492,6 @@ fn prompt_tailscale_admin_token() -> Result<String> {
     Ok(raw.trim().to_string())
 }
 
-/// Build the `https://<service>-<host>.<tailnet>/` URL for a service
-/// installed with `--tailscale`. The svc-name (first DNS label) is
-/// scoped by the local node's short hostname so two ryra machines on
-/// the same tailnet don't collide on the global Tailscale Service
-/// namespace — `ryra add vikunja --tailscale` on machine A produces
-/// `vikunja-machineA.<tailnet>.ts.net`, and the same command on
-/// machine B produces `vikunja-machineB.<tailnet>.ts.net`. A
-/// `ryra reset` on either host only tears down its own scoped svc
-/// definition and leaves the other intact. Tailscale already enforces
-/// host name uniqueness across a tailnet, so the suffix is unique by
-/// construction.
-///
-/// No port — `tailscale serve --https=443` from the host runs at the
-/// standard HTTPS port, and putting `:443` in the URL trips up OIDC
-/// libraries that string-compare issuer URLs.
-fn derive_tailscale_url(service: &str) -> Result<String> {
-    let node = ryra_core::system::tailscale::self_dns_name().ok_or_else(|| {
-        anyhow::anyhow!("--tailscale: no logged-in tailnet (preflight should have caught this)")
-    })?;
-    let host = ryra_core::system::tailscale::self_short_hostname().ok_or_else(|| {
-        anyhow::anyhow!(
-            "--tailscale: couldn't extract host label from MagicDNS name '{node}' \
-             (expected three-label `<host>.<tailnet>.ts.net`)"
-        )
-    })?;
-    let tailnet = ryra_core::system::tailscale::tailnet_suffix(&node).ok_or_else(|| {
-        anyhow::anyhow!(
-            "--tailscale: couldn't extract tailnet from MagicDNS name '{node}' \
-             (expected three-label `<host>.<tailnet>.ts.net`)"
-        )
-    })?;
-    Ok(format!("https://{service}-{host}.{tailnet}"))
-}
-
-/// True when a service URL targets Caddy's local-CA `*.internal` domain.
-/// Used to gate `/etc/hosts` writes and CA trust setup — Tailscale and
-/// External URLs handle DNS / trust through other paths.
-fn service_url_is_caddy_local(url: &str) -> bool {
-    url::Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
-        .is_some_and(|h| {
-            h.ends_with(&format!(
-                ".{}",
-                ryra_core::config::schema::CADDY_LOCAL_DOMAIN
-            ))
-        })
-}
-
-/// Bail when authelia is exposed locally (`*.internal`) but the service we're
-/// about to add will be reachable somewhere broader (tailnet, custom URL).
-/// In that combination, off-host clients (a phone on the tailnet, a public
-/// browser) hit the service fine but can't follow the OIDC redirect to
-/// `authelia.internal` because that hostname only resolves on the ryra host.
-///
-/// The reverse — authelia broader than the service — is fine: the local
-/// browser reaches both, and `*.ts.net` resolves on the host via MagicDNS.
-fn check_auth_exposure_compat(
-    config: &Config,
-    service: &str,
-    service_url: Option<&str>,
-) -> Result<()> {
-    let Some(auth) = &config.auth else {
-        return Ok(());
-    };
-    let auth_url = auth.url();
-    let auth_is_local = service_url_is_caddy_local(auth_url);
-    if !auth_is_local {
-        return Ok(());
-    }
-    let Some(svc_url) = service_url else {
-        return Ok(());
-    };
-    if service_url_is_caddy_local(svc_url) {
-        return Ok(());
-    }
-    bail!(
-        "authelia is local-only at {auth_url}, but {service} will be reachable at \
-         {svc_url}. Off-host clients (e.g., other devices on your tailnet) can't \
-         resolve `*.internal` hostnames, so the OIDC redirect from {service} back \
-         to authelia would fail.\n\n\
-         Fix: re-install authelia at the same exposure as {service}:\n  \
-         ryra remove authelia --purge\n  \
-         ryra add authelia --tailscale  (or --url <public-https-url>)"
-    );
-}
-
 /// Smoke-test DNS for `host` so we can warn before burning a Let's Encrypt
 /// validation slot on a hostname that isn't pointed anywhere yet. Only
 /// catches the "DNS not configured at all" case — a record pointing at
@@ -1633,17 +1557,6 @@ enum TlsHandling {
     External,
 }
 
-/// Convert an interactive email input into the right [`AcmeMode`] —
-/// empty string (user hit Enter) means anonymous LE, anything else
-/// means LE with that email for renewal notices.
-fn acme_mode_from_email(email: String) -> AcmeMode {
-    if email.is_empty() {
-        AcmeMode::Anonymous
-    } else {
-        AcmeMode::WithEmail(email)
-    }
-}
-
 /// Prompt the user how TLS should be handled for `url` when Caddy isn't
 /// installed. Fires from the per-service add when `--url` points at a
 /// public host. Picks the email inline for the LE branch.
@@ -1672,7 +1585,7 @@ async fn prompt_tls_for_public_url(url: &str) -> Result<TlsHandling> {
                 )
                 .allow_empty(true)
                 .interact_text()?;
-            Ok(TlsHandling::LetsEncrypt(acme_mode_from_email(email)))
+            Ok(TlsHandling::LetsEncrypt(AcmeMode::from_email(&email)))
         }
         1 => Ok(TlsHandling::SelfSigned),
         _ => Ok(TlsHandling::External),
@@ -1732,7 +1645,7 @@ async fn prompt_exposure_for(
             }
             ensure_tailscale_admin_token(true).await?;
             Ok(ryra_core::Exposure::Tailscale {
-                url: derive_tailscale_url(service)?,
+                url: ryra_core::system::tailscale::derive_service_url(service)?,
             })
         }
         1 => {
@@ -1743,19 +1656,7 @@ async fn prompt_exposure_for(
             // previous install must not count as ready.
             if !ryra_core::is_service_installed("caddy") {
                 println!("\nInstalling caddy (self-signed LAN mode)...\n");
-                Box::pin(run(
-                    &[WellKnownService::Caddy.to_string()],
-                    None,
-                    false,
-                    None,
-                    &[],
-                    false,
-                    false,
-                    None,
-                    false,
-                    true,
-                ))
-                .await?;
+                Box::pin(run(AddRequest::dependency(WellKnownService::Caddy))).await?;
             }
             let installed_all = ryra_core::list_installed().unwrap_or_default();
             let caddy_https_port =
@@ -1785,20 +1686,12 @@ async fn prompt_exposure_for(
                     .allow_empty(true)
                     .interact_text()?;
                 dns_preflight_for_acme(&url, true).await?;
-                let mode = acme_mode_from_email(email);
+                let mode = AcmeMode::from_email(&email);
                 println!("\nInstalling caddy (Let's Encrypt mode)...\n");
-                Box::pin(run(
-                    &[WellKnownService::Caddy.to_string()],
-                    None,
-                    false,
-                    None,
-                    &[],
-                    false,
-                    false,
-                    Some(&mode),
-                    false,
-                    true,
-                ))
+                Box::pin(run(AddRequest {
+                    acme: Some(mode),
+                    ..AddRequest::dependency(WellKnownService::Caddy)
+                }))
                 .await?;
             } else {
                 eprintln!(
@@ -1852,34 +1745,12 @@ async fn ensure_smtp_for_add(provider: SmtpProvider) -> Result<()> {
         SmtpProvider::Inbucket => {
             if !ryra_core::is_service_installed("inbucket") {
                 println!("\nInstalling inbucket...\n");
-                Box::pin(run(
-                    &[WellKnownService::Inbucket.to_string()],
-                    None,
-                    false,
-                    None,
-                    &[],
-                    false,
-                    false,
-                    None,
-                    false,
-                    true,
-                ))
-                .await?;
+                Box::pin(run(AddRequest::dependency(WellKnownService::Inbucket))).await?;
                 // Reload — the inner run() mutated config on disk.
                 config = ryra_core::config::load_or_default(&paths.config_file)?;
             }
-            // Target inbucket by container name — services on the same
-            // podman network resolve it via DNS. `:2500` is inbucket's
-            // internal SMTP port; the host-side PublishPort isn't used.
             let had_secrets_before = config.has_secrets();
-            config.smtp = Some(ryra_core::config::schema::SmtpCredentials {
-                host: "inbucket".to_string(),
-                port: INBUCKET_SMTP_PORT,
-                username: String::new(),
-                password: String::new(),
-                from: "noreply@example.com".to_string(),
-                security: ryra_core::config::schema::SmtpSecurity::Off,
-            });
+            config.smtp = Some(ryra_core::config::schema::SmtpCredentials::inbucket());
             paths.ensure_dirs()?;
             ryra_core::config::save_config(&paths.config_file, &config)?;
             println!(
@@ -1927,16 +1798,7 @@ async fn ensure_dependencies(auth: bool, tailscale: bool, interactive: bool) -> 
 
     println!("\nInstalling authelia...\n");
     Box::pin(run(
-        &[WellKnownService::Authelia.to_string()],
-        None,
-        false,
-        None,
-        &[],
-        tailscale,
-        false,
-        None,
-        false,
-        true,
+        AddRequest::dependency(WellKnownService::Authelia).tailscale(tailscale)
     ))
     .await?;
 
@@ -1958,7 +1820,11 @@ async fn ensure_auth_for_add(
             if ryra_core::is_service_installed("authelia") {
                 println!();
                 println!("Authelia is already installed — configuring auth...");
-                if try_configure_auth_from_installed(config, paths)? {
+                if ryra_core::authelia::configure_auth_from_installed(config, paths)? {
+                    println!(
+                        "  Auth configured. Saved to {}",
+                        paths.config_file.display()
+                    );
                     return Ok(true);
                 }
                 println!("Could not auto-configure auth from installed authelia.");
@@ -1974,18 +1840,10 @@ async fn ensure_auth_for_add(
             // For Tailscale: pass --tailscale through.
             // For Custom: fall through (custom URLs are per-service — authelia
             // gets its own exposure prompt).
-            Box::pin(run(
-                &[WellKnownService::Authelia.to_string()],
-                None,
-                false,
-                None,
-                &[],
-                parent_tailscale,
-                false,
-                None,
+            Box::pin(run(AddRequest {
                 dry_run,
-                true,
-            ))
+                ..AddRequest::dependency(WellKnownService::Authelia).tailscale(parent_tailscale)
+            }))
             .await?;
             // Reload config — authelia's finalize_add auto-configures [auth]
             *config = ryra_core::config::load_or_default(&paths.config_file)?;
@@ -2058,42 +1916,7 @@ fn warn_untrusted_service(
     service: &str,
     interactive: bool,
 ) -> Result<()> {
-    // Collect scripts (ExecStartPre/Post in quadlets)
-    let quadlet_dir = service_dir.join("quadlets");
-    let mut scripts: Vec<String> = Vec::new();
-    let mut volumes: Vec<String> = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(&quadlet_dir) {
-        for entry in entries.flatten() {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                for line in content.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("ExecStartPre=") || trimmed.starts_with("ExecStartPost=")
-                    {
-                        scripts.push(trimmed.to_string());
-                    }
-                    if trimmed.starts_with("Volume=") {
-                        let vol = trimmed.strip_prefix("Volume=").unwrap_or(trimmed);
-                        // Only flag host bind mounts (contain %h or start with /)
-                        if vol.contains("%h") || vol.starts_with('/') {
-                            volumes.push(vol.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Collect config scripts
-    let scripts_dir = service_dir.join("configs").join("scripts");
-    let mut config_scripts: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                config_scripts.push(name.to_string());
-            }
-        }
-    }
+    let report = ryra_core::registry::trust_report(service_dir);
 
     println!();
     println!(
@@ -2101,24 +1924,24 @@ fn warn_untrusted_service(
         super::style::warning()
     );
     println!("  External services can run arbitrary code on your host.");
-    if !scripts.is_empty() {
+    if !report.quadlet_hooks.is_empty() {
         println!();
         println!("  Quadlet hooks (run as your user):");
-        for s in &scripts {
+        for s in &report.quadlet_hooks {
             println!("    {s}");
         }
     }
-    if !config_scripts.is_empty() {
+    if !report.config_scripts.is_empty() {
         println!();
         println!("  Scripts (copied to service data dir):");
-        for s in &config_scripts {
+        for s in &report.config_scripts {
             println!("    {s}");
         }
     }
-    if !volumes.is_empty() {
+    if !report.host_mounts.is_empty() {
         println!();
         println!("  Host bind mounts:");
-        for v in &volumes {
+        for v in &report.host_mounts {
             println!("    {v}");
         }
     }
@@ -2137,106 +1960,4 @@ fn warn_untrusted_service(
     }
 
     Ok(())
-}
-
-/// Try to configure auth from an already-installed authelia instance.
-/// The .env is user-readable under ~/.local/share/services/authelia/.env.
-fn try_configure_auth_from_installed(config: &mut Config, paths: &ConfigPaths) -> Result<bool> {
-    let env_path = ryra_core::service_home(WellKnownService::Authelia.as_str())?.join(".env");
-    let env_content = match std::fs::read_to_string(&env_path) {
-        Ok(content) => content,
-        Err(_) => return Ok(false),
-    };
-
-    // Find the port from the quadlet-derived InstalledService view.
-    let installed_all = ryra_core::list_installed().unwrap_or_default();
-    let port = find_installed_provider(&installed_all, Capability::OidcProvider)
-        .and_then(|s| s.ports.values().next().copied())
-        .unwrap_or(DEFAULT_AUTHELIA_PORT);
-
-    // Verify the .env file looks valid (has at least a port reference)
-    if env_content.is_empty() {
-        return Ok(false);
-    }
-
-    let url = format!("http://localhost:{port}");
-
-    config.auth = Some(ryra_core::config::schema::AuthCredentials::Authelia { url, port });
-    paths.ensure_dirs()?;
-    ryra_core::config::save_config(&paths.config_file, config)?;
-    println!(
-        "  Auth configured. Saved to {}",
-        paths.config_file.display()
-    );
-    Ok(true)
-}
-
-/// Decide whether this `ryra add` invocation must be promoted to HTTPS.
-///
-/// HTTPS is required when any of these hold:
-///   1. The service declares `https = "always"` (e.g. authelia, vaultwarden).
-///   2. The service declares `https = "auth"` AND the user chose OIDC auth
-///      (via `--auth` or the interactive prompt). This is for services whose
-///      OIDC stack refuses plain HTTP even on loopback (e.g. Nextcloud's
-///      user_oidc won't render the SSO button over HTTP). Most OIDC-capable
-///      services don't need this — RFC 8252 permits HTTP loopback callbacks.
-///   3. The user passed an `https://…` URL explicitly.
-fn needs_https(
-    https_requirement: HttpsRequirement,
-    auth_requested: bool,
-    url: Option<&str>,
-) -> bool {
-    matches!(https_requirement, HttpsRequirement::Always)
-        || (matches!(https_requirement, HttpsRequirement::Auth) && auth_requested)
-        || url.is_some_and(|u| u.starts_with("https://"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn never_service_stays_http() {
-        assert!(!needs_https(HttpsRequirement::Never, false, None));
-        // Even with --auth, a service that didn't opt into HTTPS stays HTTP.
-        // This is the RFC 8252 loopback case: http://127.0.0.1 is a valid
-        // OIDC redirect_uri and most services (forgejo, etc.) work fine
-        // that way.
-        assert!(!needs_https(HttpsRequirement::Never, true, None));
-        // Explicit http:// URL also stays HTTP.
-        assert!(!needs_https(
-            HttpsRequirement::Never,
-            true,
-            Some("http://foo.example.com"),
-        ));
-    }
-
-    #[test]
-    fn always_service_always_promotes() {
-        assert!(needs_https(HttpsRequirement::Always, false, None));
-        assert!(needs_https(
-            HttpsRequirement::Always,
-            false,
-            Some("http://foo.example.com"),
-        ));
-    }
-
-    #[test]
-    fn auth_service_promotes_only_with_auth() {
-        // The regression this guards: `ryra add nextcloud --auth` without
-        // --url used to quietly install over HTTP and the SSO button never
-        // rendered (user_oidc refuses to show it without HTTPS).
-        assert!(needs_https(HttpsRequirement::Auth, true, None));
-        // Without --auth, even an `https = "auth"` service stays HTTP.
-        assert!(!needs_https(HttpsRequirement::Auth, false, None));
-    }
-
-    #[test]
-    fn explicit_https_url_promotes() {
-        assert!(needs_https(
-            HttpsRequirement::Never,
-            false,
-            Some("https://foo.example.com"),
-        ));
-    }
 }

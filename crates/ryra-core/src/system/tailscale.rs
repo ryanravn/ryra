@@ -79,6 +79,40 @@ pub fn self_dns_name() -> Option<String> {
     name.ends_with(".ts.net").then(|| name.to_string())
 }
 
+/// Build the `https://<service>-<host>.<tailnet>/` URL for a service
+/// exposed via Tailscale. The svc-name (first DNS label) is scoped by
+/// the local node's short hostname so two ryra machines on the same
+/// tailnet don't collide on the global Tailscale Service namespace:
+/// `ryra add vikunja --tailscale` on machine A produces
+/// `vikunja-machineA.<tailnet>.ts.net`, and the same command on
+/// machine B produces `vikunja-machineB.<tailnet>.ts.net`. A
+/// `ryra reset` on either host only tears down its own scoped svc
+/// definition and leaves the other intact. Tailscale already enforces
+/// host name uniqueness across a tailnet, so the suffix is unique by
+/// construction.
+///
+/// No port: `tailscale serve --https=443` from the host runs at the
+/// standard HTTPS port, and putting `:443` in the URL trips up OIDC
+/// libraries that string-compare issuer URLs.
+pub fn derive_service_url(service: &str) -> crate::error::Result<String> {
+    use crate::error::Error;
+    let node = self_dns_name()
+        .ok_or_else(|| Error::Tailscale("no logged-in tailnet: run `tailscale up` first".into()))?;
+    let host = self_short_hostname().ok_or_else(|| {
+        Error::Tailscale(format!(
+            "couldn't extract host label from MagicDNS name '{node}' \
+             (expected three-label `<host>.<tailnet>.ts.net`)"
+        ))
+    })?;
+    let tailnet = tailnet_suffix(&node).ok_or_else(|| {
+        Error::Tailscale(format!(
+            "couldn't extract tailnet from MagicDNS name '{node}' \
+             (expected three-label `<host>.<tailnet>.ts.net`)"
+        ))
+    })?;
+    Ok(format!("https://{service}-{host}.{tailnet}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

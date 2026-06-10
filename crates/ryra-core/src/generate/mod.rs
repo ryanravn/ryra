@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
+use crate::exposure::Exposure;
 use crate::registry::service_def::{AuthKind, EnvKind, EnvVar, ServiceDef};
 
 #[derive(Debug)]
@@ -27,8 +28,9 @@ pub struct GenerateEnvParams<'a> {
     /// corresponds to one `[[ports]]` definition in service.toml.
     pub resolved_ports: &'a [(String, u16)],
     pub env_overrides: &'a BTreeMap<String, String>,
-    /// Public URL for the service (used in templates as `{{service.external_url}}`).
-    pub url: Option<&'a str>,
+    /// How the service is exposed; its URL (if any) feeds templates like
+    /// `{{service.external_url}}` / `{{service.domain}}`.
+    pub exposure: &'a Exposure,
     /// Additional env vars to append to the .env file (e.g., CA cert trust vars).
     pub extra_env: BTreeMap<String, String>,
     /// Pre-built template context. When provided, secrets and auth credentials
@@ -65,7 +67,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         params.service_def,
         params.host_port,
         params.auth_kind,
-        params.url,
+        params.exposure,
         params.enable_smtp,
     )?;
     if let Some(prebuilt) = params.pre_built_ctx {
@@ -79,7 +81,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         &mut ctx,
         params.service_def,
         params.resolved_ports,
-        params.url,
+        params.exposure.url(),
     );
     let rendered_env = render_env_vars(
         params.service_def,
@@ -482,7 +484,7 @@ mod tests {
             host_port: Some(10002),
             resolved_ports: &resolved,
             env_overrides: overrides,
-            url: None,
+            exposure: &Exposure::Loopback,
             extra_env: BTreeMap::new(),
             pre_built_ctx: None,
             enable_smtp: false,
@@ -559,8 +561,9 @@ mod tests {
         let config = Config::default();
         // Build the pre-built ctx as the interactive prompt phase does:
         // host_port is None, so `service.port` is absent from the ctx.
-        let prebuilt = context::build_context(&config, &def, None, None, None, false)
-            .expect("build_context with host_port=None should succeed");
+        let prebuilt =
+            context::build_context(&config, &def, None, None, &Exposure::Loopback, false)
+                .expect("build_context with host_port=None should succeed");
         assert!(!prebuilt.contains_key("service.port"));
         let admin_secret = prebuilt
             .get("secret.admin")
@@ -577,7 +580,7 @@ mod tests {
             host_port: Some(10002),
             resolved_ports: &resolved,
             env_overrides: &BTreeMap::new(),
-            url: None,
+            exposure: &Exposure::Loopback,
             extra_env: BTreeMap::new(),
             pre_built_ctx: Some(prebuilt),
             enable_smtp: false,

@@ -157,29 +157,33 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
     let port_in_use = |_p: u16| false;
 
     let enabled_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
-    let result = add_service(
+    let no_env_overrides = BTreeMap::new();
+    let result = add_service(crate::AddServiceParams {
         service_name,
-        &exposure,
-        metadata.auth.clone(),
-        metadata.auth.is_some(),
-        // SMTP enablement is per-install state — persisted by `ryra add`
-        // and `ryra configure`. Upgrade preserves whatever the user picked.
-        metadata.smtp_enabled,
-        // Backup enablement is per-install state; preserve whatever the
-        // user picked at the original `ryra add`.
-        metadata.backup_enabled,
-        &BTreeMap::new(),
-        &enabled_groups,
-        &metadata.registry,
-        &repo_dir,
-        None,
-        &port_in_use,
+        exposure: &exposure,
+        // Metadata only records a native kind — `Requested` (auth on the
+        // provider itself) isn't persisted, so re-renders treat it as off.
+        auth: match metadata.auth.clone() {
+            Some(kind) => crate::AuthChoice::Native(kind),
+            None => crate::AuthChoice::None,
+        },
+        // SMTP and backup enablement are per-install state — persisted by
+        // `ryra add` and `ryra configure`. Upgrade preserves whatever the
+        // user picked.
+        enable_smtp: metadata.smtp_enabled,
+        enable_backup: metadata.backup_enabled,
+        env_overrides: &no_env_overrides,
+        enabled_groups: &enabled_groups,
+        registry_name: &metadata.registry,
+        repo_dir: &repo_dir,
+        pre_built_ctx: None,
+        port_in_use: &port_in_use,
         // ACME mode is only consumed when adding the reverse proxy itself;
         // upgrade never needs to seed the TLS snippet.
-        None,
-        PlanMode::Upgrade,
-        &port_overrides,
-    )?;
+        acme_mode: None,
+        mode: PlanMode::Upgrade,
+        port_overrides: &port_overrides,
+    })?;
 
     let mut planned: BTreeMap<PathBuf, String> = BTreeMap::new();
     for step in &result.steps {

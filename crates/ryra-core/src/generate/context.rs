@@ -2,13 +2,17 @@ use std::collections::BTreeMap;
 
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
+use crate::exposure::Exposure;
 use crate::registry::service_def::{AuthKind, EnvFormat, ServiceDef};
 use crate::system::secret;
 
 /// Build the template context for rendering env var values.
 /// Secrets are generated fresh using each env var's format + length.
 ///
-/// Returns an error if any provided URL (service `--url` or the stored
+/// Takes the resolved [`Exposure`] rather than a raw URL so the boundary
+/// can't be fed a URL that disagrees with the exposure decision.
+///
+/// Returns an error if any provided URL (the exposure's or the stored
 /// auth-provider URL) fails to parse or is missing a host — template
 /// rendering downstream depends on those being well-formed.
 pub fn build_context(
@@ -16,9 +20,10 @@ pub fn build_context(
     service_def: &ServiceDef,
     host_port: Option<u16>,
     auth_kind: Option<&AuthKind>,
-    url: Option<&str>,
+    exposure: &Exposure,
     enable_smtp: bool,
 ) -> Result<BTreeMap<String, String>> {
+    let url: Option<&str> = exposure.url();
     let mut ctx = BTreeMap::new();
 
     // service.*

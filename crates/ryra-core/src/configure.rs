@@ -328,30 +328,27 @@ pub async fn configure_service(
         .map(Exposure::from_url)
         .unwrap_or(Exposure::Loopback);
 
-    let target_auth_kind: Option<AuthKind> = if target_auth {
-        Some(AuthKind::Oidc)
-    } else {
-        None
-    };
-
-    let result = add_service(
+    let result = add_service(crate::AddServiceParams {
         service_name,
-        &target_exposure,
-        target_auth_kind.clone(),
-        target_auth,
-        target_smtp,
-        target_backup,
-        &overrides.env_overrides,
-        &target_groups,
-        &metadata.registry,
-        &repo_dir,
-        Some(pre_built_ctx.clone()),
-        &port_in_use,
+        exposure: &target_exposure,
+        auth: if target_auth {
+            crate::AuthChoice::Native(AuthKind::Oidc)
+        } else {
+            crate::AuthChoice::None
+        },
+        enable_smtp: target_smtp,
+        enable_backup: target_backup,
+        env_overrides: &overrides.env_overrides,
+        enabled_groups: &target_groups,
+        registry_name: &metadata.registry,
+        repo_dir: &repo_dir,
+        pre_built_ctx: Some(pre_built_ctx),
+        port_in_use: &port_in_use,
         // ACME is only consumed when seeding caddy on first install.
-        None,
-        PlanMode::Upgrade,
-        &port_overrides,
-    )?;
+        acme_mode: None,
+        mode: PlanMode::Upgrade,
+        port_overrides: &port_overrides,
+    })?;
 
     let diff = build_diff(service_name, &result)?;
 

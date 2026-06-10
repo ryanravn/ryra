@@ -33,7 +33,9 @@ pub use configure::{
     ConfigureChange, ConfigureResult, ExposureChange, Overrides as ConfigureOverrides,
     configure_service,
 };
-pub use exposure::{Exposure, is_public_url, is_tailscale_url};
+pub use exposure::{
+    Exposure, check_auth_exposure_compat, is_caddy_local_url, is_public_url, is_tailscale_url,
+};
 pub use generate::GeneratedFile;
 pub use manifest::{ManifestEntry, manifest_path};
 pub use metadata::{Metadata, load_metadata};
@@ -268,42 +270,97 @@ pub enum PlanMode {
     Upgrade,
 }
 
-/// Add a service: generate config, return steps to execute.
+/// The user's auth decision for one install.
 ///
-/// When `pre_built_ctx` is provided, its secrets and auth credentials are
-/// reused instead of generating fresh ones. Pass the context from the
-/// interactive prompt phase so the values the user saw match what gets written.
-#[allow(clippy::too_many_arguments)]
-pub fn add_service(
-    service_name: &str,
-    exposure: &Exposure,
-    auth_kind: Option<registry::service_def::AuthKind>,
-    enable_auth: bool,
-    enable_smtp: bool,
-    enable_backup: bool,
-    env_overrides: &BTreeMap<String, String>,
-    enabled_groups: &std::collections::BTreeSet<String>,
-    registry_name: &str,
-    repo_dir: &Path,
-    pre_built_ctx: Option<BTreeMap<String, String>>,
-    port_in_use: &dyn Fn(u16) -> bool,
-    acme_mode: Option<&caddy::AcmeMode>,
-    mode: PlanMode,
-    // Pin specific port assignments by name (e.g. `{"http": 10005}`) instead
-    // of running the allocator. Used by upgrade so a re-render preserves the
-    // install's existing host ports — port_in_use would say they're taken
-    // (the running service holds them) and the allocator would skip to the
-    // next free one.
-    port_overrides: &BTreeMap<String, u16>,
-) -> Result<AddResult> {
-    // Legacy locals — the rest of this function still threads
-    // `Option<&str>` URLs and a tailscale bool through downstream
-    // helpers (env templating, OIDC client registration, port
-    // resolution). Extracted once at the boundary so callers can't
-    // construct invalid `(url, tailscale)` combinations and the body
-    // doesn't have to be rewritten in one go.
+/// Replaces the `(Option<AuthKind>, bool)` pair that previously travelled
+/// through the planner, where `enable_auth = false` with a `Some` kind was
+/// representable but meaningless. The two consumers read different facets:
+/// [`Self::enabled`] drives the auth fabric (network joins, the auth
+/// bridge, the no-native-OIDC validation), [`Self::native_kind`] drives
+/// OIDC env templating and client registration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthChoice {
+    /// No auth integration.
+    None,
+    /// Auth with the service's native OIDC integration: OIDC env vars are
+    /// templated and a client is registered with the provider.
+    Native(registry::service_def::AuthKind),
+    /// Auth requested for a service that declares no native auth kinds.
+    /// The planner accepts this only when the service itself provides
+    /// OIDC (the provider doesn't act as a client of itself) and rejects
+    /// anything else with [`Error::NoOidcSupport`].
+    Requested,
+}
+
+impl AuthChoice {
+    /// True when the user asked for auth at all, natively or not.
+    pub fn enabled(&self) -> bool {
+        !matches!(self, AuthChoice::None)
+    }
+
+    /// The native OIDC kind, when the service has one.
+    pub fn native_kind(&self) -> Option<&registry::service_def::AuthKind> {
+        match self {
+            AuthChoice::Native(kind) => Some(kind),
+            AuthChoice::None | AuthChoice::Requested => None,
+        }
+    }
+}
+
+/// Inputs to [`add_service`]. One typed request instead of a positional
+/// argument list, so call sites (CLI today, other frontends later) name
+/// what they're asking for and the retry path can't drift out of sync
+/// with the original call.
+pub struct AddServiceParams<'a> {
+    pub service_name: &'a str,
+    pub exposure: &'a Exposure,
+    pub auth: AuthChoice,
+    pub enable_smtp: bool,
+    pub enable_backup: bool,
+    pub env_overrides: &'a BTreeMap<String, String>,
+    pub enabled_groups: &'a std::collections::BTreeSet<String>,
+    pub registry_name: &'a str,
+    pub repo_dir: &'a Path,
+    /// When provided, its secrets and auth credentials are reused instead
+    /// of generating fresh ones. Pass the context from the interactive
+    /// prompt phase so the values the user saw match what gets written.
+    pub pre_built_ctx: Option<BTreeMap<String, String>>,
+    pub port_in_use: &'a dyn Fn(u16) -> bool,
+    pub acme_mode: Option<&'a caddy::AcmeMode>,
+    pub mode: PlanMode,
+    /// Pin specific port assignments by name (e.g. `{"http": 10005}`)
+    /// instead of running the allocator. Used by upgrade so a re-render
+    /// preserves the install's existing host ports — port_in_use would
+    /// say they're taken (the running service holds them) and the
+    /// allocator would skip to the next free one.
+    pub port_overrides: &'a BTreeMap<String, u16>,
+}
+
+/// Add a service: generate config, return steps to execute.
+pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
+    let AddServiceParams {
+        service_name,
+        exposure,
+        auth,
+        enable_smtp,
+        enable_backup,
+        env_overrides,
+        enabled_groups,
+        registry_name,
+        repo_dir,
+        pre_built_ctx,
+        port_in_use,
+        acme_mode,
+        mode,
+        port_overrides,
+    } = params;
+    // Derived views of the typed inputs, bound once for the many body
+    // sites that only need one facet. Helpers that need the full picture
+    // (env templating, exposure-variant dispatch) take `&Exposure` /
+    // `&AuthChoice` facets directly.
+    let auth_kind: Option<&registry::service_def::AuthKind> = auth.native_kind();
+    let enable_auth: bool = auth.enabled();
     let url: Option<&str> = exposure.url();
-    let tailscale_enabled: bool = exposure.is_tailscale();
     let paths = ConfigPaths::resolve()?;
     let config = config::load_or_default(&paths.config_file)?;
 
@@ -534,11 +591,11 @@ pub fn add_service(
     let output = generate::generate_env(generate::GenerateEnvParams {
         config: &config,
         service_def: &reg_service.def,
-        auth_kind: auth_kind.as_ref(),
+        auth_kind,
         host_port,
         resolved_ports: &resolved_ports,
         env_overrides,
-        url,
+        exposure,
         extra_env,
         pre_built_ctx,
         enable_smtp: has_smtp,
@@ -574,7 +631,7 @@ pub fn add_service(
     let install_metadata = Metadata {
         registry: registry_name.to_string(),
         url: url.map(str::to_string),
-        auth: auth_kind.clone(),
+        auth: auth_kind.cloned(),
         provides: reg_service.def.capabilities.provides.clone(),
         backup_enabled: enable_backup,
         smtp_enabled: enable_smtp,
@@ -691,13 +748,14 @@ pub fn add_service(
     // `TailscaleEnable` defines the service via admin API and runs
     // `tailscale serve --service=...` from the host. No sidecar
     // containers, no per-service tailscaled.
-    if mode == PlanMode::Add && tailscale_enabled {
+    if mode == PlanMode::Add && exposure.is_tailscale() {
         // Scope the Tailscale Service name by host (`<service>-<host>`)
         // — Tailscale Services are global per tailnet, so without the
         // suffix two ryra machines that both `ryra add vikunja --tailscale`
         // would silently stomp each other's registration. The svc_name
-        // falls out of the exposure URL (built by `derive_tailscale_url`
-        // with the host suffix) — keeping URL as the single source of
+        // falls out of the exposure URL (built by
+        // `system::tailscale::derive_service_url` with the host suffix)
+        // — keeping URL as the single source of
         // truth means `metadata.toml` round-trips and remove paths
         // recover the same name without re-shelling tailscale.
         let svc_name = exposure.tailscale_svc_name().ok_or_else(|| {
@@ -756,7 +814,7 @@ pub fn add_service(
         && let (
             Some(registry::service_def::AuthKind::Oidc),
             Some(config::schema::AuthCredentials::Authelia { .. }),
-        ) = (auth_kind.as_ref(), config.auth.as_ref())
+        ) = (auth_kind, config.auth.as_ref())
     {
         steps.extend(authelia::register_oidc_client(
             service_name,

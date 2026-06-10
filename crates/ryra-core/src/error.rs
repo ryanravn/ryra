@@ -67,6 +67,9 @@ pub enum Error {
     #[error("systemctl command failed: {0}")]
     Systemctl(String),
 
+    #[error("tailscale: {0}")]
+    Tailscale(String),
+
     #[error("directory creation failed for {path}: {source}")]
     DirCreate {
         path: PathBuf,
@@ -83,6 +86,21 @@ pub enum Error {
 
     #[error("service {0} does not support native OIDC auth")]
     NoOidcSupport(String),
+
+    #[error(
+        "authelia is local-only at {auth_url}, but {service} will be reachable at \
+         {service_url}. Off-host clients (e.g., other devices on your tailnet) can't \
+         resolve `*.internal` hostnames, so the OIDC redirect from {service} back \
+         to authelia would fail.\n\n\
+         Fix: re-install authelia at the same exposure as {service}:\n  \
+         ryra remove authelia --purge\n  \
+         ryra add authelia --tailscale  (or --url <public-https-url>)"
+    )]
+    AuthExposureMismatch {
+        auth_url: String,
+        service: String,
+        service_url: String,
+    },
 
     #[error("{0}")]
     UnsupportedArchitecture(String),

@@ -164,7 +164,9 @@ fn build_overrides_from_flags(service: &str, flags: &ConfigureFlags) -> Result<C
         // Derive the tailscale Service URL the same way `ryra add
         // --tailscale` does, so the configure transition lands at the
         // same hostname the install path would have produced.
-        overrides.exposure = Some(ExposureChange::Tailscale(derive_tailscale_url(service)?));
+        overrides.exposure = Some(ExposureChange::Tailscale(
+            ryra_core::system::tailscale::derive_service_url(service)?,
+        ));
     }
     if flags.smtp {
         overrides.smtp = Some(true);
@@ -194,29 +196,6 @@ fn build_overrides_from_flags(service: &str, flags: &ConfigureFlags) -> Result<C
         overrides.env_overrides.insert(key, v.to_string());
     }
     Ok(overrides)
-}
-
-/// Build the Tailscale Service URL for `service` from the local
-/// tailnet identity. Mirrors `ryra add --tailscale`'s derivation so
-/// `configure --tailscale` and `add --tailscale` produce the same
-/// hostname for the same (service, host) pair.
-fn derive_tailscale_url(service: &str) -> Result<String> {
-    let node = ryra_core::system::tailscale::self_dns_name().ok_or_else(|| {
-        anyhow::anyhow!("--tailscale: no logged-in tailnet — run `tailscale up` first")
-    })?;
-    let host = ryra_core::system::tailscale::self_short_hostname().ok_or_else(|| {
-        anyhow::anyhow!(
-            "--tailscale: couldn't extract host label from MagicDNS name '{node}' \
-             (expected `<host>.<tailnet>.ts.net`)"
-        )
-    })?;
-    let tailnet = ryra_core::system::tailscale::tailnet_suffix(&node).ok_or_else(|| {
-        anyhow::anyhow!(
-            "--tailscale: couldn't extract tailnet from MagicDNS name '{node}' \
-             (expected `<host>.<tailnet>.ts.net`)"
-        )
-    })?;
-    Ok(format!("https://{service}-{host}.{tailnet}"))
 }
 
 /// Interactive prompt walk-through. Loads the current state and offers
@@ -256,7 +235,9 @@ async fn build_overrides_interactive(service: &str) -> Result<ConfigureOverrides
             }
         }
         2 => {
-            overrides.exposure = Some(ExposureChange::Tailscale(derive_tailscale_url(service)?));
+            overrides.exposure = Some(ExposureChange::Tailscale(
+                ryra_core::system::tailscale::derive_service_url(service)?,
+            ));
         }
         3 => {
             overrides.exposure = Some(ExposureChange::Loopback);

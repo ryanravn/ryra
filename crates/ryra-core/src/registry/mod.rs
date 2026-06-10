@@ -9,6 +9,60 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 use service_def::ServiceDef;
 
+/// What a service definition is allowed to do on the host: quadlet hooks
+/// that run as the user, scripts copied into the service data dir, and
+/// host bind mounts. Collected so the frontend can show the user exactly
+/// what they're trusting before installing from an external registry.
+#[derive(Debug, Default)]
+pub struct TrustReport {
+    /// Raw `ExecStartPre=` / `ExecStartPost=` lines from the quadlets.
+    pub quadlet_hooks: Vec<String>,
+    /// Script filenames under `configs/scripts/`.
+    pub config_scripts: Vec<String>,
+    /// `Volume=` values that bind-mount host paths (`%h` or absolute).
+    pub host_mounts: Vec<String>,
+}
+
+/// Scan a service directory for everything that touches the host. Best
+/// effort: unreadable dirs/files contribute nothing rather than erroring,
+/// since the report is advisory (the install gate is the user's y/n).
+pub fn trust_report(service_dir: &Path) -> TrustReport {
+    let mut report = TrustReport::default();
+
+    let quadlet_dir = service_dir.join("quadlets");
+    if let Ok(entries) = std::fs::read_dir(&quadlet_dir) {
+        for entry in entries.flatten() {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("ExecStartPre=") || trimmed.starts_with("ExecStartPost=")
+                    {
+                        report.quadlet_hooks.push(trimmed.to_string());
+                    }
+                    if trimmed.starts_with("Volume=") {
+                        let vol = trimmed.strip_prefix("Volume=").unwrap_or(trimmed);
+                        // Only flag host bind mounts (contain %h or start with /)
+                        if vol.contains("%h") || vol.starts_with('/') {
+                            report.host_mounts.push(vol.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let scripts_dir = service_dir.join("configs").join("scripts");
+    if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                report.config_scripts.push(name.to_string());
+            }
+        }
+    }
+
+    report
+}
+
 /// Represents a service found in a repo, with its source info.
 pub struct RegistryService {
     pub def: ServiceDef,

@@ -47,6 +47,17 @@ pub enum AcmeMode {
 }
 
 impl AcmeMode {
+    /// Convert a user-supplied Let's Encrypt email into the matching LE
+    /// mode: empty (user hit Enter at the prompt) means anonymous LE,
+    /// anything else means LE with that email for renewal notices.
+    pub fn from_email(email: &str) -> Self {
+        if email.is_empty() {
+            AcmeMode::Anonymous
+        } else {
+            AcmeMode::WithEmail(email.to_string())
+        }
+    }
+
     /// Renders the `(services_tls) { … }` snippet body for this mode.
     pub fn snippet(&self) -> String {
         match self {

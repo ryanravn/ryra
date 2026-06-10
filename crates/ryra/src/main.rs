@@ -373,24 +373,26 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Add {
-            ref services,
-            ref url,
+            services,
+            url,
             auth,
             smtp,
-            ref enable,
+            enable,
             tailscale,
             backup,
-            ref acme,
+            acme,
             yes,
             dry_run,
         } => {
-            // Map clap's raw flag to a typed AcmeMode at the CLI boundary so
-            // every interior call site pattern-matches an exhaustive enum
-            // instead of poking at a `Option<String>` with empty-string
+            // Map clap's raw flags to typed values at the CLI boundary so
+            // every interior call site pattern-matches exhaustive enums
+            // instead of poking at `Option<String>`s with empty-string
             // sentinels:
-            //   absent              → None (planner falls back to Internal)
+            //   --acme absent       → None (planner falls back to Internal)
             //   `--acme`            → Some(Anonymous)
             //   `--acme me@foo.bar` → Some(WithEmail(...))
+            // --url / --tailscale fold into one ExposureRequest (clap's
+            // conflicts_with already rejects passing both).
             let acme_mode: Option<ryra_core::caddy::AcmeMode> = acme.as_deref().map(|s| {
                 if s.is_empty() {
                     ryra_core::caddy::AcmeMode::Anonymous
@@ -398,18 +400,22 @@ async fn main() -> anyhow::Result<()> {
                     ryra_core::caddy::AcmeMode::WithEmail(s.to_string())
                 }
             });
-            cli::add::run(
+            let exposure = match url {
+                Some(u) => cli::add::ExposureRequest::Url(u),
+                None if tailscale => cli::add::ExposureRequest::Tailscale,
+                None => cli::add::ExposureRequest::Auto,
+            };
+            cli::add::run(cli::add::AddRequest {
                 services,
-                url.as_deref(),
+                exposure,
                 auth,
                 smtp,
                 enable,
-                tailscale,
                 backup,
-                acme_mode.as_ref(),
+                acme: acme_mode,
                 dry_run,
                 yes,
-            )
+            })
             .await?
         }
         Command::Remove {

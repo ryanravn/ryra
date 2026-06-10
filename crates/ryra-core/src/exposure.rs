@@ -117,6 +117,50 @@ impl Exposure {
     }
 }
 
+/// True when a service URL targets Caddy's local-CA `*.internal` domain.
+/// Used to gate `/etc/hosts` writes and CA trust setup: Tailscale and
+/// External URLs handle DNS / trust through other paths.
+///
+/// Defined as "what [`Exposure::from_url`] classifies as `Internal`" so
+/// there is exactly one URL-classification rule.
+pub fn is_caddy_local_url(url: &str) -> bool {
+    matches!(Exposure::from_url(url), Exposure::Internal { .. })
+}
+
+/// Reject the combination where authelia is exposed locally (`*.internal`)
+/// but the service being added will be reachable somewhere broader
+/// (tailnet, custom URL). In that combination, off-host clients (a phone
+/// on the tailnet, a public browser) hit the service fine but can't follow
+/// the OIDC redirect to `authelia.internal`, because that hostname only
+/// resolves on the ryra host.
+///
+/// The reverse, authelia broader than the service, is fine: the local
+/// browser reaches both, and `*.ts.net` resolves on the host via MagicDNS.
+pub fn check_auth_exposure_compat(
+    config: &crate::config::schema::Config,
+    service: &str,
+    service_url: Option<&str>,
+) -> crate::error::Result<()> {
+    let Some(auth) = &config.auth else {
+        return Ok(());
+    };
+    let auth_url = auth.url();
+    if !is_caddy_local_url(auth_url) {
+        return Ok(());
+    }
+    let Some(svc_url) = service_url else {
+        return Ok(());
+    };
+    if is_caddy_local_url(svc_url) {
+        return Ok(());
+    }
+    Err(crate::error::Error::AuthExposureMismatch {
+        auth_url: auth_url.to_string(),
+        service: service.to_string(),
+        service_url: svc_url.to_string(),
+    })
+}
+
 /// True when the URL's host is publicly resolvable — i.e. something a
 /// browser on the open internet would expect to reach. Used by the CLI
 /// to decide whether to surface the Let's Encrypt prompt.

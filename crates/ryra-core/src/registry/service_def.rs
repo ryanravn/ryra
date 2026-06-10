@@ -178,6 +178,21 @@ pub enum HttpsRequirement {
     Always,
 }
 
+impl HttpsRequirement {
+    /// Decide whether an install must be promoted to HTTPS.
+    ///
+    /// HTTPS is required when any of these hold:
+    ///   1. The service declares `https = "always"`.
+    ///   2. The service declares `https = "auth"` AND the user chose OIDC
+    ///      auth (via `--auth` or the interactive prompt).
+    ///   3. The user passed an `https://...` URL explicitly.
+    pub fn needs_https(&self, auth_requested: bool, url: Option<&str>) -> bool {
+        matches!(self, HttpsRequirement::Always)
+            || (matches!(self, HttpsRequirement::Auth) && auth_requested)
+            || url.is_some_and(|u| u.starts_with("https://"))
+    }
+}
+
 /// Whether a port uses TCP or UDP.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -963,5 +978,43 @@ paths = ["../../somewhere"]
         );
         let err = svc.validate().expect_err("must reject");
         assert!(err.contains("somewhere"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod https_requirement_tests {
+    use super::*;
+
+    #[test]
+    fn never_service_stays_http() {
+        assert!(!HttpsRequirement::Never.needs_https(false, None));
+        // Even with --auth, a service that didn't opt into HTTPS stays HTTP.
+        // This is the RFC 8252 loopback case: http://127.0.0.1 is a valid
+        // OIDC redirect_uri and most services (forgejo, etc.) work fine
+        // that way.
+        assert!(!HttpsRequirement::Never.needs_https(true, None));
+        // Explicit http:// URL also stays HTTP.
+        assert!(!HttpsRequirement::Never.needs_https(true, Some("http://foo.example.com")));
+    }
+
+    #[test]
+    fn always_service_always_promotes() {
+        assert!(HttpsRequirement::Always.needs_https(false, None));
+        assert!(HttpsRequirement::Always.needs_https(false, Some("http://foo.example.com")));
+    }
+
+    #[test]
+    fn auth_service_promotes_only_with_auth() {
+        // The regression this guards: `ryra add nextcloud --auth` without
+        // --url used to quietly install over HTTP and the SSO button never
+        // rendered (user_oidc refuses to show it without HTTPS).
+        assert!(HttpsRequirement::Auth.needs_https(true, None));
+        // Without --auth, even an `https = "auth"` service stays HTTP.
+        assert!(!HttpsRequirement::Auth.needs_https(false, None));
+    }
+
+    #[test]
+    fn explicit_https_url_promotes() {
+        assert!(HttpsRequirement::Never.needs_https(false, Some("https://foo.example.com")));
     }
 }

@@ -7,6 +7,10 @@ use crate::generate::GeneratedFile;
 use crate::registry::service_def::ServiceDef;
 use crate::{Step, WellKnownService, service_home};
 
+/// Authelia's HTTP listener port: the container port, and the fallback
+/// when an installed instance doesn't expose a port mapping.
+const DEFAULT_HTTP_PORT: u16 = 9091;
+
 /// Replace the host portion of a URL while preserving scheme, port, and path.
 fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
     let mut parsed = url::Url::parse(base_url).ok()?;
@@ -228,7 +232,7 @@ pub fn register_oidc_client(
             config,
             WellKnownService::Authelia,
             &domain,
-            9091,
+            DEFAULT_HTTP_PORT,
             quadlet_dir,
         )?);
     }
@@ -387,6 +391,41 @@ pub fn auth_config(
         .map(String::from)
         .unwrap_or_else(|| format!("http://localhost:{port}"));
     Ok(AuthCredentials::Authelia { url, port })
+}
+
+/// Configure `config.auth` from an already-installed authelia instance —
+/// the "authelia is up but `[auth]` is missing from preferences" case
+/// (hand-edited config, or an earlier run that died between install and
+/// finalize). Returns `true` when auth was configured and saved, `false`
+/// when the install doesn't look usable (no readable `.env`).
+pub fn configure_auth_from_installed(
+    config: &mut Config,
+    paths: &crate::config::ConfigPaths,
+) -> crate::error::Result<bool> {
+    // The .env is user-readable under ~/.local/share/services/authelia/.env.
+    // Its presence (and non-emptiness) is the signal that the install
+    // completed far enough to be adopted.
+    let env_path = service_home(WellKnownService::Authelia.as_str())?.join(".env");
+    let env_content = match std::fs::read_to_string(&env_path) {
+        Ok(content) => content,
+        Err(_) => return Ok(false),
+    };
+    if env_content.is_empty() {
+        return Ok(false);
+    }
+
+    // Find the port from the quadlet-derived InstalledService view. Select
+    // by name, matching `auth_config`'s rule for fresh installs.
+    let installed_all = crate::list_installed().unwrap_or_default();
+    let port = crate::find_installed_provider(&installed_all, crate::Capability::OidcProvider)
+        .and_then(|s| s.ports.get("http").copied())
+        .unwrap_or(DEFAULT_HTTP_PORT);
+
+    let url = format!("http://localhost:{port}");
+    config.auth = Some(AuthCredentials::Authelia { url, port });
+    paths.ensure_dirs()?;
+    crate::config::save_config(&paths.config_file, config)?;
+    Ok(true)
 }
 
 #[cfg(test)]
