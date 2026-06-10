@@ -36,6 +36,27 @@ pub struct ServiceDef {
     /// Carries hooks (pre/post dump) and exclude lists.
     #[serde(default)]
     pub backup: Option<BackupConfig>,
+    /// Prometheus-style metrics endpoint this service exposes. When set
+    /// and a metrics-store provider is installed, ryra writes a file_sd
+    /// scrape target and joins the service to the store's network.
+    #[serde(default)]
+    pub metrics: Option<MetricsDef>,
+}
+
+/// Where a service serves Prometheus-style metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsDef {
+    /// Name of the `[[ports]]` entry the metrics endpoint listens on.
+    /// The scrape target uses that entry's *container* port — the store
+    /// reaches the service over the shared podman network, not the host.
+    pub port: String,
+    /// HTTP path of the endpoint.
+    #[serde(default = "default_metrics_path")]
+    pub path: String,
+}
+
+fn default_metrics_path() -> String {
+    "/metrics".to_string()
 }
 
 /// Capability declarations on a service.
@@ -559,6 +580,17 @@ impl ServiceDef {
                  tailscale_https = 443 (the web root)"
                     .to_string(),
             );
+        }
+
+        // [metrics] must reference a declared port — the scrape target is
+        // built from that entry's container_port.
+        if let Some(metrics) = &self.metrics
+            && !self.ports.iter().any(|p| p.name == metrics.port)
+        {
+            errors.push(format!(
+                "[metrics] references port '{}' but no [[ports]] entry has that name",
+                metrics.port
+            ));
         }
 
         // Every env var name (top-level + every group member) must be unique

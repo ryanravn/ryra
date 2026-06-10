@@ -11,6 +11,7 @@ pub mod exposure;
 pub mod generate;
 pub mod manifest;
 pub mod metadata;
+pub mod metrics_bridge;
 pub mod paths;
 pub mod plan;
 pub mod registry;
@@ -128,67 +129,173 @@ fn retroactive_network_joins(
             }
             // Unreachable: `new_cap` was selected from the two cases
             // above. Match exhaustively so a new join-relevant capability
-            // forces a compile error here.
-            Capability::OidcProvider | Capability::ForwardAuthProvider => {
+            // forces a compile error here. Metrics wiring has its own
+            // retroactive pass (`retroactive_metrics_wiring`) because it
+            // writes targets/datasources, not just network joins.
+            Capability::OidcProvider
+            | Capability::ForwardAuthProvider
+            | Capability::MetricsStore
+            | Capability::MetricsDashboard => {
                 continue;
             }
         };
         if !should_join {
             continue;
         }
-        // Multi-container services (e.g. zammad with a separate railsserver
-        // that actually sends mail) need the network on every component
-        // container. Patch each `.container` file belonging to this service
-        // and restart each unit so podman recreates the container with the
-        // new network. Restarting only the primary unit doesn't cascade to
-        // subunits — their containers would keep running on the old network.
         let installed_names_owned: Vec<String> = installed.iter().map(|s| s.name.clone()).collect();
         let all_service_names: Vec<&str> =
             installed_names_owned.iter().map(|s| s.as_str()).collect();
-        let marker = format!("Network={network_name}.network");
-        let mut units_to_restart: Vec<String> = Vec::new();
-        let Ok(entries) = std::fs::read_dir(quadlet_path) else {
+        steps.extend(network_join_steps(
+            &svc.name,
+            &network_name,
+            quadlet_path,
+            &all_service_names,
+        ));
+    }
+    steps
+}
+
+/// Steps joining every quadlet belonging to `svc_name` to
+/// `<network_name>.network`, followed by a daemon-reload and restarts so
+/// podman recreates the containers on the new network. Empty when every
+/// file already carries the network line.
+///
+/// Multi-container services (e.g. zammad with a separate railsserver
+/// that actually sends mail) need the network on every component
+/// container — restarting only the primary unit doesn't cascade to
+/// subunits, whose containers would keep running on the old network.
+fn network_join_steps(
+    svc_name: &str,
+    network_name: &str,
+    quadlet_path: &std::path::Path,
+    all_service_names: &[&str],
+) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let marker = format!("Network={network_name}.network");
+    let mut units_to_restart: Vec<String> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(quadlet_path) else {
+        return steps;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) if n.ends_with(".container") => n.to_string(),
+            _ => continue,
+        };
+        if !quadlet_belongs_to(&name, svc_name, all_service_names) {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if content.contains(&marker) {
+            continue;
+        }
+        // The quadlet dir holds symlinks into service homes — patch the
+        // real file, not the link: atomic_write (correctly) refuses to
+        // overwrite a symlink with a regular file.
+        let real_path = match std::fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let updated = generate::bundle::inject_networks(
+            &content,
+            std::slice::from_ref(&network_name.to_string()),
+        );
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: real_path,
+            content: updated,
+        }));
+        // Unit name is the .container filename minus extension; systemd's
+        // generator turns `foo-bar.container` into `foo-bar.service`.
+        let unit = name.trim_end_matches(".container").to_string();
+        units_to_restart.push(unit);
+    }
+    if !units_to_restart.is_empty() {
+        steps.push(Step::DaemonReload);
+        for unit in units_to_restart {
+            steps.push(Step::RestartService { unit });
+        }
+    }
+    steps
+}
+
+/// The container port a metrics store's primary endpoint listens on,
+/// from its registry definition ("http" port, else the first declared).
+fn store_container_port(store_name: &str) -> Option<u16> {
+    let def = capability::lookup_registry_def(store_name)?;
+    def.ports
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("http"))
+        .or_else(|| def.ports.first())
+        .map(|p| p.container_port)
+}
+
+/// When a metrics store is being installed, wire up everything already
+/// on the machine: scrape targets for `[metrics]`-declaring services,
+/// datasources for dashboard providers, and the network joins both need
+/// to reach (or be reached by) the store. Consumers installed *after*
+/// the store are handled at their own add time instead.
+fn retroactive_metrics_wiring(
+    store_name: &str,
+    store_def: &registry::service_def::ServiceDef,
+    quadlet_path: &std::path::Path,
+) -> Vec<Step> {
+    let mut steps = Vec::new();
+    let installed = list_installed().unwrap_or_default();
+    let store_port = store_def
+        .ports
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("http"))
+        .or_else(|| store_def.ports.first())
+        .map(|p| p.container_port);
+    let installed_names_owned: Vec<String> = installed.iter().map(|s| s.name.clone()).collect();
+    let all_service_names: Vec<&str> = installed_names_owned.iter().map(|s| s.as_str()).collect();
+
+    for svc in &installed {
+        if svc.name == store_name {
+            continue;
+        }
+        // Needs the registry def for [metrics]/provides — services from
+        // other registries or missing from the cache are skipped (their
+        // next `ryra upgrade`/reinstall wires them).
+        let Some(def) = capability::lookup_registry_def(&svc.name) else {
             continue;
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) if n.ends_with(".container") => n.to_string(),
-                _ => continue,
-            };
-            if !quadlet_belongs_to(&name, &svc.name, &all_service_names) {
-                continue;
-            }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            if content.contains(&marker) {
-                continue;
-            }
-            // The quadlet dir holds symlinks into service homes — patch the
-            // real file, not the link: atomic_write (correctly) refuses to
-            // overwrite a symlink with a regular file.
-            let real_path = match std::fs::canonicalize(&path) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            let updated =
-                generate::bundle::inject_networks(&content, std::slice::from_ref(&network_name));
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: real_path,
-                content: updated,
-            }));
-            // Unit name is the .container filename minus extension; systemd's
-            // generator turns `foo-bar.container` into `foo-bar.service`.
-            let unit = name.trim_end_matches(".container").to_string();
-            units_to_restart.push(unit);
+        let mut wired = false;
+        let mut dashboard_wired = false;
+        if let Ok(Some(step)) = metrics_bridge::scrape_target_step(store_name, &def) {
+            steps.push(step);
+            wired = true;
         }
-        if !units_to_restart.is_empty() {
-            steps.push(Step::DaemonReload);
-            for unit in units_to_restart {
-                steps.push(Step::RestartService { unit });
-            }
+        if def
+            .capabilities
+            .provides
+            .contains(&Capability::MetricsDashboard)
+            && let Some(port) = store_port
+            && let Ok(step) = metrics_bridge::datasource_step(&svc.name, store_name, port)
+        {
+            steps.push(step);
+            wired = true;
+            dashboard_wired = true;
+        }
+        if !wired {
+            continue;
+        }
+        let join_steps =
+            network_join_steps(&svc.name, store_name, quadlet_path, &all_service_names);
+        // Dashboards read provisioning at boot — restart even when the
+        // network join was a no-op (e.g. the store was re-added and the
+        // quadlet still carries the network line).
+        let restarts_main = join_steps
+            .iter()
+            .any(|s| matches!(s, Step::RestartService { unit } if unit == &svc.name));
+        steps.extend(join_steps);
+        if dashboard_wired && !restarts_main {
+            steps.push(Step::RestartService {
+                unit: svc.name.clone(),
+            });
         }
     }
     steps
@@ -220,7 +327,7 @@ fn service_uses_smtp_relay(service_name: &str, relay_host: &str) -> bool {
 
 /// Determine which extra podman networks a service should join.
 ///
-/// Three providers own a shared network:
+/// Four providers own a shared network:
 /// - `authelia.network` — services with `--auth` join so they can reach the
 ///   OIDC provider by container DNS.
 /// - `inbucket.network` — services with SMTP configured join so they can
@@ -229,6 +336,9 @@ fn service_uses_smtp_relay(service_name: &str, relay_host: &str) -> bool {
 ///   auth-enabled services join so OIDC discovery goes through caddy's TLS;
 ///   inbucket itself joins so its web UI can be reverse-proxied when a URL
 ///   is supplied.
+/// - the metrics store's network — `[metrics]`-declaring services join so
+///   the store can scrape them by container DNS; dashboard providers join
+///   so they can query the store.
 #[allow(clippy::too_many_arguments)]
 fn resolve_extra_networks(
     service_name: &str,
@@ -238,6 +348,8 @@ fn resolve_extra_networks(
     inbucket_installed: bool,
     has_url: bool,
     has_smtp: bool,
+    metrics_store: Option<&str>,
+    wants_metrics: bool,
 ) -> Vec<String> {
     let mut networks = Vec::new();
     if enable_auth && authelia_installed && !WellKnownService::Authelia.matches(service_name) {
@@ -255,6 +367,14 @@ fn resolve_extra_networks(
         && !WellKnownService::Caddy.matches(service_name);
     if joins_caddy && !networks.contains(&WellKnownService::Caddy.to_string()) {
         networks.push(WellKnownService::Caddy.to_string());
+    }
+    // Scraped services and dashboards reach the metrics store the same
+    // way SMTP users reach inbucket — over the store's own network.
+    if let Some(store) = metrics_store
+        && wants_metrics
+        && store != service_name
+    {
+        networks.push(store.to_string());
     }
     networks
 }
@@ -560,6 +680,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         find_installed_provider(&installed_now, Capability::ReverseProxy).is_some();
     let inbucket_installed =
         find_installed_provider(&installed_now, Capability::SmtpRelay).is_some();
+    let metrics_store =
+        find_installed_provider(&installed_now, Capability::MetricsStore).map(|s| s.name.clone());
 
     // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
     // auth provider's domain). Pure — all filesystem writes are
@@ -582,6 +704,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         && reg_service.def.integrations.smtp
         && !reg_service.def.mappings.smtp.is_empty()
         && config.smtp.is_some();
+    let wants_metrics = reg_service.def.metrics.is_some()
+        || capability::def_provides(&reg_service.def, Capability::MetricsDashboard);
     let extra_networks = resolve_extra_networks(
         service_name,
         enable_auth,
@@ -590,6 +714,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         inbucket_installed,
         url.is_some(),
         has_smtp,
+        metrics_store.as_deref(),
+        wants_metrics,
     );
 
     let output = generate::generate_env(generate::GenerateEnvParams {
@@ -896,6 +1022,32 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             &quadlet_path,
             Some(repo_dir),
         ));
+    }
+
+    // 9c. Metrics wiring. Consumer side at install time: a service that
+    // declares [metrics] gets a file_sd scrape target dropped into the
+    // installed store (live — file_sd needs no reload); a dashboard
+    // provider gets a datasource provisioned before its first start.
+    // Provider side retroactively: a store being installed wires up
+    // everything already on the machine.
+    if mode == PlanMode::Add {
+        if let Some(store) = &metrics_store {
+            if let Some(step) = metrics_bridge::scrape_target_step(store, &reg_service.def)? {
+                steps.push(step);
+            }
+            if capability::def_provides(&reg_service.def, Capability::MetricsDashboard)
+                && let Some(port) = store_container_port(store)
+            {
+                steps.push(metrics_bridge::datasource_step(service_name, store, port)?);
+            }
+        }
+        if capability::def_provides(&reg_service.def, Capability::MetricsStore) {
+            steps.extend(retroactive_metrics_wiring(
+                service_name,
+                &reg_service.def,
+                &quadlet_path,
+            ));
+        }
     }
 
     // 9d. Caddy: seed the user-owned `tls.caddy` snippet on first install.
@@ -1313,6 +1465,42 @@ pub fn remove_service(service_name: &str, mode: RemoveMode) -> Result<RemoveResu
         )
     {
         steps.extend(authelia::unregister_oidc_client(service_name)?);
+    }
+
+    // Metrics cleanup. Drop this service's scrape target from every
+    // installed store (file_sd notices the removal, no reload). If the
+    // service being removed IS a store, also drop the datasources it
+    // provisioned on dashboards and restart them so the dead datasource
+    // disappears from their UI.
+    let installed_all = list_installed().unwrap_or_default();
+    for store in installed_all
+        .iter()
+        .filter(|s| installed_provides(s, Capability::MetricsStore))
+    {
+        if store.name != service_name
+            && let Ok(target) = metrics_bridge::target_file_path(&store.name, service_name)
+            && target.exists()
+        {
+            steps.push(Step::RemoveFile(target));
+        }
+    }
+    if installed.provides.contains(&Capability::MetricsStore) {
+        for dash in installed_all
+            .iter()
+            .filter(|s| installed_provides(s, Capability::MetricsDashboard))
+        {
+            if dash.name == service_name {
+                continue;
+            }
+            if let Ok(ds) = metrics_bridge::datasource_file_path(&dash.name, service_name)
+                && ds.exists()
+            {
+                steps.push(Step::RemoveFile(ds));
+                steps.push(Step::RestartService {
+                    unit: dash.name.clone(),
+                });
+            }
+        }
     }
 
     // Reload systemd after removing quadlet files
@@ -2289,52 +2477,116 @@ mod tests {
 
     #[test]
     fn networks_empty_when_no_auth() {
-        let nets = resolve_extra_networks("whoami", false, false, false, false, false, false);
+        let nets = resolve_extra_networks(
+            "whoami", false, false, false, false, false, false, None, false,
+        );
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_empty_when_auth_but_no_authelia() {
-        let nets = resolve_extra_networks("forgejo", true, false, false, false, false, false);
+        let nets = resolve_extra_networks(
+            "forgejo", true, false, false, false, false, false, None, false,
+        );
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_authelia_when_auth_enabled() {
-        let nets = resolve_extra_networks("forgejo", true, true, false, false, false, false);
+        let nets = resolve_extra_networks(
+            "forgejo", true, true, false, false, false, false, None, false,
+        );
         assert_eq!(nets, vec!["authelia"]);
     }
 
     #[test]
     fn networks_auth_with_caddy_includes_both() {
-        let nets = resolve_extra_networks("forgejo", true, true, true, false, false, false);
+        let nets = resolve_extra_networks(
+            "forgejo", true, true, true, false, false, false, None, false,
+        );
         assert!(nets.contains(&"authelia".to_string()));
         assert!(nets.contains(&"caddy".to_string()));
     }
 
     #[test]
     fn networks_authelia_excluded_for_authelia_itself() {
-        let nets = resolve_extra_networks("authelia", true, true, false, false, false, false);
+        let nets = resolve_extra_networks(
+            "authelia", true, true, false, false, false, false, None, false,
+        );
         assert!(nets.is_empty());
     }
 
     #[test]
     fn networks_smtp_joins_inbucket_without_caddy() {
         // Reaching inbucket for SMTP must NOT require caddy.
-        let nets = resolve_extra_networks("forgejo", false, false, false, true, false, true);
+        let nets = resolve_extra_networks(
+            "forgejo", false, false, false, true, false, true, None, false,
+        );
         assert_eq!(nets, vec!["inbucket"]);
     }
 
     #[test]
     fn networks_smtp_skips_inbucket_when_it_is_self() {
-        let nets = resolve_extra_networks("inbucket", false, false, false, true, false, true);
+        let nets = resolve_extra_networks(
+            "inbucket", false, false, false, true, false, true, None, false,
+        );
         assert!(!nets.contains(&"inbucket".to_string()));
     }
 
     #[test]
     fn networks_smtp_skips_inbucket_when_not_installed() {
-        let nets = resolve_extra_networks("forgejo", false, false, false, false, false, true);
+        let nets = resolve_extra_networks(
+            "forgejo", false, false, false, false, false, true, None, false,
+        );
         assert!(!nets.contains(&"inbucket".to_string()));
+    }
+
+    #[test]
+    fn networks_metrics_consumer_joins_store() {
+        let nets = resolve_extra_networks(
+            "grafana",
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            Some("prometheus"),
+            true,
+        );
+        assert_eq!(nets, vec!["prometheus".to_string()]);
+    }
+
+    #[test]
+    fn networks_metrics_store_skips_itself() {
+        let nets = resolve_extra_networks(
+            "prometheus",
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            Some("prometheus"),
+            true,
+        );
+        assert!(nets.is_empty());
+    }
+
+    #[test]
+    fn networks_metrics_indifferent_service_skips_store() {
+        let nets = resolve_extra_networks(
+            "vaultwarden",
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            Some("prometheus"),
+            false,
+        );
+        assert!(nets.is_empty());
     }
 
     #[test]

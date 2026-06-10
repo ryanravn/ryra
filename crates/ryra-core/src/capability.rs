@@ -37,6 +37,13 @@ pub enum Capability {
     /// Accepts mail from services. Today: Inbucket (dev). Future: real
     /// MTA configurations.
     SmtpRelay,
+    /// Scrapes and stores metrics; ryra drops file_sd target files into
+    /// its `targets/` dir. Today: Prometheus. Future: VictoriaMetrics, …
+    MetricsStore,
+    /// Visualizes metrics from a [`Capability::MetricsStore`]; ryra
+    /// provisions a datasource pointing at the installed store.
+    /// Today: Grafana.
+    MetricsDashboard,
 }
 
 impl Capability {
@@ -46,6 +53,8 @@ impl Capability {
             Self::OidcProvider => "oidc-provider",
             Self::ForwardAuthProvider => "forward-auth-provider",
             Self::SmtpRelay => "smtp-relay",
+            Self::MetricsStore => "metrics-store",
+            Self::MetricsDashboard => "metrics-dashboard",
         }
     }
 }
@@ -101,6 +110,16 @@ pub fn installed_provides(svc: &InstalledService, cap: Capability) -> bool {
 /// installed-services workflow asks "does X provide Y," the on-disk
 /// registry directory is already there.
 fn lookup_provides_from_registry(name: &str) -> Option<Vec<Capability>> {
+    Some(lookup_registry_def(name)?.capabilities.provides)
+}
+
+/// Read a service's full definition from the cached default registry (or
+/// the `RYRA_REGISTRY_DIR` override). Same availability caveats as
+/// [`service_provides`]: `None` until the first `ryra add`/`ryra search`
+/// has populated the cache. Used by dispatch sites that need more than
+/// `provides` — e.g. the metrics bridge reading `[metrics]` and port
+/// declarations of already-installed services.
+pub(crate) fn lookup_registry_def(name: &str) -> Option<crate::registry::service_def::ServiceDef> {
     let paths = crate::config::ConfigPaths::resolve().ok()?;
 
     // Mirror resolve_default_registry_dir's env-override logic so an
@@ -118,8 +137,7 @@ fn lookup_provides_from_registry(name: &str) -> Option<Vec<Capability>> {
         return None;
     }
 
-    let entry = crate::registry::find_service(&registry_dir, name).ok()?;
-    Some(entry.def.capabilities.provides)
+    Some(crate::registry::find_service(&registry_dir, name).ok()?.def)
 }
 
 /// Find an installed service that provides the given capability. Returns

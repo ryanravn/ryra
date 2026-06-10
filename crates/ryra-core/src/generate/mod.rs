@@ -374,6 +374,7 @@ mod tests {
             integrations: Default::default(),
             capabilities: Default::default(),
             backup: None,
+            metrics: None,
         }
     }
 

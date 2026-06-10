@@ -398,6 +398,7 @@ mod tests {
             },
             capabilities: Default::default(),
             backup: backup_section,
+            metrics: None,
         }
     }
 

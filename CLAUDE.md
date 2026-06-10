@@ -127,6 +127,15 @@ When `ryra add <service> --auth` is called:
 6. Services without native OIDC get Caddy forward auth instead (Authelia handles login at the proxy level)
 7. Services work at `http://127.0.0.1:<port>` without `--url` — the OIDC redirect goes through authelia (HTTPS) and back to the service (HTTP)
 
+### How metrics work
+
+Prometheus (`provides = ["metrics-store"]`) and grafana (`provides = ["metrics-dashboard"]`) wire up through the capability system, both install orders:
+
+1. A service declares its endpoint in service.toml: `[metrics]` with `port` (a `[[ports]]` name; the scrape target uses its *container* port) and optional `path` (default `/metrics`).
+2. When a store is installed, adding a `[metrics]` service drops `targets/<svc>.json` into the store's file_sd dir (live, no reload) and joins the service to the store's network. `ryra remove` deletes the target file.
+3. Adding a dashboard provider with a store installed provisions a datasource file into `provisioning-datasources/` (read at boot). Installing the store *after* other services wires everything retroactively (`retroactive_metrics_wiring`): targets, datasources, network joins, restarts.
+4. All glue is file-based and typed Steps from `metrics_bridge.rs` - core never calls prometheus or grafana APIs.
+
 ### Pre-start and post-start scripts
 
 Hooks are implemented as **quadlet-native `ExecStartPre=` / `ExecStartPost=`** directives in `.container` files — there is no hook abstraction in service.toml. Scripts live in `registry/<service>/configs/scripts/` and are copied to the service's data directory during `ryra add`. The quadlet file references them with `ExecStartPost=/bin/bash ${SERVICE_HOME}/configs/scripts/<script>.sh`.

@@ -293,6 +293,66 @@ pub fn print_plan_header(steps: &[Step], service: &str, primary_url: Option<&str
     if let Some(p) = primary_quadlet {
         println!("{arrow} writes {}", tildify(p));
     }
+
+    // Narrate automatic metrics wiring — integrations that happen because
+    // a provider is present must be loud, not silent. Scrape targets are
+    // `<store>/targets/<svc>.json`; datasources are
+    // `<dash>/provisioning-datasources/ryra-<store>.yml`.
+    for step in steps {
+        let Step::WriteFile(f) = step else { continue };
+        let Some(name) = f.path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let dir = f
+            .path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
+        let owner = f
+            .path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
+        match dir {
+            Some("targets") if name.ends_with(".json") => {
+                let scraped = name.trim_end_matches(".json");
+                println!(
+                    "{arrow} wires {scraped} into {} (scrape target)",
+                    owner.unwrap_or("the metrics store")
+                );
+            }
+            Some("provisioning-datasources") => {
+                let store = name.trim_start_matches("ryra-").trim_end_matches(".yml");
+                println!(
+                    "{arrow} provisions {store} datasource in {}",
+                    owner.unwrap_or("the dashboard")
+                );
+            }
+            _ => {}
+        }
+    }
+    // Restarts of units that don't belong to the service being added —
+    // retroactive wiring (network joins, datasource reloads) on peers.
+    let peer_restarts: BTreeSet<&str> = steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::RestartService { unit }
+                if unit != service && !unit.starts_with(&format!("{service}-")) =>
+            {
+                Some(unit.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    if !peer_restarts.is_empty() {
+        let list: Vec<&str> = peer_restarts.into_iter().collect();
+        println!(
+            "{arrow} restarts {} (picks up the new wiring)",
+            list.join(", ")
+        );
+    }
+
     match primary_url {
         Some(url) => println!("{arrow} starts {service} on {url}"),
         None => println!("{arrow} starts {service}"),
