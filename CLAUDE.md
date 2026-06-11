@@ -83,11 +83,11 @@ The split is deliberate: tags pushed by `GITHUB_TOKEN` (i.e. from a workflow) do
 
 ## Architecture
 
-- `ryra-core`: pure library, no CLI deps, no sudo, no side effects beyond file I/O to user-owned config
+- `ryra-core`: library with no CLI deps and no sudo. Planning (`ops`, `add_service`, …) is pure: typed results, no system probes. System-touching utilities live under `ryra_core::system` (podman, tailscale, the Step executor `system::apply`) so every frontend shares one implementation
 - `ryra` (crate `ryra`, binary `ryra`): thin shell that calls core and handles sudo/system interaction
 - `ryra-vm`: QEMU/SSH/cloud-init VM orchestration library
 - `ryra-test`: E2E test runner, depends on ryra-vm
-- Core returns typed results describing what needs to happen; CLI decides whether to apply or print
+- Core returns typed results describing what needs to happen; frontends (CLI, ryra-api) decide whether to apply (via `system::apply`) or print
 - All services run under the invoking user's rootless podman (`systemctl --user`)
 - Quadlet files go to `~/.config/containers/systemd/`
 - Service data goes to `~/.local/share/services/<name>/`

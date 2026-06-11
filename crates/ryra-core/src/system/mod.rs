@@ -1,3 +1,4 @@
+pub mod apply;
 pub mod atomic_write;
 pub mod doctor;
 pub mod memory;
