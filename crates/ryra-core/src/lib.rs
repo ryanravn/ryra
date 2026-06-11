@@ -1356,9 +1356,7 @@ pub fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names:
 }
 
 /// How destructive `remove_service` should be.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoveMode {
     #[default]
