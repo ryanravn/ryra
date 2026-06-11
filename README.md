@@ -5,7 +5,14 @@
 
 > Self-host anything, automatically test it works.
 
-Ryra scaffolds **rootless**, **daemonless** **podman** containers wired with the same authorization system (**SSO**) and e-mail system with **SMTP**. The [default registry](https://github.com/ryanravn/ryra-registry) covers useful services, each **end-to-end tested** in a fresh virtual machine, and the test framework is simple enough that you can have an AI add new services and prove they work the same way.
+Services arrive wired: **SSO**, **mail**, **encrypted backups**, **monitoring**. Plain rootless podman and systemd underneath, in files you can read. Every service in the [registry](https://github.com/ryanravn/ryra-registry) proven by **end-to-end tests** in a fresh VM.
+
+```sh
+$ ryra add prometheus grafana
+→ wires grafana into prometheus (scrape target)
+→ provisions prometheus datasource in grafana
+→ starts grafana on http://127.0.0.1:3000
+```
 
 [Website](https://ryra.dev) · [Docs](https://ryra.dev/intro/) · [Services](https://ryra.dev/services/)
 
@@ -21,7 +28,7 @@ Or with Rust:
 cargo install ryra
 ```
 
-Works on Debian, Ubuntu, Fedora, Arch, and any Linux with systemd and Podman.
+Works on any Linux with systemd and podman >= 5.3 (current Debian-based, Fedora, and Arch releases all qualify). `ryra doctor` checks your setup.
 
 ## Quickstart
 

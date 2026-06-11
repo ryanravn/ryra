@@ -25,6 +25,14 @@ use crate::system::tailscale;
 /// 65536 is the standard allocation size shipped by adduser/usermod.
 const MIN_SUBID_RANGE: u32 = 65536;
 
+/// Minimum podman version. Quadlet must pass `${...}` port/path values
+/// through to the generated ExecStart (validation removed in 5.3.0) —
+/// older quadlet rejects `PublishPort=${SERVICE_PORT_HTTP}:...` outright,
+/// so every registry service fails to generate. Ubuntu 24.04 LTS ships
+/// 4.9; this check turns that into one clear message instead of a
+/// confusing unit failure.
+const MIN_PODMAN: (u32, u32) = (5, 3);
+
 /// How serious an [`Issue`] is. Drives both UI grouping in `ryra doctor`
 /// output and the gate behaviour of `ryra add` (which bails on any
 /// `Blocker` but otherwise prints warnings without stopping).
@@ -43,6 +51,14 @@ pub enum Severity {
 /// A typed, renderable problem detected by [`check_all`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Issue {
+    /// `podman` is missing or older than [`MIN_PODMAN`]. Registry
+    /// quadlets rely on runtime env expansion that older quadlet
+    /// versions reject at generation time.
+    PodmanUnsupported {
+        /// `podman --version` output, `None` when the binary isn't on
+        /// PATH or didn't run.
+        found: Option<String>,
+    },
     /// User has no entry in /etc/subuid or /etc/subgid.
     SubidNotConfigured {
         user: String,
@@ -100,6 +116,7 @@ impl Issue {
     /// How `ryra add` and `ryra doctor` should treat this issue.
     pub fn severity(&self) -> Severity {
         match self {
+            Issue::PodmanUnsupported { .. } => Severity::Blocker,
             Issue::SubidNotConfigured { .. } | Issue::SubidRangeTooSmall { .. } => {
                 Severity::Blocker
             }
@@ -117,6 +134,27 @@ impl Issue {
 impl fmt::Display for Issue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Issue::PodmanUnsupported { found } => match found {
+                Some(version) => write!(
+                    f,
+                    "podman {version} is too old — ryra needs podman >= {}.{} \
+                     (quadlet env expansion in PublishPort/Volume).\n\
+                     \n\
+                     Fix: upgrade podman — current Debian-based, Fedora, and Arch \
+                     releases all ship a supported version.",
+                    MIN_PODMAN.0, MIN_PODMAN.1,
+                ),
+                None => write!(
+                    f,
+                    "podman isn't on PATH — ryra runs every service as a rootless \
+                     podman container.\n\
+                     \n\
+                     Fix:\n  \
+                       sudo apt install podman      # Debian-based\n  \
+                       sudo dnf install podman      # Fedora\n  \
+                       sudo pacman -S podman        # Arch",
+                ),
+            },
             Issue::SubidNotConfigured {
                 user,
                 missing_files,
@@ -272,6 +310,9 @@ impl fmt::Display for Issue {
 /// [`check_tailscale_runtime`].
 pub fn check_all(_config: &Config) -> Vec<Issue> {
     let mut issues = Vec::new();
+    if let Err(e) = check_podman_version() {
+        issues.push(e);
+    }
     if let Err(e) = check_subid_range() {
         issues.push(e);
     }
@@ -303,6 +344,45 @@ pub fn check_tailscale_runtime() -> Result<(), Issue> {
         return Err(Issue::TailscaleNotLoggedIn);
     }
     Ok(())
+}
+
+/// Blocker when podman is missing or below [`MIN_PODMAN`].
+fn check_podman_version() -> Result<(), Issue> {
+    let Ok(output) = std::process::Command::new("podman")
+        .arg("--version")
+        .output()
+    else {
+        return Err(Issue::PodmanUnsupported { found: None });
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let Some((major, minor, patch)) = parse_podman_version(&text) else {
+        // Ran but printed something unparseable — report what we saw
+        // rather than guessing it's fine.
+        return Err(Issue::PodmanUnsupported {
+            found: Some(text.trim().to_string()),
+        });
+    };
+    if (major, minor) < MIN_PODMAN {
+        return Err(Issue::PodmanUnsupported {
+            found: Some(format!("{major}.{minor}.{patch}")),
+        });
+    }
+    Ok(())
+}
+
+/// Parse `podman --version` output ("podman version 5.8.2", tolerating
+/// suffixes like "5.9.0-dev").
+fn parse_podman_version(s: &str) -> Option<(u32, u32, u32)> {
+    let nums = s.split_whitespace().last()?;
+    let mut parts = nums.split('.');
+    let digits = |p: &str| -> Option<u32> {
+        let d: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
+        d.parse().ok()
+    };
+    let major = digits(parts.next()?)?;
+    let minor = digits(parts.next()?)?;
+    let patch = parts.next().and_then(digits).unwrap_or(0);
+    Some((major, minor, patch))
 }
 
 fn check_subid_range() -> Result<(), Issue> {
@@ -563,6 +643,28 @@ fn parse_subid_range(path: &'static str, user: &str, missing: &mut Vec<&'static 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn podman_version_parsing() {
+        assert_eq!(
+            parse_podman_version("podman version 5.8.2"),
+            Some((5, 8, 2))
+        );
+        assert_eq!(
+            parse_podman_version("podman version 4.9.3"),
+            Some((4, 9, 3))
+        );
+        assert_eq!(
+            parse_podman_version("podman version 5.9.0-dev"),
+            Some((5, 9, 0))
+        );
+        assert_eq!(parse_podman_version("podman version 6.0"), Some((6, 0, 0)));
+        assert_eq!(parse_podman_version("garbage"), None);
+        // The floor itself: 5.3 passes, 5.2 / 4.x don't.
+        assert!((5, 3) >= MIN_PODMAN);
+        assert!((5, 2) < MIN_PODMAN);
+        assert!((4, 9) < MIN_PODMAN);
+    }
 
     #[test]
     fn display_too_small_includes_fix_command() {

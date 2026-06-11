@@ -127,9 +127,9 @@ const principles = [
               Self-host anything, <em>automatically test</em> it works.
             </h1>
             <p class="lede">
-              Scaffolds <strong>rootless</strong>, <strong>daemonless</strong> <strong>podman</strong> containers wired with the same authorization system (<strong>SSO</strong>), e-mail system (<strong>SMTP</strong>), and <strong>automatic end-to-end encrypted backups</strong>.
-              The default registry covers useful services, each <strong>tested</strong> in a fresh virtual machine, and the
-              test framework is simple enough that you can have an AI add new services and prove they work the same way.
+              Services arrive wired: <strong>SSO</strong>, <strong>mail</strong>, <strong>encrypted backups</strong>, <strong>monitoring</strong>.
+              Plain rootless podman and systemd underneath, in files you can read.
+              Every service proven by <strong>end-to-end tests</strong> in a fresh VM.
             </p>
             <div class="cta-row">
               <button class="install" id="copy-install" type="button">
@@ -178,7 +178,9 @@ const principles = [
                 <tbody>
                   <tr><td class="term-name">caddy</td><td class="term-up">running</td><td>http://127.0.0.1:8080</td></tr>
                   <tr><td class="term-name">forgejo</td><td class="term-up">running</td><td>http://127.0.0.1:3000</td></tr>
+                  <tr><td class="term-name">grafana</td><td class="term-up">running</td><td>http://127.0.0.1:3001</td></tr>
                   <tr><td class="term-name">immich</td><td class="term-up">running</td><td>https://immich.tail-ryra.ts.net</td></tr>
+                  <tr><td class="term-name">prometheus</td><td class="term-up">running</td><td>http://127.0.0.1:9090</td></tr>
                   <tr><td class="term-name">vaultwarden</td><td class="term-up">running</td><td>https://vault.tail-ryra.ts.net</td></tr>
                 </tbody>
               </table>
