@@ -80,7 +80,23 @@ pub fn service_data_root() -> Result<PathBuf> {
 }
 
 /// Data directory for a service: `~/.local/share/services/<name>`
+///
+/// Rejects path-like names before the join: `PathBuf::join` with an
+/// absolute path REPLACES the base, so an unvalidated name like
+/// `/home/user/project` would make this return that very directory,
+/// and a purge would then delete it. A test-harness bug did exactly
+/// that once; never again.
 pub fn service_home(service_name: &str) -> Result<PathBuf> {
+    if service_name.is_empty()
+        || service_name == "."
+        || service_name == ".."
+        || service_name.contains('/')
+        || service_name.contains('\\')
+    {
+        return Err(Error::ConfigValidation(format!(
+            "invalid service name '{service_name}': names must not be paths"
+        )));
+    }
     Ok(service_data_root()?.join(service_name))
 }
 
@@ -109,4 +125,39 @@ pub fn systemd_user_dir() -> Result<PathBuf> {
         None => home_dir()?.join(".config"),
     };
     Ok(base.join("systemd").join("user"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_home_rejects_path_like_names() {
+        // An absolute or traversing name must never escape the data root
+        // (PathBuf::join with an absolute path replaces the base). A real
+        // purge once deleted a whole repo this way.
+        for bad in [
+            "/home/user/code/ryra-api",
+            ".",
+            "..",
+            "../x",
+            "a/b",
+            "a\\b",
+            "",
+        ] {
+            assert!(
+                service_home(bad).is_err(),
+                "expected '{bad}' to be rejected as a service name"
+            );
+        }
+    }
+
+    #[test]
+    fn service_home_accepts_plain_names() {
+        // Plain registry-style names still resolve (under the data root).
+        for good in ["forgejo", "ryra-api", "node-exporter", "caddy"] {
+            let home = service_home(good).expect("plain name should resolve");
+            assert!(home.ends_with(good));
+        }
+    }
 }

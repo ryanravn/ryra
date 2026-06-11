@@ -144,6 +144,12 @@ pub enum StepDef {
         env: BTreeMap<String, String>,
         #[serde(default = "default_add_timeout")]
         timeout: u64,
+        /// Set by local-project discovery (`--project`): add by this path
+        /// instead of by registry name, so the project's own
+        /// `service.toml` resolves. Never set from test.toml; `service`
+        /// remains the real registered name for every other use.
+        #[serde(skip)]
+        project_path: Option<std::path::PathBuf>,
     },
     Remove {
         service: String,
@@ -296,6 +302,7 @@ impl StepDef {
                 args,
                 env,
                 timeout,
+                ..
             } => {
                 let args_s = args
                     .as_deref()

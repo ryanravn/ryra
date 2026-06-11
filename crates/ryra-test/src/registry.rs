@@ -214,10 +214,20 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
     }
 
     if quadlet_files.is_empty() {
-        anyhow::bail!(
-            "test.toml found at {} but no quadlet files (.container, .volume, .network, .pod) in the same directory",
-            test_toml_path.display()
-        );
+        // Native-runtime services are quadlet-free by design: ryra runs
+        // their `run` command directly under systemd --user. service.toml
+        // is the authority on which kind this project is.
+        let is_native = std::fs::read_to_string(project_dir.join("service.toml"))
+            .ok()
+            .and_then(|s| s.parse::<toml::Value>().ok())
+            .and_then(|v| Some(v.get("service")?.get("runtime")?.as_str()? == "native"))
+            .unwrap_or(false);
+        if !is_native {
+            anyhow::bail!(
+                "test.toml found at {} but no quadlet files (.container, .volume, .network, .pod) in the same directory (container services need quadlets; native services declare runtime = \"native\" in service.toml)",
+                test_toml_path.display()
+            );
+        }
     }
 
     let project_dir = std::fs::canonicalize(project_dir)
@@ -244,6 +254,26 @@ pub fn discover_local_project(project_dir: &Path) -> Result<Option<DiscoveredTes
         );
     }
     let mut test = tests.remove(0);
+
+    // A local project's `add <name>` step names a service that isn't in
+    // any registry — it lives in this directory. Tag that step with the
+    // project path so the runner adds by path (`ryra add ./project`,
+    // which reads ./service.toml), while `service` stays the real
+    // registered name for waits, assertions, and cleanup. This is what
+    // makes native-runtime projects (no quadlets) testable via --project.
+    if let DiscoveredTest::Lifecycle { ref mut steps, .. } = test {
+        for step in steps.iter_mut() {
+            if let StepDef::Add {
+                service,
+                project_path,
+                ..
+            } = step
+                && *service == dir_name
+            {
+                *project_path = Some(project_dir.clone());
+            }
+        }
+    }
 
     // Populate quadlets from discovered files if not explicitly set in [setup]
     if let DiscoveredTest::Simple { ref mut setup, .. } = test

@@ -557,6 +557,7 @@ pub async fn run_lifecycle_test(
                 args,
                 env,
                 timeout,
+                project_path,
             } => {
                 println!("{p}  ryra add {service}...");
                 let mut cmd = String::new();
@@ -564,7 +565,14 @@ pub async fn run_lifecycle_test(
                     let escaped = shell_escape(val);
                     cmd.push_str(&format!("{key}='{escaped}' "));
                 }
-                cmd.push_str(&format!("ryra add {service}"));
+                // Local projects add by path so `ryra add ./project` reads
+                // the project's own service.toml; registry services add by
+                // name. Either way the install registers under `service`.
+                let add_target = match project_path {
+                    Some(p) => shell_escape(&p.display().to_string()),
+                    None => service.clone(),
+                };
+                cmd.push_str(&format!("ryra add {add_target}"));
                 if let Some(a) = args.as_deref()
                     && !a.is_empty()
                 {

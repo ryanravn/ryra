@@ -151,9 +151,11 @@ pub fn enumerate_all() -> Result<Vec<ServiceData>> {
 /// volumes end up unattributed. Looking up by name dodges that because
 /// the name itself seeds the owner match.
 pub fn enumerate_service(name: &str) -> Result<Option<ServiceData>> {
-    let home_root = crate::service_data_root()?;
     let quadlet = crate::quadlet_dir()?;
-    let home_dir = home_root.join(name);
+    // Validated join: rejects path-like names so an absolute `name`
+    // can't replace the data root and make this enumerate (and a later
+    // purge delete) an arbitrary directory.
+    let home_dir = crate::service_home(name)?;
     let known = [name.to_string()];
 
     let quadlet_vols = volumes::parse_volume_quadlets(&quadlet, &known)?;
