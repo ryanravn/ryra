@@ -12,6 +12,7 @@ pub mod generate;
 pub mod manifest;
 pub mod metadata;
 pub mod metrics_bridge;
+pub mod ops;
 pub mod paths;
 pub mod plan;
 pub mod registry;
@@ -1355,8 +1356,12 @@ pub fn quadlet_belongs_to(filename: &str, service_name: &str, all_service_names:
 }
 
 /// How destructive `remove_service` should be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoveMode {
+    #[default]
     /// Stop + remove quadlets + delete ephemeral config files, but keep
     /// the data subdirs under the service home dir and keep all podman
     /// named volumes. After this, `ryra data ls` reports the service as
@@ -1631,7 +1636,8 @@ fn remove_native_service(
 }
 
 /// A lifecycle transition applied to an installed service's unit family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Lifecycle {
     Start,
     Stop,

@@ -700,28 +700,45 @@ pub async fn run(request: AddRequest) -> Result<()> {
                 None
             };
 
-        let no_port_overrides = BTreeMap::new();
-        // One params builder for both the initial attempt and the
+        // The prompts above resolved fuzzy intent into the typed,
+        // frontend-neutral operation vocabulary; planning goes through
+        // the same `ops::plan_add` every frontend uses, so the CLI
+        // can't support more (or different) semantics than the API.
+        let op_req = ryra_core::ops::AddRequest {
+            service: service.to_string(),
+            exposure: match &exposure {
+                ryra_core::Exposure::Loopback => ryra_core::ops::ExposureRequest::Loopback,
+                ryra_core::Exposure::Tailscale { url } => {
+                    ryra_core::ops::ExposureRequest::Tailscale(url.clone())
+                }
+                ryra_core::Exposure::Internal { url } | ryra_core::Exposure::Public { url } => {
+                    ryra_core::ops::ExposureRequest::Url(url.clone())
+                }
+            },
+            auth: match &auth_choice {
+                ryra_core::AuthChoice::Native(kind) => {
+                    ryra_core::ops::AuthRequested::Kind(kind.clone())
+                }
+                ryra_core::AuthChoice::None => ryra_core::ops::AuthRequested::No,
+            },
+            smtp: Some(enable_smtp),
+            backup,
+            env: env_overrides.clone(),
+            enable_groups: enabled_groups.clone(),
+        };
+        // One context builder for both the initial attempt and the
         // post-cleanup retry, so the two calls can't drift apart.
-        let make_params = || ryra_core::AddServiceParams {
-            service_name: service,
-            exposure: &exposure,
-            auth: auth_choice.clone(),
-            enable_smtp,
-            enable_backup: backup,
-            env_overrides: &env_overrides,
-            enabled_groups: &enabled_groups,
-            registry_name: service_ref.registry_name(),
-            repo_dir: &repo_dir,
-            pre_built_ctx: prompt_ctx.clone(),
+        let plan_ctx = || ryra_core::ops::PlanContext {
             port_in_use: &super::is_port_in_use,
-            acme_mode: acme_for_service,
+            resolved: Some((&service_ref, repo_dir.as_path())),
+            pre_built_ctx: prompt_ctx.clone(),
+            port_overrides: BTreeMap::new(),
             mode: ryra_core::PlanMode::Add,
-            port_overrides: &no_port_overrides,
+            acme: acme_for_service,
         };
 
         // If a previous add failed partway, clean up before retrying.
-        let result = match ryra_core::add_service(make_params()) {
+        let planned = match ryra_core::ops::plan_add(&op_req, plan_ctx()).await {
             Err(ryra_core::error::Error::ServiceIncomplete(_)) => {
                 // Two cases land here: a previous `ryra add` crashed mid-way
                 // (config entry with installed=false), or the user ran
@@ -777,10 +794,14 @@ pub async fn run(request: AddRequest) -> Result<()> {
                 // doesn't depend on any pool that the killed previous
                 // install might have reserved.)
                 // Retry now that the partial state is gone
-                ryra_core::add_service(make_params())?
+                ryra_core::ops::plan_add(&op_req, plan_ctx()).await?
             }
             other => other?,
         };
+        for note in &planned.notes {
+            println!("  Note: {note}");
+        }
+        let result = &planned.result;
 
         // (Tailscale exposures: add_service emits the TailscaleSetup /
         // TailscaleEnable steps itself; nothing extra to do here.)
@@ -886,14 +907,7 @@ pub async fn run(request: AddRequest) -> Result<()> {
         } else {
             // Record the service as pending before executing steps.
             // If execution fails, ryra knows about the service and can clean up.
-            ryra_core::record_pending(ryra_core::RecordPendingParams {
-                service_name: service,
-                auth_kind,
-                registry_name: service_ref.registry_name(),
-                allocated_ports: &result.allocated_ports,
-                repo_dir: &repo_dir,
-                exposure: &exposure,
-            })?;
+            planned.record_pending()?;
 
             // Preview what's about to happen — the user sees "pulls / writes /
             // starts" before the steps run. If --url wasn't set, fall back to

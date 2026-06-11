@@ -111,7 +111,10 @@ async fn remove_one(service: &str, purge: bool, skip_prompt: bool, dry_run: bool
         } else {
             ryra_core::RemoveMode::Preserve
         };
-        let result = ryra_core::remove_service(service, mode)?;
+        let result = ryra_core::ops::plan_remove(&ryra_core::ops::RemoveRequest {
+            service: service.to_string(),
+            mode,
+        })?;
 
         let preserved = if matches!(mode, ryra_core::RemoveMode::Preserve) {
             preserved_snapshot

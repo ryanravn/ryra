@@ -29,7 +29,12 @@ pub async fn run(service: Option<&str>, all: bool, action: Lifecycle, dry_run: b
     // toggling anything.
     let mut steps = Vec::new();
     for name in &targets {
-        steps.extend(ryra_core::lifecycle_steps(name, action)?);
+        steps.extend(ryra_core::ops::plan_lifecycle(
+            &ryra_core::ops::LifecycleRequest {
+                service: name.to_string(),
+                action,
+            },
+        )?);
     }
 
     if dry_run {
