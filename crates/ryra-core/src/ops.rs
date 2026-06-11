@@ -135,6 +135,7 @@ pub enum Operation {
     Lifecycle(LifecycleRequest),
     Upgrade(UpgradeRequest),
     Configure(ConfigureRequest),
+    BackupRun(BackupRunRequest),
 }
 
 /// Frontend-supplied capabilities and plan mechanics. Everything here
@@ -211,6 +212,7 @@ pub enum Planned {
     Lifecycle(Vec<Step>),
     Upgrade(Box<crate::upgrade::UpgradeResult>),
     Configure(Box<crate::configure::ConfigureResult>),
+    BackupRun(Box<crate::backup::BackupRunPlan>),
 }
 
 /// Plan one operation. The single entry point shared by all frontends.
@@ -221,6 +223,7 @@ pub async fn plan(op: &Operation, ctx: PlanContext<'_>) -> Result<Planned> {
         Operation::Lifecycle(req) => Ok(Planned::Lifecycle(plan_lifecycle(req)?)),
         Operation::Upgrade(req) => Ok(Planned::Upgrade(Box::new(plan_upgrade(req).await?))),
         Operation::Configure(req) => Ok(Planned::Configure(Box::new(plan_configure(req).await?))),
+        Operation::BackupRun(req) => Ok(Planned::BackupRun(Box::new(plan_backup_run(req).await?))),
     }
 }
 
@@ -364,4 +367,24 @@ pub fn plan_remove(req: &RemoveRequest) -> Result<RemoveResult> {
 
 pub fn plan_lifecycle(req: &LifecycleRequest) -> Result<Vec<Step>> {
     crate::lifecycle_steps(&req.service, req.action)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupRunRequest {
+    pub service: String,
+}
+
+/// Plan a backup of one service: resolves the install's registry dir and
+/// the configured repository. Execution is
+/// [`crate::backup::execute_backup_run`].
+pub async fn plan_backup_run(req: &BackupRunRequest) -> Result<crate::backup::BackupRunPlan> {
+    let paths = config::ConfigPaths::resolve()?;
+    let cfg = config::load_or_default(&paths.config_file)?;
+    let installed = crate::list_installed()?
+        .into_iter()
+        .find(|s| s.name == req.service)
+        .ok_or_else(|| Error::ServiceNotInstalled(req.service.clone()))?;
+    let service_ref = crate::service_ref_from_installed(&installed);
+    let repo_dir = crate::resolve_registry_dir(&service_ref).await?;
+    crate::backup::plan_backup_run(&req.service, &cfg, &repo_dir)
 }

@@ -22,7 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use ryra_core::REGISTRY_DEFAULT;
 use ryra_core::backup::{
-    BackupRestorePlan, BackupRunPlan, list_backup_enabled, plan_backup_restore, plan_backup_run,
+    BackupRestorePlan, list_backup_enabled, plan_backup_restore, plan_backup_run, restic_restore,
+    run_hook,
 };
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::{BackupBackend, BackupSettings, Config};
@@ -530,66 +531,7 @@ async fn run_one(service_name: &str, config: &Config) -> Result<()> {
         plan.paths.len()
     );
 
-    if let Some(hook) = &plan.pre_backup_hook {
-        run_hook("pre_backup", &plan.service_name, hook, &plan.service_home)?;
-    }
-
-    let restic_result = restic_backup(&plan);
-
-    if let Some(hook) = &plan.post_backup_hook {
-        // Run the post hook even if restic failed: its purpose is
-        // usually cleanup (removing a dump file). Failing to clean
-        // up shouldn't mask the original error.
-        if let Err(e) = run_hook("post_backup", &plan.service_name, hook, &plan.service_home)
-            && restic_result.is_ok()
-        {
-            return Err(e);
-        }
-    }
-    restic_result
-}
-
-fn restic_backup(plan: &BackupRunPlan) -> Result<()> {
-    // restic runs as the ryra user; reading the container-owned
-    // bind-mount tree (postgres data, www-data html, etc.) is the
-    // hook's job; backup-pre.sh chowns those volumes to namespace
-    // root via `podman unshare chown -R 0:0`, so by the time we
-    // get here every file is owned by ryra and freely readable.
-    // The next container start's `:U` re-chowns to the container's
-    // USER, round-tripping the ownership.
-    let mut cmd = std::process::Command::new("restic");
-    cmd.arg("backup")
-        .arg("--repo")
-        .arg(&plan.repo)
-        .env("RESTIC_PASSWORD", &plan.password);
-    for (k, v) in &plan.env {
-        cmd.env(k, v);
-    }
-    for tag in &plan.tags {
-        cmd.arg("--tag").arg(tag);
-    }
-    for excl in &plan.excludes {
-        // restic --exclude works on patterns relative to the working
-        // dir; the backup runs with cwd=service_home so excludes
-        // listed in service.toml as `data/cache` resolve correctly.
-        cmd.arg("--exclude").arg(excl);
-    }
-    cmd.current_dir(&plan.service_home);
-    for path in &plan.paths {
-        // Pass absolute paths so restic's snapshot tree mirrors the
-        // service home layout regardless of the cwd setting above.
-        cmd.arg(path);
-    }
-    let status = cmd.status().with_context(|| {
-        format!(
-            "spawning `podman unshare restic backup` for {}",
-            plan.service_name
-        )
-    })?;
-    if !status.success() {
-        bail!("restic backup exited with {}", status.code().unwrap_or(-1));
-    }
-    Ok(())
+    ryra_core::backup::execute_backup_run(&plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -875,34 +817,6 @@ fn list_snapshot_tags(plan: &BackupRestorePlan, snapshot: &str) -> Result<Vec<St
         ))
     })?;
     Ok(last.tags)
-}
-
-fn restic_restore(plan: &BackupRestorePlan) -> Result<()> {
-    // restic runs as the ryra user. The snapshot files come back
-    // owned by ryra; the next container start's `:U` walks the
-    // bind-mount tree and chowns to the container's USER, so the
-    // service sees the right ownership. (Running inside `podman
-    // unshare` would let restic preserve the snapshot's UIDs but
-    // also forces it to try to chown `/home` and `/home/ryra`,
-    // which sit outside the user namespace's mapping and fail.)
-    let mut cmd = std::process::Command::new("restic");
-    cmd.arg("restore")
-        .arg(&plan.snapshot)
-        .arg("--repo")
-        .arg(&plan.repo)
-        .arg("--target")
-        .arg("/")
-        .arg("--tag")
-        .arg(format!("service:{}", plan.service_name))
-        .env("RESTIC_PASSWORD", &plan.password);
-    for (k, v) in &plan.env {
-        cmd.env(k, v);
-    }
-    let status = cmd.status().context("spawning `restic restore`")?;
-    if !status.success() {
-        bail!("restic restore exited with {}", status.code().unwrap_or(-1));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,65 +1111,6 @@ fn read_schedule_state() -> Option<ScheduleState> {
         });
 
     Some(ScheduleState { interval, next_run })
-}
-
-// ---------------------------------------------------------------------------
-// Hook execution
-// ---------------------------------------------------------------------------
-
-fn run_hook(kind: &str, service: &str, script: &Path, service_home: &Path) -> Result<()> {
-    if !script.exists() {
-        return Err(ryra_core::error::Error::BackupHookFailed {
-            service: service.to_string(),
-            hook: kind.to_string(),
-            message: format!("hook script not found: {}", script.display()),
-        }
-        .into());
-    }
-    println!("  {} {}", style("hook").dim(), kind);
-
-    let env_file = service_home.join(".env");
-    let envs = if env_file.exists() {
-        parse_env_file(&env_file)
-    } else {
-        Vec::new()
-    };
-
-    let mut cmd = std::process::Command::new("/bin/bash");
-    cmd.arg(script)
-        .env("SERVICE_HOME", service_home)
-        .current_dir(service_home);
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-    let status = cmd
-        .status()
-        .with_context(|| format!("running hook {kind} for {service}"))?;
-    if !status.success() {
-        return Err(ryra_core::error::Error::BackupHookFailed {
-            service: service.to_string(),
-            hook: kind.to_string(),
-            message: format!("hook script exited with {}", status.code().unwrap_or(-1)),
-        }
-        .into());
-    }
-    Ok(())
-}
-
-fn parse_env_file(path: &Path) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (k, v) = line.split_once('=')?;
-            Some((k.trim().to_string(), v.trim().trim_matches('"').to_string()))
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
