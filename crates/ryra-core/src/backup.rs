@@ -359,6 +359,152 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+// ---------------------------------------------------------------------------
+// Execution: shared by every frontend (CLI, ryra-api). restic runs as
+// the invoking user; ownership round-trips via the hooks + quadlet `:U`
+// (see the hook scripts in the registry).
+// ---------------------------------------------------------------------------
+
+/// Run a pre/post backup or restore hook with the service's `.env`
+/// loaded, mirroring how quadlet ExecStartPre/Post scripts see it.
+pub fn run_hook(
+    kind: &str,
+    service: &str,
+    script: &std::path::Path,
+    service_home: &std::path::Path,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    if !script.exists() {
+        return Err(crate::error::Error::BackupHookFailed {
+            service: service.to_string(),
+            hook: kind.to_string(),
+            message: format!("hook script not found: {}", script.display()),
+        }
+        .into());
+    }
+    let env_file = service_home.join(".env");
+    let envs = if env_file.exists() {
+        parse_env_file(&env_file)
+    } else {
+        Vec::new()
+    };
+    let mut cmd = std::process::Command::new("/bin/bash");
+    cmd.arg(script)
+        .env("SERVICE_HOME", service_home)
+        .current_dir(service_home);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let status = cmd
+        .status()
+        .with_context(|| format!("running hook {kind} for {service}"))?;
+    if !status.success() {
+        return Err(crate::error::Error::BackupHookFailed {
+            service: service.to_string(),
+            hook: kind.to_string(),
+            message: format!("hook script exited with {}", status.code().unwrap_or(-1)),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Execute a planned backup with restic. Ownership of container-owned
+/// bind mounts is the pre-hook's job (`podman unshare chown`); by this
+/// point every file is readable by the invoking user.
+pub fn restic_backup(plan: &BackupRunPlan) -> anyhow::Result<()> {
+    use anyhow::{Context, bail};
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("backup")
+        .arg("--repo")
+        .arg(&plan.repo)
+        .env("RESTIC_PASSWORD", &plan.password);
+    for (k, v) in &plan.env {
+        cmd.env(k, v);
+    }
+    for tag in &plan.tags {
+        cmd.arg("--tag").arg(tag);
+    }
+    for excl in &plan.excludes {
+        // Excludes from service.toml are relative to the service home,
+        // hence cwd below.
+        cmd.arg("--exclude").arg(excl);
+    }
+    cmd.current_dir(&plan.service_home);
+    for path in &plan.paths {
+        cmd.arg(path);
+    }
+    let status = cmd
+        .status()
+        .with_context(|| format!("spawning `restic backup` for {}", plan.service_name))?;
+    if !status.success() {
+        bail!("restic backup exited with {}", status.code().unwrap_or(-1));
+    }
+    Ok(())
+}
+
+/// Execute a planned restore. Files come back owned by the invoking
+/// user; the next container start's `:U` re-chowns to the container's
+/// USER. (Running inside `podman unshare` would preserve snapshot UIDs
+/// but fails chowning `/home` outside the namespace mapping.)
+pub fn restic_restore(plan: &BackupRestorePlan) -> anyhow::Result<()> {
+    use anyhow::{Context, bail};
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("restore")
+        .arg(&plan.snapshot)
+        .arg("--repo")
+        .arg(&plan.repo)
+        .arg("--target")
+        .arg("/")
+        .arg("--tag")
+        .arg(format!("service:{}", plan.service_name))
+        .env("RESTIC_PASSWORD", &plan.password);
+    for (k, v) in &plan.env {
+        cmd.env(k, v);
+    }
+    let status = cmd.status().context("spawning `restic restore`")?;
+    if !status.success() {
+        bail!("restic restore exited with {}", status.code().unwrap_or(-1));
+    }
+    Ok(())
+}
+
+/// KEY=VALUE lines from a `.env` file; malformed lines are skipped the
+/// same way systemd's EnvironmentFile= skips them.
+pub fn parse_env_file(path: &std::path::Path) -> Vec<(String, String)> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') {
+                return None;
+            }
+            l.split_once('=')
+                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect()
+}
+
+/// Run a planned backup end-to-end: pre hook, restic, post hook. The
+/// post hook runs even when restic fails (it usually cleans up a dump
+/// file), but its own failure never masks restic's error.
+pub fn execute_backup_run(plan: &BackupRunPlan) -> anyhow::Result<()> {
+    if let Some(hook) = &plan.pre_backup_hook {
+        run_hook("pre_backup", &plan.service_name, hook, &plan.service_home)?;
+    }
+    let restic_result = restic_backup(plan);
+    if let Some(hook) = &plan.post_backup_hook
+        && let Err(e) = run_hook("post_backup", &plan.service_name, hook, &plan.service_home)
+        && restic_result.is_ok()
+    {
+        return Err(e);
+    }
+    restic_result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,150 +698,4 @@ mod tests {
             Some(&"secret".to_string())
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// Execution: shared by every frontend (CLI, ryra-api). restic runs as
-// the invoking user; ownership round-trips via the hooks + quadlet `:U`
-// (see the hook scripts in the registry).
-// ---------------------------------------------------------------------------
-
-/// Run a pre/post backup or restore hook with the service's `.env`
-/// loaded, mirroring how quadlet ExecStartPre/Post scripts see it.
-pub fn run_hook(
-    kind: &str,
-    service: &str,
-    script: &std::path::Path,
-    service_home: &std::path::Path,
-) -> anyhow::Result<()> {
-    use anyhow::Context;
-    if !script.exists() {
-        return Err(crate::error::Error::BackupHookFailed {
-            service: service.to_string(),
-            hook: kind.to_string(),
-            message: format!("hook script not found: {}", script.display()),
-        }
-        .into());
-    }
-    let env_file = service_home.join(".env");
-    let envs = if env_file.exists() {
-        parse_env_file(&env_file)
-    } else {
-        Vec::new()
-    };
-    let mut cmd = std::process::Command::new("/bin/bash");
-    cmd.arg(script)
-        .env("SERVICE_HOME", service_home)
-        .current_dir(service_home);
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-    let status = cmd
-        .status()
-        .with_context(|| format!("running hook {kind} for {service}"))?;
-    if !status.success() {
-        return Err(crate::error::Error::BackupHookFailed {
-            service: service.to_string(),
-            hook: kind.to_string(),
-            message: format!("hook script exited with {}", status.code().unwrap_or(-1)),
-        }
-        .into());
-    }
-    Ok(())
-}
-
-/// Execute a planned backup with restic. Ownership of container-owned
-/// bind mounts is the pre-hook's job (`podman unshare chown`); by this
-/// point every file is readable by the invoking user.
-pub fn restic_backup(plan: &BackupRunPlan) -> anyhow::Result<()> {
-    use anyhow::{Context, bail};
-    let mut cmd = std::process::Command::new("restic");
-    cmd.arg("backup")
-        .arg("--repo")
-        .arg(&plan.repo)
-        .env("RESTIC_PASSWORD", &plan.password);
-    for (k, v) in &plan.env {
-        cmd.env(k, v);
-    }
-    for tag in &plan.tags {
-        cmd.arg("--tag").arg(tag);
-    }
-    for excl in &plan.excludes {
-        // Excludes from service.toml are relative to the service home,
-        // hence cwd below.
-        cmd.arg("--exclude").arg(excl);
-    }
-    cmd.current_dir(&plan.service_home);
-    for path in &plan.paths {
-        cmd.arg(path);
-    }
-    let status = cmd
-        .status()
-        .with_context(|| format!("spawning `restic backup` for {}", plan.service_name))?;
-    if !status.success() {
-        bail!("restic backup exited with {}", status.code().unwrap_or(-1));
-    }
-    Ok(())
-}
-
-/// Execute a planned restore. Files come back owned by the invoking
-/// user; the next container start's `:U` re-chowns to the container's
-/// USER. (Running inside `podman unshare` would preserve snapshot UIDs
-/// but fails chowning `/home` outside the namespace mapping.)
-pub fn restic_restore(plan: &BackupRestorePlan) -> anyhow::Result<()> {
-    use anyhow::{Context, bail};
-    let mut cmd = std::process::Command::new("restic");
-    cmd.arg("restore")
-        .arg(&plan.snapshot)
-        .arg("--repo")
-        .arg(&plan.repo)
-        .arg("--target")
-        .arg("/")
-        .arg("--tag")
-        .arg(format!("service:{}", plan.service_name))
-        .env("RESTIC_PASSWORD", &plan.password);
-    for (k, v) in &plan.env {
-        cmd.env(k, v);
-    }
-    let status = cmd.status().context("spawning `restic restore`")?;
-    if !status.success() {
-        bail!("restic restore exited with {}", status.code().unwrap_or(-1));
-    }
-    Ok(())
-}
-
-/// KEY=VALUE lines from a `.env` file; malformed lines are skipped the
-/// same way systemd's EnvironmentFile= skips them.
-pub fn parse_env_file(path: &std::path::Path) -> Vec<(String, String)> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    content
-        .lines()
-        .filter_map(|l| {
-            let l = l.trim();
-            if l.is_empty() || l.starts_with('#') {
-                return None;
-            }
-            l.split_once('=')
-                .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-        })
-        .collect()
-}
-
-/// Run a planned backup end-to-end: pre hook, restic, post hook. The
-/// post hook runs even when restic fails (it usually cleans up a dump
-/// file), but its own failure never masks restic's error.
-pub fn execute_backup_run(plan: &BackupRunPlan) -> anyhow::Result<()> {
-    if let Some(hook) = &plan.pre_backup_hook {
-        run_hook("pre_backup", &plan.service_name, hook, &plan.service_home)?;
-    }
-    let restic_result = restic_backup(plan);
-    if let Some(hook) = &plan.post_backup_hook
-        && let Err(e) = run_hook("post_backup", &plan.service_name, hook, &plan.service_home)
-        && restic_result.is_ok()
-    {
-        return Err(e);
-    }
-    restic_result
 }
