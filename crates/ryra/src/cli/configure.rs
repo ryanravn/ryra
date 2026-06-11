@@ -12,7 +12,7 @@ use dialoguer::{Confirm, Input};
 
 use ryra_core::{
     ConfigureChange, ConfigureOverrides, ConfigureResult, DiffKind, ExposureChange,
-    configure_service, is_service_installed, load_metadata,
+    is_service_installed, load_metadata,
 };
 
 use super::apply;
@@ -93,7 +93,11 @@ pub async fn run(service: &str, flags: ConfigureFlags) -> Result<()> {
         return Ok(());
     };
 
-    let result = configure_service(service, &overrides).await?;
+    let result = ryra_core::ops::plan_configure(&ryra_core::ops::ConfigureRequest {
+        service: service.to_string(),
+        changes: overrides,
+    })
+    .await?;
 
     // Tailscale lifecycle steps (Enable on entering, Disable on
     // leaving) need the admin token in preferences.toml. Prompt now if

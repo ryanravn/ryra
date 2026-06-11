@@ -106,6 +106,24 @@ pub struct LifecycleRequest {
     pub action: Lifecycle,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradeRequest {
+    pub service: String,
+    /// Re-render even when the diff is empty (native services rebuild
+    /// from source regardless).
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Re-render an installed service with a changed integration set. The
+/// change set is core's [`crate::configure::Overrides`]: `None` fields
+/// stay untouched, provided fields are the new truth.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureRequest {
+    pub service: String,
+    pub changes: crate::configure::Overrides,
+}
+
 /// The complete state-changing vocabulary. Wire frontends can carry
 /// this enum directly; the CLI constructs the inner requests from
 /// flags and prompts.
@@ -115,6 +133,8 @@ pub enum Operation {
     Add(AddRequest),
     Remove(RemoveRequest),
     Lifecycle(LifecycleRequest),
+    Upgrade(UpgradeRequest),
+    Configure(ConfigureRequest),
 }
 
 /// Frontend-supplied capabilities and plan mechanics. Everything here
@@ -189,6 +209,8 @@ pub enum Planned {
     Add(Box<PlannedAdd>),
     Remove(RemoveResult),
     Lifecycle(Vec<Step>),
+    Upgrade(Box<crate::upgrade::UpgradeResult>),
+    Configure(Box<crate::configure::ConfigureResult>),
 }
 
 /// Plan one operation. The single entry point shared by all frontends.
@@ -197,7 +219,17 @@ pub async fn plan(op: &Operation, ctx: PlanContext<'_>) -> Result<Planned> {
         Operation::Add(req) => Ok(Planned::Add(Box::new(plan_add(req, ctx).await?))),
         Operation::Remove(req) => Ok(Planned::Remove(plan_remove(req)?)),
         Operation::Lifecycle(req) => Ok(Planned::Lifecycle(plan_lifecycle(req)?)),
+        Operation::Upgrade(req) => Ok(Planned::Upgrade(Box::new(plan_upgrade(req).await?))),
+        Operation::Configure(req) => Ok(Planned::Configure(Box::new(plan_configure(req).await?))),
     }
+}
+
+pub async fn plan_upgrade(req: &UpgradeRequest) -> Result<crate::upgrade::UpgradeResult> {
+    crate::upgrade::upgrade_service(&req.service, req.force).await
+}
+
+pub async fn plan_configure(req: &ConfigureRequest) -> Result<crate::configure::ConfigureResult> {
+    crate::configure::configure_service(&req.service, &req.changes).await
 }
 
 pub async fn plan_add(req: &AddRequest, ctx: PlanContext<'_>) -> Result<PlannedAdd> {

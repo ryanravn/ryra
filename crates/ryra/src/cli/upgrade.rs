@@ -26,7 +26,12 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
     // others.
     let mut plans: Vec<UpgradeResult> = Vec::with_capacity(targets.len());
     for service in &targets {
-        match ryra_core::upgrade_service(service, force).await {
+        match ryra_core::ops::plan_upgrade(&ryra_core::ops::UpgradeRequest {
+            service: service.to_string(),
+            force,
+        })
+        .await
+        {
             Ok(plan) => plans.push(plan),
             Err(ryra_core::error::Error::HandEditedFiles { service, paths }) => {
                 eprintln!(

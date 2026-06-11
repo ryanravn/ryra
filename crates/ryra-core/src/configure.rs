@@ -53,7 +53,8 @@ use crate::{
 /// `Some(_)` means "set to this value." Two-sided enums (e.g.
 /// [`ExposureChange`]) make "remove" representable without overloading
 /// `Some("")` with a sentinel meaning.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Overrides {
     /// Change the service's exposure: a public URL, a Tailscale Service,
     /// or loopback-only. `None` leaves the current exposure alone.
@@ -79,7 +80,8 @@ pub struct Overrides {
 
 /// Exposure transition. `Loopback` means "no public route" (the install's
 /// equivalent of dropping `--url` and `--tailscale`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExposureChange {
     /// Caddy-routed public URL. Internal vs. Public is auto-classified
     /// from the hostname by [`Exposure::from_url`].
