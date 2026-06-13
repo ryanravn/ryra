@@ -156,8 +156,12 @@ enum Command {
     /// Run tests for a service. Runs the full lifecycle on this host by
     /// default; pass --vm to run in an isolated throwaway VM instead.
     Test {
-        /// Test name filters
+        /// Test name filters. Pick tests with names, or pass --all to run
+        /// everything; bare `ryra test` just prints this help.
         names: Vec<String>,
+        /// Run every test in the registry.
+        #[arg(long, short = 'a', conflicts_with = "names")]
+        all: bool,
         /// Run the full add/assert/remove lifecycle in a fresh, throwaway
         /// QEMU VM instead of on this host. Slower, needs KVM, but isolated.
         #[arg(long)]
@@ -334,13 +338,29 @@ enum Command {
 
 #[derive(Subcommand)]
 enum TestAction {
-    /// List available tests (optionally filtered by name substrings)
-    List {
+    /// Search available tests from the registry
+    Search {
         /// Test name filters
         names: Vec<String>,
-        /// Show full step details (commands, URLs, poll config, …)
+        /// Show full step details
         #[arg(long, short)]
         verbose: bool,
+    },
+    /// Show local test sandbox state: installed services and last run results
+    List,
+    /// Remove stored results for one or more tests (report, log, playwright,
+    /// per-test sandbox). Does not touch services or the ledger.
+    Remove {
+        /// Test names to remove
+        names: Vec<String>,
+    },
+    /// Tear down the test sandbox: purge leftover test services and delete
+    /// the sandbox dir (service data, preferences, ledger, run results).
+    /// `ryra reset` for the test footprint; real services are untouched.
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -512,6 +532,7 @@ async fn main() -> anyhow::Result<()> {
         } => cli::search::run(query.as_deref(), registry.as_deref()).await?,
         Command::Test {
             ref names,
+            all,
             vm,
             live,
             no_vm: _,
@@ -530,11 +551,54 @@ async fn main() -> anyhow::Result<()> {
             // else is the normal run path.
             let (effective_list, effective_verbose, effective_names): (bool, bool, &[String]) =
                 match action {
-                    Some(TestAction::List {
-                        names: list_names,
-                        verbose: list_verbose,
-                    }) => (true, *list_verbose || verbose, list_names.as_slice()),
-                    None => (false, verbose, names.as_slice()),
+                    Some(TestAction::Search {
+                        names: search_names,
+                        verbose: search_verbose,
+                    }) => (true, *search_verbose || verbose, search_names.as_slice()),
+                    Some(TestAction::List) => {
+                        cli::test::show_sandbox_state();
+                        return Ok(());
+                    }
+                    Some(TestAction::Remove {
+                        names: remove_names,
+                    }) => {
+                        cli::test::remove_tests(remove_names);
+                        return Ok(());
+                    }
+                    Some(TestAction::Reset { yes: reset_yes }) => {
+                        cli::test::reset_sandbox(*reset_yes || yes).await?;
+                        return Ok(());
+                    }
+                    None => {
+                        // Running everything must be asked for explicitly
+                        // (--all), because the default mode installs and
+                        // purges every service the registry declares on
+                        // THIS host. Without --all, names, or another
+                        // explicit target (--project, --live, --keep-alive),
+                        // print help instead of running the world.
+                        let has_target =
+                            all || !names.is_empty() || project.is_some() || live || keep_alive;
+                        if !has_target {
+                            use clap::CommandFactory;
+                            let mut sub = Cli::command()
+                                .find_subcommand("test")
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    unreachable!("'test' is declared in the Command enum")
+                                })
+                                // Printed outside a parse, so clap hasn't
+                                // propagated the parent bin name into the
+                                // usage line; set it explicitly.
+                                .bin_name("ryra test");
+                            sub.print_help()?;
+                            // Exit non-zero (clap's missing-required-arg code)
+                            // so scripts that relied on bare `ryra test`
+                            // running everything fail loudly instead of
+                            // silently passing.
+                            std::process::exit(2);
+                        }
+                        (false, verbose, names.as_slice())
+                    }
                 };
             cli::test::run(cli::test::TestRunParams {
                 service: service.as_deref(),

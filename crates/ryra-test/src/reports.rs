@@ -4,86 +4,146 @@ use anyhow::{Context, Result};
 
 use crate::scenario::{Outcome, ScenarioResult};
 
-/// Root directory where test reports for the previous run live: under the
-/// host-test sandbox (`~/.local/share/services-test/reports/`), alongside the
-/// service data and ledger, so the whole test footprint is one folder.
+/// Root directory where test reports live: under the host-test sandbox
+/// (`~/.local/share/services-test/reports/`), alongside the service data
+/// and ledger, so the whole test footprint is one folder.
 pub fn reports_dir() -> Result<PathBuf> {
     crate::test_sandbox_root()
         .map(|root| root.join("reports"))
         .context("cannot resolve test sandbox root ($HOME unset)")
 }
 
-/// Wipe the reports directory so only results from this run remain.
-/// Called at the start of every `ryra test` invocation.
-pub fn wipe_reports_dir() -> Result<()> {
-    let dir = reports_dir()?;
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("failed to wipe {}", dir.display()))?;
-    }
-    std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    Ok(())
+/// Per-test result stored as `reports/<name>/result.json`.
+#[derive(Clone, Debug)]
+pub struct TestResult {
+    pub name: String,
+    pub status: String,
+    pub duration_ms: u64,
+    pub timestamp: u64,
+    pub has_playwright: bool,
 }
 
-/// Write the run-level summary.json and per-test events.json files,
-/// then print a human-readable summary pointing at the files on disk.
-pub fn save_run_results(results: &[ScenarioResult]) -> Result<()> {
+/// Save one test's result to `reports/<name>/result.json` and its log to
+/// `reports/<name>/run.log`. Previous results for other tests are untouched.
+pub fn save_test_result(result: &ScenarioResult) -> Result<()> {
     let dir = reports_dir()?;
-    std::fs::create_dir_all(&dir)?;
+    let tdir = dir.join(&result.name);
+    std::fs::create_dir_all(&tdir)?;
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    let passed = results.iter().filter(|r| r.passed()).count();
-    let failed = results
-        .iter()
-        .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
-        .count();
-    let skipped = results
-        .iter()
-        .filter(|r| matches!(r.outcome, Outcome::Skipped))
-        .count();
+    let status = match &result.outcome {
+        Outcome::Passed => "pass",
+        Outcome::Failed(_) => "fail",
+        Outcome::Skipped => "skip",
+    };
 
-    // Run-level summary.json - simple hand-written JSON (no serde_json dep).
-    let mut json = String::new();
-    json.push_str("{\n");
-    json.push_str(&format!("  \"timestamp\": {timestamp},\n"));
-    json.push_str(&format!("  \"passed\": {passed},\n"));
-    json.push_str(&format!("  \"failed\": {failed},\n"));
-    json.push_str(&format!("  \"skipped\": {skipped},\n"));
-    json.push_str(&format!("  \"total\": {},\n", results.len()));
-    json.push_str("  \"tests\": [\n");
-    for (i, r) in results.iter().enumerate() {
-        let status = match &r.outcome {
-            Outcome::Passed => "pass",
-            Outcome::Failed(_) => "fail",
-            Outcome::Skipped => "skip",
-        };
-        let comma = if i + 1 < results.len() { "," } else { "" };
-        json.push_str(&format!(
-            "    {{\"name\": \"{}\", \"status\": \"{status}\", \"duration_ms\": {}}}{comma}\n",
-            escape_json(&r.name),
-            r.duration.as_millis(),
-        ));
+    let json = format!(
+        "{{\n  \"name\": \"{}\",\n  \"status\": \"{status}\",\n  \
+         \"duration_ms\": {},\n  \"timestamp\": {timestamp}\n}}\n",
+        escape_json(&result.name),
+        result.duration.as_millis(),
+    );
+    std::fs::write(tdir.join("result.json"), json)?;
+    std::fs::write(tdir.join("run.log"), format!("{result}"))?;
+
+    Ok(())
+}
+
+/// Remove a single test's results (report dir and per-test sandbox).
+pub fn delete_test_result(name: &str) -> Result<()> {
+    let report = reports_dir()?.join(name);
+    if report.is_dir() {
+        std::fs::remove_dir_all(&report)
+            .with_context(|| format!("failed to remove report dir: {}", report.display()))?;
     }
-    json.push_str("  ]\n");
-    json.push_str("}\n");
-    std::fs::write(dir.join("summary.json"), json)?;
 
-    // Per-test events.json + run.log (events rendered as text)
-    for r in results {
-        let tdir = dir.join(&r.name);
-        std::fs::create_dir_all(&tdir)?;
-        std::fs::write(tdir.join("run.log"), format!("{r}"))?;
+    if let Some(sandbox) = crate::test_sandbox_root() {
+        let test_dir = sandbox.join("tests").join(name);
+        if test_dir.is_dir() {
+            std::fs::remove_dir_all(&test_dir)
+                .with_context(|| format!("failed to remove sandbox dir: {}", test_dir.display()))?;
+        }
     }
 
     Ok(())
 }
 
-/// Format a duration as a compact human string, e.g. `1091s` → `18m 11s`,
-/// `45s` → `45s`, `3725s` → `1h 2m 5s`.
+/// Save results for a batch of tests.
+pub fn save_run_results(results: &[ScenarioResult]) -> Result<()> {
+    for r in results {
+        save_test_result(r)?;
+    }
+    Ok(())
+}
+
+/// Scan `reports/*/result.json` to discover all stored test results,
+/// the same way services are discovered by scanning directories.
+pub fn scan_results() -> Vec<TestResult> {
+    let dir = match reports_dir() {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut results: Vec<TestResult> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let tdir = e.path();
+            let json = std::fs::read_to_string(tdir.join("result.json")).ok()?;
+            parse_result_json(&json, &tdir)
+        })
+        .collect();
+
+    results.sort_by(|a, b| a.name.cmp(&b.name));
+    results
+}
+
+fn parse_result_json(json: &str, tdir: &std::path::Path) -> Option<TestResult> {
+    // Minimal JSON parsing without pulling in serde for this crate.
+    let name = extract_json_str(json, "name")?;
+    let status = extract_json_str(json, "status")?;
+    let duration_ms = extract_json_u64(json, "duration_ms")?;
+    let timestamp = extract_json_u64(json, "timestamp").unwrap_or(0);
+    let has_playwright = tdir.join("playwright").join("index.html").exists();
+    Some(TestResult {
+        name,
+        status,
+        duration_ms,
+        timestamp,
+        has_playwright,
+    })
+}
+
+fn extract_json_str(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let pos = json.find(&needle)? + needle.len();
+    let rest = &json[pos..];
+    let start = rest.find('"')? + 1;
+    let end = start + rest[start..].find('"')?;
+    Some(rest[start..end].to_string())
+}
+
+fn extract_json_u64(json: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{key}\"");
+    let pos = json.find(&needle)? + needle.len();
+    let rest = &json[pos..];
+    let colon = rest.find(':')?;
+    let after = rest[colon + 1..].trim_start();
+    let end = after
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after.len());
+    after[..end].parse().ok()
+}
+
+/// Format a duration as a compact human string, e.g. `1091s` -> `18m 11s`.
 pub fn humanize_secs(total: u64) -> String {
     let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
     if h > 0 {
@@ -101,17 +161,7 @@ pub fn print_results_paths(results: &[ScenarioResult], wall_clock: std::time::Du
         Ok(d) => d,
         Err(_) => return,
     };
-    let display = match dir.to_str() {
-        Some(s) => s.to_string(),
-        None => dir.display().to_string(),
-    };
-    // Replace $HOME prefix with ~ for brevity
-    let home = std::env::var("HOME").unwrap_or_default();
-    let display = if !home.is_empty() && display.starts_with(&home) {
-        format!("~{}", &display[home.len()..])
-    } else {
-        display
-    };
+    let display = tilde_path(&dir);
 
     let passed = results.iter().filter(|r| r.passed()).count();
     let failed = results
@@ -122,8 +172,7 @@ pub fn print_results_paths(results: &[ScenarioResult], wall_clock: std::time::Du
 
     let elapsed = humanize_secs(wall_clock.as_secs());
     println!("\nResults: {passed}/{total} passed ({failed} failed) in {elapsed}");
-    println!("  dir:     {display}/");
-    println!("  summary: cat {display}/summary.json");
+    println!("  dir: {display}/");
 
     if failed > 0 {
         println!("\n  Failed ({failed}):");
@@ -131,7 +180,7 @@ pub fn print_results_paths(results: &[ScenarioResult], wall_clock: std::time::Du
             .iter()
             .filter(|r| matches!(r.outcome, Outcome::Failed(_)))
         {
-            println!("    ✗ {} ({:.1}s)", r.name, r.duration.as_secs_f64());
+            println!("    x {} ({:.1}s)", r.name, r.duration.as_secs_f64());
             if let Some(why) = r.failure_summary() {
                 println!("        {why}");
             }
@@ -152,8 +201,6 @@ pub fn print_results_paths(results: &[ScenarioResult], wall_clock: std::time::Du
         println!("    log:     cat {display}/{}/run.log", r.name);
         let playwright_index = dir.join(&r.name).join("playwright").join("index.html");
         if playwright_index.exists() {
-            // The trace viewer requires http:// - file:// can't load the trace
-            // zips - so surface the `show-report` command, not the path.
             println!(
                 "    browser: cd registry/tests/browser && bunx playwright show-report {display}/{}/playwright",
                 r.name
@@ -162,7 +209,18 @@ pub fn print_results_paths(results: &[ScenarioResult], wall_clock: std::time::Du
     }
 }
 
-/// Minimal JSON string escaping - enough for test names.
+fn tilde_path(path: &std::path::Path) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    match path.to_str() {
+        Some(s) if !home.is_empty() && s.starts_with(&home) => {
+            format!("~{}", &s[home.len()..])
+        }
+        Some(s) => s.to_string(),
+        None => path.display().to_string(),
+    }
+}
+
+/// Minimal JSON string escaping.
 fn escape_json(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }

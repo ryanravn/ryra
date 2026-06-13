@@ -17,6 +17,7 @@ pub mod search;
 pub mod status;
 pub mod style;
 pub mod sysctl_low_ports;
+pub mod tailscale_sudoers;
 pub mod test;
 pub mod upgrade;
 

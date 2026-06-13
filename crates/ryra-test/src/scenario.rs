@@ -1,9 +1,15 @@
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Result types — full trace of what happened in each test
 // ---------------------------------------------------------------------------
+
+/// Optional callback fired after each step completes. Receives the
+/// finished Event by reference so consumers can stream progress without
+/// waiting for the entire test to finish.
+pub type OnEvent = Arc<dyn Fn(&Event) + Send + Sync>;
 
 #[derive(Debug)]
 pub struct ScenarioResult {

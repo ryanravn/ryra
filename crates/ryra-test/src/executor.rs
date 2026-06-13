@@ -107,10 +107,11 @@ pub struct LocalExecutor {
 }
 
 impl LocalExecutor {
-    /// Construct a LocalExecutor that prepends `RYRA_REGISTRY_DIR=<path>`
-    /// to every command, so `ryra` resolves the default registry to the
-    /// local checkout under test.
-    pub fn with_registry(registry_path: &Path) -> Self {
+    /// Construct a LocalExecutor with no registry override. Used by commands
+    /// that run `ryra` but never resolve the registry (e.g. `ryra remove`
+    /// during `ryra test reset`); most callers want
+    /// [`LocalExecutor::with_registry`].
+    pub fn new() -> Self {
         let mut env_prefix = String::new();
         // Run the *same* ryra we're part of, not whatever (possibly stale)
         // `ryra` is on the user's PATH. `ryra test` is a subcommand of the ryra
@@ -124,8 +125,17 @@ impl LocalExecutor {
         {
             env_prefix.push_str(&format!("export PATH=\"{}:$PATH\"; ", dir.display()));
         }
-        env_prefix.push_str(&registry_env_prefix(&registry_path.display().to_string()));
         Self { env_prefix }
+    }
+
+    /// Construct a LocalExecutor that prepends `RYRA_REGISTRY_DIR=<path>`
+    /// to every command, so `ryra` resolves the default registry to the
+    /// local checkout under test.
+    pub fn with_registry(registry_path: &Path) -> Self {
+        let mut s = Self::new();
+        s.env_prefix
+            .push_str(&registry_env_prefix(&registry_path.display().to_string()));
+        s
     }
 
     /// Also export `RYRA_CONFIG_DIR=<path>` on every command, isolating
@@ -155,13 +165,8 @@ impl LocalExecutor {
 }
 
 impl Default for LocalExecutor {
-    /// LocalExecutor with no registry override — only useful when the
-    /// commands run don't touch `ryra`. Most callers want
-    /// [`LocalExecutor::with_registry`].
     fn default() -> Self {
-        Self {
-            env_prefix: String::new(),
-        }
+        Self::new()
     }
 }
 

@@ -182,6 +182,7 @@ pub async fn run(request: AddRequest) -> Result<()> {
     // (define service via API) and removal time (delete service).
     if tailscale && !dry_run {
         ensure_tailscale_admin_token(interactive).await?;
+        super::tailscale_sudoers::offer_enable().await?;
     }
 
     // "First add" = no ryra config on disk yet. Latch the answer before any

@@ -71,6 +71,7 @@ pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
             .args(["--user", "reset-failed"])
             .status();
         remove_caddy_ca();
+        super::tailscale_sudoers::remove();
         super::sysctl_low_ports::offer_disable().await?;
         super::linger::note_if_enabled().await;
         println!("\nryra has been fully reset.");

@@ -2,6 +2,7 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use tokio::process::Command;
 
@@ -315,4 +316,174 @@ async fn run_no_vm(
     args.project = project.cloned();
     args.tests = names.to_vec();
     ryra_test::run(args).await
+}
+
+/// Display a path with `$HOME` abbreviated to `~`.
+fn tilde(path: &std::path::Path) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    match path.to_str() {
+        Some(s) if !home.is_empty() && s.starts_with(&home) => {
+            format!("~{}", &s[home.len()..])
+        }
+        Some(s) => s.to_string(),
+        None => path.display().to_string(),
+    }
+}
+
+/// Tear down the host-test sandbox: purge leftover test services recorded in
+/// the ledger, then delete the sandbox dir (service data, preferences,
+/// ledger, run results). The test analogue of `ryra reset`; services the
+/// user installed for real are never touched.
+pub async fn reset_sandbox(yes: bool) -> Result<()> {
+    let Some(root) = ryra_test::test_sandbox_root() else {
+        anyhow::bail!("cannot resolve test sandbox root ($HOME unset)");
+    };
+
+    let leftovers = ryra_test::host_leftovers();
+    if !root.exists() && leftovers.is_empty() {
+        println!("Nothing to reset: no test sandbox found.");
+        return Ok(());
+    }
+
+    if !yes {
+        if super::is_interactive() {
+            println!("This will:");
+            if !leftovers.is_empty() {
+                println!(
+                    "  - Purge {} leftover test service(s): {}",
+                    leftovers.len(),
+                    leftovers.join(", ")
+                );
+            }
+            println!(
+                "  - Delete {}/  (test service data, preferences, ledger, run results)",
+                tilde(&root)
+            );
+            println!();
+
+            let confirm = dialoguer::Confirm::new()
+                .with_prompt("Continue?")
+                .default(false)
+                .interact()?;
+            if !confirm {
+                println!("Cancelled.");
+                return Ok(());
+            }
+        } else {
+            anyhow::bail!("use --yes (-y) to confirm test reset in non-interactive mode");
+        }
+    }
+
+    if !leftovers.is_empty() {
+        let executor = ryra_test::executor::LocalExecutor::new()
+            .with_config_dir(&root.join("config"))
+            .with_data_dir(&root.join("services"));
+        ryra_test::purge_services(&executor, &leftovers, "during reset").await;
+
+        // purge_services is best-effort; verify before deleting the sandbox.
+        // The ledger lives inside it, and wiping the ledger while a service
+        // is still installed would make the next run treat that service as
+        // user-owned and refuse to touch it.
+        let remaining = ryra_test::host_leftovers();
+        if !remaining.is_empty() {
+            anyhow::bail!(
+                "could not purge: {}. Remove manually with `ryra remove --purge <name> -y`, \
+                 then re-run `ryra test reset`.",
+                remaining.join(", ")
+            );
+        }
+    }
+
+    if root.exists() {
+        std::fs::remove_dir_all(&root)
+            .map_err(|e| anyhow::anyhow!("failed to delete {}: {e}", root.display()))?;
+    }
+
+    println!("Test sandbox reset.");
+    Ok(())
+}
+
+/// Remove stored results for the named tests.
+pub fn remove_tests(names: &[String]) {
+    if names.is_empty() {
+        println!("Usage: ryra test remove <name> [<name> ...]");
+        return;
+    }
+    let existing: Vec<String> = ryra_test::reports::scan_results()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    for name in names {
+        if !existing.contains(name) {
+            println!("  skip  {name} (no stored results)");
+            continue;
+        }
+        match ryra_test::reports::delete_test_result(name) {
+            Ok(()) => println!("  removed  {name}"),
+            Err(e) => eprintln!("  error    {name}: {e}"),
+        }
+    }
+}
+
+/// Print local test sandbox state: per-test results discovered from
+/// `reports/*/result.json`, plus any leftover ledger entries.
+pub fn show_sandbox_state() {
+    let Some(root) = ryra_test::test_sandbox_root() else {
+        println!("No test sandbox found. Run `ryra test <name>` to create one.");
+        return;
+    };
+
+    if !root.exists() {
+        println!("No test sandbox found. Run `ryra test <name>` to create one.");
+        return;
+    }
+
+    let display = tilde(&root);
+    println!("Test sandbox ({display}/)\n");
+
+    // Ledger (leftover services from aborted runs)
+    let ledger = ryra_test::ledger_load();
+    if !ledger.is_empty() {
+        println!("Leftovers (from aborted runs):");
+        for name in &ledger {
+            println!("  {name}");
+        }
+        println!();
+    }
+
+    // Test results: scan reports/*/result.json
+    let results = ryra_test::reports::scan_results();
+    if results.is_empty() {
+        println!("\nResults:\n  (no results)");
+        return;
+    }
+
+    let passed = results.iter().filter(|r| r.status == "pass").count();
+    let failed = results.iter().filter(|r| r.status == "fail").count();
+
+    let latest_ts = results.iter().map(|r| r.timestamp).max().unwrap_or(0);
+    let date_str = if latest_ts > 0 {
+        let dt = DateTime::<Utc>::from_timestamp(latest_ts as i64, 0);
+        match dt {
+            Some(dt) => dt.format("%-d %b %Y").to_string(),
+            None => "unknown date".to_string(),
+        }
+    } else {
+        "unknown date".to_string()
+    };
+
+    println!("\nResults ({date_str}):");
+    println!("  {passed} passed, {failed} failed");
+
+    let max_name = results.iter().map(|r| r.name.len()).max().unwrap_or(0);
+    for r in &results {
+        let label = match r.status.as_str() {
+            "pass" => "PASS",
+            "fail" => "FAIL",
+            "skip" => "SKIP",
+            other => other,
+        };
+        let duration_str = format!("{:.1}s", r.duration_ms as f64 / 1000.0);
+        println!("    {label}  {:<max_name$}  {duration_str}", r.name);
+    }
 }

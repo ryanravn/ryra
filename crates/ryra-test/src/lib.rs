@@ -1,8 +1,8 @@
 pub mod executor;
 pub mod registry;
-mod reports;
-mod runner;
-mod scenario;
+pub mod reports;
+pub mod runner;
+pub mod scenario;
 pub mod test_toml;
 
 use std::collections::BTreeSet;
@@ -511,9 +511,6 @@ pub async fn run(args: Args) -> Result<()> {
         anyhow::bail!("no tests matched the given filters");
     }
 
-    // Fresh report directory for this run. Previous run's output is discarded.
-    reports::wipe_reports_dir()?;
-
     // --no-vm: run entirely on the host. Skip all VM prerequisites, binary
     // lookup, and image preparation since none of it is needed in bare mode.
     if args.no_vm {
@@ -765,10 +762,10 @@ pub async fn run(args: Args) -> Result<()> {
                 let vm_registry = std::path::Path::new("/opt/ryra-test-registry");
                 let result = match &test {
                     registry::DiscoveredTest::Lifecycle { steps, .. } => {
-                        runner::run_lifecycle_test(&executor, &name, steps, verbose, !single_test, vm_registry, false).await
+                        runner::run_lifecycle_test(&executor, &name, steps, verbose, !single_test, vm_registry, false, None).await
                     }
                     registry::DiscoveredTest::Simple { .. } => {
-                        runner::run_registry_test(&executor, &test, !single_test).await
+                        runner::run_registry_test(&executor, &test, !single_test, None).await
                     }
                 };
 
@@ -905,7 +902,7 @@ async fn run_interactive_vm(
 /// `XDG_DATA_HOME`), a sibling of the real `~/.local/share/services/`, so the
 /// whole test footprint is one folder you can `rm -rf`. `None` if `$HOME` is
 /// unset.
-pub(crate) fn test_sandbox_root() -> Option<PathBuf> {
+pub fn test_sandbox_root() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_DATA_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
@@ -923,8 +920,17 @@ fn host_ledger_path() -> Option<PathBuf> {
     Some(test_sandbox_root()?.join("ledger"))
 }
 
+/// Ledger entries still installed on the host: leftovers from a previous
+/// aborted run. The ledger only ever records harness installs, so purging
+/// these is always safe: user-installed services are never in it.
+pub fn host_leftovers() -> Vec<String> {
+    let ledger = ledger_load();
+    let installed = scan_installed();
+    ledger.intersection(&installed).cloned().collect()
+}
+
 /// Load the ledger (newline-separated service names). Missing file → empty.
-fn ledger_load() -> BTreeSet<String> {
+pub fn ledger_load() -> BTreeSet<String> {
     let Some(path) = host_ledger_path() else {
         return BTreeSet::new();
     };
@@ -963,7 +969,11 @@ fn ledger_save(set: &BTreeSet<String>) {
 /// dependencies (reverse install order). Failures are non-fatal: a
 /// not-installed service is a no-op. Callers guarantee these services are
 /// harness-owned (never user-installed), so purging is always safe.
-async fn purge_services(executor: &crate::executor::LocalExecutor, svcs: &[String], when: &str) {
+pub async fn purge_services(
+    executor: &crate::executor::LocalExecutor,
+    svcs: &[String],
+    when: &str,
+) {
     use crate::executor::Executor;
     for svc in svcs.iter().rev() {
         println!("  cleaning up {svc} (purge) {when}");
@@ -1201,19 +1211,9 @@ async fn run_bare(
     //    resolve data paths through ${RYRA_DATA_DIR:-…}, so they find the
     //    sandbox here and fall back to the real dir under --vm / normal use.
     let sandbox = test_sandbox_root().context("cannot resolve test sandbox root ($HOME unset)")?;
-    let data_dir = sandbox.join("services");
-    let config_dir = sandbox.join("config");
-    // Fresh preferences each run so a previous run's SMTP/auth/backup config
-    // can't leak in. Service data is managed per-service (reclaimed/torn down);
-    // the ledger persists; reports are wiped at run start.
-    let _ = std::fs::remove_dir_all(&config_dir);
-    std::fs::create_dir_all(&config_dir)
-        .with_context(|| format!("failed to create {}", config_dir.display()))?;
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("failed to create {}", data_dir.display()))?;
-    let executor = crate::executor::LocalExecutor::with_registry(registry_path)
-        .with_config_dir(&config_dir)
-        .with_data_dir(&data_dir);
+
+    // Base executor for cleanup operations (no per-test sandbox needed).
+    let base_executor = crate::executor::LocalExecutor::with_registry(registry_path);
 
     // 2. Anything installed that we didn't install is the user's — off-limits.
     let mut ledger = ledger_load();
@@ -1233,7 +1233,7 @@ async fn run_bare(
     let leftovers: Vec<String> = ledger.intersection(&installed).cloned().collect();
     for svc in &leftovers {
         println!("  reclaiming leftover {svc} (purge) from a previous run");
-        let _ = executor
+        let _ = base_executor
             .exec(&format!("ryra remove --purge {svc} -y"))
             .await;
         ledger.remove(svc);
@@ -1274,18 +1274,20 @@ async fn run_bare(
         }
         ledger_save(&ledger);
 
-        // Reset the preferences sandbox so a previous test's `--smtp`/`--auth`/
-        // backup config can't leak in. This matters: a `--smtp=inbucket` test
-        // writes SMTP into preferences.toml, and without a reset the *next*
-        // `--smtp` add sees SMTP already configured and skips installing
-        // inbucket — so its mail step finds nothing. Per-test, not per-run.
+        // Per-test sandbox: each test gets its own config and data dirs so
+        // no state leaks between tests (same pattern as per-test results).
+        let test_dir = sandbox.join("tests").join(&name);
+        let config_dir = test_dir.join("config");
+        let data_dir = test_dir.join("services");
         let _ = std::fs::remove_dir_all(&config_dir);
-        let _ = std::fs::create_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir)
+            .with_context(|| format!("failed to create {}", config_dir.display()))?;
+        std::fs::create_dir_all(&data_dir)
+            .with_context(|| format!("failed to create {}", data_dir.display()))?;
+        let executor = crate::executor::LocalExecutor::with_registry(registry_path)
+            .with_config_dir(&config_dir)
+            .with_data_dir(&data_dir);
 
-        // Pre-clean this test's own services (a stale install from a crashed
-        // earlier run of the same test shouldn't cascade in). The default-
-        // registry cache is also cleared — tests like diff-whoami mutate it,
-        // and it's a cache, not user data.
         purge_services(&executor, &svcs, "before test").await;
         let _ = executor
             .exec("rm -rf \"${XDG_CACHE_HOME:-$HOME/.cache}/services/default\"")
@@ -1299,17 +1301,15 @@ async fn run_bare(
                     &name,
                     steps,
                     args.verbose,
-                    // Bare runs are serial and each test is bracketed by a
-                    // `---- START name ----` banner, so the per-line prefix is
-                    // redundant — drop it.
                     false,
                     registry_path,
                     args.retest,
+                    None,
                 )
                 .await
             }
             registry::DiscoveredTest::Simple { .. } => {
-                runner::run_registry_test(&executor, test, false).await
+                runner::run_registry_test(&executor, test, false, None).await
             }
         };
 
@@ -1320,12 +1320,7 @@ async fn run_bare(
         );
 
         // Tear down everything this test put on the host so nothing
-        // accumulates and eats RAM — pass or fail. That's the declared
-        // services (purged first, in reverse order so dependents go before
-        // dependencies) plus anything installed as a side-effect with no
-        // explicit add step (e.g. inbucket via `--smtp=inbucket`). The
-        // leftover sweep is safe: `user_owned` was fixed at startup and is
-        // never in the set, so we only ever remove this test's own footprint.
+        // accumulates and eats RAM.
         purge_services(&executor, &svcs, "after test").await;
         let leaked: Vec<String> = scan_installed()
             .into_iter()

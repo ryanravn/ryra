@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::executor::Executor;
 use crate::registry::{DiscoveredTest, TestEntry};
-use crate::scenario::{Event, EventKind, Outcome, ScenarioResult};
+use crate::scenario::{Event, EventKind, OnEvent, Outcome, ScenarioResult};
 use crate::test_toml::StepDef;
 
 /// Shell expansion for the service-data root: the `RYRA_DATA_DIR` override
@@ -13,6 +13,13 @@ use crate::test_toml::StepDef;
 /// service-data path through this so it works under the sandbox, in a VM
 /// (where the var is unset and it falls back), and for normal installs.
 const DATA_ROOT_SH: &str = "${RYRA_DATA_DIR:-$HOME/.local/share/services}";
+
+fn emit(events: &mut Vec<Event>, ev: Event, on_event: &Option<OnEvent>) {
+    if let Some(cb) = on_event {
+        cb(&ev);
+    }
+    events.push(ev);
+}
 
 fn print_event_result(prefix: &str, event: &Event) {
     let elapsed = format!("{:.1}s", event.duration.as_secs_f64());
@@ -35,6 +42,7 @@ pub async fn run_registry_test(
     vm: &dyn Executor,
     test: &DiscoveredTest,
     prefixed: bool,
+    on_event: Option<OnEvent>,
 ) -> ScenarioResult {
     let start = Instant::now();
     let name = test.name();
@@ -94,10 +102,10 @@ pub async fn run_registry_test(
 
             if step_event.outcome.is_fail() {
                 failed = true;
-                events.push(step_event);
+                emit(&mut events, step_event, &on_event);
                 break;
             }
-            events.push(step_event);
+            emit(&mut events, step_event, &on_event);
 
             // Wait for service to be active
             println!("{p}  waiting for {service} to start...");
@@ -105,10 +113,10 @@ pub async fn run_registry_test(
             print_event_result(&p, &wait_event);
             if wait_event.outcome.is_fail() {
                 failed = true;
-                events.push(wait_event);
+                emit(&mut events, wait_event, &on_event);
                 break;
             }
-            events.push(wait_event);
+            emit(&mut events, wait_event, &on_event);
         }
     }
 
@@ -129,10 +137,10 @@ pub async fn run_registry_test(
                     print_event_result(&p, &port_event);
                     if port_event.outcome.is_fail() {
                         failed = true;
-                        events.push(port_event);
+                        emit(&mut events, port_event, &on_event);
                         break;
                     }
-                    events.push(port_event);
+                    emit(&mut events, port_event, &on_event);
                 }
             }
             if failed {
@@ -156,7 +164,7 @@ pub async fn run_registry_test(
         if deploy_event.outcome.is_fail() {
             failed = true;
         }
-        events.push(deploy_event);
+        emit(&mut events, deploy_event, &on_event);
 
         // Derive service names from .container file stems, start each
         if !failed {
@@ -173,20 +181,20 @@ pub async fn run_registry_test(
                 print_event_result(&p, &start_event);
                 if start_event.outcome.is_fail() {
                     failed = true;
-                    events.push(start_event);
+                    emit(&mut events, start_event, &on_event);
                     break;
                 }
-                events.push(start_event);
+                emit(&mut events, start_event, &on_event);
 
                 println!("{p}  waiting for {svc}...");
                 let wait_event = wait_for_service(vm, &p, svc).await;
                 print_event_result(&p, &wait_event);
                 if wait_event.outcome.is_fail() {
                     failed = true;
-                    events.push(wait_event);
+                    emit(&mut events, wait_event, &on_event);
                     break;
                 }
-                events.push(wait_event);
+                emit(&mut events, wait_event, &on_event);
             }
         }
     }
@@ -197,12 +205,16 @@ pub async fn run_registry_test(
             Ok(prefix) => prefix,
             Err(e) => {
                 failed = true;
-                events.push(Event::bare(
-                    "source service env vars".to_string(),
-                    EventKind::Step,
-                    Outcome::Failed(format!("{e:#}")),
-                    Duration::ZERO,
-                ));
+                emit(
+                    &mut events,
+                    Event::bare(
+                        "source service env vars".to_string(),
+                        EventKind::Step,
+                        Outcome::Failed(format!("{e:#}")),
+                        Duration::ZERO,
+                    ),
+                    &on_event,
+                );
                 String::new()
             }
         }
@@ -213,12 +225,16 @@ pub async fn run_registry_test(
     // Run each test command
     for test_entry in test.tests() {
         if failed {
-            events.push(Event::bare(
-                format!("test: {}", test_entry.name),
-                EventKind::Assertion,
-                Outcome::Skipped,
-                Duration::ZERO,
-            ));
+            emit(
+                &mut events,
+                Event::bare(
+                    format!("test: {}", test_entry.name),
+                    EventKind::Assertion,
+                    Outcome::Skipped,
+                    Duration::ZERO,
+                ),
+                &on_event,
+            );
             println!("{p}  skip  {}", test_entry.name);
             continue;
         }
@@ -229,7 +245,7 @@ pub async fn run_registry_test(
         if event.outcome.is_fail() {
             failed = true;
         }
-        events.push(event);
+        emit(&mut events, event, &on_event);
     }
 
     // Dump diagnostics on failure
@@ -517,6 +533,7 @@ pub async fn run_lifecycle_test(
     prefixed: bool,
     registry_path: &std::path::Path,
     retest: bool,
+    on_event: Option<OnEvent>,
 ) -> ScenarioResult {
     let start = Instant::now();
     let mut events = Vec::new();
@@ -541,12 +558,16 @@ pub async fn run_lifecycle_test(
 
         if failed {
             let desc = step.step_name();
-            events.push(Event::bare(
-                desc.clone(),
-                EventKind::Step,
-                Outcome::Skipped,
-                Duration::ZERO,
-            ));
+            emit(
+                &mut events,
+                Event::bare(
+                    desc.clone(),
+                    EventKind::Step,
+                    Outcome::Skipped,
+                    Duration::ZERO,
+                ),
+                &on_event,
+            );
             println!("{p}  skip  {desc}");
             continue;
         }
@@ -583,7 +604,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
             StepDef::Remove { service } => {
                 println!("{p}  ryra remove --purge {service}...");
@@ -598,7 +619,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
             StepDef::Wait { service, timeout } => {
                 println!("{p}  waiting for {service}...");
@@ -607,7 +628,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
             StepDef::Shell {
                 name: step_name,
@@ -630,7 +651,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
             StepDef::Http {
                 name: http_name,
@@ -705,7 +726,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
             StepDef::Playwright {
                 name: browser_name,
@@ -729,7 +750,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
             StepDef::Mail {
                 name: mail_name,
@@ -752,7 +773,7 @@ pub async fn run_lifecycle_test(
                 };
                 let cmd = format!(
                     "INBUCKET_PORT=$(grep SERVICE_PORT_HTTP {DATA_ROOT_SH}/inbucket/.env 2>/dev/null | cut -d= -f2); \
-                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed — no ~/.local/share/services/inbucket/.env'; exit 2; }}; \
+                     [ -n \"$INBUCKET_PORT\" ] || {{ echo 'inbucket not installed -- no ~/.local/share/services/inbucket/.env'; exit 2; }}; \
                      BODY=$(curl -sf \"http://127.0.0.1:$INBUCKET_PORT/api/v1/mailbox/{mailbox_esc}\" 2>/dev/null); \
                      [ -n \"$BODY\" ] && [ \"$BODY\" != '[]' ]{contains_check}"
                 );
@@ -770,7 +791,7 @@ pub async fn run_lifecycle_test(
                 if event.outcome.is_fail() {
                     failed = true;
                 }
-                events.push(event);
+                emit(&mut events, event, &on_event);
             }
         }
     }
