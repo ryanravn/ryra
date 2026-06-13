@@ -525,6 +525,7 @@ async fn run_browser_step(
 ///
 /// Unlike `run_registry_test`, this processes a sequence of typed steps
 /// (add, remove, wait, run, assert) rather than "add all then test".
+#[allow(clippy::too_many_arguments)]
 pub async fn run_lifecycle_test(
     vm: &dyn Executor,
     name: &str,
