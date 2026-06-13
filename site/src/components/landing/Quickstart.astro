@@ -210,6 +210,7 @@ const steps: Step[] = [
     if (fileEl) fileEl.textContent = files[idx];
     if (counterEl) counterEl.textContent = `step ${idx + 1} / ${total}`;
     animateStep(idx);
+    window.posthog?.capture("quickstart_step_viewed", { step: idx + 1, step_name: files[idx] });
   };
 
   // ─── Step changes via IntersectionObserver ───────────────────────────

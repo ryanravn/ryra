@@ -114,6 +114,10 @@ const total = groups.reduce((acc, g) => acc + g.items.length, 0);
   </p>
 </StarlightPage>
 
+<script is:inline>
+  window.posthog?.capture("services_page_viewed");
+</script>
+
 <style>
   .service-list {
     list-style: none;

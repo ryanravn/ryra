@@ -3,6 +3,7 @@ import Mountains from "../components/landing/Mountains.astro";
 import Terminal from "../components/landing/Terminal.astro";
 import Quickstart from "../components/landing/Quickstart.astro";
 import MountainDivider from "../components/landing/MountainDivider.astro";
+import PostHog from "../components/posthog.astro";
 
 declare const __RYRA_VERSION__: string;
 const version = __RYRA_VERSION__;
@@ -84,6 +85,7 @@ const principles = [
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <PostHog />
   </head>
   <body>
     <div class="topbar">
@@ -693,6 +695,7 @@ const principles = [
           try {
             await navigator.clipboard.writeText(cmdEl.textContent ?? "");
             copyEl.textContent = "COPIED";
+            (window as any).posthog?.capture("install_command_copied");
             setTimeout(() => {
               copyEl.textContent = "COPY";
             }, 1400);
@@ -701,6 +704,24 @@ const principles = [
           }
         });
       }
+    </script>
+
+    <script is:inline>
+      document.addEventListener("click", function (e) {
+        const target = e.target;
+        if (!target) return;
+        const el = target.closest("a, button");
+        if (!el) return;
+        if (el.matches(".gh-btn")) {
+          window.posthog?.capture("github_clicked");
+        } else if (el.matches(".docs-link")) {
+          window.posthog?.capture("docs_opened");
+        } else if (el.closest(".cta-row") && el.matches("a[href='#features']")) {
+          window.posthog?.capture("see_how_it_works_clicked");
+        } else if (el.closest(".why") && el.matches("a.cta-secondary")) {
+          window.posthog?.capture("read_docs_clicked");
+        }
+      });
     </script>
 
     <style is:global>

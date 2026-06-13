@@ -36,6 +36,7 @@ import Default from "@astrojs/starlight/components/SocialIcons.astro";
         const text = await res.text();
         await navigator.clipboard.writeText(text);
         label.textContent = "Copied";
+        (window as any).posthog?.capture("docs_copied_to_clipboard");
       } catch {
         label.textContent = "Failed";
       }

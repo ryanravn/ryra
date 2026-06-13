@@ -5,6 +5,21 @@ import { dirname, resolve } from "node:path";
 
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import { loadEnv } from "vite";
+
+const { PUBLIC_POSTHOG_PROJECT_TOKEN, PUBLIC_POSTHOG_HOST } = loadEnv("", process.cwd(), "PUBLIC_");
+
+// Only emitted when both env vars are set (e.g. CI build with the repo
+// variable). Missing token => no script, rather than a broken init('').
+const posthogHead =
+  PUBLIC_POSTHOG_PROJECT_TOKEN && PUBLIC_POSTHOG_HOST
+    ? [
+        {
+          tag: "script",
+          content: `!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled onFeatureFlags getFeatureFlag getFeatureFlagPayload reloadFeatureFlags group updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures getActiveMatchingSurveys getSurveys getNextSurveyStep onSessionId".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init('${PUBLIC_POSTHOG_PROJECT_TOKEN}',{api_host:'${PUBLIC_POSTHOG_HOST}',defaults:'2026-01-30',capture_exceptions:true})`,
+        },
+      ]
+    : [];
 
 const cargoToml = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), "../Cargo.toml"),
@@ -55,6 +70,7 @@ export default defineConfig({
         },
       },
       head: [
+        ...posthogHead,
         {
           tag: "link",
           attrs: { rel: "preconnect", href: "https://fonts.googleapis.com" },
