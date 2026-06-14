@@ -47,6 +47,26 @@ fn ente_smtp_encryption(value: &str) -> String {
     }
 }
 
+/// Derive the session-cookie domain Authelia needs from a host. Mirrors the
+/// rule the provider expects: `localhost` becomes `127.0.0.1`; a multi-label
+/// host (two or more dots, e.g. `auth-host.tailnet.ts.net`) drops its first
+/// label so the cookie is valid across sibling subdomains (`tailnet.ts.net`);
+/// a single-label or bare host is used as-is. Lives here (not in the
+/// generate-config.sh shell) so the value is computed at render time into the
+/// `.env`, and Authelia reads it fresh on every start: changing the auth URL
+/// no longer leaves a stale cookie domain baked into configuration.yml.
+fn cookie_domain(value: &str) -> String {
+    if value == "localhost" {
+        return "127.0.0.1".to_string();
+    }
+    if value.matches('.').count() >= 2
+        && let Some((_, parent)) = value.split_once('.')
+    {
+        return parent.to_string();
+    }
+    value.to_string()
+}
+
 /// Render a template string with the given context variables.
 ///
 /// Runs in strict mode: any `{{ foo.bar }}` that isn't in the context errors
@@ -72,6 +92,9 @@ pub fn render(template_str: &str, context: &BTreeMap<String, String>) -> Result<
     });
     env.add_filter("ente_smtp_encryption", |value: &str| -> String {
         ente_smtp_encryption(value)
+    });
+    env.add_filter("cookie_domain", |value: &str| -> String {
+        cookie_domain(value)
     });
     // Standard-base64 encode a string. Used by services (e.g. Zammad) whose
     // entrypoints expect a base64-encoded JSON payload as an env var.
@@ -280,6 +303,25 @@ mod tests {
         ctx.insert("smtp.security".into(), "off".into());
         let result = render("{{ smtp.security | authelia_scheme }}", &ctx)?;
         assert_eq!(result, "smtp");
+        Ok(())
+    }
+
+    #[test]
+    fn cookie_domain_filter() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let render_domain = |d: &str| -> std::result::Result<String, Box<dyn std::error::Error>> {
+            let mut ctx = BTreeMap::new();
+            ctx.insert("service.domain".into(), d.into());
+            Ok(render("{{ service.domain | cookie_domain }}", &ctx)?)
+        };
+        // localhost maps to a loopback literal authelia accepts as a cookie domain.
+        assert_eq!(render_domain("localhost")?, "127.0.0.1");
+        // Multi-label host drops its first label so the cookie spans siblings.
+        assert_eq!(
+            render_domain("authelia-debian.cobbler-tuna.ts.net")?,
+            "cobbler-tuna.ts.net"
+        );
+        // Single-dot host is used verbatim (e.g. the .internal default).
+        assert_eq!(render_domain("auth.internal")?, "auth.internal");
         Ok(())
     }
 }
