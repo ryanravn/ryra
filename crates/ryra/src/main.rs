@@ -304,9 +304,9 @@ enum Command {
         /// Global mode: set the SMTP From address.
         #[arg(long = "smtp-from")]
         smtp_from: Option<String>,
-        /// Global mode: set SMTP security (starttls, force_tls, off).
-        #[arg(long = "smtp-security")]
-        smtp_security: Option<String>,
+        /// Global mode: set SMTP transport security.
+        #[arg(long = "smtp-security", value_enum)]
+        smtp_security: Option<cli::configure_global::SmtpSecurityArg>,
         /// Global mode: set the default admin email.
         #[arg(long = "admin-email")]
         admin_email: Option<String>,
@@ -561,7 +561,7 @@ async fn main() -> anyhow::Result<()> {
                     smtp_username: smtp_username.clone(),
                     smtp_password: smtp_password.clone(),
                     smtp_from: smtp_from.clone(),
-                    smtp_security: smtp_security.clone(),
+                    smtp_security: *smtp_security,
                     admin_email: admin_email.clone(),
                     yes,
                     dry_run,

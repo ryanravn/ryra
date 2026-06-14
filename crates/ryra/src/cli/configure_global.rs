@@ -18,6 +18,28 @@ use ryra_core::{EnvKeyChange, ServiceReconcile};
 
 use super::apply;
 
+/// SMTP transport security, as a typed CLI flag. A `clap::ValueEnum` so
+/// `--smtp-security bogus` is rejected at parse time (and `--help` lists the
+/// choices) rather than failing in a runtime string match. Maps 1:1 onto the
+/// core [`SmtpSecurity`]; kept CLI-side because core carries no clap dep.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum SmtpSecurityArg {
+    Starttls,
+    #[value(name = "force_tls")]
+    ForceTls,
+    Off,
+}
+
+impl SmtpSecurityArg {
+    fn to_core(self) -> SmtpSecurity {
+        match self {
+            SmtpSecurityArg::Starttls => SmtpSecurity::Starttls,
+            SmtpSecurityArg::ForceTls => SmtpSecurity::ForceTls,
+            SmtpSecurityArg::Off => SmtpSecurity::Off,
+        }
+    }
+}
+
 /// Flags for the no-service (global) form of `ryra configure`. Each SMTP
 /// field is individually settable so a script can change one value without
 /// restating the rest.
@@ -28,7 +50,7 @@ pub struct GlobalFlags {
     pub smtp_username: Option<String>,
     pub smtp_password: Option<String>,
     pub smtp_from: Option<String>,
-    pub smtp_security: Option<String>,
+    pub smtp_security: Option<SmtpSecurityArg>,
     pub admin_email: Option<String>,
     pub yes: bool,
     pub dry_run: bool,
@@ -184,8 +206,8 @@ fn apply_flag_edits(config: &mut Config, flags: &GlobalFlags) -> Result<bool> {
         if let Some(f) = &flags.smtp_from {
             smtp.from = f.clone();
         }
-        if let Some(sec) = &flags.smtp_security {
-            smtp.security = parse_security(sec)?;
+        if let Some(sec) = flags.smtp_security {
+            smtp.security = sec.to_core();
         }
         if smtp.from.is_empty() {
             smtp.from = format!("noreply@{}", smtp.host);
@@ -202,15 +224,6 @@ fn apply_flag_edits(config: &mut Config, flags: &GlobalFlags) -> Result<bool> {
     }
 
     Ok(changed)
-}
-
-fn parse_security(s: &str) -> Result<SmtpSecurity> {
-    match s.to_ascii_lowercase().as_str() {
-        "starttls" => Ok(SmtpSecurity::Starttls),
-        "force_tls" | "forcetls" | "tls" => Ok(SmtpSecurity::ForceTls),
-        "off" | "none" | "plaintext" => Ok(SmtpSecurity::Off),
-        other => bail!("invalid --smtp-security '{other}' (expected: starttls, force_tls, off)"),
-    }
 }
 
 /// Interactive global editor: show current state, pick a setting, edit it.
