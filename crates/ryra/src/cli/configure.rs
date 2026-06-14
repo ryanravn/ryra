@@ -209,9 +209,13 @@ async fn build_overrides_interactive(service: &str) -> Result<ConfigureOverrides
         anyhow::anyhow!("metadata.toml missing for installed service '{service}'")
     })?;
     let mut overrides = ConfigureOverrides::default();
-    let reg_groups = load_registry_group_names(service, &metadata.registry)
-        .await
-        .unwrap_or_default();
+    // The def drives both which env_group toggles to show and which
+    // feature prompts (auth / smtp / backup) make sense at all. If the
+    // registry can't be resolved we fall back to showing everything:
+    // core's validation still rejects unsupported toggles, so the worst
+    // case is an extra prompt, never a silently-applied bad change.
+    let reg_def = load_registry_def(service, &metadata.registry).await.ok();
+    let reg_groups = reg_def.as_ref().map(group_prompts).unwrap_or_default();
 
     println!();
     println!("Current configuration for {}:", style(service).bold());
@@ -249,41 +253,60 @@ async fn build_overrides_interactive(service: &str) -> Result<ConfigureOverrides
         _ => {}
     }
 
-    // Auth toggle.
+    // Auth toggle. Only services that natively consume OIDC can have
+    // SSO enabled. A reverse proxy (caddy, `auth = []`) has nothing to
+    // log into; the auth provider (authelia) *is* the SSO and declares
+    // `auth = []` too, so it's correctly excluded. We still show the
+    // prompt if auth is somehow already on, so it can always be turned
+    // off. Unknown def: show it (core rejects it if unsupported).
     let auth_on = metadata.auth.is_some();
-    let new_auth = Confirm::new()
-        .with_prompt(format!(
-            "Enable OIDC SSO for this service? (currently {})",
-            if auth_on { "on" } else { "off" }
-        ))
-        .default(auth_on)
-        .interact()?;
-    if new_auth != auth_on {
-        overrides.auth = Some(new_auth);
+    let auth_supported = reg_def
+        .as_ref()
+        .is_none_or(|d| !d.integrations.auth.is_empty());
+    if auth_on || auth_supported {
+        let new_auth = Confirm::new()
+            .with_prompt(format!(
+                "Enable OIDC SSO for this service? (currently {})",
+                if auth_on { "on" } else { "off" }
+            ))
+            .default(auth_on)
+            .interact()?;
+        if new_auth != auth_on {
+            overrides.auth = Some(new_auth);
+        }
     }
 
-    // SMTP toggle.
-    let new_smtp = Confirm::new()
-        .with_prompt(format!(
-            "Enable SMTP for this service? (currently {})",
-            if metadata.smtp_enabled { "on" } else { "off" }
-        ))
-        .default(metadata.smtp_enabled)
-        .interact()?;
-    if new_smtp != metadata.smtp_enabled {
-        overrides.smtp = Some(new_smtp);
+    // SMTP toggle, gated on the service declaring SMTP support
+    // (`smtp = true`, the default). Services like caddy set
+    // `smtp = false` and shouldn't be asked.
+    let smtp_supported = reg_def.as_ref().is_none_or(|d| d.integrations.smtp);
+    if metadata.smtp_enabled || smtp_supported {
+        let new_smtp = Confirm::new()
+            .with_prompt(format!(
+                "Enable SMTP for this service? (currently {})",
+                if metadata.smtp_enabled { "on" } else { "off" }
+            ))
+            .default(metadata.smtp_enabled)
+            .interact()?;
+        if new_smtp != metadata.smtp_enabled {
+            overrides.smtp = Some(new_smtp);
+        }
     }
 
-    // Backup toggle.
-    let new_backup = Confirm::new()
-        .with_prompt(format!(
-            "Include this service in encrypted backups? (currently {})",
-            if metadata.backup_enabled { "on" } else { "off" }
-        ))
-        .default(metadata.backup_enabled)
-        .interact()?;
-    if new_backup != metadata.backup_enabled {
-        overrides.backup = Some(new_backup);
+    // Backup toggle, gated on the author having certified the service
+    // as backup-safe (`backup = true`); the default is opt-in off.
+    let backup_supported = reg_def.as_ref().is_none_or(|d| d.integrations.backup);
+    if metadata.backup_enabled || backup_supported {
+        let new_backup = Confirm::new()
+            .with_prompt(format!(
+                "Include this service in encrypted backups? (currently {})",
+                if metadata.backup_enabled { "on" } else { "off" }
+            ))
+            .default(metadata.backup_enabled)
+            .interact()?;
+        if new_backup != metadata.backup_enabled {
+            overrides.backup = Some(new_backup);
+        }
     }
 
     // Env groups — reuse the registry-known list loaded above so we
@@ -313,15 +336,19 @@ async fn build_overrides_interactive(service: &str) -> Result<ConfigureOverrides
     Ok(overrides)
 }
 
-/// Load a service's `[[env_group]]` names + prompts from its registry.
-/// Returns `(group_name, group_prompt)` pairs. Async because the
-/// registry resolver is — we're already inside `#[tokio::main]`, so
-/// awaiting is fine and (importantly) we must not spin a nested runtime
-/// here.
-async fn load_registry_group_names(
+/// Resolve a service's registry definition. Async because the registry
+/// resolver is (we're already inside `#[tokio::main]`, so awaiting is
+/// fine and, importantly, we must not spin a nested runtime here).
+///
+/// The interactive flow uses this for two things: the `[[env_group]]`
+/// list (which toggles to offer) and the `[integrations]` capability
+/// flags (which feature prompts even make sense for this service: a
+/// reverse proxy has no OIDC SSO to enable, the auth provider *is* the
+/// SSO, etc.).
+async fn load_registry_def(
     service: &str,
     registry: &str,
-) -> anyhow::Result<Vec<(String, String)>> {
+) -> anyhow::Result<ryra_core::registry::service_def::ServiceDef> {
     use ryra_core::registry::resolve::ServiceRef;
     let service_ref = if registry.is_empty() || registry == ryra_core::REGISTRY_DEFAULT {
         ServiceRef::Default(service.to_string())
@@ -332,21 +359,26 @@ async fn load_registry_group_names(
         }
     };
     let repo_dir = ryra_core::resolve_registry_dir(&service_ref).await?;
-    let reg_service = ryra_core::registry::find_service(&repo_dir, service)?;
-    Ok(reg_service
-        .def
-        .env_groups
+    Ok(ryra_core::registry::find_service(&repo_dir, service)?.def)
+}
+
+/// `(group_name, group_prompt)` pairs for a service's `[[env_group]]`s.
+fn group_prompts(def: &ryra_core::registry::service_def::ServiceDef) -> Vec<(String, String)> {
+    def.env_groups
         .iter()
         .map(|g| (g.name.clone(), g.prompt.clone()))
-        .collect())
+        .collect()
 }
 
 async fn print_current_state(service: &str) -> Result<()> {
     let meta = load_metadata(service)?.ok_or_else(|| {
         anyhow::anyhow!("metadata.toml missing for installed service '{service}'")
     })?;
-    let reg_groups = load_registry_group_names(service, &meta.registry)
+    let reg_groups = load_registry_def(service, &meta.registry)
         .await
+        .ok()
+        .as_ref()
+        .map(group_prompts)
         .unwrap_or_default();
     println!("{}", style(service).bold());
     print_status_block(&meta, &reg_groups);
@@ -470,6 +502,36 @@ fn print_summary(result: &ConfigureResult) {
             style("→").cyan(),
             result.service
         );
+    }
+
+    // Tailscale exposure changes run an admin-API call plus
+    // `sudo tailscale serve`; neither shows up in the file diff, so
+    // without this the preview would imply the switch is just a
+    // metadata edit when it actually reconfigures the tailnet.
+    for step in &result.steps {
+        match step {
+            ryra_core::Step::TailscaleEnable { svc_name, ports } => {
+                let https = ports
+                    .iter()
+                    .map(|p| p.https_port.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!(
+                    "  {} advertise {} on the tailnet (tailscale serve, https {}); needs sudo",
+                    style("→").cyan(),
+                    style(format!("svc:{svc_name}")).cyan(),
+                    https
+                );
+            }
+            ryra_core::Step::TailscaleDisable { svc_name } => {
+                println!(
+                    "  {} stop advertising {} and delete the Tailscale Service",
+                    style("→").cyan(),
+                    style(format!("svc:{svc_name}")).cyan(),
+                );
+            }
+            _ => {}
+        }
     }
     if result.has_destructive {
         println!(

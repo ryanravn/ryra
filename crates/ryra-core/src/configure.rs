@@ -520,6 +520,23 @@ pub async fn configure_service(
     if target_backup && !reg_service.def.integrations.backup {
         return Err(Error::BackupNotSupported(service_name.to_string()));
     }
+    // Enabling SMTP requires the service to actually consume it: an
+    // `integrations.smtp` flag *and* a `[mappings.smtp]` block to render.
+    // Mirrors the backup/auth guards (and the interactive prompt's
+    // capability gate) so `configure <svc> --smtp` on a service that can't
+    // send mail is rejected up front rather than recording a phantom
+    // `smtp_enabled = true` that renders nothing.
+    let smtp_supported =
+        reg_service.def.integrations.smtp && !reg_service.def.mappings.smtp.is_empty();
+    if !current_smtp && target_smtp && !smtp_supported {
+        return Err(Error::ConfigureUnsupported {
+            service: service_name.to_string(),
+            field: "smtp".to_string(),
+            workaround: "this service declares no SMTP support (no [mappings.smtp]); \
+                 it can't be wired to the mail relay"
+                .to_string(),
+        });
+    }
     // Enabling auth requires the service to support OIDC natively.
     // (`add_service` checks this too, but failing here gives a cleaner
     // error than a half-built plan.)
