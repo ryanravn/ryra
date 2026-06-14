@@ -76,6 +76,12 @@ pub struct Overrides {
     /// the value of a `prompted` env var (e.g. an admin email) without
     /// touching anything else.
     pub env_overrides: BTreeMap<String, String>,
+    /// Re-register this service's OIDC client with the auth provider even
+    /// though auth is already on and the URL hasn't changed. Reuses the
+    /// `client_id`/`client_secret` already in the service's `.env` (no
+    /// rotation). Used to repair a provider/consumer desync, e.g. after a
+    /// `ryra backup restore` of authelia dropped the client.
+    pub reassert_auth: bool,
 }
 
 /// Exposure transition. `Loopback` means "no public route" (the install's
@@ -677,7 +683,11 @@ pub async fn configure_service(
     // point at the wrong hostname).
     let url_changed = current_url != target_url;
     let needs_unregister = current_auth && (!target_auth || url_changed);
-    let needs_register = target_auth && (!current_auth || url_changed);
+    // `reassert_auth` forces a re-register (reusing the existing `.env` creds
+    // via the same path a URL change takes) without a URL change. The outer
+    // `target_auth` gate means it only fires for services that actually have
+    // auth on; a no-op otherwise.
+    let needs_register = target_auth && (!current_auth || url_changed || overrides.reassert_auth);
     // Tailscale: enable when entering, disable when leaving. The two
     // sides are independent — going `tailscale → url` runs both.
     let prior_is_ts = matches!(prior_kind, Exposure::Tailscale { .. });

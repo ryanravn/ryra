@@ -338,6 +338,12 @@ enum Command {
         /// Unregister the OIDC client and disable SSO. Destructive.
         #[arg(long = "no-auth", conflicts_with = "auth")]
         no_auth: bool,
+        /// Re-register this service's OIDC client with the auth provider,
+        /// reusing the credentials already in its .env (no rotation). Repairs
+        /// a provider/consumer desync, e.g. after restoring the auth provider
+        /// from a snapshot that predated this service. See `ryra doctor`.
+        #[arg(long = "reassert-auth", conflicts_with = "no_auth")]
+        reassert_auth: bool,
         /// Enable a named env_group bundle (repeatable).
         #[arg(long = "enable", value_name = "GROUP")]
         enable: Vec<String>,
@@ -509,6 +515,7 @@ async fn main() -> anyhow::Result<()> {
             no_backup,
             auth,
             no_auth,
+            reassert_auth,
             ref enable,
             ref disable,
             ref set,
@@ -526,6 +533,7 @@ async fn main() -> anyhow::Result<()> {
                     no_backup,
                     auth,
                     no_auth,
+                    reassert_auth,
                     enable: enable.clone(),
                     disable: disable.clone(),
                     set: set.clone(),
@@ -542,6 +550,7 @@ async fn main() -> anyhow::Result<()> {
                     (smtp || no_smtp, "--smtp/--no-smtp"),
                     (backup || no_backup, "--backup/--no-backup"),
                     (auth || no_auth, "--auth/--no-auth"),
+                    (reassert_auth, "--reassert-auth"),
                     (!enable.is_empty(), "--enable"),
                     (!disable.is_empty(), "--disable"),
                     (!set.is_empty(), "--set"),

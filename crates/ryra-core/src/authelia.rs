@@ -23,6 +23,23 @@ fn url_with_host(base_url: &str, new_host: &str) -> Option<String> {
     Some(result)
 }
 
+/// Whether the managed auth provider's config currently registers an OIDC
+/// client for `service_name`, matched by the `client_name` that
+/// [`register_oidc_client`] writes. `None` when there's no authelia config
+/// to read (provider not installed, config unreadable); callers treat that
+/// as "can't tell, don't flag". The read-only counterpart to registration:
+/// `ryra doctor` uses it to catch a service whose metadata says `auth = on`
+/// but whose client vanished from the provider (e.g. a `ryra backup restore`
+/// of authelia from a snapshot predating the registration).
+pub fn oidc_client_registered(service_name: &str) -> Option<bool> {
+    let config_path = service_home(WellKnownService::Authelia.as_str())
+        .ok()?
+        .join("config")
+        .join("configuration.yml");
+    let yaml = std::fs::read_to_string(&config_path).ok()?;
+    Some(yaml.contains(&format!("client_name: '{service_name}'")))
+}
+
 /// Register an OIDC client with authelia by editing its configuration.yml.
 /// Returns steps to write the updated config and restart authelia.
 ///

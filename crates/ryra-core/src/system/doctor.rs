@@ -75,6 +75,12 @@ pub enum Issue {
     /// CLI is present but `tailscale status --json` doesn't return a
     /// `*.ts.net` DNSName for this node.
     TailscaleNotLoggedIn,
+    /// A service's metadata says OIDC SSO is on, but the managed auth
+    /// provider's config has no client registered for it: ryra's
+    /// bookkeeping and the provider's actual state disagree, so SSO is
+    /// silently broken. Usually a `ryra backup restore` of the provider
+    /// from a snapshot predating this service's registration.
+    AuthSsoDesync { service: String },
     /// A symlink in `~/.config/containers/systemd/` points at a target
     /// that no longer exists. Usually means the user `rm -rf`d the
     /// service's home dir under `~/.local/share/services/<svc>/`.
@@ -121,6 +127,7 @@ impl Issue {
                 Severity::Blocker
             }
             Issue::TailscaleCliMissing | Issue::TailscaleNotLoggedIn => Severity::Warning,
+            Issue::AuthSsoDesync { .. } => Severity::Warning,
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
             Issue::BrokenEnvFileRef { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
@@ -205,6 +212,19 @@ impl fmt::Display for Issue {
                      \n\
                      Fix:\n  \
                        sudo tailscale up",
+                )
+            }
+            Issue::AuthSsoDesync { service } => {
+                write!(
+                    f,
+                    "{service} is configured for OIDC SSO, but the auth provider has no client \
+                     registered for it, so SSO is broken even though ryra's metadata says it's \
+                     wired. Often follows a `ryra backup restore` of the provider from a \
+                     snapshot taken before {service} was added with --auth.\n\
+                     \n\
+                     Fix (re-registers using the existing client credentials in {service}'s \
+                     .env, no secret rotation):\n  \
+                       ryra configure {service} --reassert-auth -y",
                 )
             }
             Issue::DanglingSymlink { link, target } => {
@@ -344,6 +364,39 @@ pub fn check_tailscale_runtime() -> Result<(), Issue> {
         return Err(Issue::TailscaleNotLoggedIn);
     }
     Ok(())
+}
+
+/// Verify ryra's auth bookkeeping matches the provider's actual state: for
+/// every installed service whose metadata says SSO is on, the managed auth
+/// provider should still have a client registered for it. Catches the
+/// provider/consumer desync (e.g. a provider restore that rolled back past
+/// a registration) that local install-state checks miss entirely.
+///
+/// Doctor-only (not in the `ryra add` gate) and silent unless the managed
+/// provider is installed and a service claims auth; only a definite
+/// mismatch is reported; undeterminable (provider config unreadable) stays
+/// quiet.
+pub fn check_auth_wiring() -> Vec<Issue> {
+    // Only the managed provider exposes a config we can introspect; an
+    // external OIDC provider is the user's to verify.
+    if !crate::is_service_installed(crate::WellKnownService::Authelia.as_str()) {
+        return Vec::new();
+    }
+    let Ok(installed) = crate::list_installed() else {
+        return Vec::new();
+    };
+    let mut issues = Vec::new();
+    for svc in &installed {
+        if svc.auth_kind.is_none() {
+            continue;
+        }
+        if crate::authelia::oidc_client_registered(&svc.name) == Some(false) {
+            issues.push(Issue::AuthSsoDesync {
+                service: svc.name.clone(),
+            });
+        }
+    }
+    issues
 }
 
 /// Blocker when podman is missing or below [`MIN_PODMAN`].
@@ -701,6 +754,18 @@ mod tests {
     fn tailscale_not_logged_in_display_has_up_command() {
         let s = format!("{}", Issue::TailscaleNotLoggedIn);
         assert!(s.contains("tailscale up"));
+    }
+
+    #[test]
+    fn auth_sso_desync_display_names_service_and_nonrotating_fix() {
+        let issue = Issue::AuthSsoDesync {
+            service: "seafile".into(),
+        };
+        assert_eq!(issue.severity(), Severity::Warning);
+        let s = format!("{issue}");
+        assert!(s.contains("seafile"));
+        // Points at the non-rotating repair command.
+        assert!(s.contains("ryra configure seafile --reassert-auth"));
     }
 
     #[test]

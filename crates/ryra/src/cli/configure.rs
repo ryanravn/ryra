@@ -30,6 +30,7 @@ pub struct ConfigureFlags {
     pub no_backup: bool,
     pub auth: bool,
     pub no_auth: bool,
+    pub reassert_auth: bool,
     pub enable: Vec<String>,
     pub disable: Vec<String>,
     pub set: Vec<String>,
@@ -72,6 +73,7 @@ pub async fn run(service: &str, flags: ConfigureFlags) -> Result<()> {
         || flags.no_backup
         || flags.auth
         || flags.no_auth
+        || flags.reassert_auth
         || !flags.enable.is_empty()
         || !flags.disable.is_empty()
         || !flags.set.is_empty();
@@ -187,6 +189,7 @@ fn build_overrides_from_flags(service: &str, flags: &ConfigureFlags) -> Result<C
     } else if flags.no_auth {
         overrides.auth = Some(false);
     }
+    overrides.reassert_auth = flags.reassert_auth;
     overrides.enable_groups = flags.enable.iter().cloned().collect();
     overrides.disable_groups = flags.disable.iter().cloned().collect();
     for kv in &flags.set {

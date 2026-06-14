@@ -1,10 +1,15 @@
 use anyhow::Result;
-use ryra_core::system::doctor::{Issue, Severity, check_all};
+use ryra_core::system::doctor::{Issue, Severity, check_all, check_auth_wiring};
 
 pub fn run() -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
-    let issues = check_all(&config);
+    // Cross-service auth wiring is doctor-only (not the add gate); no-ops
+    // unless the managed provider is installed and a service claims SSO.
+    let issues: Vec<Issue> = check_all(&config)
+        .into_iter()
+        .chain(check_auth_wiring())
+        .collect();
 
     if issues.is_empty() {
         println!("No issues found.");
