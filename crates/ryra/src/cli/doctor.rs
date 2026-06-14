@@ -1,14 +1,19 @@
 use anyhow::Result;
-use ryra_core::system::doctor::{Issue, Severity, check_all, check_auth_wiring};
+use ryra_core::system::doctor::{
+    Issue, Severity, check_all, check_auth_wiring, check_tailscale_services,
+};
 
 pub fn run() -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
-    // Cross-service auth wiring is doctor-only (not the add gate); no-ops
-    // unless the managed provider is installed and a service claims SSO.
+    // Cross-service checks are doctor-only (not the add gate) and each
+    // no-ops unless relevant: auth wiring needs the provider installed plus
+    // a service claiming SSO; tailscale reachability needs a
+    // tailscale-exposed service.
     let issues: Vec<Issue> = check_all(&config)
         .into_iter()
         .chain(check_auth_wiring())
+        .chain(check_tailscale_services())
         .collect();
 
     if issues.is_empty() {

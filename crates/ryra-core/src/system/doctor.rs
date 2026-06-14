@@ -81,6 +81,13 @@ pub enum Issue {
     /// silently broken. Usually a `ryra backup restore` of the provider
     /// from a snapshot predating this service's registration.
     AuthSsoDesync { service: String },
+    /// A service is exposed via Tailscale (`svc:<svc_name>`) but the
+    /// control plane hasn't approved this host to serve it, so the
+    /// `*.ts.net` URL routes nowhere even though the container is healthy.
+    /// `ryra add` verifies approval once at install time; this catches it
+    /// drifting out of approval afterwards (ACL change, host de-approved,
+    /// tailscaled losing the advertisement across a reboot).
+    TailscaleServiceUnapproved { service: String, svc_name: String },
     /// A symlink in `~/.config/containers/systemd/` points at a target
     /// that no longer exists. Usually means the user `rm -rf`d the
     /// service's home dir under `~/.local/share/services/<svc>/`.
@@ -128,6 +135,7 @@ impl Issue {
             }
             Issue::TailscaleCliMissing | Issue::TailscaleNotLoggedIn => Severity::Warning,
             Issue::AuthSsoDesync { .. } => Severity::Warning,
+            Issue::TailscaleServiceUnapproved { .. } => Severity::Warning,
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
             Issue::BrokenEnvFileRef { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
@@ -225,6 +233,22 @@ impl fmt::Display for Issue {
                      Fix (re-registers using the existing client credentials in {service}'s \
                      .env, no secret rotation):\n  \
                        ryra configure {service} --reassert-auth -y",
+                )
+            }
+            Issue::TailscaleServiceUnapproved { service, svc_name } => {
+                write!(
+                    f,
+                    "{service} is exposed on your tailnet (svc:{svc_name}) but the control \
+                     plane hasn't approved this host to serve it, so its *.ts.net URL routes \
+                     nowhere even though the container is healthy.\n\
+                     \n\
+                     Fix (most common: tailscaled didn't push the advertisement):\n  \
+                       sudo systemctl restart tailscaled\n\
+                     If it stays unapproved, your tailnet ACL isn't auto-approving the service. \
+                     Confirm with:\n  \
+                       sudo tailscale status --json | jq '.Self.CapMap[\"service-host\"]'\n\
+                     and add the service to autoApprovers.services in the ACL (or approve the \
+                     host in the admin console).",
                 )
             }
             Issue::DanglingSymlink { link, target } => {
@@ -393,6 +417,38 @@ pub fn check_auth_wiring() -> Vec<Issue> {
         if crate::authelia::oidc_client_registered(&svc.name) == Some(false) {
             issues.push(Issue::AuthSsoDesync {
                 service: svc.name.clone(),
+            });
+        }
+    }
+    issues
+}
+
+/// Verify every Tailscale-exposed installed service is still approved by
+/// the tailnet to serve its `svc:<name>`. Deliberately *not* part of
+/// [`check_all`]: it's a `ryra doctor`-only check (no point probing the
+/// tailnet on the `ryra add` blocker gate), and it stays silent unless the
+/// user actually has Tailscale-exposed services; no tailnet calls happen
+/// otherwise. Only a definite "not approved" is reported; when approval
+/// can't be determined (CLI missing, status unreadable) we say nothing
+/// rather than nag.
+pub fn check_tailscale_services() -> Vec<Issue> {
+    let Ok(installed) = crate::list_installed() else {
+        // Install-state errors are already surfaced by check_install_integrity;
+        // don't double-report here.
+        return Vec::new();
+    };
+    let mut issues = Vec::new();
+    for svc in &installed {
+        if !svc.exposure.is_tailscale() {
+            continue;
+        }
+        let Some(svc_name) = svc.exposure.tailscale_svc_name() else {
+            continue;
+        };
+        if tailscale::is_service_approved(&svc_name) == Some(false) {
+            issues.push(Issue::TailscaleServiceUnapproved {
+                service: svc.name.clone(),
+                svc_name,
             });
         }
     }
@@ -766,6 +822,20 @@ mod tests {
         assert!(s.contains("seafile"));
         // Points at the non-rotating repair command.
         assert!(s.contains("ryra configure seafile --reassert-auth"));
+    }
+
+    #[test]
+    fn tailscale_unapproved_display_names_service_and_fix() {
+        let issue = Issue::TailscaleServiceUnapproved {
+            service: "vikunja".into(),
+            svc_name: "vikunja-debian".into(),
+        };
+        assert_eq!(issue.severity(), Severity::Warning);
+        let s = format!("{issue}");
+        // Names the service and its svc:, and carries the one-line fix.
+        assert!(s.contains("vikunja") && s.contains("svc:vikunja-debian"));
+        assert!(s.contains("systemctl restart tailscaled"));
+        assert!(s.contains("autoApprovers.services"));
     }
 
     #[test]

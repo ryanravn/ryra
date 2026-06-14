@@ -113,6 +113,44 @@ pub fn derive_service_url(service: &str) -> crate::error::Result<String> {
     Ok(format!("https://{service}-{host}.{tailnet}"))
 }
 
+/// Whether the control plane has approved this host to serve
+/// `svc:<svc_name>`, read from `Self.CapMap."service-host"` in
+/// `tailscale status --json`. That cap is the coordination server's own
+/// record of approved Service Hosts: its presence is what makes the
+/// tailnet route traffic here. A Tailscale-exposed service missing from
+/// it is silently unreachable even when the container is healthy and the
+/// local `tailscale serve` config is intact; the failure mode plain
+/// health checks (and the rest of `ryra doctor`) miss.
+///
+/// `None` means undeterminable (CLI missing, `status` unreadable, JSON we
+/// can't parse). Callers treat that as "can't check, don't flag" so
+/// `ryra doctor` never nags without a real signal. This is the read-only
+/// twin of the enable-time poll in `system::apply`.
+pub fn is_service_approved(svc_name: &str) -> Option<bool> {
+    let out = Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let svc_key = format!("svc:{svc_name}");
+    let approved = value
+        .pointer("/Self/CapMap/service-host")
+        .and_then(|sh| sh.as_array())
+        .is_some_and(|arr| {
+            arr.iter().any(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|o| o.get(&svc_key))
+                    .and_then(|ips| ips.as_array())
+                    .is_some_and(|ips| !ips.is_empty())
+            })
+        });
+    Some(approved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
