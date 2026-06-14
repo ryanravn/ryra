@@ -161,7 +161,7 @@ pub struct HostConfig {
 
 // --- SMTP ---
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SmtpCredentials {
     pub host: String,
     pub port: u16,

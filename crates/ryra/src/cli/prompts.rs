@@ -74,6 +74,56 @@ pub fn prompt_smtp() -> Result<SmtpSetupChoice> {
     }
 }
 
+/// Edit an existing global SMTP relay, pre-filling every field with its
+/// current value (press enter to keep, type to replace). Unlike
+/// [`prompt_smtp`] there's no Skip/Inbucket branch: the caller already chose
+/// to edit the custom relay, so we go straight to the fields.
+pub fn prompt_smtp_edit(existing: &SmtpCredentials) -> Result<SmtpCredentials> {
+    let host: String = Input::new()
+        .with_prompt("  SMTP host")
+        .default(existing.host.clone())
+        .interact_text()?;
+    let port: u16 = Input::new()
+        .with_prompt("  SMTP port")
+        .default(existing.port)
+        .interact_text()?;
+    let username: String = Input::new()
+        .with_prompt("  SMTP username")
+        .default(existing.username.clone())
+        .allow_empty(true)
+        .interact_text()?;
+    let password: String = Input::new()
+        .with_prompt("  SMTP password")
+        .default(existing.password.clone())
+        .allow_empty(true)
+        .interact_text()?;
+    let from: String = Input::new()
+        .with_prompt("  From address")
+        .default(existing.from.clone())
+        .interact_text()?;
+
+    let sec_labels: Vec<&str> = SMTP_SECURITY_ITEMS.iter().map(|(l, _)| *l).collect();
+    let current_idx = SMTP_SECURITY_ITEMS
+        .iter()
+        .position(|(_, s)| *s == existing.security)
+        .unwrap_or(0);
+    let sec_idx = dialoguer::Select::new()
+        .with_prompt("  Security")
+        .items(&sec_labels)
+        .default(current_idx)
+        .interact()?;
+    let security = SMTP_SECURITY_ITEMS[sec_idx].1.clone();
+
+    Ok(SmtpCredentials {
+        host,
+        port,
+        username,
+        password,
+        from,
+        security,
+    })
+}
+
 /// What the user chose when prompted for auth setup.
 pub enum AuthSetupChoice {
     /// Install a managed Authelia instance via ryra.

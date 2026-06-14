@@ -240,22 +240,35 @@ fn edit_interactive(config: &mut Config) -> Result<bool> {
         .interact()?;
 
     match sel {
-        0 => match super::prompts::prompt_smtp()? {
-            super::prompts::SmtpSetupChoice::Custom(smtp) => {
-                config.smtp = Some(smtp);
-                Ok(true)
+        0 => match &config.smtp {
+            // Editing an existing relay: pre-fill every field with its
+            // current value. Treat an unchanged edit as a no-op so we don't
+            // rewrite the config and run a pointless propagation pass.
+            Some(existing) => {
+                let existing = existing.clone();
+                let edited = super::prompts::prompt_smtp_edit(&existing)?;
+                let changed = edited != existing;
+                config.smtp = Some(edited);
+                Ok(changed)
             }
-            super::prompts::SmtpSetupChoice::Inbucket => {
-                config.smtp = Some(SmtpCredentials::inbucket());
-                if !ryra_core::is_service_installed("inbucket") {
-                    println!(
-                        "  {} inbucket is not installed - run `ryra add inbucket` so mail has somewhere to land.",
-                        style("note:").yellow()
-                    );
+            // No relay yet: the from-scratch setup flow (also offers inbucket).
+            None => match super::prompts::prompt_smtp()? {
+                super::prompts::SmtpSetupChoice::Custom(smtp) => {
+                    config.smtp = Some(smtp);
+                    Ok(true)
                 }
-                Ok(true)
-            }
-            super::prompts::SmtpSetupChoice::Skip => Ok(false),
+                super::prompts::SmtpSetupChoice::Inbucket => {
+                    config.smtp = Some(SmtpCredentials::inbucket());
+                    if !ryra_core::is_service_installed("inbucket") {
+                        println!(
+                            "  {} inbucket is not installed - run `ryra add inbucket` so mail has somewhere to land.",
+                            style("note:").yellow()
+                        );
+                    }
+                    Ok(true)
+                }
+                super::prompts::SmtpSetupChoice::Skip => Ok(false),
+            },
         },
         1 => {
             let current = config.admin_email.clone().unwrap_or_default();
