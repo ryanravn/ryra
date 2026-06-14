@@ -32,8 +32,8 @@ pub use capability::{
     service_provides,
 };
 pub use configure::{
-    ConfigureChange, ConfigureResult, ExposureChange, Overrides as ConfigureOverrides,
-    configure_service,
+    ConfigureChange, ConfigureResult, EnvKeyChange, ExposureChange,
+    Overrides as ConfigureOverrides, ServiceReconcile, configure_service, reconcile_service,
 };
 pub use exposure::{
     Exposure, check_auth_exposure_compat, is_caddy_local_url, is_public_url, is_tailscale_url,

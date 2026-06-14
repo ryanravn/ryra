@@ -283,10 +283,33 @@ enum Command {
         #[command(subcommand)]
         action: cli::backup::BackupAction,
     },
-    /// Reconfigure an installed service in place.
+    /// Reconfigure an installed service in place, or (with no service)
+    /// edit global preferences and propagate them to installed services.
     Configure {
-        /// Service name to reconfigure.
-        service: String,
+        /// Service name to reconfigure. Omit to edit global config (SMTP
+        /// relay, admin email) and push changes into installed services.
+        service: Option<String>,
+        /// Global mode: set the SMTP relay host.
+        #[arg(long = "smtp-host")]
+        smtp_host: Option<String>,
+        /// Global mode: set the SMTP relay port.
+        #[arg(long = "smtp-port")]
+        smtp_port: Option<u16>,
+        /// Global mode: set the SMTP username.
+        #[arg(long = "smtp-username")]
+        smtp_username: Option<String>,
+        /// Global mode: set the SMTP password.
+        #[arg(long = "smtp-password")]
+        smtp_password: Option<String>,
+        /// Global mode: set the SMTP From address.
+        #[arg(long = "smtp-from")]
+        smtp_from: Option<String>,
+        /// Global mode: set SMTP security (starttls, force_tls, off).
+        #[arg(long = "smtp-security")]
+        smtp_security: Option<String>,
+        /// Global mode: set the default admin email.
+        #[arg(long = "admin-email")]
+        admin_email: Option<String>,
         /// Set or change the public URL.
         #[arg(long, conflicts_with_all = ["no_url", "tailscale"])]
         url: Option<String>,
@@ -470,6 +493,13 @@ async fn main() -> anyhow::Result<()> {
         Command::Backup { action } => cli::backup::run(action).await?,
         Command::Configure {
             ref service,
+            ref smtp_host,
+            smtp_port,
+            ref smtp_username,
+            ref smtp_password,
+            ref smtp_from,
+            ref smtp_security,
+            ref admin_email,
             ref url,
             no_url,
             tailscale,
@@ -484,25 +514,61 @@ async fn main() -> anyhow::Result<()> {
             ref set,
             yes,
             dry_run,
-        } => {
-            let flags = cli::configure::ConfigureFlags {
-                url: url.clone(),
-                no_url,
-                tailscale,
-                smtp,
-                no_smtp,
-                backup,
-                no_backup,
-                auth,
-                no_auth,
-                enable: enable.clone(),
-                disable: disable.clone(),
-                set: set.clone(),
-                yes,
-                dry_run,
-            };
-            cli::configure::run(service, flags).await?
-        }
+        } => match service {
+            Some(service) => {
+                let flags = cli::configure::ConfigureFlags {
+                    url: url.clone(),
+                    no_url,
+                    tailscale,
+                    smtp,
+                    no_smtp,
+                    backup,
+                    no_backup,
+                    auth,
+                    no_auth,
+                    enable: enable.clone(),
+                    disable: disable.clone(),
+                    set: set.clone(),
+                    yes,
+                    dry_run,
+                };
+                cli::configure::run(service, flags).await?
+            }
+            None => {
+                // Per-service-only flags make no sense without a service.
+                let stray = [
+                    (url.is_some() || no_url, "--url/--no-url"),
+                    (tailscale, "--tailscale"),
+                    (smtp || no_smtp, "--smtp/--no-smtp"),
+                    (backup || no_backup, "--backup/--no-backup"),
+                    (auth || no_auth, "--auth/--no-auth"),
+                    (!enable.is_empty(), "--enable"),
+                    (!disable.is_empty(), "--disable"),
+                    (!set.is_empty(), "--set"),
+                ]
+                .iter()
+                .find(|(present, _)| *present)
+                .map(|(_, name)| *name);
+                if let Some(name) = stray {
+                    anyhow::bail!(
+                        "{name} needs a service (e.g. `ryra configure forgejo {name}`); \
+                         with no service, `ryra configure` edits global config"
+                    );
+                }
+                let flags = cli::configure_global::GlobalFlags {
+                    smtp_host: smtp_host.clone(),
+                    smtp_port,
+                    smtp_username: smtp_username.clone(),
+                    smtp_password: smtp_password.clone(),
+                    smtp_from: smtp_from.clone(),
+                    smtp_security: smtp_security.clone(),
+                    admin_email: admin_email.clone(),
+                    yes,
+                    dry_run,
+                };
+                cli::configure_global::run(flags).await?
+            }
+        },
         Command::Start {
             ref service,
             all,

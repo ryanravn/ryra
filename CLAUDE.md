@@ -68,6 +68,16 @@ If something truly cannot fail, explain why in a comment and use `unwrap_or_else
 - Config file permission errors (`chmod 600`) must propagate — security-relevant
 - Use `|| true` in shell hooks only when failure is genuinely acceptable, and document why
 
+## Headless / Scriptable by Default
+
+Every `ryra` command must be fully runnable without a TTY (CI, cron, provisioning scripts, the orchestrator). Interactive prompts are a convenience layer over the headless path, never the only way to do something.
+
+- Every value an interactive prompt collects must also be settable via a flag (or process env). If you add a prompt, add the matching flag in the same change.
+- Every confirmation must be bypassable with `--yes`. Destructive ones may additionally demand typed confirmation interactively, but `--yes` must still let a script proceed.
+- Where it makes sense, offer `--dry-run` to preview without mutating.
+- A command run with no TTY and missing required input must fail loudly, naming the flag to pass. Never hang waiting on stdin, and never silently pick a default for something the user should decide. `is_interactive()` (both stdin and stdout are TTYs) gates the prompt path; the non-interactive branch either has every input from flags or errors with a usable message.
+- Selection prompts (multi-select, pick-one) need a headless equivalent: a flag to name the targets, or `--yes`/`--all` to take the obvious set. "Apply to everything" via `--yes` is an acceptable headless answer when per-item selection is only an interactive convenience.
+
 ## Commits
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/). Prefix every commit subject with a type: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `ci:`.

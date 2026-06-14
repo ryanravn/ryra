@@ -2,6 +2,7 @@ pub mod add;
 pub mod apply;
 pub mod backup;
 pub mod configure;
+pub mod configure_global;
 pub mod diff;
 pub mod doctor;
 pub mod init;

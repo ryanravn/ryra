@@ -40,7 +40,7 @@ use crate::exposure::Exposure;
 use crate::generate::GeneratedFile;
 use crate::metadata::load_metadata;
 use crate::registry::resolve::ServiceRef;
-use crate::registry::service_def::{AuthKind, EnvFormat};
+use crate::registry::service_def::{AuthKind, EnvFormat, EnvKind};
 use crate::system::secret;
 use crate::upgrade::{DiffEntry, DiffKind, DiffResult, EnvAddition};
 use crate::{
@@ -186,6 +186,256 @@ impl ConfigureResult {
     pub fn is_noop(&self) -> bool {
         self.steps.is_empty()
     }
+}
+
+/// One env key whose value would change when the current global config is
+/// re-rendered into an installed service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvKeyChange {
+    pub key: String,
+    /// On-disk value, or `None` when the key isn't present yet (the registry
+    /// or global config newly produces it).
+    pub from: Option<String>,
+    pub to: String,
+    /// True when the key name looks sensitive (password / secret / token), so
+    /// the CLI masks the value when printing the diff. Display-only.
+    pub secret: bool,
+}
+
+/// Plan for propagating the current global config into one installed
+/// service's `.env`. Pure: reads the install's state, emits steps, touches
+/// nothing.
+pub struct ServiceReconcile {
+    pub service: String,
+    /// Keys whose re-rendered value differs from what's on disk, sorted by
+    /// key. Empty when the service is already current.
+    pub changes: Vec<EnvKeyChange>,
+    /// Steps to apply: a merged `.env` write (changed keys only, every other
+    /// line preserved byte-for-byte) plus a restart. Empty when `changes` is.
+    pub steps: Vec<Step>,
+}
+
+/// Re-render an installed service against the *current* global config and
+/// surface the env keys that come out different. Unlike [`configure_service`]
+/// (which applies a user's per-service change) and
+/// [`crate::upgrade::upgrade_service`] (which never touches `.env`), this is
+/// the propagation path for "the global SMTP relay / admin email / auth
+/// provider changed, push it into the services that consume it."
+///
+/// The whole `.env` is re-rendered, but everything that's *the user's* is
+/// preserved first, so the only values that can move are driven by global
+/// config (or a registry update): generated secrets and auth credentials come
+/// back through the template context, interactively-supplied values (kind
+/// `prompted`/`required`) are recovered straight from the live `.env`, and
+/// ports are pinned. The diff is then taken over every key, and applied as a
+/// line-level merge so any key the user hand-added to `.env` survives. No
+/// hardcoded list of "which fields are global" is needed — the renderer is
+/// the single source of truth.
+pub async fn reconcile_service(service_name: &str) -> Result<ServiceReconcile> {
+    let empty = ServiceReconcile {
+        service: service_name.to_string(),
+        changes: Vec::new(),
+        steps: Vec::new(),
+    };
+    if !is_service_installed(service_name) {
+        return Err(Error::ServiceNotInstalled(service_name.to_string()));
+    }
+    let metadata = load_metadata(service_name)?
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_DEFAULT {
+        ServiceRef::Default(service_name.to_string())
+    } else if crate::registry::resolve::is_path_like(&metadata.registry) {
+        ServiceRef::Path {
+            dir: PathBuf::from(&metadata.registry),
+            name: service_name.to_string(),
+        }
+    } else {
+        ServiceRef::Custom {
+            registry: metadata.registry.clone(),
+            service: service_name.to_string(),
+        }
+    };
+    let repo_dir = resolve_registry_dir(&service_ref).await?;
+    let reg_service = registry::find_service(&repo_dir, service_name)?;
+    let def = &reg_service.def;
+
+    let enabled_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
+
+    let env_path = service_home(service_name)?.join(".env");
+    let on_disk_text = match std::fs::read_to_string(&env_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(source) => {
+            return Err(Error::FileRead {
+                path: env_path,
+                source,
+            });
+        }
+    };
+    let on_disk = parse_env_content(&on_disk_text);
+
+    // Preserve everything that's the user's, so the only diffs left are
+    // global-config (or registry) driven:
+    //   - secrets / auth credentials → recovered into the template context;
+    //   - prompted/required values → recovered straight from the live `.env`
+    //     (their value came from the user at install, not from a template);
+    //   - ports → pinned.
+    let pre_built_ctx = recover_template_ctx(service_name, def)?;
+    let mut env_overrides: BTreeMap<String, String> = BTreeMap::new();
+    let mut recover_user_input = |e: &registry::service_def::EnvVar| {
+        if matches!(e.kind, EnvKind::Prompted | EnvKind::Required)
+            && let Some(v) = on_disk.get(&e.name)
+        {
+            env_overrides.insert(e.name.clone(), v.clone());
+        }
+    };
+    for e in &def.env {
+        recover_user_input(e);
+    }
+    for g in &def.env_groups {
+        if enabled_groups.contains(&g.name) {
+            for e in &g.env {
+                recover_user_input(e);
+            }
+        }
+    }
+
+    let exposure: Exposure = match metadata.url.as_deref() {
+        Some(u) => Exposure::from_url(u),
+        None => Exposure::Loopback,
+    };
+    let port_overrides = read_existing_ports(service_name)?;
+    let port_in_use = |_p: u16| false;
+    let result = add_service(crate::AddServiceParams {
+        service_name,
+        exposure: &exposure,
+        auth: match metadata.auth.clone() {
+            Some(kind) => crate::AuthChoice::Native(kind),
+            None => crate::AuthChoice::None,
+        },
+        enable_smtp: metadata.smtp_enabled,
+        enable_backup: metadata.backup_enabled,
+        env_overrides: &env_overrides,
+        enabled_groups: &enabled_groups,
+        registry_name: &metadata.registry,
+        repo_dir: &repo_dir,
+        pre_built_ctx: Some(pre_built_ctx),
+        port_in_use: &port_in_use,
+        acme_mode: None,
+        mode: PlanMode::Upgrade,
+        port_overrides: &port_overrides,
+    })?;
+
+    let rendered_content = result
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::WriteFile(f) if f.path == env_path => Some(f.content.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            Error::Template(format!(
+                "{service_name}: re-render produced no .env to reconcile"
+            ))
+        })?;
+    let rendered = parse_env_content(&rendered_content);
+
+    // Diff every rendered key against disk. A key present in the render but
+    // not on disk is an addition; keys only on disk (user-added, or dropped
+    // by the registry) are never touched — the merge is append/update only.
+    let mut changes: Vec<EnvKeyChange> = Vec::new();
+    for (key, new_val) in &rendered {
+        let old = on_disk.get(key);
+        if old.map(String::as_str) != Some(new_val.as_str()) {
+            changes.push(EnvKeyChange {
+                key: key.clone(),
+                from: old.cloned(),
+                to: new_val.clone(),
+                secret: is_sensitive_key(key),
+            });
+        }
+    }
+    changes.sort_by(|a, b| a.key.cmp(&b.key));
+
+    if changes.is_empty() {
+        return Ok(empty);
+    }
+
+    let merged = merge_env_changes(&on_disk_text, &changes);
+    let steps = vec![
+        Step::WriteFile(GeneratedFile {
+            path: env_path,
+            content: merged,
+        }),
+        Step::RestartService {
+            unit: service_name.to_string(),
+        },
+    ];
+    Ok(ServiceReconcile {
+        service: service_name.to_string(),
+        changes,
+        steps,
+    })
+}
+
+/// Whether an env key's *name* looks sensitive, for display masking only.
+/// Used to decide whether to print `••••••` instead of the value in the
+/// reconcile diff. Over-masking is harmless; this never affects what's
+/// written.
+fn is_sensitive_key(key: &str) -> bool {
+    let up = key.to_ascii_uppercase();
+    ["PASSWORD", "PASSWD", "SECRET", "TOKEN", "API_KEY", "APIKEY"]
+        .iter()
+        .any(|needle| up.contains(needle))
+}
+
+/// Parse `.env` text into a key→raw-value map. Comments and blanks skipped;
+/// value keeps everything after the first `=` (values may contain `=`).
+fn parse_env_content(content: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            out.insert(k.trim().to_string(), v.to_string());
+        }
+    }
+    out
+}
+
+/// Apply `changes` to the existing `.env` text line-by-line: rewrite the
+/// value of any changed key in place (preserving file order and comments),
+/// and append keys that weren't present. Every untouched line — secrets,
+/// ports, prompted values, user-added keys — survives verbatim.
+fn merge_env_changes(existing: &str, changes: &[EnvKeyChange]) -> String {
+    let by_key: BTreeMap<&str, &str> = changes
+        .iter()
+        .map(|c| (c.key.as_str(), c.to.as_str()))
+        .collect();
+    let mut applied: BTreeSet<&str> = BTreeSet::new();
+    let mut lines: Vec<String> = Vec::new();
+    for line in existing.lines() {
+        if let Some((k, _)) = line.trim().split_once('=') {
+            let key = k.trim();
+            if let Some(new_val) = by_key.get(key) {
+                lines.push(format!("{key}={new_val}"));
+                applied.insert(key);
+                continue;
+            }
+        }
+        lines.push(line.to_string());
+    }
+    for c in changes {
+        if !applied.contains(c.key.as_str()) {
+            lines.push(format!("{}={}", c.key, c.to));
+        }
+    }
+    let mut content = lines.join("\n");
+    content.push('\n');
+    content
 }
 
 /// Re-plan an installed service against `overrides`. Pure: emits steps but
@@ -1106,6 +1356,64 @@ fn clone_step(step: &Step) -> Step {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line-level merge is the safety contract for reconcile: it must
+    /// rewrite only the changed keys and leave everything else — comments,
+    /// secrets, ports, user-added keys, file order — byte-for-byte intact.
+    #[test]
+    fn merge_rewrites_only_changed_keys() {
+        let existing = "\
+# generated by ryra
+SMTP_HOST=old.example.com
+SMTP_PORT=587
+POSTGRES_PASSWORD=s3cret-unchanged
+ADMIN_EMAIL=me@example.com
+SERVICE_PORT_HTTP=8080
+USER_ADDED=keep-me
+";
+        let changes = vec![
+            EnvKeyChange {
+                key: "SMTP_HOST".into(),
+                from: Some("old.example.com".into()),
+                to: "new.example.com".into(),
+                secret: false,
+            },
+            // A key not yet present — appended, never inserted mid-file.
+            EnvKeyChange {
+                key: "SMTP_FROM".into(),
+                from: None,
+                to: "noreply@new.example.com".into(),
+                secret: false,
+            },
+        ];
+        let merged = merge_env_changes(existing, &changes);
+        let parsed = parse_env_content(&merged);
+        assert_eq!(
+            parsed.get("SMTP_HOST").map(String::as_str),
+            Some("new.example.com")
+        );
+        assert_eq!(
+            parsed.get("SMTP_FROM").map(String::as_str),
+            Some("noreply@new.example.com")
+        );
+        // Untouched lines survive verbatim.
+        assert_eq!(
+            parsed.get("POSTGRES_PASSWORD").map(String::as_str),
+            Some("s3cret-unchanged")
+        );
+        assert_eq!(
+            parsed.get("USER_ADDED").map(String::as_str),
+            Some("keep-me")
+        );
+        assert_eq!(
+            parsed.get("SERVICE_PORT_HTTP").map(String::as_str),
+            Some("8080")
+        );
+        // The comment header is preserved.
+        assert!(merged.starts_with("# generated by ryra\n"));
+        // No duplicate SMTP_HOST line was appended.
+        assert_eq!(merged.matches("SMTP_HOST=").count(), 1);
+    }
 
     /// The is_destructive matrix is the safety contract: it decides
     /// whether the CLI demands typed confirmation. One table-driven test
