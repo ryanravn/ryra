@@ -52,6 +52,9 @@ pub struct GlobalFlags {
     pub smtp_from: Option<String>,
     pub smtp_security: Option<SmtpSecurityArg>,
     pub admin_email: Option<String>,
+    /// Reconcile installed services against the current on-disk config
+    /// without editing it (the post-`vim` workflow).
+    pub apply: bool,
     pub yes: bool,
     pub dry_run: bool,
 }
@@ -75,6 +78,36 @@ pub async fn run(flags: GlobalFlags) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     let had_secrets_before = config.has_secrets();
+
+    // --apply: reconcile installed services against the current
+    // preferences.toml without editing it. The on-disk file is already the
+    // source of truth (e.g. the user hand-edited it), so there's no edit to
+    // make and no snapshot/restore dance: just plan and apply.
+    if flags.apply {
+        if flags.has_any_edit() {
+            bail!(
+                "--apply reconciles services against the current config and can't be combined \
+                 with edit flags (--smtp-*, --admin-email); drop --apply to edit-and-propagate"
+            );
+        }
+        let plans = collect_plans().await?;
+        if plans.is_empty() {
+            println!("All services already match the global config - nothing to update.");
+            return Ok(());
+        }
+        println!();
+        render_plans(&plans);
+        println!();
+        if flags.dry_run {
+            println!(
+                "Dry run: {} service(s) would be updated and restarted. \
+                 Re-run without --dry-run to apply.",
+                plans.len()
+            );
+            return Ok(());
+        }
+        return apply_plans(&plans, flags.yes).await;
+    }
 
     let changed = if flags.has_any_edit() {
         apply_flag_edits(&mut config, &flags)?
@@ -349,6 +382,13 @@ async fn propagate(yes: bool) -> Result<()> {
     render_plans(&plans);
     println!();
 
+    apply_plans(&plans, yes).await
+}
+
+/// Let the user pick which of `plans` to apply (all with `--yes`, an
+/// interactive multi-select otherwise, refuse non-interactively without
+/// `--yes`), then write each selected service's `.env` and restart it.
+async fn apply_plans(plans: &[ServiceReconcile], yes: bool) -> Result<()> {
     let selected: Vec<&ServiceReconcile> = if yes {
         plans.iter().collect()
     } else if super::is_interactive() {

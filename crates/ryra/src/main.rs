@@ -310,6 +310,11 @@ enum Command {
         /// Global mode: set the default admin email.
         #[arg(long = "admin-email")]
         admin_email: Option<String>,
+        /// Global mode: reconcile installed services against the current
+        /// preferences.toml without editing it (e.g. after hand-editing the
+        /// file). Shows the per-service env diff and the same service chooser.
+        #[arg(long)]
+        apply: bool,
         /// Set or change the public URL.
         #[arg(long, conflicts_with_all = ["no_url", "tailscale"])]
         url: Option<String>,
@@ -506,6 +511,7 @@ async fn main() -> anyhow::Result<()> {
             ref smtp_from,
             ref smtp_security,
             ref admin_email,
+            apply,
             ref url,
             no_url,
             tailscale,
@@ -523,6 +529,12 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
         } => match service {
             Some(service) => {
+                if apply {
+                    anyhow::bail!(
+                        "--apply reconciles all services against the global config; \
+                         run it without a service name (`ryra configure --apply`)"
+                    );
+                }
                 let flags = cli::configure::ConfigureFlags {
                     url: url.clone(),
                     no_url,
@@ -572,6 +584,7 @@ async fn main() -> anyhow::Result<()> {
                     smtp_from: smtp_from.clone(),
                     smtp_security: *smtp_security,
                     admin_email: admin_email.clone(),
+                    apply,
                     yes,
                     dry_run,
                 };
