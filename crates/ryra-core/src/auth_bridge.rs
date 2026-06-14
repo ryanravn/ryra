@@ -56,15 +56,16 @@ pub struct AuthBridgeParams<'a> {
 
 /// Build auth-bridge artifacts for a service. Returns `Ok(None)` when the
 /// bridge does not apply — the caller isn't using auth, the service is
-/// authelia/caddy itself, authelia/Caddy aren't yet installed, or
-/// authelia's URL isn't a Caddy-local hostname (`*.internal`).
+/// authelia/caddy itself, authelia/Caddy aren't yet installed, or authelia
+/// has no URL (a Loopback exposure can't host OIDC).
 ///
-/// Dispatch is driven by authelia's URL: when the hostname is `*.internal`,
-/// Caddy is the internal TLS terminator and we build the existing bridge
-/// (CA bundle, alias-to-Caddy, host-resolve script). Other URLs (Tailscale
-/// FQDNs, public domains) imply the user is running their own internal
-/// trust path, which ryra doesn't construct yet — bridge returns None and
-/// runtime OIDC across containers is the user's responsibility for now.
+/// The bridge routes the OIDC back-channel through Caddy as the internal TLS
+/// terminator regardless of how the *browser* reaches authelia: Caddy on a
+/// `*.internal` host, `tailscale serve` on a `*.ts.net` host, or an external
+/// proxy on a public domain. In every case the service container reaches
+/// authelia at its issuer host via Caddy (network alias + dynamic
+/// `/etc/hosts`) and trusts Caddy's self-signed CA through the mounted
+/// bundle. Only a Loopback authelia is excluded — it has no issuer URL.
 pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     if !params.enable_auth {
         return Ok(None);
@@ -79,13 +80,25 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
     let Some(authelia) = find_installed_provider(params.installed, Capability::OidcProvider) else {
         return Ok(None);
     };
-    // Bridge applies only when the OIDC provider is reachable via a
-    // Caddy-fronted *.internal hostname. Other exposures (Tailscale serve,
-    // user's external proxy on a public domain) mean another trust path
-    // is in play and ryra doesn't have matching client-side plumbing yet.
-    if !matches!(authelia.exposure, crate::Exposure::Internal { .. }) {
+    // The bridge keys the back-channel routing on authelia's issuer host
+    // (network alias + dynamic `/etc/hosts`). Without a URL that parses to a
+    // host there's nothing to route, so bail: a Loopback authelia has no URL,
+    // and a malformed one can't be resolved. Internal / Tailscale / Public
+    // all carry a host and route the same way.
+    let has_auth_host = authelia
+        .exposure
+        .url()
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(str::to_string))
+        .is_some();
+    if !has_auth_host {
         return Ok(None);
     }
+    // Caddy is the internal TLS terminator for the back-channel, so it must
+    // be installed. `add_service` turns a missing reverse proxy into a loud
+    // error (Error::AuthRequiresReverseProxy) before reaching this point —
+    // returning None here is the belt-and-suspenders path for callers that
+    // build the bridge without that pre-check.
     if find_installed_provider(params.installed, Capability::ReverseProxy).is_none() {
         return Ok(None);
     }
@@ -354,28 +367,25 @@ mod tests {
     }
 
     #[test]
-    fn returns_none_for_non_internal_authelia_url() -> TestResult {
-        // Authelia at a non-`*.internal` URL means another trust path is
-        // in play (Tailscale serve, user's external proxy). ryra doesn't
-        // construct that bridge — runtime OIDC across containers is the
-        // user's responsibility for non-Caddy deployments.
+    fn builds_for_tailscale_authelia_url() -> TestResult {
+        // Authelia exposed via `tailscale serve` (`*.ts.net`) still routes
+        // the OIDC back-channel through Caddy as the internal TLS
+        // terminator, so the bridge applies and writes the same CA-trust +
+        // host-resolve artifacts, keyed on the ts.net hostname.
         let tmp = tempfile::tempdir()?;
-        let (cfg, installed) = fixture(
-            vec![
-                installed("authelia", Some("https://auth.test.local")),
-                installed("caddy", None),
-            ],
-            None,
-        );
-        let out = build(&AuthBridgeParams {
-            service_name: "forgejo",
-            service_provides: provides_for("forgejo"),
-            enable_auth: true,
-            config: &cfg,
-            installed: &installed,
-            service_data: tmp.path(),
-        })?;
-        assert!(out.is_none());
+        let service_data = tmp.path().join("forgejo");
+        let bridge =
+            build_forgejo_bridge(&service_data, Some("https://auth.example.ts.net"))?;
+
+        let hosts_step = bridge
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::WriteFile(f) if f.path == service_data.join("auth-hosts.txt") => Some(f),
+                _ => None,
+            })
+            .ok_or("auth-hosts.txt step missing")?;
+        assert_eq!(hosts_step.content, "127.0.0.1 auth.example.ts.net\n");
         Ok(())
     }
 

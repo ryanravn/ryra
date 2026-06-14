@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::schema::Config;
 use crate::error::{Error, Result};
 use crate::generate::GeneratedFile;
 use crate::generate::bundle::inject_networks;
@@ -116,12 +115,18 @@ impl AcmeMode {
 /// reverse-proxies to the auth provider (which requires proper
 /// X-Forwarded-Proto/Host headers for OIDC).
 ///
+/// `issuer_port` is the port the internal vhost listens on — it must equal
+/// the port in authelia's issuer URL so the back-channel reaches Caddy at the
+/// exact host:port authelia's discovery response advertises. `*.internal`
+/// carries Caddy's HTTPS port (e.g. `:8443`); `tailscale serve` / public
+/// exposures are port-less (`:443`).
+///
 /// A no-op when Caddy isn't installed — returns an empty Vec.
 pub fn ensure_auth_provider_routed(
-    config: &Config,
     auth_service: WellKnownService,
     auth_domain: &str,
     auth_container_port: u16,
+    issuer_port: u16,
     quadlet_dir: &Path,
 ) -> Result<Vec<Step>> {
     if !crate::is_service_installed("caddy") {
@@ -180,7 +185,11 @@ pub fn ensure_auth_provider_routed(
             target_host,
             domain: auth_domain.to_string(),
             container_port: auth_container_port,
-            https_port: crate::caddy_https_port(config),
+            https_port: issuer_port,
+            // The auth provider's internal back-channel vhost always
+            // terminates with Caddy's self-signed CA, even when the browser
+            // reaches authelia at a real cert via tailscale/external proxy.
+            force_internal_tls: true,
         });
         let updated = add_route(&caddyfile, auth_service.as_str(), &block);
         steps.push(Step::WriteFile(GeneratedFile {
@@ -228,6 +237,13 @@ pub struct CaddySiteParams {
     pub container_port: u16,
     /// Caddy's HTTPS listen port (from the installed caddy service's port map).
     pub https_port: u16,
+    /// Force `tls internal` (Caddy's self-signed CA) regardless of the
+    /// domain suffix. Set for the auth provider's internal OIDC-terminator
+    /// vhost: even when authelia is browser-reachable at a `*.ts.net` or
+    /// public host (real cert via `tailscale serve` / external proxy), the
+    /// *internal* back-channel hop terminates at Caddy with a self-signed
+    /// cert that the service trusts via the mounted CA bundle.
+    pub force_internal_tls: bool,
 }
 
 /// Generate a Caddy site block for a service.
@@ -243,7 +259,7 @@ pub struct CaddySiteParams {
 pub fn render_site_block(params: &CaddySiteParams) -> String {
     let mut block = format!("# Service-Source: registry/{}\n", params.service_name);
     block.push_str(&format!("{}:{} {{\n", params.domain, params.https_port));
-    if params.domain.ends_with(".internal") {
+    if params.force_internal_tls || params.domain.ends_with(".internal") {
         block.push_str("    tls internal\n");
     } else {
         block.push_str("    import services_tls\n");
@@ -385,6 +401,7 @@ mod tests {
             domain: "whoami.example.com".to_string(),
             container_port: 8080,
             https_port: 8443,
+            force_internal_tls: false,
         };
         let block = render_site_block(&params);
         assert!(block.starts_with("# Service-Source: registry/whoami\n"));
@@ -408,6 +425,7 @@ mod tests {
             domain: "immich.internal".to_string(),
             container_port: 2283,
             https_port: 8443,
+            force_internal_tls: false,
         };
         let block = render_site_block(&params);
         assert!(block.contains("# Service-Source: registry/immich\n"));
@@ -457,6 +475,7 @@ mod tests {
             domain: "auth.internal".to_string(),
             container_port: 9091,
             https_port: 8443,
+            force_internal_tls: false,
         };
         let block = render_site_block(&params);
         assert!(block.contains("    tls internal\n"));
@@ -526,9 +545,31 @@ mod tests {
             domain: "app.example.com".to_string(),
             container_port: 3000,
             https_port: 9443,
+            force_internal_tls: false,
         };
         let block = render_site_block(&params);
         assert!(block.contains("app.example.com:9443 {"));
+    }
+
+    #[test]
+    fn render_force_internal_tls_on_public_domain() {
+        // The auth provider's internal back-channel vhost terminates with
+        // Caddy's self-signed CA even on a non-`.internal` host (e.g. a
+        // `*.ts.net` issuer fronted by `tailscale serve`). The browser
+        // never hits this block; only service containers do, trusting
+        // Caddy's CA via the mounted bundle.
+        let params = CaddySiteParams {
+            service_name: "authelia".to_string(),
+            target_host: "authelia".to_string(),
+            domain: "auth.example.ts.net".to_string(),
+            container_port: 9091,
+            https_port: 443,
+            force_internal_tls: true,
+        };
+        let block = render_site_block(&params);
+        assert!(block.contains("auth.example.ts.net:443 {"));
+        assert!(block.contains("    tls internal\n"));
+        assert!(!block.contains("import services_tls"));
     }
 
     #[test]

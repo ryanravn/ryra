@@ -102,6 +102,16 @@ pub enum Error {
         service_url: String,
     },
 
+    #[error(
+        "{service} uses --auth and authelia is exposed at {auth_url}, but no reverse \
+         proxy is installed. The OIDC back-channel between {service} and authelia runs \
+         through Caddy as the internal TLS terminator, so Caddy must be installed first.\n\n\
+         Fix:\n  \
+         ryra add caddy\n  \
+         then re-run your `ryra add {service} --auth ...` command"
+    )]
+    AuthRequiresReverseProxy { service: String, auth_url: String },
+
     #[error("{0}")]
     UnsupportedArchitecture(String),
 

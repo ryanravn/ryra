@@ -51,7 +51,6 @@ pub fn register_oidc_client(
     service_def: &ServiceDef,
     url: Option<&str>,
     ctx: &BTreeMap<String, String>,
-    config: &Config,
     quadlet_dir: &Path,
 ) -> crate::error::Result<Vec<Step>> {
     let mut steps = Vec::new();
@@ -242,18 +241,22 @@ pub fn register_oidc_client(
     // discovery goes through Caddy's TLS termination (authelia needs the
     // X-Forwarded-Proto/Host headers for issuer validation).
     let installed = crate::list_installed().unwrap_or_default();
-    if let Some(domain) = installed
+    if let Some(parsed) = installed
         .iter()
         .find(|s| WellKnownService::Authelia.matches(&s.name))
         .and_then(|s| s.exposure.url())
         .and_then(|u| url::Url::parse(u).ok())
-        .and_then(|parsed| parsed.host_str().map(|h| h.to_string()))
+        && let Some(domain) = parsed.host_str()
     {
+        // The internal vhost listens on the issuer's port so the back-channel
+        // matches authelia's discovery response: `.internal` carries Caddy's
+        // HTTPS port (e.g. :8443); tailscale/public are port-less (:443).
+        let issuer_port = parsed.port().unwrap_or(443);
         steps.extend(crate::caddy::ensure_auth_provider_routed(
-            config,
             WellKnownService::Authelia,
-            &domain,
+            domain,
             DEFAULT_HTTP_PORT,
+            issuer_port,
             quadlet_dir,
         )?);
     }

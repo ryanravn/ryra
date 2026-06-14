@@ -105,13 +105,21 @@ pub fn build_context(
         // Uses the stored URL from the auth provider's installed record if available.
         // When Caddy is installed, ensures the URL includes Caddy's HTTPS port
         // so it matches the issuer in authelia's OIDC discovery response.
-        let mut external_url = installed_for_auth
+        let authelia_exposure = installed_for_auth
             .iter()
             .find(|s| s.name == auth.provider_name())
-            .and_then(|s| s.exposure.url())
+            .map(|s| s.exposure.clone());
+        let mut external_url = authelia_exposure
+            .as_ref()
+            .and_then(|e| e.url())
             .map(|u| u.to_string())
             .unwrap_or_else(|| auth_base_url.clone());
-        if caddy_installed {
+        // Only a `*.internal` authelia is reached by the browser at Caddy's
+        // HTTPS port, so only its issuer carries that port. Tailscale
+        // (`tailscale serve` on :443) and public exposures already carry
+        // their canonical browser port in the stored URL — appending Caddy's
+        // port would corrupt the issuer and break OIDC discovery.
+        if caddy_installed && matches!(authelia_exposure, Some(crate::Exposure::Internal { .. })) {
             let port = crate::caddy_https_port(config);
             external_url = with_caddy_port(&external_url, port)?;
         }

@@ -695,6 +695,29 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     let metrics_store =
         find_installed_provider(&installed_now, Capability::MetricsStore).map(|s| s.name.clone());
 
+    // --auth routes the OIDC back-channel through Caddy as the internal TLS
+    // terminator (see auth_bridge). If authelia is installed and reachable
+    // but Caddy isn't, the bridge would silently no-op and OIDC would break
+    // only at login time. Fail loudly at add time instead. Skip the auth
+    // infra itself (the IdP and the proxy don't consume the bridge).
+    let provides_auth_infra = reg_service
+        .def
+        .capabilities
+        .provides
+        .iter()
+        .any(|c| matches!(c, Capability::OidcProvider | Capability::ReverseProxy));
+    if enable_auth
+        && !provides_auth_infra
+        && !caddy_installed
+        && let Some(authelia) = find_installed_provider(&installed_now, Capability::OidcProvider)
+        && let Some(auth_url) = authelia.exposure.url()
+    {
+        return Err(Error::AuthRequiresReverseProxy {
+            service: service_name.to_string(),
+            auth_url: auth_url.to_string(),
+        });
+    }
+
     // Build auth-bridge artifacts (CA trust + dynamic /etc/hosts for the
     // auth provider's domain). Pure — all filesystem writes are
     // emitted as Step::WriteFile below, not performed here.
@@ -960,7 +983,6 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             &reg_service.def,
             url,
             &output.ctx,
-            &config,
             &quadlet_path,
         )?);
     }
@@ -999,6 +1021,9 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
                 domain: domain.to_string(),
                 container_port,
                 https_port: caddy_https_port(&config),
+                // Normal service vhosts follow the user's TLS strategy
+                // (the `services_tls` snippet) unless they're `*.internal`.
+                force_internal_tls: false,
             });
             let caddyfile_path = caddy::caddyfile_path()?;
             let existing =
