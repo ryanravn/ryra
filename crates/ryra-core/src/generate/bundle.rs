@@ -81,7 +81,13 @@ fn validate_quadlet_env_refs(
     file_name: &str,
     params: &ProcessBundleParams<'_>,
 ) -> Result<()> {
-    if content.contains("{{") {
+    // Skip comment lines: a comment may legitimately mention `{{...}}` when it
+    // explains the `.env` value a directive reads. Only a directive using
+    // template syntax is the mistake (ryra renders `.env`, not quadlets).
+    if content
+        .lines()
+        .any(|l| !l.trim_start().starts_with('#') && l.contains("{{"))
+    {
         return Err(Error::Bundle(format!(
             "quadlet '{}' for service '{}' contains '{{{{...}}}}' template syntax — quadlets \
              are plain podman files; use runtime env vars (${{SERVICE_PORT_<NAME>}}, \
