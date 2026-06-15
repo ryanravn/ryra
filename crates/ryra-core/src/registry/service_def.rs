@@ -393,14 +393,6 @@ pub struct ChoiceOption {
     pub label: Option<String>,
     #[serde(default)]
     pub env: Vec<EnvVar>,
-    /// Services this option depends on, pulled into the dependency set only
-    /// when the option is selected. The infra counterpart to `env`: where
-    /// `env` adds env vars to `.env`, `requires` adds edges to the service
-    /// graph (and so the dependency's quadlet + image to the install plan).
-    /// An unselected option contributes no edges, so its image is never
-    /// pulled. Resolved against the requiring service's own registry.
-    #[serde(default)]
-    pub requires: Vec<ServiceRequirement>,
     /// Owned sidecar quadlet filenames (in this service's own `quadlets/`
     /// dir) included only when this option is selected. A quadlet claimed by
     /// any option is gated; unclaimed quadlets always install. So `external`
