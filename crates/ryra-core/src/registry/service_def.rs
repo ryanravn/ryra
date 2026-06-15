@@ -393,6 +393,22 @@ pub struct ChoiceOption {
     pub label: Option<String>,
     #[serde(default)]
     pub env: Vec<EnvVar>,
+    /// Services this option depends on, pulled into the dependency set only
+    /// when the option is selected. The infra counterpart to `env`: where
+    /// `env` adds env vars to `.env`, `requires` adds edges to the service
+    /// graph (and so the dependency's quadlet + image to the install plan).
+    /// An unselected option contributes no edges, so its image is never
+    /// pulled. Resolved against the requiring service's own registry.
+    #[serde(default)]
+    pub requires: Vec<ServiceRequirement>,
+    /// Owned sidecar quadlet filenames (in this service's own `quadlets/`
+    /// dir) included only when this option is selected. A quadlet claimed by
+    /// any option is gated; unclaimed quadlets always install. So `external`
+    /// claiming none means the bundled-DB `.container` is never symlinked and
+    /// its image never pulled, while `internal` brings it in. The kind-2
+    /// counterpart to `requires`' cross-service edges.
+    #[serde(default)]
+    pub quadlets: Vec<String>,
 }
 
 /// A service that must already be installed on the system before this one.
@@ -1277,6 +1293,40 @@ value = "mock"
         parse(BILLING_CHOICE)
             .validate()
             .expect("a well-formed choice is valid");
+    }
+
+    #[test]
+    fn choice_option_carries_quadlets() {
+        let def = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[choice]]
+name = "database"
+prompt = "Database"
+default = "internal"
+
+[[choice.option]]
+name = "internal"
+quadlets = ["x-postgres.container"]
+[[choice.option.env]]
+name = "DATABASE_URL"
+value = "postgres://ryra@postgres/x"
+
+[[choice.option]]
+name = "external"
+[[choice.option.env]]
+name = "DATABASE_URL"
+value = ""
+kind = "required"
+"#,
+        );
+        def.validate().expect("valid");
+        let internal = &def.choices[0].options[0];
+        assert_eq!(internal.quadlets, vec!["x-postgres.container".to_string()]);
+        assert!(def.choices[0].options[1].quadlets.is_empty());
     }
 
     #[test]

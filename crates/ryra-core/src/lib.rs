@@ -533,13 +533,28 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         return Err(Error::UnsupportedArchitecture(msg));
     }
 
-    // Validate: all required services must be installed
-    let missing_requires: Vec<&str> = reg_service
+    // Validate: all required services must be installed. The dependency set is
+    // the top-level `requires` plus the `requires` of each choice's selected
+    // option (falling back to its default). An unselected option contributes
+    // no dependency, so its quadlet and image never enter the plan.
+    let mut effective_requires: Vec<&str> = reg_service
         .def
         .requires
         .iter()
-        .filter(|r| !is_service_installed(&r.service))
         .map(|r| r.service.as_str())
+        .collect();
+    for choice in &reg_service.def.choices {
+        let selected = selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        if let Some(option) = choice.options.iter().find(|o| &o.name == selected) {
+            effective_requires.extend(option.requires.iter().map(|r| r.service.as_str()));
+        }
+    }
+    let missing_requires: Vec<&str> = effective_requires
+        .iter()
+        .copied()
+        .filter(|s| !is_service_installed(s))
         .collect();
     if !missing_requires.is_empty() {
         return Err(Error::MissingRequiredServices {
@@ -834,6 +849,31 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         });
     }
 
+    // Quadlets claimed by a choice option are gated on selection: keep the
+    // selected option's, exclude every other claimed one. A quadlet no option
+    // claims always installs. So `external` (claiming no `.container`) drops
+    // the bundled DB entirely — not symlinked, image not pulled.
+    let mut all_claimed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut selected_quadlets: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for choice in &reg_service.def.choices {
+        let selected = selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        for option in &choice.options {
+            for q in &option.quadlets {
+                all_claimed.insert(q.clone());
+                if &option.name == selected {
+                    selected_quadlets.insert(q.clone());
+                }
+            }
+        }
+    }
+    let excluded_quadlets: Vec<String> = all_claimed
+        .difference(&selected_quadlets)
+        .cloned()
+        .collect();
+
     // Process quadlet bundle from registry
     let bundle =
         generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
@@ -844,6 +884,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             podman_args: &podman_args,
             extra_exec_start_pre: &extra_exec_start_pre,
             port_names: &port_names,
+            excluded_quadlets: &excluded_quadlets,
         })?;
 
     // Generate warnings

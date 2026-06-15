@@ -25,6 +25,11 @@ pub struct ProcessBundleParams<'a> {
     /// expansion can't catch typos (an undefined var expands to ""), so
     /// this is validated here, at the boundary.
     pub port_names: &'a [String],
+    /// Quadlet filenames to skip: those claimed by a `[[choice.option]]`
+    /// whose option was not selected. Skipped files are neither processed
+    /// nor symlinked, and their `Image=` is never collected, so an
+    /// unselected sidecar costs no pull.
+    pub excluded_quadlets: &'a [String],
 }
 
 /// Result of processing a quadlet bundle from the registry.
@@ -316,6 +321,16 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             .ok_or_else(|| Error::Bundle(format!("invalid file path: {}", path.display())))?
             .to_string_lossy();
 
+        // Skip quadlets claimed by an unselected choice option: not written,
+        // not symlinked, image not collected.
+        if params
+            .excluded_quadlets
+            .iter()
+            .any(|q| q == file_name.as_ref())
+        {
+            continue;
+        }
+
         validate_quadlet_env_refs(&content, &file_name, params)?;
 
         // The registry's canonical `EnvironmentFile=%h/.local/share/services/
@@ -588,6 +603,53 @@ mod tests {
     }
 
     #[test]
+    fn excluded_quadlet_is_skipped_and_its_image_not_pulled() {
+        let tmp = tempfile::tempdir()
+            .unwrap_or_else(|e| unreachable!("tempdir creation should not fail in tests: {e}"));
+        let service_dir = tmp.path().join("svc");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir)
+            .unwrap_or_else(|e| unreachable!("dir creation should not fail in tests: {e}"));
+        std::fs::write(
+            quadlets_dir.join("svc.container"),
+            "[Container]\nImage=app:1\n[Service]\nRestart=always\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+        // The bundled DB sidecar, which `external` would exclude.
+        std::fs::write(
+            quadlets_dir.join("svc-postgres.container"),
+            "[Container]\nImage=postgres:17\n[Service]\nRestart=always\n",
+        )
+        .unwrap_or_else(|e| unreachable!("write should not fail in tests: {e}"));
+
+        let excluded = vec!["svc-postgres.container".to_string()];
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "svc",
+            extra_networks: &[],
+            extra_volumes: &[],
+            podman_args: &[],
+            extra_exec_start_pre: &[],
+            port_names: &[],
+            excluded_quadlets: &excluded,
+        };
+        let bundle = process_quadlet_bundle(&params)
+            .unwrap_or_else(|e| unreachable!("process_quadlet_bundle should not fail: {e}"));
+
+        // Only the main container survives; the excluded sidecar is gone, and
+        // its image was never collected, so nothing pulls it.
+        assert_eq!(bundle.quadlet_files.len(), 1);
+        assert!(
+            bundle.quadlet_files[0]
+                .path
+                .to_string_lossy()
+                .ends_with("svc.container")
+        );
+        assert_eq!(bundle.images, vec!["app:1".to_string()]);
+        assert!(!bundle.images.iter().any(|i| i.contains("postgres")));
+    }
+
+    #[test]
     fn process_quadlet_bundle_errors_on_missing_dir() {
         let params = ProcessBundleParams {
             service_dir: Path::new("/nonexistent"),
@@ -597,6 +659,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_names: &[],
+            excluded_quadlets: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("quadlets/ directory not found"));
@@ -631,6 +694,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_names: &["http".to_string()],
+            excluded_quadlets: &[],
         };
 
         let bundle = process_quadlet_bundle(&params)
@@ -688,6 +752,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_names: &[],
+            excluded_quadlets: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));
@@ -715,6 +780,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_names: &["http".to_string()],
+            excluded_quadlets: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("SERVICE_PORT_HTPP"));
@@ -745,6 +811,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_names: &["http".to_string()],
+            excluded_quadlets: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("[Service] section"));
@@ -772,6 +839,7 @@ mod tests {
             podman_args: &[],
             extra_exec_start_pre: &[],
             port_names: &["http".to_string()],
+            excluded_quadlets: &[],
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("plain podman files"));
