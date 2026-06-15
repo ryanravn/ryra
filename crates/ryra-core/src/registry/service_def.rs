@@ -1225,6 +1225,43 @@ mod https_requirement_tests {
         toml::from_str(toml_src).expect("parse")
     }
 
+    /// Every shipped registry `service.toml` must parse and validate under the
+    /// current schema. Guards against a core change (a new field, a stricter
+    /// rule) silently breaking a catalog service. Skips gracefully if the
+    /// registry dir isn't present (e.g. a packaged build of just the crate).
+    #[test]
+    fn all_registry_services_parse_and_validate() {
+        let registry = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../registry");
+        if !registry.is_dir() {
+            eprintln!("registry dir not found ({}); skipping", registry.display());
+            return;
+        }
+        let mut failures = Vec::new();
+        let entries = std::fs::read_dir(&registry).expect("read registry dir");
+        for entry in entries {
+            let entry = entry.expect("dir entry");
+            let svc_toml = entry.path().join("service.toml");
+            if !svc_toml.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&svc_toml).expect("read service.toml");
+            match toml::from_str::<ServiceDef>(&text) {
+                Ok(def) => {
+                    if let Err(e) = def.validate() {
+                        failures.push(format!("{name}: validate: {e}"));
+                    }
+                }
+                Err(e) => failures.push(format!("{name}: parse: {e}")),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "registry service.toml failures:\n  {}",
+            failures.join("\n  ")
+        );
+    }
+
     #[test]
     fn never_service_stays_http() {
         assert!(!HttpsRequirement::Never.needs_https(false, None));
