@@ -846,33 +846,11 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             tracked_envs,
             allocated_ports,
             generated_secrets,
+            excluded_quadlets: excluded_quadlets(&reg_service.def, selected_choices),
         });
     }
 
-    // Quadlets claimed by a choice option are gated on selection: keep the
-    // selected option's, exclude every other claimed one. A quadlet no option
-    // claims always installs. So `external` (claiming no `.container`) drops
-    // the bundled DB entirely — not symlinked, image not pulled.
-    let mut all_claimed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut selected_quadlets: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
-    for choice in &reg_service.def.choices {
-        let selected = selected_choices
-            .get(&choice.name)
-            .unwrap_or(&choice.default);
-        for option in &choice.options {
-            for q in &option.quadlets {
-                all_claimed.insert(q.clone());
-                if &option.name == selected {
-                    selected_quadlets.insert(q.clone());
-                }
-            }
-        }
-    }
-    let excluded_quadlets: Vec<String> = all_claimed
-        .difference(&selected_quadlets)
-        .cloned()
-        .collect();
+    let excluded_quadlets = excluded_quadlets(&reg_service.def, selected_choices);
 
     // Process quadlet bundle from registry
     let bundle =
@@ -1283,6 +1261,35 @@ struct NativeAddParams<'a> {
     tracked_envs: Vec<TrackedEnv>,
     allocated_ports: Vec<(String, u16)>,
     generated_secrets: Vec<String>,
+    /// Quadlet filenames excluded by the choice selection (see
+    /// [`excluded_quadlets`]). A native service may ship a `quadlets/` dir of
+    /// auxiliary containers (e.g. a bundled postgres) alongside its binary.
+    excluded_quadlets: Vec<String>,
+}
+
+/// Quadlet filenames to skip for an install: those claimed by a
+/// `[[choice.option]]` whose option is not selected (falling back to the
+/// choice's `default`). A quadlet claimed by no option always installs.
+fn excluded_quadlets(
+    def: &registry::service_def::ServiceDef,
+    selected_choices: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut all_claimed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut selected: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for choice in &def.choices {
+        let picked = selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        for option in &choice.options {
+            for q in &option.quadlets {
+                all_claimed.insert(q.clone());
+                if &option.name == picked {
+                    selected.insert(q.clone());
+                }
+            }
+        }
+    }
+    all_claimed.difference(&selected).cloned().collect()
 }
 
 /// Plan a `runtime = "native"` install: build the binary (unless prebuilt),
@@ -1302,6 +1309,7 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
         tracked_envs,
         allocated_ports,
         generated_secrets,
+        excluded_quadlets,
     } = p;
 
     let run = reg_service.def.service.run.as_ref().ok_or_else(|| {
@@ -1355,7 +1363,63 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
         target: unit_path,
     });
 
+    // A native service may ship auxiliary container quadlets (e.g. a bundled
+    // postgres) in its `quadlets/` dir, reached over a published loopback port.
+    // Process them exactly like the podman path (pull images, write + symlink
+    // each unit, create bind-mount dirs), gated by the choice selection, then
+    // start each one before the native app (which Restart=always retries until
+    // its DB is up). Skipped when there's no `quadlets/` dir.
+    let mut quadlet_units: Vec<String> = Vec::new();
+    if source_dir.join("quadlets").is_dir() {
+        let port_names: Vec<String> = reg_service
+            .def
+            .ports
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        let bundle =
+            generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
+                service_dir: &source_dir,
+                service_name,
+                extra_networks: &[],
+                extra_volumes: &[],
+                podman_args: &[],
+                extra_exec_start_pre: &[],
+                port_names: &port_names,
+                excluded_quadlets: &excluded_quadlets,
+            })?;
+        for image in &bundle.images {
+            steps.push(Step::PullImage {
+                image: image.clone(),
+            });
+        }
+        for dir in &bundle.bind_mount_dirs {
+            steps.push(Step::CreateDir(dir.clone()));
+        }
+        let quadlet_path = quadlet_dir()?;
+        for file in bundle.quadlet_files {
+            let fname = file
+                .path
+                .file_name()
+                .ok_or_else(|| {
+                    Error::Bundle(format!("invalid quadlet path: {}", file.path.display()))
+                })?
+                .to_os_string();
+            if let Some(stem) = fname.to_string_lossy().strip_suffix(".container") {
+                quadlet_units.push(stem.to_string());
+            }
+            let link = quadlet_path.join(&fname);
+            let target = file.path.clone();
+            steps.push(Step::WriteFile(file));
+            steps.push(Step::Symlink { link, target });
+        }
+    }
+
     steps.push(Step::DaemonReload);
+    // Auxiliary containers first, so the DB is up (or coming up) before the app.
+    for unit in &quadlet_units {
+        steps.push(Step::StartService { unit: unit.clone() });
+    }
     steps.push(Step::StartService {
         unit: service_name.to_string(),
     });
@@ -1685,25 +1749,54 @@ fn remove_native_service(
 ) -> Result<RemoveResult> {
     let home = service_home(service_name)?;
     let unit_name = format!("{service_name}.service");
-    let mut steps = vec![
-        Step::StopService {
-            unit: service_name.to_string(),
-        },
-        Step::RemoveFile(systemd_user_dir()?.join(&unit_name)),
-        Step::DaemonReload,
-    ];
+    let mut steps = Vec::new();
+
+    // Tear down any auxiliary container quadlets the native service shipped
+    // (e.g. a bundled postgres): stop each unit and drop its systemd symlink.
+    // The real `.container` files live under the service home and go with it
+    // (purge) or are dropped below (preserve). Their data (bind-mounted under
+    // the home, e.g. db-data/) is kept on preserve, removed on purge with home.
+    let mut aux_container_files: Vec<String> = Vec::new();
+    if let Ok(qdir) = quadlet_dir() {
+        let names = scan_managed_services().unwrap_or_default();
+        let all: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        if let Ok(entries) = std::fs::read_dir(&qdir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().into_owned();
+                if let Some(stem) = fname.strip_suffix(".container")
+                    && quadlet_belongs_to(&fname, service_name, &all)
+                {
+                    steps.push(Step::StopService {
+                        unit: stem.to_string(),
+                    });
+                    steps.push(Step::RemoveFile(qdir.join(&fname)));
+                    aux_container_files.push(fname);
+                }
+            }
+        }
+    }
+
+    steps.push(Step::StopService {
+        unit: service_name.to_string(),
+    });
+    steps.push(Step::RemoveFile(systemd_user_dir()?.join(&unit_name)));
+    steps.push(Step::DaemonReload);
 
     match mode {
         RemoveMode::Purge => steps.push(Step::RemoveDir(home)),
         RemoveMode::Preserve => {
             // Keep data/ and metadata.toml; drop the rebuildable binary, the
-            // generated .env, and the unit file (all re-created on re-add).
+            // generated .env, the unit file, and the aux quadlet files (all
+            // re-created on re-add). Container data dirs (db-data/) stay.
             for child in ["bin", ".env", unit_name.as_str()] {
                 let p = home.join(child);
                 match std::fs::metadata(&p) {
                     Ok(m) if m.is_dir() => steps.push(Step::RemoveDir(p)),
                     _ => steps.push(Step::RemoveFile(p)),
                 }
+            }
+            for f in &aux_container_files {
+                steps.push(Step::RemoveFile(home.join(f)));
             }
         }
     }
