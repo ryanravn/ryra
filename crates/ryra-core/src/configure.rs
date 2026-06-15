@@ -44,8 +44,8 @@ use crate::system::secret;
 use crate::upgrade::{DiffEntry, DiffKind, DiffResult, EnvAddition};
 use crate::{
     AddResult, PlanMode, REGISTRY_DEFAULT, Step, WellKnownService, add_service, authelia, caddy,
-    is_service_installed, list_installed, manifest, quadlet_dir, registry,
-    resolve_registry_dir, service_home,
+    is_service_installed, list_installed, manifest, quadlet_dir, registry, resolve_registry_dir,
+    service_home,
 };
 
 /// What the caller wants to change. Every field is "leave alone" by default;
@@ -1006,13 +1006,8 @@ fn build_configure_steps(
             ctx.insert("service.url".into(), u.to_string());
         }
         let qdir = quadlet_dir()?;
-        register_steps = authelia::register_oidc_client(
-            service_name,
-            service_def,
-            target_url,
-            &ctx,
-            &qdir,
-        )?;
+        register_steps =
+            authelia::register_oidc_client(service_name, service_def, target_url, &ctx, &qdir)?;
     }
     let mut tailscale_enable_steps: Vec<Step> = Vec::new();
     if needs_tailscale_enable

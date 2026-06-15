@@ -374,8 +374,7 @@ mod tests {
         // host-resolve artifacts, keyed on the ts.net hostname.
         let tmp = tempfile::tempdir()?;
         let service_data = tmp.path().join("forgejo");
-        let bridge =
-            build_forgejo_bridge(&service_data, Some("https://auth.example.ts.net"))?;
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.example.ts.net"))?;
 
         let hosts_step = bridge
             .steps
