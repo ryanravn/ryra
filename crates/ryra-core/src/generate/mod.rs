@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::config::schema::Config;
 use crate::error::{Error, Result};
 use crate::exposure::Exposure;
-use crate::registry::service_def::{AuthKind, EnvKind, EnvVar, ServiceDef};
+use crate::registry::service_def::{AuthKind, EnvKind, EnvVar, PortDef, ServiceDef};
 
 #[derive(Debug)]
 pub struct GeneratedFile {
@@ -81,9 +81,21 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
             }
         }
     }
+    // Effective ports = top-level plus the selected choice option's gated ports
+    // (so a gated port's port_url resolves; mirrors the allocator in lib.rs).
+    let mut eff_ports: Vec<&PortDef> = params.service_def.ports.iter().collect();
+    for choice in &params.service_def.choices {
+        let sel = params
+            .selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        if let Some(opt) = choice.options.iter().find(|o| &o.name == sel) {
+            eff_ports.extend(opt.ports.iter());
+        }
+    }
     insert_port_urls(
         &mut ctx,
-        params.service_def,
+        &eff_ports,
         params.resolved_ports,
         params.exposure.url(),
     );
@@ -120,7 +132,9 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
 /// raw `--url`, or `--tailscale`).
 fn insert_port_urls(
     ctx: &mut BTreeMap<String, String>,
-    service_def: &ServiceDef,
+    // Effective ports: top-level plus the selected choice option's, so a gated
+    // port (e.g. ente's bundled minio) gets `service.port_url.*` too.
+    ports: &[&PortDef],
     resolved_ports: &[(String, u16)],
     url: Option<&str>,
 ) {
@@ -135,11 +149,11 @@ fn insert_port_urls(
     }
     // The primary port (named "http", else the first) answers at the root
     // URL — for it, `port_url` is exactly `external_url` outside Tailscale.
-    let primary = service_def
-        .ports
+    let primary = ports
         .iter()
+        .copied()
         .find(|p| p.name.eq_ignore_ascii_case("http"))
-        .or_else(|| service_def.ports.first())
+        .or_else(|| ports.first().copied())
         .map(|p| p.name.clone());
     let parsed = url.and_then(|u| url::Url::parse(u).ok());
     let host = parsed
@@ -150,7 +164,7 @@ fn insert_port_urls(
     let is_ts = host.as_deref().is_some_and(|h| h.ends_with(".ts.net"));
     let external_url = ctx.get("service.external_url").cloned();
 
-    for p in &service_def.ports {
+    for p in ports.iter().copied() {
         let host_port = resolved_ports
             .iter()
             .find(|(n, _)| n == &p.name)
@@ -475,7 +489,8 @@ mod tests {
         ];
         let mut ctx = BTreeMap::new();
         ctx.insert("service.external_url".to_string(), external_url.to_string());
-        insert_port_urls(&mut ctx, &def, &resolved, url);
+        let ports: Vec<&PortDef> = def.ports.iter().collect();
+        insert_port_urls(&mut ctx, &ports, &resolved, url);
         ctx
     }
 
