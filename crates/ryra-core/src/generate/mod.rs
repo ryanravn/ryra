@@ -124,6 +124,15 @@ fn insert_port_urls(
     resolved_ports: &[(String, u16)],
     url: Option<&str>,
 ) {
+    // Bare allocated host port per name, for templating into values like a
+    // DATABASE_URL that points at a gated container's published loopback port
+    // (`@127.0.0.1:{{service.ports.db}}`). Covers top-level and choice-gated
+    // ports alike, since `resolved_ports` already includes both. Plural
+    // `service.ports.*` so it doesn't collide with the `service.port` leaf
+    // (the template engine nests dotted keys; a key can't be leaf and parent).
+    for (name, port) in resolved_ports {
+        ctx.insert(format!("service.ports.{name}"), port.to_string());
+    }
     // The primary port (named "http", else the first) answers at the root
     // URL — for it, `port_url` is exactly `external_url` outside Tailscale.
     let primary = service_def

@@ -409,6 +409,13 @@ pub struct ChoiceOption {
     /// counterpart to `requires`' cross-service edges.
     #[serde(default)]
     pub quadlets: Vec<String>,
+    /// `[[ports]]` allocated only when this option is selected. ryra hands each
+    /// a free host port (exposed as `${SERVICE_PORT_<NAME>}` and
+    /// `{{service.ports.<name>}}`), so a gated container (e.g. a bundled
+    /// postgres) publishes to an allocated loopback port instead of a hardcoded
+    /// one that could clash.
+    #[serde(default, rename = "ports")]
+    pub ports: Vec<PortDef>,
 }
 
 /// A service that must already be installed on the system before this one.

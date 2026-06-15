@@ -615,14 +615,24 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // 3000/3002/3003, inbucket: http+smtp) hit `bind: address already in
     // use` on all but the first.
     let mut port_warnings: Vec<Warning> = Vec::new();
-    let mut claimed: std::collections::HashSet<u16> = reg_service
-        .def
-        .ports
-        .iter()
-        .filter_map(|p| p.host_port)
-        .collect();
-    let mut resolved_ports: Vec<(String, u16)> = Vec::with_capacity(reg_service.def.ports.len());
-    for p in &reg_service.def.ports {
+    // Ports to allocate: top-level [[ports]] plus the [[ports]] of each choice's
+    // selected option (gated infra, e.g. a bundled DB's published loopback
+    // port). ryra picks a free host port for each, so there's no hardcoded port
+    // to collide. Unselected options contribute none.
+    let mut effective_ports: Vec<&registry::service_def::PortDef> =
+        reg_service.def.ports.iter().collect();
+    for choice in &reg_service.def.choices {
+        let sel = selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        if let Some(opt) = choice.options.iter().find(|o| &o.name == sel) {
+            effective_ports.extend(opt.ports.iter());
+        }
+    }
+    let mut claimed: std::collections::HashSet<u16> =
+        effective_ports.iter().filter_map(|p| p.host_port).collect();
+    let mut resolved_ports: Vec<(String, u16)> = Vec::with_capacity(effective_ports.len());
+    for p in effective_ports.iter().copied() {
         let host = if let Some(pinned) = port_overrides.get(&p.name) {
             // Upgrade passes the install's existing port here so re-renders
             // are stable. Trust the caller — port_in_use would say it's
@@ -1371,12 +1381,9 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
     // its DB is up). Skipped when there's no `quadlets/` dir.
     let mut quadlet_units: Vec<String> = Vec::new();
     if source_dir.join("quadlets").is_dir() {
-        let port_names: Vec<String> = reg_service
-            .def
-            .ports
-            .iter()
-            .map(|p| p.name.clone())
-            .collect();
+        // Includes choice-gated ports (e.g. the bundled DB's allocated port),
+        // so a quadlet's `${SERVICE_PORT_DB}` validates.
+        let port_names: Vec<String> = allocated_ports.iter().map(|(n, _)| n.clone()).collect();
         let bundle =
             generate::bundle::process_quadlet_bundle(&generate::bundle::ProcessBundleParams {
                 service_dir: &source_dir,
