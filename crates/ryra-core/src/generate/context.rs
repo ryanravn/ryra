@@ -210,14 +210,30 @@ pub fn build_context(
     // 2. Generate JWT secrets (which reference signing key secrets)
     // 3. Generate remaining non-JWT secrets
 
-    // Pass 1: collect signing key names and generate them first
-    let jwt_signing_keys: Vec<String> = service_def
+    // A secret ref can live in a top-level env, an env_group member, or a
+    // choice option member. Generate for ALL of them (selection-independent):
+    // generating an unused secret is harmless (it's only written if a var that
+    // references it is), and it means switching group/choice later via
+    // `ryra configure` finds the secret already minted instead of drifting.
+    let all_envs: Vec<_> = service_def
         .env
+        .iter()
+        .chain(service_def.env_groups.iter().flat_map(|g| g.env.iter()))
+        .chain(
+            service_def
+                .choices
+                .iter()
+                .flat_map(|c| c.options.iter().flat_map(|o| o.env.iter())),
+        )
+        .collect();
+
+    // Pass 1: collect signing key names and generate them first
+    let jwt_signing_keys: Vec<String> = all_envs
         .iter()
         .filter(|e| e.format == EnvFormat::JwtHs256)
         .filter_map(|e| e.jwt_signing_key.clone())
         .collect();
-    for env in &service_def.env {
+    for env in all_envs.iter().copied() {
         if env.format == EnvFormat::JwtHs256 {
             continue;
         }
@@ -231,7 +247,7 @@ pub fn build_context(
     }
 
     // Pass 2: generate JWT secrets using the signing keys
-    for env in &service_def.env {
+    for env in all_envs.iter().copied() {
         if env.format != EnvFormat::JwtHs256 {
             continue;
         }
@@ -253,7 +269,7 @@ pub fn build_context(
     }
 
     // Pass 3: generate remaining secrets
-    for env in &service_def.env {
+    for env in all_envs.iter().copied() {
         if env.format == EnvFormat::JwtHs256 {
             continue;
         }

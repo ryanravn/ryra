@@ -598,6 +598,49 @@ value = "mock"
     }
 
     #[test]
+    fn choice_option_secret_is_generated() {
+        // Regression: a `{{secret.*}}` referenced only inside a choice option
+        // must still be minted. Secret generation used to scan top-level env
+        // only, so this rendered to an undefined value and `ryra add` failed.
+        let def = toml::from_str::<ServiceDef>(
+            r#"
+[service]
+name = "s"
+description = "x"
+[[ports]]
+name = "http"
+container_port = 8080
+[[choice]]
+name = "database"
+prompt = "Database"
+default = "internal"
+[[choice.option]]
+name = "internal"
+[[choice.option.env]]
+name = "DB_PASSWORD"
+value = "{{secret.db_password}}"
+[[choice.option]]
+name = "external"
+[[choice.option.env]]
+name = "DB_PASSWORD"
+value = ""
+kind = "required"
+"#,
+        )
+        .expect("parse");
+        let mut selected = BTreeMap::new();
+        selected.insert("database".to_string(), "internal".to_string());
+        let content = gen_with_choices(&def, &selected, &BTreeMap::new())
+            .expect("renders with generated secret");
+        let line = content
+            .lines()
+            .find(|l| l.starts_with("DB_PASSWORD="))
+            .expect("DB_PASSWORD present");
+        let val = line.trim_start_matches("DB_PASSWORD=");
+        assert!(!val.is_empty() && !val.contains("{{"), "got: {line}");
+    }
+
+    #[test]
     fn choice_falls_back_to_default_when_unselected() {
         let def = def_with_billing_choice();
         // Empty selection map -> the `default` (mock) is rendered.
