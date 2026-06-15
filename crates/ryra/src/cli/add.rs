@@ -59,6 +59,8 @@ pub struct AddRequest {
     pub auth: bool,
     pub smtp: Option<SmtpProvider>,
     pub enable: Vec<String>,
+    /// `[[choice]]` selections as raw `CHOICE=OPTION` strings.
+    pub choose: Vec<String>,
     pub backup: bool,
     pub acme: Option<AcmeMode>,
     pub dry_run: bool,
@@ -96,6 +98,7 @@ pub async fn run(request: AddRequest) -> Result<()> {
         auth,
         smtp,
         enable,
+        choose,
         backup,
         acme,
         dry_run,
@@ -115,6 +118,21 @@ pub async fn run(request: AddRequest) -> Result<()> {
     }
     if !enable.is_empty() && services.len() > 1 {
         bail!("--enable can only be used when adding a single service");
+    }
+    if !choose.is_empty() && services.len() > 1 {
+        bail!("--choose can only be used when adding a single service");
+    }
+    // Parse `--choose CHOICE=OPTION` once, up front, so a malformed flag
+    // fails before any install work. Names are validated against the
+    // service's registered choices per-service below.
+    let mut choose_pairs: Vec<(String, String)> = Vec::new();
+    for raw in &choose {
+        match raw.split_once('=') {
+            Some((c, o)) if !c.is_empty() && !o.is_empty() => {
+                choose_pairs.push((c.to_string(), o.to_string()))
+            }
+            _ => bail!("--choose expects CHOICE=OPTION, got '{raw}'"),
+        }
     }
     // --acme drives caddy's TLS mode. It's accepted on any `ryra add`:
     // when adding caddy directly it sets the snippet; when adding a
@@ -605,14 +623,46 @@ pub async fn run(request: AddRequest) -> Result<()> {
         }
         let mut enabled_groups: BTreeSet<String> = enable.iter().cloned().collect();
 
+        // Seed choice selections from `--choose`, validated against this
+        // service's registered choices and options (fail fast on typos).
+        let mut selected_choices: BTreeMap<String, String> = BTreeMap::new();
+        for (cname, oname) in &choose_pairs {
+            let Some(c) = reg_service.def.choices.iter().find(|c| &c.name == cname) else {
+                let known: Vec<&str> = reg_service
+                    .def
+                    .choices
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect();
+                let hint = if known.is_empty() {
+                    format!("service '{service}' defines no choices")
+                } else {
+                    format!(
+                        "service '{service}' has no choice '{cname}' (known: {})",
+                        known.join(", ")
+                    )
+                };
+                bail!("{hint}");
+            };
+            if !c.options.iter().any(|o| &o.name == oname) {
+                let known: Vec<&str> = c.options.iter().map(|o| o.name.as_str()).collect();
+                bail!(
+                    "choice '{cname}' has no option '{oname}' (known: {})",
+                    known.join(", ")
+                );
+            }
+            selected_choices.insert(cname.clone(), oname.clone());
+        }
+
         let has_promptable_top = reg_service
             .def
             .env
             .iter()
             .any(|e| matches!(e.kind, EnvKind::Prompted | EnvKind::Required));
         let has_groups = !reg_service.def.env_groups.is_empty();
+        let has_choices = !reg_service.def.choices.is_empty();
 
-        if (has_promptable_top || has_groups) && interactive {
+        if (has_promptable_top || has_groups || has_choices) && interactive {
             // Resolve template variables in defaults so prompts show real values.
             // This context is reused by add_service so the secrets the user saw
             // during prompts match what gets written to .env.
@@ -650,6 +700,38 @@ pub async fn run(request: AddRequest) -> Result<()> {
                 }
             }
 
+            // Interactive choice selection: one Select per choice (default
+            // pre-highlighted), then prompt the chosen option's members.
+            // Choices fixed via --choose are not re-prompted.
+            for choice in &reg_service.def.choices {
+                if !selected_choices.contains_key(&choice.name) {
+                    let labels: Vec<&str> = choice
+                        .options
+                        .iter()
+                        .map(|o| o.label.as_deref().unwrap_or(&o.name))
+                        .collect();
+                    let default_idx = choice
+                        .options
+                        .iter()
+                        .position(|o| o.name == choice.default)
+                        .unwrap_or(0);
+                    let sel = dialoguer::Select::new()
+                        .with_prompt(format!("  {}", choice.prompt))
+                        .items(&labels)
+                        .default(default_idx)
+                        .interact()?;
+                    selected_choices.insert(choice.name.clone(), choice.options[sel].name.clone());
+                }
+                let chosen = selected_choices[&choice.name].clone();
+                if let Some(option) = choice.options.iter().find(|o| o.name == chosen) {
+                    for env in &option.env {
+                        if matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
+                            prompt_env(env, &default_ctx, &mut env_overrides)?;
+                        }
+                    }
+                }
+            }
+
             // Top-level prompted/required envs.
             for env in &reg_service.def.env {
                 if !matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
@@ -680,6 +762,22 @@ pub async fn run(request: AddRequest) -> Result<()> {
                         continue;
                     }
                     collect_non_interactive(env, &mut env_overrides, &mut missing_required);
+                }
+            }
+            // Choices: default any not set via --choose, then collect the
+            // selected option's required/prompted members from the process env.
+            for choice in &reg_service.def.choices {
+                let chosen = selected_choices
+                    .entry(choice.name.clone())
+                    .or_insert_with(|| choice.default.clone())
+                    .clone();
+                if let Some(option) = choice.options.iter().find(|o| o.name == chosen) {
+                    for env in &option.env {
+                        if !matches!(env.kind, EnvKind::Prompted | EnvKind::Required) {
+                            continue;
+                        }
+                        collect_non_interactive(env, &mut env_overrides, &mut missing_required);
+                    }
                 }
             }
             if !missing_required.is_empty() {
@@ -726,6 +824,7 @@ pub async fn run(request: AddRequest) -> Result<()> {
             backup,
             env: env_overrides.clone(),
             enable_groups: enabled_groups.clone(),
+            choose: selected_choices.clone(),
         };
         // One context builder for both the initial attempt and the
         // post-cleanup retry, so the two calls can't drift apart.

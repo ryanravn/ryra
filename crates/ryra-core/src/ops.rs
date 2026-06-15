@@ -76,6 +76,10 @@ pub struct AddRequest {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub enable_groups: BTreeSet<String>,
+    /// `[[choice]]` selections (`choice name -> option name`). Choices left
+    /// out fall back to their declared `default`.
+    #[serde(default)]
+    pub choose: BTreeMap<String, String>,
 }
 
 impl AddRequest {
@@ -89,6 +93,7 @@ impl AddRequest {
             backup: false,
             env: BTreeMap::new(),
             enable_groups: BTreeSet::new(),
+            choose: BTreeMap::new(),
         }
     }
 }
@@ -341,6 +346,7 @@ pub async fn plan_add(req: &AddRequest, ctx: PlanContext<'_>) -> Result<PlannedA
         enable_backup: req.backup,
         env_overrides: &req.env,
         enabled_groups: &req.enable_groups,
+        selected_choices: &req.choose,
         registry_name: service_ref.registry_name(),
         repo_dir: &repo_dir,
         pre_built_ctx: ctx.pre_built_ctx,

@@ -537,6 +537,7 @@ mod tests {
             }],
             env: vec![],
             env_groups: vec![],
+            choices: vec![],
             requires: vec![],
             mappings: Default::default(),
             integrations: IntegrationFlags {

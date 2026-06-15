@@ -157,6 +157,7 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
     let port_in_use = |_p: u16| false;
 
     let enabled_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
+    let selected_choices = metadata.selected_choices.clone();
     let no_env_overrides = BTreeMap::new();
     let result = add_service(crate::AddServiceParams {
         service_name,
@@ -172,6 +173,7 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
         enable_backup: metadata.backup_enabled,
         env_overrides: &no_env_overrides,
         enabled_groups: &enabled_groups,
+        selected_choices: &selected_choices,
         registry_name: &metadata.registry,
         repo_dir: &repo_dir,
         pre_built_ctx: None,

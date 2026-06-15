@@ -46,6 +46,10 @@ pub struct GenerateEnvParams<'a> {
     /// Names of `[[env_group]]` entries the user toggled on. Members of
     /// groups not listed here are fully omitted from the generated `.env`.
     pub enabled_groups: &'a BTreeSet<String>,
+    /// `[[choice]]` selections (`choice name -> option name`). Only the
+    /// selected option's members are written; absent choices fall back to
+    /// their declared `default`.
+    pub selected_choices: &'a BTreeMap<String, String>,
 }
 
 /// Result of generating env for a service.
@@ -90,6 +94,7 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         params.env_overrides,
         params.auth_kind,
         params.enabled_groups,
+        params.selected_choices,
     )?;
 
     // Build .env file content
@@ -208,6 +213,7 @@ fn render_env_vars(
     env_overrides: &BTreeMap<String, String>,
     auth_kind: Option<&AuthKind>,
     enabled_groups: &BTreeSet<String>,
+    selected_choices: &BTreeMap<String, String>,
 ) -> Result<Vec<EnvVar>> {
     let mut rendered: Vec<EnvVar> = service_def
         .env
@@ -216,13 +222,31 @@ fn render_env_vars(
         .collect::<Result<Vec<_>>>()?;
 
     // Append members of every enabled `[[env_group]]`. Groups not toggled
-    // on are fully omitted — no partial state possible.
+    // on are fully omitted, no partial state possible.
     for group in &service_def.env_groups {
         if !enabled_groups.contains(&group.name) {
             continue;
         }
+        let loc = format!("group '{}'", group.name);
         for env in &group.env {
-            rendered.push(render_one(env, env_overrides, ctx, Some(&group.name))?);
+            rendered.push(render_one(env, env_overrides, ctx, Some(&loc))?);
+        }
+    }
+
+    // Append the selected option of every `[[choice]]`. With no recorded
+    // selection (a choice added after install) we fall back to the choice's
+    // `default`, which validate() guarantees names a real option. Only the
+    // selected option's members are written; the rest never appear.
+    for choice in &service_def.choices {
+        let selected = selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        let Some(option) = choice.options.iter().find(|o| &o.name == selected) else {
+            continue;
+        };
+        let loc = format!("choice '{}' option '{}'", choice.name, option.name);
+        for env in &option.env {
+            rendered.push(render_one(env, env_overrides, ctx, Some(&loc))?);
         }
     }
 
@@ -274,17 +298,20 @@ fn render_one(
     env: &EnvVar,
     env_overrides: &BTreeMap<String, String>,
     ctx: &BTreeMap<String, String>,
-    group: Option<&str>,
+    // Location phrase for the "required member has no value" error, e.g.
+    // `"group 'stripe'"` or `"choice 'billing' option 'live'"`. `None` for a
+    // top-level var (a required top-level var is caught earlier at prompt time).
+    member_of: Option<&str>,
 ) -> Result<EnvVar> {
     let value = match env_overrides.get(&env.name) {
         Some(override_value) => override_value.clone(),
         None => {
-            if let Some(group_name) = group
+            if let Some(loc) = member_of
                 && env.kind == EnvKind::Required
             {
                 return Err(Error::Template(format!(
-                    "required env var '{}' in group '{}' has no value — provide it via the interactive prompt or process env",
-                    env.name, group_name
+                    "required env var '{}' in {loc} has no value; provide it via the interactive prompt or process env",
+                    env.name
                 )));
             }
             template::render(&env.value, ctx)?
@@ -370,6 +397,7 @@ mod tests {
                 },
             ],
             env_groups: vec![],
+            choices: vec![],
             requires: vec![],
             mappings: Default::default(),
             integrations: Default::default(),
@@ -492,8 +520,120 @@ mod tests {
             pre_built_ctx: None,
             enable_smtp: false,
             enabled_groups,
+            selected_choices: &BTreeMap::new(),
         })?;
         Ok(output.env_file.content)
+    }
+
+    fn gen_with_choices(
+        def: &ServiceDef,
+        selected: &BTreeMap<String, String>,
+        overrides: &BTreeMap<String, String>,
+    ) -> Result<String> {
+        let config = Config::default();
+        let resolved = vec![("http".to_string(), 10002u16)];
+        let output = generate_env(GenerateEnvParams {
+            config: &config,
+            service_def: def,
+            auth_kind: None,
+            host_port: Some(10002),
+            resolved_ports: &resolved,
+            env_overrides: overrides,
+            exposure: &Exposure::Loopback,
+            extra_env: BTreeMap::new(),
+            pre_built_ctx: None,
+            enable_smtp: false,
+            enabled_groups: &BTreeSet::new(),
+            selected_choices: selected,
+        })?;
+        Ok(output.env_file.content)
+    }
+
+    fn def_with_billing_choice() -> ServiceDef {
+        toml::from_str(
+            r#"
+[service]
+name = "billed"
+description = "x"
+
+[[ports]]
+name = "http"
+container_port = 8080
+
+[[choice]]
+name = "billing"
+prompt = "Billing mode"
+default = "mock"
+
+[[choice.option]]
+name = "live"
+[[choice.option.env]]
+name = "BILLING_MODE"
+value = "live"
+[[choice.option.env]]
+name = "STRIPE_SECRET_KEY"
+value = ""
+kind = "required"
+
+[[choice.option]]
+name = "mock"
+[[choice.option.env]]
+name = "BILLING_MODE"
+value = "mock"
+"#,
+        )
+        .expect("parse")
+    }
+
+    #[test]
+    fn choice_writes_only_selected_option_members() {
+        let def = def_with_billing_choice();
+        let mut selected = BTreeMap::new();
+        selected.insert("billing".to_string(), "mock".to_string());
+        let content =
+            gen_with_choices(&def, &selected, &BTreeMap::new()).expect("mock selection renders");
+        assert!(content.contains("BILLING_MODE=mock"), "got: {content}");
+        // The `live`-only Stripe var must not appear.
+        assert!(!content.contains("STRIPE_SECRET_KEY"), "got: {content}");
+    }
+
+    #[test]
+    fn choice_falls_back_to_default_when_unselected() {
+        let def = def_with_billing_choice();
+        // Empty selection map -> the `default` (mock) is rendered.
+        let content = gen_with_choices(&def, &BTreeMap::new(), &BTreeMap::new())
+            .expect("default selection renders");
+        assert!(content.contains("BILLING_MODE=mock"), "got: {content}");
+    }
+
+    #[test]
+    fn choice_required_member_needs_a_value() {
+        // Selecting `live` without providing STRIPE_SECRET_KEY must error,
+        // mirroring a required group member with no value.
+        let def = def_with_billing_choice();
+        let mut selected = BTreeMap::new();
+        selected.insert("billing".to_string(), "live".to_string());
+        let err = gen_with_choices(&def, &selected, &BTreeMap::new())
+            .expect_err("required member without value must fail");
+        assert!(
+            format!("{err}").contains("STRIPE_SECRET_KEY"),
+            "error names the missing var: {err}"
+        );
+    }
+
+    #[test]
+    fn choice_required_member_value_is_written() {
+        let def = def_with_billing_choice();
+        let mut selected = BTreeMap::new();
+        selected.insert("billing".to_string(), "live".to_string());
+        let mut overrides = BTreeMap::new();
+        overrides.insert("STRIPE_SECRET_KEY".to_string(), "sk_test_123".to_string());
+        let content = gen_with_choices(&def, &selected, &overrides).expect("live renders");
+        assert!(content.contains("BILLING_MODE=live"), "got: {content}");
+        assert!(
+            content.contains("STRIPE_SECRET_KEY=sk_test_123"),
+            "got: {content}"
+        );
     }
 
     #[test]
@@ -588,6 +728,7 @@ mod tests {
             pre_built_ctx: Some(prebuilt),
             enable_smtp: false,
             enabled_groups: &no_groups,
+            selected_choices: &BTreeMap::new(),
         })
         .expect("generate_env must succeed with the real host_port");
 

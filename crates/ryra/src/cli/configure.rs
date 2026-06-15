@@ -33,6 +33,8 @@ pub struct ConfigureFlags {
     pub reassert_auth: bool,
     pub enable: Vec<String>,
     pub disable: Vec<String>,
+    /// `[[choice]]` reselections as raw `CHOICE=OPTION` strings.
+    pub choose: Vec<String>,
     pub set: Vec<String>,
     pub yes: bool,
     pub dry_run: bool,
@@ -192,6 +194,16 @@ fn build_overrides_from_flags(service: &str, flags: &ConfigureFlags) -> Result<C
     overrides.reassert_auth = flags.reassert_auth;
     overrides.enable_groups = flags.enable.iter().cloned().collect();
     overrides.disable_groups = flags.disable.iter().cloned().collect();
+    for kv in &flags.choose {
+        match kv.split_once('=') {
+            Some((c, o)) if !c.trim().is_empty() && !o.trim().is_empty() => {
+                overrides
+                    .choose
+                    .insert(c.trim().to_string(), o.trim().to_string());
+            }
+            _ => bail!("--choose must be CHOICE=OPTION, got: {kv}"),
+        }
+    }
     for kv in &flags.set {
         let (k, v) = kv
             .split_once('=')
@@ -219,10 +231,11 @@ async fn build_overrides_interactive(service: &str) -> Result<ConfigureOverrides
     // case is an extra prompt, never a silently-applied bad change.
     let reg_def = load_registry_def(service, &metadata.registry).await.ok();
     let reg_groups = reg_def.as_ref().map(group_prompts).unwrap_or_default();
+    let reg_choices = reg_def.as_ref().map(choice_names).unwrap_or_default();
 
     println!();
     println!("Current configuration for {}:", style(service).bold());
-    print_status_block(&metadata, &reg_groups);
+    print_status_block(&metadata, &reg_groups, &reg_choices);
     println!();
 
     // Exposure: offer the four target states.
@@ -336,6 +349,39 @@ async fn build_overrides_interactive(service: &str) -> Result<ConfigureOverrides
         }
     }
 
+    // Choices — one Select per choice, the current option preselected.
+    if let Some(def) = &reg_def {
+        for choice in &def.choices {
+            let current = metadata
+                .selected_choices
+                .get(&choice.name)
+                .unwrap_or(&choice.default);
+            let current_idx = choice
+                .options
+                .iter()
+                .position(|o| &o.name == current)
+                .unwrap_or(0);
+            let labels: Vec<&str> = choice
+                .options
+                .iter()
+                .map(|o| o.label.as_deref().unwrap_or(&o.name))
+                .collect();
+            let sel = dialoguer::Select::new()
+                .with_prompt(format!(
+                    "{} (current: {})",
+                    choice.prompt, choice.options[current_idx].name
+                ))
+                .items(&labels)
+                .default(current_idx)
+                .interact()?;
+            if choice.options[sel].name != *current {
+                overrides
+                    .choose
+                    .insert(choice.name.clone(), choice.options[sel].name.clone());
+            }
+        }
+    }
+
     Ok(overrides)
 }
 
@@ -373,18 +419,20 @@ fn group_prompts(def: &ryra_core::registry::service_def::ServiceDef) -> Vec<(Str
         .collect()
 }
 
+/// Names of a service's `[[choice]]`s (for the status block's choices line).
+fn choice_names(def: &ryra_core::registry::service_def::ServiceDef) -> Vec<String> {
+    def.choices.iter().map(|c| c.name.clone()).collect()
+}
+
 async fn print_current_state(service: &str) -> Result<()> {
     let meta = load_metadata(service)?.ok_or_else(|| {
         anyhow::anyhow!("metadata.toml missing for installed service '{service}'")
     })?;
-    let reg_groups = load_registry_def(service, &meta.registry)
-        .await
-        .ok()
-        .as_ref()
-        .map(group_prompts)
-        .unwrap_or_default();
+    let def = load_registry_def(service, &meta.registry).await.ok();
+    let reg_groups = def.as_ref().map(group_prompts).unwrap_or_default();
+    let reg_choices = def.as_ref().map(choice_names).unwrap_or_default();
     println!("{}", style(service).bold());
-    print_status_block(&meta, &reg_groups);
+    print_status_block(&meta, &reg_groups, &reg_choices);
     Ok(())
 }
 
@@ -392,7 +440,11 @@ async fn print_current_state(service: &str) -> Result<()> {
 /// line is suppressed entirely when the registry defines no
 /// `[[env_group]]` blocks — saying `(none enabled)` for a service that
 /// has nothing to enable is just noise.
-fn print_status_block(meta: &ryra_core::Metadata, reg_groups: &[(String, String)]) {
+fn print_status_block(
+    meta: &ryra_core::Metadata,
+    reg_groups: &[(String, String)],
+    reg_choices: &[String],
+) {
     if let Some(url) = &meta.url {
         println!("  url:    {}", style(url).cyan());
     } else {
@@ -427,6 +479,18 @@ fn print_status_block(meta: &ryra_core::Metadata, reg_groups: &[(String, String)
             println!("  groups: {}", style("(none enabled)").dim());
         } else {
             println!("  groups: {}", meta.enabled_groups.join(", "));
+        }
+    }
+    if !reg_choices.is_empty() {
+        if meta.selected_choices.is_empty() {
+            println!("  choices: {}", style("(defaults)").dim());
+        } else {
+            let rendered: Vec<String> = meta
+                .selected_choices
+                .iter()
+                .map(|(c, o)| format!("{c}={o}"))
+                .collect();
+            println!("  choices: {}", rendered.join(", "));
         }
     }
 }

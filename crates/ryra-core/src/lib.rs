@@ -455,6 +455,9 @@ pub struct AddServiceParams<'a> {
     pub enable_backup: bool,
     pub env_overrides: &'a BTreeMap<String, String>,
     pub enabled_groups: &'a std::collections::BTreeSet<String>,
+    /// `[[choice]]` selections (`choice name -> option name`). Choices absent
+    /// from the map fall back to their declared `default` at render time.
+    pub selected_choices: &'a BTreeMap<String, String>,
     pub registry_name: &'a str,
     pub repo_dir: &'a Path,
     /// When provided, its secrets and auth credentials are reused instead
@@ -482,6 +485,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         enable_backup,
         env_overrides,
         enabled_groups,
+        selected_choices,
         registry_name,
         repo_dir,
         pre_built_ctx,
@@ -771,6 +775,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         pre_built_ctx,
         enable_smtp: has_smtp,
         enabled_groups,
+        selected_choices,
     })?;
 
     let podman_args: Vec<String> = Vec::new();
@@ -798,6 +803,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         backup_enabled: enable_backup,
         smtp_enabled: enable_smtp,
         enabled_groups: enabled_groups.iter().cloned().collect(),
+        selected_choices: selected_choices.clone(),
         runtime: reg_service.def.service.runtime.clone(),
     };
 
@@ -806,7 +812,12 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // entire podman path below stays untouched. Reuses everything already
     // computed: home_dir, the generated .env (`output`), ports, and metadata.
     if reg_service.def.service.runtime == registry::service_def::Runtime::Native {
-        let tracked_envs = collect_static_envs(&reg_service.def, &output.ctx, enabled_groups)?;
+        let tracked_envs = collect_static_envs(
+            &reg_service.def,
+            &output.ctx,
+            enabled_groups,
+            selected_choices,
+        )?;
         let allocated_ports = resolved_ports.clone();
         let generated_secrets = collect_generated_secrets(&reg_service.def, env_overrides);
         return build_native_add(NativeAddParams {
@@ -1150,7 +1161,12 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // secrets). Append-only by design. The richer `tracked_envs` is what
     // upgrade uses to decide whether to prompt the user; the on-disk
     // manifest only records key+value (the `# env: KEY=VAL` lines).
-    let tracked_envs = collect_static_envs(&reg_service.def, &output.ctx, enabled_groups)?;
+    let tracked_envs = collect_static_envs(
+        &reg_service.def,
+        &output.ctx,
+        enabled_groups,
+        selected_choices,
+    )?;
     let manifest_envs: Vec<manifest::EnvEntry> = tracked_envs
         .iter()
         .map(|t| manifest::EnvEntry {
@@ -1847,6 +1863,7 @@ fn collect_static_envs(
     service_def: &registry::service_def::ServiceDef,
     ctx: &BTreeMap<String, String>,
     enabled_groups: &std::collections::BTreeSet<String>,
+    selected_choices: &BTreeMap<String, String>,
 ) -> Result<Vec<plan::TrackedEnv>> {
     use registry::service_def::EnvKind;
     let mut out: Vec<plan::TrackedEnv> = Vec::new();
@@ -1888,6 +1905,26 @@ fn collect_static_envs(
             continue;
         }
         for env in &group.env {
+            push(
+                &env.name,
+                &env.value,
+                env.kind.clone(),
+                env.prompt.clone(),
+                &mut out,
+                &mut seen,
+            )?;
+        }
+    }
+    // Selected option of each `[[choice]]`, falling back to the choice's
+    // `default` when no selection is recorded, mirroring `render_env_vars`.
+    for choice in &service_def.choices {
+        let selected = selected_choices
+            .get(&choice.name)
+            .unwrap_or(&choice.default);
+        let Some(option) = choice.options.iter().find(|o| &o.name == selected) else {
+            continue;
+        };
+        for env in &option.env {
             push(
                 &env.name,
                 &env.value,

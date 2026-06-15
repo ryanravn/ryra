@@ -49,6 +49,11 @@ enum Command {
         /// in non-interactive mode, or prompted for interactively.
         #[arg(long = "enable", value_name = "GROUP")]
         enable: Vec<String>,
+        /// Select a `[[choice]]` option non-interactively (repeatable).
+        /// Format: CHOICE=OPTION, e.g. `--choose billing=mock`. Choices left
+        /// unset use their declared default. Single-service installs only.
+        #[arg(long = "choose", value_name = "CHOICE=OPTION")]
+        choose: Vec<String>,
         /// Expose this service on your tailnet at
         /// `https://<service>.<tailnet>.ts.net` via Tailscale Services.
         /// Defines the service through the Tailscale admin API and runs
@@ -356,6 +361,11 @@ enum Command {
         /// drops the group's env vars from `.env`.
         #[arg(long = "disable", value_name = "GROUP")]
         disable: Vec<String>,
+        /// Reselect a `[[choice]]` option (repeatable). Format: CHOICE=OPTION,
+        /// e.g. `--choose billing=live`. Switching to an option with required
+        /// members needs their values via `--set` or the process env.
+        #[arg(long = "choose", value_name = "CHOICE=OPTION")]
+        choose: Vec<String>,
         /// Override an individual env var (repeatable). Format: KEY=VALUE.
         #[arg(long = "set", value_name = "KEY=VALUE")]
         set: Vec<String>,
@@ -432,6 +442,7 @@ async fn main() -> anyhow::Result<()> {
             auth,
             smtp,
             enable,
+            choose,
             tailscale,
             backup,
             acme,
@@ -465,6 +476,7 @@ async fn main() -> anyhow::Result<()> {
                 auth,
                 smtp,
                 enable,
+                choose,
                 backup,
                 acme: acme_mode,
                 dry_run,
@@ -524,6 +536,7 @@ async fn main() -> anyhow::Result<()> {
             reassert_auth,
             ref enable,
             ref disable,
+            ref choose,
             ref set,
             yes,
             dry_run,
@@ -548,6 +561,7 @@ async fn main() -> anyhow::Result<()> {
                     reassert_auth,
                     enable: enable.clone(),
                     disable: disable.clone(),
+                    choose: choose.clone(),
                     set: set.clone(),
                     yes,
                     dry_run,
@@ -565,6 +579,7 @@ async fn main() -> anyhow::Result<()> {
                     (reassert_auth, "--reassert-auth"),
                     (!enable.is_empty(), "--enable"),
                     (!disable.is_empty(), "--disable"),
+                    (!choose.is_empty(), "--choose"),
                     (!set.is_empty(), "--set"),
                 ]
                 .iter()

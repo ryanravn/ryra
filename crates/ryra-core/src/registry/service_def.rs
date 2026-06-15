@@ -19,6 +19,12 @@ pub struct ServiceDef {
     /// makes "client_id without client_secret" unrepresentable.
     #[serde(default, rename = "env_group")]
     pub env_groups: Vec<EnvGroup>,
+    /// Mutually-exclusive choices. Exactly one option per choice is selected
+    /// and only that option's env vars are written, so "none selected" and
+    /// "two at once" are unrepresentable rather than rejected. The sum type
+    /// to `env_group`'s product.
+    #[serde(default, rename = "choice")]
+    pub choices: Vec<Choice>,
     #[serde(default)]
     pub requires: Vec<ServiceRequirement>,
     #[serde(default)]
@@ -355,6 +361,40 @@ pub struct EnvGroup {
     pub env: Vec<EnvVar>,
 }
 
+/// A mutually-exclusive choice between two or more [`ChoiceOption`]s. Where an
+/// [`EnvGroup`] is an independent on/off bundle (any subset may be enabled), a
+/// choice's selection is a single value, so the illegal states ("nothing
+/// selected", "two selected at once") cannot be constructed. This is the
+/// config-layer expression of "make invalid state unrepresentable": a sum
+/// type, the dual of `env_group`'s product.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Choice {
+    /// Identifier, lowercase snake_case. Names the `--choose <name>=<option>`
+    /// flag and the key recorded in metadata.
+    pub name: String,
+    /// Single-select question shown during `ryra add`.
+    pub prompt: String,
+    /// Option selected non-interactively (and pre-highlighted in the prompt).
+    /// Must name one of `options`; enforced by [`ServiceDef::validate`].
+    pub default: String,
+    #[serde(default, rename = "option")]
+    pub options: Vec<ChoiceOption>,
+}
+
+/// One alternative within a [`Choice`]. Its `env` members reuse the full
+/// [`EnvVar`] shape and are written to `.env` only when this option is the
+/// selected one; every other option's members stay absent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceOption {
+    /// Identifier within the choice, lowercase snake_case.
+    pub name: String,
+    /// Human-facing text shown in the select list. Falls back to `name`.
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub env: Vec<EnvVar>,
+}
+
 /// A service that must already be installed on the system before this one.
 ///
 /// References separately-installed ryra services whose env vars
@@ -625,11 +665,42 @@ impl ServiceDef {
                 }
             }
         }
+        // Choice options: at most one option per choice is ever active and
+        // sibling options are mutually exclusive, so two options of the *same*
+        // choice may reuse a name (e.g. every billing option sets
+        // BILLING_MODE). But a name shared with a top-level env, a group, or a
+        // *different* choice can be active simultaneously, so those still
+        // collide. So we check each option against `seen_envs` (top-level +
+        // groups + earlier choices) but merge only the choice's deduped union
+        // back in, never sibling-by-sibling.
+        for c in &self.choices {
+            let mut choice_envs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for o in &c.options {
+                let mut option_envs: std::collections::HashSet<&str> =
+                    std::collections::HashSet::new();
+                for e in &o.env {
+                    if !option_envs.insert(e.name.as_str()) {
+                        errors.push(format!(
+                            "env var '{}' is declared twice in choice '{}' option '{}'",
+                            e.name, c.name, o.name
+                        ));
+                    }
+                    if seen_envs.contains(e.name.as_str()) {
+                        errors.push(format!(
+                            "env var '{}' in choice '{}' option '{}' collides with another env var",
+                            e.name, c.name, o.name
+                        ));
+                    }
+                    choice_envs.insert(e.name.as_str());
+                }
+            }
+            seen_envs.extend(choice_envs);
+        }
 
         // --- Env var name format + kind consistency ---
 
         for e in &self.env {
-            check_env_var(e, None, &mut errors);
+            check_env_var(e, EnvLoc::TopLevel, &mut errors);
         }
 
         // --- Env group names + members ---
@@ -658,7 +729,95 @@ impl ServiceDef {
                 errors.push(format!("env_group '{}' has no env vars", g.name));
             }
             for e in &g.env {
-                check_env_var(e, Some(&g.name), &mut errors);
+                check_env_var(e, EnvLoc::Group(&g.name), &mut errors);
+            }
+        }
+
+        // --- Choice names + options ---
+        //
+        // The "exactly one selected" guarantee comes from the metadata shape (a
+        // single value per choice), so here we only police the static
+        // structure: a snake_case name distinct from groups, a prompt, two or
+        // more uniquely-named options, and a default that names one of them.
+        let mut seen_choices: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for c in &self.choices {
+            if !seen_choices.insert(c.name.as_str()) {
+                errors.push(format!("duplicate choice name '{}'", c.name));
+            }
+            if self.env_groups.iter().any(|g| g.name == c.name) {
+                errors.push(format!(
+                    "choice '{}' shares a name with an env_group; names must be distinct",
+                    c.name
+                ));
+            }
+            if c.name.is_empty() {
+                errors.push("choice has empty name".to_string());
+            } else if !c
+                .name
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+            {
+                errors.push(format!(
+                    "choice '{}' must be lowercase snake_case ([a-z0-9_])",
+                    c.name
+                ));
+            }
+            if c.prompt.is_empty() {
+                errors.push(format!("choice '{}' has empty prompt", c.name));
+            }
+            // Fewer than two options is not a choice.
+            if c.options.len() < 2 {
+                errors.push(format!(
+                    "choice '{}' has {} option(s); a choice needs at least two",
+                    c.name,
+                    c.options.len()
+                ));
+            }
+            let mut seen_options: std::collections::HashSet<&str> =
+                std::collections::HashSet::new();
+            for o in &c.options {
+                if !seen_options.insert(o.name.as_str()) {
+                    errors.push(format!(
+                        "duplicate option '{}' in choice '{}'",
+                        o.name, c.name
+                    ));
+                }
+                if o.name.is_empty() {
+                    errors.push(format!("choice '{}' has an option with empty name", c.name));
+                } else if !o
+                    .name
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                {
+                    errors.push(format!(
+                        "option '{}' in choice '{}' must be lowercase snake_case ([a-z0-9_])",
+                        o.name, c.name
+                    ));
+                }
+                for e in &o.env {
+                    check_env_var(
+                        e,
+                        EnvLoc::ChoiceOption {
+                            choice: &c.name,
+                            option: &o.name,
+                        },
+                        &mut errors,
+                    );
+                }
+            }
+            // The default must name a real option, else a non-interactive add
+            // would resolve to nothing.
+            if !c.options.iter().any(|o| o.name == c.default) {
+                errors.push(format!(
+                    "choice '{}' default '{}' names no option (have: {})",
+                    c.name,
+                    c.default,
+                    c.options
+                        .iter()
+                        .map(|o| o.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
 
@@ -746,17 +905,33 @@ impl ServiceDef {
     }
 }
 
-/// Shared name-format + kind-consistency check for a single `EnvVar`, used
-/// for both top-level `[[env]]` entries and `[[env_group.env]]` members.
-/// `group` is `Some(group_name)` for member vars — it's used to make error
-/// messages locate the offending declaration.
-fn check_env_var(e: &EnvVar, group: Option<&str>, errors: &mut Vec<String>) {
-    let where_ = match group {
-        Some(g) => format!(" in group '{g}'"),
-        None => String::new(),
-    };
+/// Where an [`EnvVar`] is declared, used to locate it in validation errors. A
+/// closed sum type rather than a free-form string, so a caller can't pass an
+/// arbitrary label and [`check_env_var`] `match`es it to build the suffix.
+enum EnvLoc<'a> {
+    TopLevel,
+    Group(&'a str),
+    ChoiceOption { choice: &'a str, option: &'a str },
+}
+
+impl std::fmt::Display for EnvLoc<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnvLoc::TopLevel => Ok(()),
+            EnvLoc::Group(g) => write!(f, " in group '{g}'"),
+            EnvLoc::ChoiceOption { choice, option } => {
+                write!(f, " in choice '{choice}' option '{option}'")
+            }
+        }
+    }
+}
+
+/// Name-format + kind-consistency check for a single `EnvVar`, shared by
+/// top-level `[[env]]`, `[[env_group.env]]`, and `[[choice.option.env]]`. `loc`
+/// is woven into each error so the offending declaration is locatable.
+fn check_env_var(e: &EnvVar, loc: EnvLoc, errors: &mut Vec<String>) {
     if e.name.is_empty() {
-        errors.push(format!("env var has empty name{where_}"));
+        errors.push(format!("env var has empty name{loc}"));
     } else if !e
         .name
         .chars()
@@ -764,7 +939,7 @@ fn check_env_var(e: &EnvVar, group: Option<&str>, errors: &mut Vec<String>) {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
     {
         errors.push(format!(
-            "env var '{}'{where_} must start with a letter or _",
+            "env var '{}'{loc} must start with a letter or _",
             e.name
         ));
     } else if !e
@@ -773,13 +948,13 @@ fn check_env_var(e: &EnvVar, group: Option<&str>, errors: &mut Vec<String>) {
         .all(|c| c.is_ascii_alphanumeric() || c == '_')
     {
         errors.push(format!(
-            "env var '{}'{where_} contains invalid characters — must match [A-Za-z0-9_]",
+            "env var '{}'{loc} contains invalid characters (must match [A-Za-z0-9_])",
             e.name
         ));
     }
     if e.kind == EnvKind::Required && e.value.contains("{{secret.") {
         errors.push(format!(
-            "env var '{}'{where_} is kind=required but has a secret template default — use kind=prompted or kind=default",
+            "env var '{}'{loc} is kind=required but has a secret template default; use kind=prompted or kind=default",
             e.name
         ));
     }
@@ -1030,6 +1205,10 @@ paths = ["../../somewhere"]
 mod https_requirement_tests {
     use super::*;
 
+    fn parse(toml_src: &str) -> ServiceDef {
+        toml::from_str(toml_src).expect("parse")
+    }
+
     #[test]
     fn never_service_stays_http() {
         assert!(!HttpsRequirement::Never.needs_https(false, None));
@@ -1061,5 +1240,192 @@ mod https_requirement_tests {
     #[test]
     fn explicit_https_url_promotes() {
         assert!(HttpsRequirement::Never.needs_https(false, Some("https://foo.example.com")));
+    }
+
+    // --- [[choice]] validation ---
+
+    const BILLING_CHOICE: &str = r#"
+[service]
+name = "x"
+description = "x"
+
+[[choice]]
+name = "billing"
+prompt = "Billing mode"
+default = "mock"
+
+[[choice.option]]
+name = "live"
+label = "Stripe"
+[[choice.option.env]]
+name = "BILLING_MODE"
+value = "live"
+[[choice.option.env]]
+name = "STRIPE_SECRET_KEY"
+value = ""
+kind = "required"
+
+[[choice.option]]
+name = "mock"
+[[choice.option.env]]
+name = "BILLING_MODE"
+value = "mock"
+"#;
+
+    #[test]
+    fn valid_choice_validates() {
+        parse(BILLING_CHOICE)
+            .validate()
+            .expect("a well-formed choice is valid");
+    }
+
+    #[test]
+    fn sibling_options_may_reuse_an_env_name() {
+        // Both `live` and `mock` set BILLING_MODE — allowed, since at most one
+        // option is ever active.
+        let def = parse(BILLING_CHOICE);
+        let billing = &def.choices[0];
+        assert!(
+            billing
+                .options
+                .iter()
+                .all(|o| o.env.iter().any(|e| e.name == "BILLING_MODE"))
+        );
+        def.validate().expect("sibling reuse is allowed");
+    }
+
+    #[test]
+    fn choice_needs_at_least_two_options() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[choice]]
+name = "billing"
+prompt = "p"
+default = "only"
+
+[[choice.option]]
+name = "only"
+"#,
+        );
+        let err = svc.validate().expect_err("one option is not a choice");
+        assert!(err.contains("at least two"), "got: {err}");
+    }
+
+    #[test]
+    fn choice_default_must_name_an_option() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[choice]]
+name = "billing"
+prompt = "p"
+default = "nope"
+
+[[choice.option]]
+name = "live"
+[[choice.option]]
+name = "mock"
+"#,
+        );
+        let err = svc.validate().expect_err("bad default rejected");
+        assert!(err.contains("names no option"), "got: {err}");
+    }
+
+    #[test]
+    fn duplicate_option_name_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[choice]]
+name = "billing"
+prompt = "p"
+default = "live"
+
+[[choice.option]]
+name = "live"
+[[choice.option]]
+name = "live"
+"#,
+        );
+        let err = svc.validate().expect_err("dup option rejected");
+        assert!(err.contains("duplicate option"), "got: {err}");
+    }
+
+    #[test]
+    fn two_choices_sharing_an_env_name_collide() {
+        // Different choices can both be active, so a shared name is a real
+        // collision (unlike sibling options of one choice).
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[choice]]
+name = "a"
+prompt = "p"
+default = "one"
+[[choice.option]]
+name = "one"
+[[choice.option.env]]
+name = "SHARED"
+value = "1"
+[[choice.option]]
+name = "two"
+
+[[choice]]
+name = "b"
+prompt = "p"
+default = "one"
+[[choice.option]]
+name = "one"
+[[choice.option.env]]
+name = "SHARED"
+value = "2"
+[[choice.option]]
+name = "two"
+"#,
+        );
+        let err = svc.validate().expect_err("cross-choice collision rejected");
+        assert!(err.contains("collides"), "got: {err}");
+    }
+
+    #[test]
+    fn choice_name_colliding_with_group_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[env_group]]
+name = "billing"
+prompt = "p"
+[[env_group.env]]
+name = "FOO"
+value = "1"
+
+[[choice]]
+name = "billing"
+prompt = "p"
+default = "live"
+[[choice.option]]
+name = "live"
+[[choice.option]]
+name = "mock"
+"#,
+        );
+        let err = svc.validate().expect_err("name clash rejected");
+        assert!(err.contains("shares a name"), "got: {err}");
     }
 }

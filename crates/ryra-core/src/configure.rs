@@ -71,6 +71,9 @@ pub struct Overrides {
     pub enable_groups: BTreeSet<String>,
     /// Env-group names to turn OFF (members drop out of `.env`).
     pub disable_groups: BTreeSet<String>,
+    /// `[[choice]]` selections to change (`choice name -> option name`).
+    /// Choices not listed keep their recorded selection.
+    pub choose: BTreeMap<String, String>,
     /// Raw per-env overrides applied during render. Useful for changing
     /// the value of a `prompted` env var (e.g. an admin email) without
     /// touching anything else.
@@ -266,6 +269,7 @@ pub async fn reconcile_service(service_name: &str) -> Result<ServiceReconcile> {
     let def = &reg_service.def;
 
     let enabled_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
+    let selected_choices = metadata.selected_choices.clone();
 
     let env_path = service_home(service_name)?.join(".env");
     let on_disk_text = match std::fs::read_to_string(&env_path) {
@@ -305,6 +309,14 @@ pub async fn reconcile_service(service_name: &str) -> Result<ServiceReconcile> {
             }
         }
     }
+    for c in &def.choices {
+        let selected = selected_choices.get(&c.name).unwrap_or(&c.default);
+        if let Some(o) = c.options.iter().find(|o| &o.name == selected) {
+            for e in &o.env {
+                recover_user_input(e);
+            }
+        }
+    }
 
     let exposure: Exposure = match metadata.url.as_deref() {
         Some(u) => Exposure::from_url(u),
@@ -323,6 +335,7 @@ pub async fn reconcile_service(service_name: &str) -> Result<ServiceReconcile> {
         enable_backup: metadata.backup_enabled,
         env_overrides: &env_overrides,
         enabled_groups: &enabled_groups,
+        selected_choices: &selected_choices,
         registry_name: &metadata.registry,
         repo_dir: &repo_dir,
         pre_built_ctx: Some(pre_built_ctx),
@@ -461,6 +474,7 @@ pub async fn configure_service(
     let current_backup: bool = metadata.backup_enabled;
     let current_auth: bool = metadata.auth.is_some();
     let current_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
+    let current_choices = metadata.selected_choices.clone();
 
     // Compute target values.
     let target_url: Option<String> = match &overrides.exposure {
@@ -522,6 +536,35 @@ pub async fn configure_service(
             });
         }
     }
+    // Validate --choose against the registry: known choice, known option.
+    for (cname, oname) in &overrides.choose {
+        let Some(choice) = reg_service.def.choices.iter().find(|c| &c.name == cname) else {
+            let known: Vec<&str> = reg_service
+                .def
+                .choices
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect();
+            let hint = if known.is_empty() {
+                " (service defines no choices)".to_string()
+            } else {
+                format!(" (known: {})", known.join(", "))
+            };
+            return Err(Error::ConfigureUnsupported {
+                service: service_name.to_string(),
+                field: format!("choice '{cname}'"),
+                workaround: format!("no such choice{hint}"),
+            });
+        };
+        if !choice.options.iter().any(|o| &o.name == oname) {
+            let known: Vec<&str> = choice.options.iter().map(|o| o.name.as_str()).collect();
+            return Err(Error::ConfigureUnsupported {
+                service: service_name.to_string(),
+                field: format!("choice '{cname}' option '{oname}'"),
+                workaround: format!("no such option (known: {})", known.join(", ")),
+            });
+        }
+    }
     if target_backup && !reg_service.def.integrations.backup {
         return Err(Error::BackupNotSupported(service_name.to_string()));
     }
@@ -575,6 +618,11 @@ pub async fn configure_service(
         target_groups.remove(g);
     }
 
+    let mut target_choices = current_choices.clone();
+    for (cname, oname) in &overrides.choose {
+        target_choices.insert(cname.clone(), oname.clone());
+    }
+
     // Recover existing secrets from the live `.env` so re-render doesn't
     // mint fresh ones. When auth is being *enabled* for the first time,
     // mint client_id / client_secret here (so we can pass the same pair
@@ -614,6 +662,7 @@ pub async fn configure_service(
         enable_backup: target_backup,
         env_overrides: &overrides.env_overrides,
         enabled_groups: &target_groups,
+        selected_choices: &target_choices,
         registry_name: &metadata.registry,
         repo_dir: &repo_dir,
         pre_built_ctx: Some(pre_built_ctx),

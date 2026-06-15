@@ -2,6 +2,8 @@
 //! that needs to know how a service was set up. Mirrors the data that used
 //! to live in `# Service-*` quadlet header comments.
 
+use std::collections::BTreeMap;
+
 use crate::capability::Capability;
 use crate::error::{Error, Result};
 use crate::paths::metadata_path;
@@ -55,6 +57,13 @@ pub struct Metadata {
     /// empty list reads back as "no groups were toggled").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enabled_groups: Vec<String>,
+    /// `[[choice]]` selections made at install time, as `choice name ->
+    /// option name`. Persisted so re-renders and `ryra configure` know which
+    /// option's members belong in the rendered `.env`. A map (one value per
+    /// choice) rather than a set, so "two options of one choice at once" is
+    /// unrepresentable. Default empty for legacy installs.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub selected_choices: BTreeMap<String, String>,
     /// How this service runs: a podman container (default) or a native binary
     /// under systemd --user. Recorded at install time so post-install commands
     /// (remove, list, status, backup) stay runtime-aware from the install
@@ -119,6 +128,7 @@ registry = "default"
             backup_enabled: true,
             smtp_enabled: true,
             enabled_groups: vec![],
+            selected_choices: BTreeMap::new(),
             runtime: Default::default(),
         };
         let text = toml::to_string(&meta).expect("serialize");
@@ -142,6 +152,7 @@ registry = "default"
             backup_enabled: false,
             smtp_enabled: true,
             enabled_groups: vec![],
+            selected_choices: BTreeMap::new(),
             runtime: Default::default(),
         };
         let text = toml::to_string(&meta).expect("serialize");
