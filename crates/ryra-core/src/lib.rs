@@ -476,6 +476,65 @@ pub struct AddServiceParams<'a> {
     pub port_overrides: &'a BTreeMap<String, u16>,
 }
 
+/// Build the Caddy site-block + reload steps for a service exposed at `url`,
+/// or a `UrlWithoutReverseProxy` warning when no Caddy is installed. Shared by
+/// the podman and native add paths so both expose services identically; the
+/// caller supplies the reverse-proxy upstream, which is the only thing that
+/// differs by runtime: `<container>:<container_port>` (podman, on Caddy's
+/// shared network) vs `host.containers.internal:<host_port>` (native, a host
+/// process reached over the bridge — the same convention the metrics bridge
+/// uses for native scrape targets).
+fn caddy_route_steps(
+    service_name: &str,
+    url: &str,
+    target_host: String,
+    upstream_port: u16,
+    host_port: Option<u16>,
+    caddy_installed: bool,
+    https_port: u16,
+) -> Result<(Vec<Step>, Vec<Warning>)> {
+    let mut steps = Vec::new();
+    let mut warnings = Vec::new();
+    if caddy_installed {
+        let parsed = url::Url::parse(url)
+            .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
+        let domain = parsed.host_str().ok_or_else(|| {
+            Error::Template(format!(
+                "service URL '{url}' has no host — Caddy needs a hostname to route to"
+            ))
+        })?;
+        let block = caddy::render_site_block(&caddy::CaddySiteParams {
+            service_name: service_name.to_string(),
+            target_host,
+            domain: domain.to_string(),
+            container_port: upstream_port,
+            https_port,
+            force_internal_tls: false,
+        });
+        let caddyfile_path = caddy::caddyfile_path()?;
+        let existing =
+            std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
+                path: caddyfile_path.clone(),
+                source,
+            })?;
+        let updated = caddy::add_route(&existing, service_name, &block);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: caddyfile_path,
+            content: updated,
+        }));
+        steps.push(Step::ReloadCaddy);
+    } else if let Some(primary) = host_port {
+        // --url but no ryra-managed reverse proxy: routing is the user's job
+        // (their own nginx / Cloudflare Tunnel / etc.).
+        warnings.push(Warning::UrlWithoutReverseProxy {
+            service_name: service_name.to_string(),
+            url: url.to_string(),
+            host_port: primary,
+        });
+    }
+    Ok((steps, warnings))
+}
+
 /// Add a service: generate config, return steps to execute.
 pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     let AddServiceParams {
@@ -873,6 +932,42 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         )?;
         let allocated_ports = resolved_ports.clone();
         let generated_secrets = collect_generated_secrets(&reg_service.def, env_overrides);
+
+        // Caddy route for native services. Unlike podman slots (containers on
+        // Caddy's shared network, reached by name), a native process is reached
+        // over the host bridge at `host.containers.internal:<host_port>`. For
+        // blue/green the active (blue) slot's port is the upstream; the swap
+        // repoints it to green on `ryra upgrade`.
+        let native_blue_green =
+            reg_service.def.service.deploy == registry::service_def::DeployStrategy::BlueGreen;
+        let mut caddy_steps: Vec<Step> = Vec::new();
+        let mut native_warnings: Vec<Warning> = Vec::new();
+        if let Some(u) = url
+            && !exposure.is_tailscale()
+        {
+            let upstream_port = if native_blue_green {
+                resolved_ports
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case("http_blue"))
+                    .map(|(_, p)| *p)
+            } else {
+                host_port
+            };
+            if let Some(p) = upstream_port {
+                let (route_steps, route_warnings) = caddy_route_steps(
+                    service_name,
+                    u,
+                    "host.containers.internal".to_string(),
+                    p,
+                    host_port,
+                    caddy_installed,
+                    caddy_https_port(&config),
+                )?;
+                caddy_steps = route_steps;
+                native_warnings.extend(route_warnings);
+            }
+        }
+
         return build_native_add(NativeAddParams {
             service_name,
             reg_service: &reg_service,
@@ -885,6 +980,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             allocated_ports,
             generated_secrets,
             excluded_quadlets: excluded_quadlets(&reg_service.def, selected_choices),
+            caddy_steps,
+            warnings: native_warnings,
         });
     }
 
@@ -1071,64 +1168,34 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         && !WellKnownService::Caddy.matches(service_name)
         && !exposure.is_tailscale()
     {
-        if caddy_installed {
-            let parsed = url::Url::parse(url)
-                .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
-            let domain = parsed.host_str().ok_or_else(|| {
-                Error::Template(format!(
-                    "service URL '{url}' has no host — Caddy needs a hostname to route to"
-                ))
-            })?;
-            let container_port = reg_service
-                .def
-                .ports
-                .first()
-                .map(|p| p.container_port)
-                .unwrap_or(80);
-            let primary_quadlet = reg_service
-                .service_dir
-                .join("quadlets")
-                .join(format!("{service_name}.container"));
-            // Blue/green routes at the active color's container; the swap
-            // (`ryra upgrade`) repoints this to the other color and reloads.
-            let target_host = if blue_green {
-                deploy::color_unit(service_name, registry::service_def::Color::Blue)
-            } else {
-                caddy::primary_container_name(&primary_quadlet, service_name)
-            };
-            let block = caddy::render_site_block(&caddy::CaddySiteParams {
-                service_name: service_name.to_string(),
-                target_host,
-                domain: domain.to_string(),
-                container_port,
-                https_port: caddy_https_port(&config),
-                // Normal service vhosts follow the user's TLS strategy
-                // (the `services_tls` snippet) unless they're `*.internal`.
-                force_internal_tls: false,
-            });
-            let caddyfile_path = caddy::caddyfile_path()?;
-            let existing =
-                std::fs::read_to_string(&caddyfile_path).map_err(|source| Error::FileRead {
-                    path: caddyfile_path.clone(),
-                    source,
-                })?;
-            let updated = caddy::add_route(&existing, service_name, &block);
-            steps.push(Step::WriteFile(GeneratedFile {
-                path: caddyfile_path,
-                content: updated,
-            }));
-            steps.push(Step::ReloadCaddy);
-        } else if let Some(primary) = host_port {
-            // --url was passed but no ryra-managed reverse proxy is installed.
-            // Templating and OIDC still work, but the user is responsible for
-            // routing <url> → 127.0.0.1:<primary> via nginx / Cloudflare Tunnel
-            // / Tailscale Funnel / etc.
-            warnings.push(Warning::UrlWithoutReverseProxy {
-                service_name: service_name.to_string(),
-                url: url.to_string(),
-                host_port: primary,
-            });
-        }
+        let container_port = reg_service
+            .def
+            .ports
+            .first()
+            .map(|p| p.container_port)
+            .unwrap_or(80);
+        let primary_quadlet = reg_service
+            .service_dir
+            .join("quadlets")
+            .join(format!("{service_name}.container"));
+        // Blue/green routes at the active color's container; the swap
+        // (`ryra upgrade`) repoints this to the other color and reloads.
+        let target_host = if blue_green {
+            deploy::color_unit(service_name, registry::service_def::Color::Blue)
+        } else {
+            caddy::primary_container_name(&primary_quadlet, service_name)
+        };
+        let (route_steps, route_warnings) = caddy_route_steps(
+            service_name,
+            url,
+            target_host,
+            container_port,
+            host_port,
+            caddy_installed,
+            caddy_https_port(&config),
+        )?;
+        steps.extend(route_steps);
+        warnings.extend(route_warnings);
     }
 
     // 9b. When a shared-network provider (caddy, inbucket) is being
@@ -1321,6 +1388,13 @@ struct NativeAddParams<'a> {
     /// [`excluded_quadlets`]). A native service may ship a `quadlets/` dir of
     /// auxiliary containers (e.g. a bundled postgres) alongside its binary.
     excluded_quadlets: Vec<String>,
+    /// Caddy route steps (site-block write + reload) for a native service with
+    /// a routed URL, pre-built by [`caddy_route_steps`] in `add_service`.
+    /// Appended after the unit starts. Empty for loopback/tailscale exposures.
+    caddy_steps: Vec<Step>,
+    /// Warnings surfaced for this native install (e.g. `UrlWithoutReverseProxy`
+    /// when a URL was given but no Caddy is installed).
+    warnings: Vec<Warning>,
 }
 
 /// Quadlet filenames to skip for an install: those claimed by a
@@ -1366,6 +1440,8 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
         allocated_ports,
         generated_secrets,
         excluded_quadlets,
+        caddy_steps,
+        warnings,
     } = p;
 
     let run = reg_service.def.service.run.as_ref().ok_or_else(|| {
@@ -1544,9 +1620,13 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
     };
     steps.push(Step::StartService { unit: app_unit });
 
+    // Caddy route (if the service is URL-exposed and Caddy is installed),
+    // pre-built in add_service. After the slot is up so the upstream exists.
+    steps.extend(caddy_steps);
+
     Ok(AddResult {
         steps,
-        warnings: Vec::new(),
+        warnings,
         repo_url: registry_name.to_string(),
         allocated_ports,
         generated_secrets,
@@ -2836,13 +2916,21 @@ mod tests {
     }
 
     fn plan_service(tmp: &std::path::Path, name: &'static str) -> AddResult {
+        plan_service_exposed(tmp, name, exposure::Exposure::Loopback)
+    }
+
+    fn plan_service_exposed(
+        tmp: &std::path::Path,
+        name: &'static str,
+        exposure: exposure::Exposure,
+    ) -> AddResult {
         let empty_map = std::collections::BTreeMap::new();
         let empty_ports: std::collections::BTreeMap<String, u16> = std::collections::BTreeMap::new();
         let empty_set = std::collections::BTreeSet::new();
         let port_in_use = |_p: u16| false;
         add_service(AddServiceParams {
             service_name: name,
-            exposure: &exposure::Exposure::Loopback,
+            exposure: &exposure,
             auth: AuthChoice::None,
             enable_smtp: false,
             enable_backup: false,
@@ -2956,6 +3044,26 @@ mod tests {
         }).unwrap();
         assert!(env.contains("SERVICE_PORT_HTTP_BLUE="));
         assert!(env.contains("SERVICE_PORT_HTTP_GREEN="));
+    }
+
+    /// A native service with a URL now flows through the Caddy-route logic
+    /// (it used to return before that code ran). With no Caddy installed it
+    /// surfaces the UrlWithoutReverseProxy warning rather than silently
+    /// ignoring the exposure — proving the native path reaches the route logic
+    /// (and, for blue/green, the active-slot port selection).
+    #[test]
+    fn blue_green_native_add_with_url_warns_when_no_caddy() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_native_registry(tmp.path());
+        let result = plan_service_exposed(
+            tmp.path(),
+            "napp",
+            exposure::Exposure::Public { url: "https://napp.example.com".into() },
+        );
+        assert!(
+            result.warnings.iter().any(|w| matches!(w, Warning::UrlWithoutReverseProxy { .. })),
+            "native + url + no caddy should warn UrlWithoutReverseProxy"
+        );
     }
 
     /// A plain (restart) podman service is untouched by the blue/green path:

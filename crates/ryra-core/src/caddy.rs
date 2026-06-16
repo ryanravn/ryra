@@ -43,6 +43,11 @@ pub enum AcmeMode {
     Anonymous,
     /// Let's Encrypt with a registration email for renewal notices.
     WithEmail(String),
+    /// Bring-your-own certificate: Caddy serves the given cert + key files
+    /// directly, issuing nothing. The right mode behind an upstream proxy that
+    /// terminates the public TLS (Cloudflare in Full-Strict with an Origin CA
+    /// cert), or anywhere the operator manages certs out of band.
+    Byo { cert: String, key: String },
 }
 
 impl AcmeMode {
@@ -65,6 +70,9 @@ impl AcmeMode {
             // which makes Caddy auto-issue LE certs for any public hostname.
             AcmeMode::Anonymous => "(services_tls) {\n}\n".to_string(),
             AcmeMode::WithEmail(email) => format!("(services_tls) {{\n\ttls {email}\n}}\n"),
+            AcmeMode::Byo { cert, key } => {
+                format!("(services_tls) {{\n\ttls {cert} {key}\n}}\n")
+            }
         }
     }
 
@@ -97,10 +105,17 @@ impl AcmeMode {
         }
         if let Some(rest) = line.strip_prefix("tls ") {
             let arg = rest.trim();
-            // Reject obvious non-email shapes (file paths, directive
-            // blocks) — those are user-managed.
+            // `tls <email>` — single token with an @.
             if arg.contains('@') && !arg.contains(' ') {
                 return Some(AcmeMode::WithEmail(arg.to_string()));
+            }
+            // `tls <cert> <key>` — two tokens, both file paths (no @).
+            let parts: Vec<&str> = arg.split_whitespace().collect();
+            if parts.len() == 2 && !arg.contains('@') {
+                return Some(AcmeMode::Byo {
+                    cert: parts[0].to_string(),
+                    key: parts[1].to_string(),
+                });
             }
         }
         None
@@ -394,6 +409,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn byo_cert_snippet_round_trips() {
+        let mode = AcmeMode::Byo {
+            cert: "/etc/ryra/certs/origin.pem".into(),
+            key: "/etc/ryra/certs/origin.key".into(),
+        };
+        let snippet = mode.snippet();
+        assert!(
+            snippet.contains("tls /etc/ryra/certs/origin.pem /etc/ryra/certs/origin.key"),
+            "got: {snippet}"
+        );
+        // Reading it back recovers the same mode (so `ryra add` can report
+        // "your own certificate" instead of "user-customized").
+        assert_eq!(AcmeMode::detect_from_snippet(&snippet), Some(mode));
+    }
+
+    #[test]
+    fn detect_does_not_confuse_email_with_byo() {
+        // A single token with @ is still LE-with-email, not a cert pair.
+        assert_eq!(
+            AcmeMode::detect_from_snippet("(services_tls) {\n\ttls me@example.com\n}\n"),
+            Some(AcmeMode::WithEmail("me@example.com".into()))
+        );
+    }
+
+    #[test]
     fn render_basic_block() {
         let params = CaddySiteParams {
             service_name: "whoami".to_string(),
@@ -512,14 +552,12 @@ mod tests {
 
     #[test]
     fn acme_mode_detect_user_customized_returns_none() {
-        // Cloudflare DNS-01 and BYO-cert shapes shouldn't be mis-classified
-        // as one of the ryra-written modes — the install message has to
-        // fall back to "user-managed" instead of lying.
+        // Shapes ryra doesn't model (DNS-01 sub-blocks, multi-directive bodies)
+        // must fall back to "user-managed" instead of being mis-classified.
+        // Note: a plain `tls <cert> <key>` pair IS modeled now (AcmeMode::Byo),
+        // covered by `byo_cert_snippet_round_trips`.
         let cf = "(services_tls) {\n\ttls {\n\t\tdns cloudflare {env.CF_API_TOKEN}\n\t}\n}\n";
         assert_eq!(AcmeMode::detect_from_snippet(cf), None);
-
-        let byo = "(services_tls) {\n\ttls /etc/ssl/cert.pem /etc/ssl/key.pem\n}\n";
-        assert_eq!(AcmeMode::detect_from_snippet(byo), None);
 
         let extra = "(services_tls) {\n\ttls internal\n\theader X-Foo bar\n}\n";
         assert_eq!(AcmeMode::detect_from_snippet(extra), None);

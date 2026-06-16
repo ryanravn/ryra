@@ -1201,6 +1201,9 @@ pub async fn run(request: AddRequest) -> Result<()> {
                             "TLS: self-signed (LAN — browsers warn unless ryra's CA is trusted)"
                         );
                     }
+                    AcmeMode::Byo { cert, key } => {
+                        println!("TLS: your own certificate ({cert} + {key})");
+                    }
                 }
                 // If the snippet on disk doesn't match a ryra-written
                 // shape at all, say so explicitly so the user isn't misled

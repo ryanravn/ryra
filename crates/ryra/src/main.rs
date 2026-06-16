@@ -79,6 +79,16 @@ enum Command {
         /// wildcards, Cloudflare DNS-01, BYO certs, etc.
         #[arg(long, value_name = "EMAIL", num_args = 0..=1, default_missing_value = "")]
         acme: Option<String>,
+        /// Bring your own TLS cert for Caddy-managed routes instead of
+        /// Let's Encrypt or the internal CA. Pass the cert (fullchain) path
+        /// together with `--tls-key`. The right choice behind a proxy that
+        /// terminates public TLS (e.g. a Cloudflare Origin CA cert with
+        /// "Full (Strict)"). Mutually exclusive with `--acme`.
+        #[arg(long, value_name = "CERT_PATH", requires = "tls_key", conflicts_with = "acme")]
+        tls_cert: Option<String>,
+        /// Private key path that pairs with `--tls-cert`.
+        #[arg(long, value_name = "KEY_PATH", requires = "tls_cert")]
+        tls_key: Option<String>,
         /// Skip confirmation prompts (including untrusted registry warnings)
         #[arg(long, short = 'y')]
         yes: bool,
@@ -446,6 +456,8 @@ async fn main() -> anyhow::Result<()> {
             tailscale,
             backup,
             acme,
+            tls_cert,
+            tls_key,
             yes,
             dry_run,
         } => {
@@ -458,13 +470,19 @@ async fn main() -> anyhow::Result<()> {
             //   `--acme me@foo.bar` → Some(WithEmail(...))
             // --url / --tailscale fold into one ExposureRequest (clap's
             // conflicts_with already rejects passing both).
-            let acme_mode: Option<ryra_core::caddy::AcmeMode> = acme.as_deref().map(|s| {
-                if s.is_empty() {
-                    ryra_core::caddy::AcmeMode::Anonymous
-                } else {
-                    ryra_core::caddy::AcmeMode::WithEmail(s.to_string())
-                }
-            });
+            //   --tls-cert P --tls-key K → Some(Byo { cert, key }) (clap's
+            //   `conflicts_with`/`requires` guarantee they come as a pair and
+            //   never alongside --acme).
+            let acme_mode: Option<ryra_core::caddy::AcmeMode> = match (tls_cert, tls_key) {
+                (Some(cert), Some(key)) => Some(ryra_core::caddy::AcmeMode::Byo { cert, key }),
+                _ => acme.as_deref().map(|s| {
+                    if s.is_empty() {
+                        ryra_core::caddy::AcmeMode::Anonymous
+                    } else {
+                        ryra_core::caddy::AcmeMode::WithEmail(s.to_string())
+                    }
+                }),
+            };
             let exposure = match url {
                 Some(u) => cli::add::ExposureRequest::Url(u),
                 None if tailscale => cli::add::ExposureRequest::Tailscale,
