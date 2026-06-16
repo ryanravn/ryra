@@ -117,6 +117,15 @@ pub enum Issue {
     /// `loginctl --user enable-linger` hasn't been run, so user-level
     /// services don't survive logout / reboot.
     LingerNotEnabled,
+    /// Rootless podman fell back to the cgroupfs cgroup manager because there's
+    /// no usable systemd user session (no user D-Bus). `systemctl --user`
+    /// quadlets still run (systemd owns their cgroup), but direct `podman build`
+    /// and `podman exec` fail to create containers ("sd-bus call: Interactive
+    /// authentication required"). Caused by lingering off and/or a missing user
+    /// D-Bus session (`dbus-user-session` on Debian/Ubuntu) and/or an unset
+    /// XDG_RUNTIME_DIR. This is the wart that turns a clean `ryra add` of a
+    /// container-built service into a cryptic crun failure.
+    PodmanCgroupfsFallback,
     /// Couldn't read the quadlet symlink farm or service data root to
     /// detect drift — usually a permissions problem on
     /// `~/.config/containers/systemd/` or `~/.local/share/services/`.
@@ -139,6 +148,7 @@ impl Issue {
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
             Issue::BrokenEnvFileRef { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
+            Issue::PodmanCgroupfsFallback => Severity::Warning,
             Issue::MissingMetadata { .. } => Severity::Info,
             Issue::NativeSourceMissing { .. } => Severity::Warning,
             Issue::IntegrityScanFailed { .. } => Severity::Warning,
@@ -336,6 +346,25 @@ impl fmt::Display for Issue {
                        loginctl enable-linger",
                 )
             }
+            Issue::PodmanCgroupfsFallback => {
+                write!(
+                    f,
+                    "rootless podman has no usable systemd user session and fell back to the\n\
+                     cgroupfs cgroup manager. Quadlet services started via `systemctl --user`\n\
+                     still run, but direct `podman build` / `podman exec` fail to create\n\
+                     containers (\"sd-bus call: Interactive authentication required\"). This box\n\
+                     can pull + run images, but it can't build one locally until the user\n\
+                     session works.\n\
+                     \n\
+                     Fix (run all three, then log out and back in so the session starts):\n  \
+                       sudo loginctl enable-linger $USER\n  \
+                       sudo apt-get install -y dbus-user-session   # Debian/Ubuntu: provides the user D-Bus session\n  \
+                       # confirm XDG_RUNTIME_DIR=/run/user/$(id -u) is set in your shell\n\
+                     \n\
+                     Verify afterwards:  podman info --format '{{{{.Host.CgroupManager}}}}'  (want: systemd)\n\
+                     Or sidestep it entirely: build the image in CI and let the box pull it.",
+                )
+            }
             Issue::IntegrityScanFailed { error } => {
                 write!(
                     f,
@@ -362,6 +391,9 @@ pub fn check_all(_config: &Config) -> Vec<Issue> {
     }
     if !check_linger_enabled() {
         issues.push(Issue::LingerNotEnabled);
+    }
+    if !check_podman_user_session() {
+        issues.push(Issue::PodmanCgroupfsFallback);
     }
     issues.extend(check_install_integrity());
     issues
@@ -539,6 +571,27 @@ fn check_linger_enabled() -> bool {
             let stdout = String::from_utf8_lossy(&o.stdout);
             !stdout.trim().eq_ignore_ascii_case("Linger=no")
         }
+        _ => true,
+    }
+}
+
+/// Whether rootless podman has a usable systemd user session, i.e. it isn't
+/// falling back to the cgroupfs cgroup manager. We read the observable symptom
+/// directly: `podman info`'s cgroup manager. `systemd` (or anything that isn't
+/// `cgroupfs`) is healthy; `cgroupfs` means crun can't register systemd scopes,
+/// so `podman build`/`exec` will hit "Interactive authentication required".
+///
+/// Conservative: if podman is absent or unreadable we return `true` (healthy)
+/// so we don't false-positive on hosts where this check can't run (and the
+/// separate podman-version check already flags a missing podman).
+fn check_podman_user_session() -> bool {
+    let output = std::process::Command::new("podman")
+        .args(["info", "--format", "{{.Host.CgroupManager}}"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => !String::from_utf8_lossy(&o.stdout)
+            .trim()
+            .eq_ignore_ascii_case("cgroupfs"),
         _ => true,
     }
 }
@@ -810,6 +863,18 @@ mod tests {
     fn tailscale_not_logged_in_display_has_up_command() {
         let s = format!("{}", Issue::TailscaleNotLoggedIn);
         assert!(s.contains("tailscale up"));
+    }
+
+    #[test]
+    fn podman_cgroupfs_fallback_display_has_the_session_fix() {
+        let s = format!("{}", Issue::PodmanCgroupfsFallback);
+        // The three commands a user needs, and the verify hint (with the braces
+        // un-escaped from the format string).
+        assert!(s.contains("enable-linger"), "{s}");
+        assert!(s.contains("dbus-user-session"), "{s}");
+        assert!(s.contains("XDG_RUNTIME_DIR"), "{s}");
+        assert!(s.contains("{{.Host.CgroupManager}}"), "{s}");
+        assert_eq!(Issue::PodmanCgroupfsFallback.severity(), Severity::Warning);
     }
 
     #[test]
