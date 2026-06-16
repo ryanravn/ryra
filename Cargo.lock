@@ -885,6 +885,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "ryra-core",
+ "ryra-protocol",
  "ryra-test",
  "serde",
  "serde_json",
@@ -904,6 +905,7 @@ dependencies = [
  "hmac",
  "minijinja",
  "rand",
+ "ryra-protocol",
  "serde",
  "serde_json",
  "sha2",
@@ -912,6 +914,14 @@ dependencies = [
  "tokio",
  "toml",
  "url",
+]
+
+[[package]]
+name = "ryra-protocol"
+version = "0.9.3"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

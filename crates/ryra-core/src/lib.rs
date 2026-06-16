@@ -9,6 +9,7 @@ pub mod data;
 pub mod deploy;
 pub mod error;
 pub mod exposure;
+pub mod from_protocol;
 pub mod generate;
 pub mod manifest;
 pub mod metadata;
@@ -16,9 +17,9 @@ pub mod metrics_bridge;
 pub mod ops;
 pub mod paths;
 pub mod plan;
-pub mod protocol;
 pub mod registry;
 pub mod system;
+pub mod to_protocol;
 pub mod upgrade;
 pub mod well_known;
 

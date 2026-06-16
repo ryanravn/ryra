@@ -22,6 +22,7 @@ assets = [{ source = "target/release/ryra", dest = "/usr/bin/ryra", mode = "0755
 
 [dependencies]
 ryra-core = { path = "../ryra-core", version = "0.9.3" }
+ryra-protocol = { path = "../ryra-protocol" }
 ryra-test = { path = "../ryra-test", version = "0.9.3" }
 anyhow.workspace = true
 tokio.workspace = true

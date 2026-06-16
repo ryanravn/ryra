@@ -15,7 +15,7 @@ use anyhow::Result;
 use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
-use ryra_core::protocol::{
+use ryra_protocol::{
     ApplyOutcome, BackupOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, DoctorIssue,
     EnvAddition, ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError,
     SearchHit, ServiceState, ServiceView, Severity,
@@ -105,11 +105,13 @@ async fn dispatch(req: Request) -> OpResult {
         }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
-        Request::Add(r) => run_mutation(Operation::Add(r)).await,
-        Request::Remove(r) => run_mutation(Operation::Remove(r)).await,
-        Request::Configure(r) => run_mutation(Operation::Configure(r)).await,
-        Request::Lifecycle(r) => run_mutation(Operation::Lifecycle(r)).await,
-        Request::Upgrade(r) => run_mutation(Operation::Upgrade(r)).await,
+        // Convert the protocol-native request payloads into the engine's ops
+        // types at the boundary (ryra-core owns the From impls).
+        Request::Add(r) => run_mutation(Operation::Add(r.into())).await,
+        Request::Remove(r) => run_mutation(Operation::Remove(r.into())).await,
+        Request::Configure(r) => run_mutation(Operation::Configure(r.into())).await,
+        Request::Lifecycle(r) => run_mutation(Operation::Lifecycle(r.into())).await,
+        Request::Upgrade(r) => run_mutation(Operation::Upgrade(r.into())).await,
     }
 }
 

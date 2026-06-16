@@ -1,0 +1,14 @@
+[package]
+name = "ryra-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The typed wire protocol for driving ryra over rpc. No engine dependency, so any client can speak it without compiling ryra-core."
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json = "1"

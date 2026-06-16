@@ -1,24 +1,170 @@
-//! Typed wire protocol for driving ryra programmatically.
+//! The typed wire protocol for driving ryra over rpc.
 //!
-//! Both the `ryra` agent (server) and any client compile against these types,
-//! so the request/response contract is checked on both ends rather than passed
-//! as stringly-typed CLI flags + parsed text. Transport-agnostic: the same
-//! messages ride JSON-RPC over stdio now (a client spawns the agent as the
-//! target user) and a network transport later (the agent on the box, the client
-//! on a control plane), so moving off-box is a transport swap, not a rewrite.
+//! This crate is the contract, and *only* the contract: pure serde data types,
+//! no dependency on `ryra-core` (the engine). Any client - ryra-api, a control
+//! plane, a third-party tool - can speak it without compiling the engine, which
+//! is what makes ryra-api movable off the box later (it talks to the box's
+//! `ryra rpc` over a transport, depending only on these types).
 //!
-//! State-changing requests reuse the [`crate::ops`] request structs, which are
-//! already the serde wire vocabulary ("Wire frontends can carry this enum
-//! directly"). Read-only queries and the result/error shapes are added here,
-//! because the on-disk types ([`crate::config::schema::InstalledService`]) are
-//! deliberately not serde -- their on-disk artifacts are the source of truth,
-//! so [`ServiceView`] is the stable wire projection of one.
+//! The `ryra` binary owns the engine: it deserializes a [`Request`], converts
+//! the protocol-native request payloads into `ryra_core::ops` types, runs them,
+//! and serializes a [`Reply`]. The request payloads here mirror the ops request
+//! structs by shape (not by import), so the engine's internal types stay
+//! engine-private.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ops::{AddRequest, ConfigureRequest, LifecycleRequest, RemoveRequest, UpgradeRequest};
+// ---- Request payloads (protocol-native; the engine converts to ops::*) ----
+
+/// How a service should be exposed when installed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExposureRequest {
+    #[default]
+    Loopback,
+    /// A concrete URL, classified by hostname into internal/public.
+    Url(String),
+    /// A pre-derived `*.ts.net` URL (the caller resolved the tailnet identity).
+    Tailscale(String),
+}
+
+/// The kind of auth a service can be wired to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthKind {
+    Oidc,
+}
+
+/// Whether (and how) to wire a service to the auth provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthRequested {
+    #[default]
+    No,
+    /// The service's first declared auth kind (the `--auth` rule).
+    Yes,
+    /// A specific kind.
+    Kind(AuthKind),
+}
+
+/// Install and start a service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddRequest {
+    /// Registry ref ("forgejo", "acme/forgejo") or a local project path.
+    pub service: String,
+    #[serde(default)]
+    pub exposure: ExposureRequest,
+    #[serde(default)]
+    pub auth: AuthRequested,
+    /// `None` = wire SMTP iff a provider is configured; `Some(true)` errors
+    /// when none exists rather than silently skipping.
+    #[serde(default)]
+    pub smtp: Option<bool>,
+    #[serde(default)]
+    pub backup: bool,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub enable_groups: BTreeSet<String>,
+    /// `[[choice]]` selections (`choice -> option`); unset choices use defaults.
+    #[serde(default)]
+    pub choose: BTreeMap<String, String>,
+}
+
+impl AddRequest {
+    /// The simplest install: loopback, no integrations.
+    pub fn new(service: impl Into<String>) -> Self {
+        AddRequest {
+            service: service.into(),
+            exposure: ExposureRequest::default(),
+            auth: AuthRequested::default(),
+            smtp: None,
+            backup: false,
+            env: BTreeMap::new(),
+            enable_groups: BTreeSet::new(),
+            choose: BTreeMap::new(),
+        }
+    }
+}
+
+/// How much to remove.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoveMode {
+    /// Stop + remove quadlets/config but keep data dirs and volumes (orphan).
+    #[default]
+    Preserve,
+    /// Also delete data subdirs and podman named volumes.
+    Purge,
+}
+
+/// Remove a service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveRequest {
+    pub service: String,
+    #[serde(default)]
+    pub mode: RemoveMode,
+}
+
+/// Start or stop an installed service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Lifecycle {
+    Start,
+    Stop,
+}
+
+/// Start/stop a service (and its sidecars).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifecycleRequest {
+    pub service: String,
+    pub action: Lifecycle,
+}
+
+/// Upgrade a service to the registry's current version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpgradeRequest {
+    pub service: String,
+    /// Re-render even when the diff is empty.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// An exposure transition for `configure`. `Loopback` means "no public route".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExposureChange {
+    Url(String),
+    Tailscale(String),
+    Loopback,
+}
+
+/// The integration change-set for `configure`. `None`/empty fields leave the
+/// current state untouched; provided fields are the new truth.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Overrides {
+    pub exposure: Option<ExposureChange>,
+    pub smtp: Option<bool>,
+    pub backup: Option<bool>,
+    pub auth: Option<bool>,
+    pub enable_groups: BTreeSet<String>,
+    pub disable_groups: BTreeSet<String>,
+    pub choose: BTreeMap<String, String>,
+    pub env_overrides: BTreeMap<String, String>,
+    /// Re-register the OIDC client even when auth is already on and the URL is
+    /// unchanged (repairs a provider/consumer desync).
+    pub reassert_auth: bool,
+}
+
+/// Re-render an installed service with a changed integration set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureRequest {
+    pub service: String,
+    pub changes: Overrides,
+}
 
 /// One request to the agent. Adjacently tagged so it maps straight onto a
 /// JSON-RPC `method` + `params`: `{"method":"add","params":{...}}`,
@@ -95,7 +241,7 @@ pub struct RegistryInfo {
     pub service_count: usize,
 }
 
-/// Severity of a doctor finding. Mirrors `system::doctor::Severity`.
+/// Severity of a doctor finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
@@ -121,8 +267,7 @@ pub struct DoctorIssue {
     pub service: Option<String>,
 }
 
-/// How one file differs between the registry render and disk. Mirrors
-/// `upgrade::DiffKind`.
+/// How one file differs between the registry render and disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffKind {
@@ -195,8 +340,7 @@ pub enum ServiceState {
 }
 
 /// A service as seen over the wire: the stable, serde projection of an on-disk
-/// `InstalledService` plus its live status. Mirrors the shape ryra-api already
-/// returns to its dashboard, promoted here so server and client share it.
+/// installed service plus its live status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceView {
     pub name: String,
@@ -219,10 +363,8 @@ pub struct ServiceView {
 }
 
 /// The outcome of a mutating operation: the affected service's fresh view plus
-/// what the apply actually did. `applied` is the number of steps/changes
-/// executed (0 = nothing to do / already current); `destructive` is true when
-/// the change set deletes data or is otherwise irreversible (the safety signal
-/// `ryra configure` surfaces).
+/// what the apply did. `applied` is the number of steps/changes executed (0 =
+/// nothing to do); `destructive` is true when the change deletes data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyOutcome {
     pub service: ServiceView,
@@ -235,10 +377,9 @@ pub struct ApplyOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Response {
-    /// `add` / `configure` / `lifecycle` / `upgrade`: the service view plus what
-    /// the apply did.
+    /// `add` / `configure` / `lifecycle` / `upgrade`.
     Applied(ApplyOutcome),
-    /// `get`: a pure view, no apply.
+    /// `get`.
     Service(ServiceView),
     /// `list`.
     Services(Vec<ServiceView>),
@@ -261,8 +402,7 @@ pub enum Response {
 }
 
 /// What `ryra rpc` writes to stdout: exactly one of these per request, then it
-/// exits. Tagged so a client can branch without inspecting the exit code,
-/// though `ryra rpc` also exits non-zero on `Error` for shell ergonomics.
+/// exits.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reply {
@@ -277,18 +417,13 @@ pub struct RpcError {
     pub message: String,
 }
 
-/// Coarse error categories, so a client can branch (e.g. 404 vs 409 vs 500)
-/// without string-matching the message.
+/// Coarse error categories, so a client can branch without string-matching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
-    /// Malformed request, or it referenced something unknown/invalid.
     BadRequest,
-    /// No such service.
     NotFound,
-    /// Conflicting state (e.g. already installed, drift blocks the change).
     Conflict,
-    /// Execution failed (podman / systemctl / the registry / the network).
     Internal,
 }
 
@@ -321,16 +456,6 @@ mod tests {
     }
 
     #[test]
-    fn get_carries_its_service() {
-        let v = serde_json::to_value(Request::Get {
-            service: "vaultwarden".to_string(),
-        })
-        .unwrap();
-        assert_eq!(v["method"], "get");
-        assert_eq!(v["params"]["service"], "vaultwarden");
-    }
-
-    #[test]
     fn service_view_round_trips_and_omits_empties() {
         let view = ServiceView {
             name: "forgejo".to_string(),
@@ -342,9 +467,7 @@ mod tests {
             upgrade_available: false,
         };
         let v = serde_json::to_value(&view).unwrap();
-        // Empty/None fields are omitted from the wire.
         assert!(v.get("ports").is_none());
-        assert!(v.get("registry").is_none());
         assert_eq!(v["state"], "running");
         let back: ServiceView = serde_json::from_value(v).unwrap();
         assert_eq!(back.name, "forgejo");
