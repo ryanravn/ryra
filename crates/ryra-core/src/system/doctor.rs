@@ -154,6 +154,42 @@ impl Issue {
             Issue::IntegrityScanFailed { .. } => Severity::Warning,
         }
     }
+
+    /// Stable machine-readable identifier for the issue variant, so a UI or
+    /// rpc client can switch on it without parsing the message. Kept in one
+    /// match so adding a variant surfaces here as a compile error rather than
+    /// silently degrading to a blank code.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Issue::PodmanUnsupported { .. } => "podman_unsupported",
+            Issue::SubidNotConfigured { .. } => "subid_not_configured",
+            Issue::SubidRangeTooSmall { .. } => "subid_range_too_small",
+            Issue::TailscaleCliMissing => "tailscale_cli_missing",
+            Issue::TailscaleNotLoggedIn => "tailscale_not_logged_in",
+            Issue::AuthSsoDesync { .. } => "auth_sso_desync",
+            Issue::TailscaleServiceUnapproved { .. } => "tailscale_service_unapproved",
+            Issue::DanglingSymlink { .. } => "dangling_symlink",
+            Issue::OrphanQuadletFile { .. } => "orphan_quadlet_file",
+            Issue::MissingMetadata { .. } => "missing_metadata",
+            Issue::NativeSourceMissing { .. } => "native_source_missing",
+            Issue::BrokenEnvFileRef { .. } => "broken_env_file_ref",
+            Issue::LingerNotEnabled => "linger_not_enabled",
+            Issue::PodmanCgroupfsFallback => "podman_cgroupfs_fallback",
+            Issue::IntegrityScanFailed { .. } => "integrity_scan_failed",
+        }
+    }
+
+    /// The installed service this issue is scoped to, when it's service-specific.
+    pub fn service(&self) -> Option<String> {
+        match self {
+            Issue::AuthSsoDesync { service }
+            | Issue::TailscaleServiceUnapproved { service, .. }
+            | Issue::MissingMetadata { service }
+            | Issue::NativeSourceMissing { service, .. }
+            | Issue::BrokenEnvFileRef { service, .. } => Some(service.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Issue {

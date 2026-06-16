@@ -281,7 +281,9 @@ fn doctor() -> Vec<DoctorIssue> {
     issues
         .into_iter()
         .map(|i| DoctorIssue {
+            code: i.code().to_string(),
             severity: map_severity(i.severity()),
+            service: i.service(),
             message: i.to_string(),
         })
         .collect()

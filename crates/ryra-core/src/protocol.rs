@@ -110,8 +110,15 @@ pub enum Severity {
 /// One diagnostic finding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoctorIssue {
+    /// Stable machine-readable id for the issue variant.
+    pub code: String,
     pub severity: Severity,
+    /// Full human-readable message, including the suggested fix (byte-for-byte
+    /// what `ryra doctor` prints).
     pub message: String,
+    /// The service this issue is scoped to, when service-specific.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
 }
 
 /// How one file differs between the registry render and disk. Mirrors
