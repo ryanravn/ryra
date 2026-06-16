@@ -6,8 +6,14 @@ use ryra_core::data::{ServiceData, ServiceStatus, enumerate_all};
 
 use super::style;
 
-pub fn run(all: bool, long: bool) -> Result<()> {
+pub fn run(all: bool, long: bool, json: bool) -> Result<()> {
     let mut svcs = enumerate_all()?;
+
+    // Machine-readable path: emit every service (installed + orphan) with a
+    // status + url, regardless of -a/-l. Programmatic callers filter as needed.
+    if json {
+        return run_json(&svcs);
+    }
 
     // Fast path when there's literally nothing to show. Short-circuits
     // the status probe + volume sizing.
@@ -80,6 +86,64 @@ pub fn run(all: bool, long: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// One service in the machine-readable `--json` output.
+#[derive(serde::Serialize)]
+struct JsonService {
+    name: String,
+    /// "running" | "stopped" | "removed".
+    status: &'static str,
+    url: Option<String>,
+}
+
+/// Emit every service as JSON. Mirrors the human table's status + url, but as
+/// structured data with `null` (not the "no url" dash) when there's no URL.
+fn run_json(svcs: &[ServiceData]) -> Result<()> {
+    let installed_full = ryra_core::list_installed().unwrap_or_default();
+    let by_name: HashMap<&str, &InstalledService> = installed_full
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
+    let active = active_user_units();
+
+    let out: Vec<JsonService> = svcs
+        .iter()
+        .map(|svc| {
+            let installed = by_name.get(svc.service.as_str()).copied();
+            let status = if matches!(svc.status, ServiceStatus::Orphan) {
+                "removed"
+            } else if active.contains(&svc.service) {
+                "running"
+            } else {
+                "stopped"
+            };
+            JsonService {
+                name: svc.service.clone(),
+                status,
+                url: service_url(installed),
+            }
+        })
+        .collect();
+
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+/// The service's URL as `Option`, deriving it the same way the human table's
+/// `url_for` does (exposure URL, then the http port, then the lowest port) but
+/// returning `None` instead of a display dash.
+fn service_url(installed: Option<&InstalledService>) -> Option<String> {
+    let entry = installed?;
+    if let Some(url) = entry.exposure.url() {
+        return Some(url.to_string());
+    }
+    if let Some(http_port) = entry.ports.get("http") {
+        return Some(format!("http://127.0.0.1:{http_port}"));
+    }
+    let mut ports: Vec<(&String, &u16)> = entry.ports.iter().collect();
+    ports.sort_by_key(|(_, p)| *p);
+    ports.first().map(|(_, port)| format!("127.0.0.1:{port}"))
 }
 
 fn print_short(

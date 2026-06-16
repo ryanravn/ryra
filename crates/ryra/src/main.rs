@@ -140,6 +140,10 @@ enum Command {
         /// because each volume requires a podman subprocess to measure.
         #[arg(long, short = 'l')]
         long: bool,
+        /// Emit machine-readable JSON (name, status, url per service) instead
+        /// of the human table. For programmatic callers such as ryra-api.
+        #[arg(long)]
+        json: bool,
     },
     /// Start an installed service (and its sidecars).
     Start {
@@ -651,7 +655,7 @@ async fn main() -> anyhow::Result<()> {
                 .await?
         }
         Command::Status => cli::status::run().await?,
-        Command::List { all, long } => cli::list::run(all, long)?,
+        Command::List { all, long, json } => cli::list::run(all, long, json)?,
         Command::Search {
             ref query,
             ref registry,
