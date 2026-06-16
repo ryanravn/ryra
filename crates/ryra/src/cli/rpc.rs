@@ -16,11 +16,12 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_protocol::{
-    ApplyOutcome, BackupOutcome, BackupSnapshotView, ChoiceOptionView, ChoiceView, ConfigureView,
-    DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition, EnvGroupView, EnvKindView, EnvVarView,
-    EnvKeyChangeView, ErrorCode, ReconcileOutcome, ReconcilePlanView, RegistryInfo, Reply, Request,
-    Response, RestoreOutcome, RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState,
-    ServiceView, Severity,
+    ApplyOutcome, BackupBackendSpec, BackupOutcome, BackupSnapshotView, BackupStatusView,
+    ChoiceOptionView, ChoiceView, ConfigureView, DiffEntry, DiffKind, DiffView, DoctorIssue,
+    EnvAddition, EnvGroupView, EnvKeyChangeView, EnvKindView, EnvVarView, ErrorCode,
+    ReconcileOutcome, ReconcilePlanView, RegistryInfo, Reply, Request, Response, RestoreOutcome,
+    RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState, ServiceView, Severity,
+    SnapshotView,
 };
 
 use super::apply;
@@ -108,9 +109,11 @@ async fn dispatch(req: Request) -> OpResult {
         Request::Restore { service, snapshot } => {
             restore(&service, &snapshot).await.map(Response::Restore)
         }
-        Request::BackupEnrolled => {
-            let services = ryra_core::backup::list_backup_enabled().map_err(core_err)?;
-            Ok(Response::BackupEnrolled(services))
+        Request::Snapshots { service } => snapshots(&service).map(Response::Snapshots),
+        Request::BackupStatus => backup_status().map(Response::BackupStatus),
+        Request::ConfigureBackup { backend, password } => {
+            configure_backup(backend, password)?;
+            backup_status().map(Response::BackupStatus)
         }
         Request::SetBackupEnrolled { service, enabled } => {
             set_backup_enrolled(&service, enabled)?;
@@ -401,6 +404,144 @@ fn set_backup_enrolled(service: &str, enabled: bool) -> std::result::Result<(), 
         .join("metadata.toml");
     let toml = toml::to_string_pretty(&meta).map_err(core_err)?;
     std::fs::write(&path, toml).map_err(core_err)?;
+    Ok(())
+}
+
+/// Human label for a backup backend, matching what `ryra backup status` shows.
+fn backend_label(backend: &ryra_core::config::schema::BackupBackend) -> String {
+    use ryra_core::config::schema::BackupBackend;
+    match backend {
+        BackupBackend::Local { path } => format!("Local: {}", path.display()),
+        BackupBackend::S3 {
+            bucket, endpoint, ..
+        } => format!("S3: {bucket} ({endpoint})"),
+    }
+}
+
+/// Build a `restic` command pre-wired with the repo, password, and backend
+/// credentials, kept per-invocation rather than polluting the process env.
+fn restic_cmd(
+    settings: &ryra_core::config::schema::BackupSettings,
+    args: &[&str],
+) -> std::process::Command {
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("--repo").arg(settings.backend.restic_repo());
+    cmd.env("RESTIC_PASSWORD", &settings.password);
+    for (key, value) in settings.backend.env() {
+        cmd.env(key, value);
+    }
+    cmd.args(args);
+    cmd
+}
+
+#[derive(serde::Deserialize)]
+struct ResticSnapshot {
+    short_id: String,
+    time: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// A service's restic data snapshots, newest first. Empty when backups aren't
+/// configured (the engine half of `ryra backup list`).
+fn snapshots(service: &str) -> std::result::Result<Vec<SnapshotView>, RpcError> {
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let Some(settings) = cfg.backup else {
+        return Ok(Vec::new());
+    };
+    let tag = format!("service:{service}");
+    let out = restic_cmd(&settings, &["snapshots", "--json", "--tag", &tag])
+        .output()
+        .map_err(core_err)?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(core_err(format!(
+            "restic snapshots failed: {}",
+            stderr.trim()
+        )));
+    }
+    let parsed: Vec<ResticSnapshot> = serde_json::from_slice(&out.stdout).map_err(core_err)?;
+    let mut views: Vec<SnapshotView> = parsed
+        .into_iter()
+        .map(|s| SnapshotView {
+            id: s.short_id,
+            time: s.time,
+            tags: s.tags,
+        })
+        .collect();
+    views.reverse();
+    Ok(views)
+}
+
+/// The effective backup configuration plus enrolled services
+/// (`ryra backup status`).
+fn backup_status() -> std::result::Result<BackupStatusView, RpcError> {
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let enrolled = ryra_core::backup::list_backup_enabled().map_err(core_err)?;
+    Ok(BackupStatusView {
+        configured: cfg.backup.is_some(),
+        backend_label: cfg.backup.as_ref().map(|s| backend_label(&s.backend)),
+        enrolled,
+    })
+}
+
+/// `restic init`, treating an already-initialised repo as success.
+fn restic_init(
+    settings: &ryra_core::config::schema::BackupSettings,
+) -> std::result::Result<(), RpcError> {
+    let out = restic_cmd(settings, &["init"]).output().map_err(core_err)?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("already initialized") || stderr.contains("already exists") {
+        return Ok(());
+    }
+    Err(core_err(format!("restic init failed: {}", stderr.trim())))
+}
+
+/// Point backups at a backend: init the restic repo (surfacing auth/bucket
+/// errors up front), then persist `[backup]`. `password` is used as-is when
+/// given, else the existing repo key is reused (so re-pointing doesn't orphan
+/// snapshots under the old key), else a fresh key is generated.
+fn configure_backup(
+    backend: BackupBackendSpec,
+    password: Option<String>,
+) -> std::result::Result<(), RpcError> {
+    use ryra_core::config::schema::{BackupBackend, BackupSettings};
+    let backend = match backend {
+        BackupBackendSpec::Local { path } => BackupBackend::Local {
+            path: std::path::PathBuf::from(path),
+        },
+        BackupBackendSpec::S3 {
+            endpoint,
+            bucket,
+            access_key_id,
+            secret_access_key,
+            prefix,
+        } => BackupBackend::S3 {
+            endpoint,
+            bucket,
+            access_key_id,
+            secret_access_key,
+            prefix,
+        },
+    };
+
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let mut cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let password = password
+        .or_else(|| cfg.backup.as_ref().map(|b| b.password.clone()))
+        .unwrap_or_else(ryra_core::system::secret::generate_secret);
+    let settings = BackupSettings { password, backend };
+
+    // Init before persisting, so we only record a [backup] that actually works.
+    restic_init(&settings)?;
+    cfg.backup = Some(settings);
+    paths.ensure_dirs().map_err(core_err)?;
+    ryra_core::config::save_config(&paths.config_file, &cfg).map_err(core_err)?;
     Ok(())
 }
 

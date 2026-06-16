@@ -215,8 +215,19 @@ pub enum Request {
     Backup { service: String },
     /// Restore a service's data from a restic snapshot ("latest" for newest).
     Restore { service: String, snapshot: String },
-    /// List the services enrolled in backups (`metadata.backup_enabled`).
-    BackupEnrolled,
+    /// List a service's restic data snapshots, newest first (`ryra backup list`).
+    Snapshots { service: String },
+    /// The effective backup configuration + enrolled services
+    /// (`ryra backup status`).
+    BackupStatus,
+    /// Point backups at a backend: init the restic repo and persist `[backup]`
+    /// (`ryra backup configure`). `password` is the restic key; when absent the
+    /// engine reuses the existing key or generates a fresh one.
+    ConfigureBackup {
+        backend: BackupBackendSpec,
+        #[serde(default)]
+        password: Option<String>,
+    },
     /// Opt a service in or out of backups.
     SetBackupEnrolled { service: String, enabled: bool },
     /// The installable env/group/choice schema for a registry service
@@ -254,6 +265,47 @@ pub struct RestoreOutcome {
     pub service: String,
     /// The snapshot restored ("latest" when none was specified).
     pub snapshot: String,
+}
+
+/// Where backups are stored, as a client describes one when configuring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupBackendSpec {
+    /// A local restic repo path (no off-box protection; rarely what you want).
+    Local { path: String },
+    /// Any S3-compatible object store (MinIO, AWS S3, B2, R2, Wasabi).
+    S3 {
+        endpoint: String,
+        bucket: String,
+        access_key_id: String,
+        secret_access_key: String,
+        #[serde(default)]
+        prefix: Option<String>,
+    },
+}
+
+/// One restic data snapshot (`ryra backup list`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotView {
+    /// Short restic snapshot id; pass back as the restore snapshot.
+    pub id: String,
+    /// RFC3339 timestamp the snapshot was taken.
+    pub time: String,
+    /// Restic tags (e.g. `service:foo`, `manifest_sha:...`).
+    pub tags: Vec<String>,
+}
+
+/// The effective backup configuration plus enrolled services
+/// (`ryra backup status`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupStatusView {
+    /// `[backup]` is configured (env-seeded, CLI, or manual).
+    pub configured: bool,
+    /// Human label for the backend, e.g. "S3: my-bucket (...)". None when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_label: Option<String>,
+    /// Services enrolled in backups (`metadata.backup_enabled`).
+    pub enrolled: Vec<String>,
 }
 
 /// One env key a reconcile would change in a service's `.env`.
@@ -536,8 +588,10 @@ pub enum Response {
     Backup(BackupOutcome),
     /// `restore`.
     Restore(RestoreOutcome),
-    /// `backup_enrolled`.
-    BackupEnrolled(Vec<String>),
+    /// `snapshots`.
+    Snapshots(Vec<SnapshotView>),
+    /// `backup_status`.
+    BackupStatus(BackupStatusView),
     /// `service_def`.
     ServiceDef(ServiceDefView),
     /// `configure_view`.
