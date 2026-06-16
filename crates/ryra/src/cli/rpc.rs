@@ -18,9 +18,9 @@ use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_protocol::{
     ApplyOutcome, BackupOutcome, BackupSnapshotView, ChoiceOptionView, ChoiceView, ConfigureView,
     DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition, EnvGroupView, EnvKindView, EnvVarView,
-    ConfigFileView, ConfigInfoView, EnvKeyChangeView, ErrorCode, ReconcileOutcome,
-    ReconcilePlanView, RegistryInfo, Reply, Request, Response, RestoreOutcome, RevertOutcome,
-    RpcError, SearchHit, ServiceDefView, ServiceState, ServiceView, Severity,
+    EnvKeyChangeView, ErrorCode, ReconcileOutcome, ReconcilePlanView, RegistryInfo, Reply, Request,
+    Response, RestoreOutcome, RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState,
+    ServiceView, Severity,
 };
 
 use super::apply;
@@ -124,13 +124,6 @@ async fn dispatch(req: Request) -> OpResult {
         }
         Request::Reconcile { services, dry_run } => {
             reconcile(services, dry_run).await.map(Response::Reconcile)
-        }
-        Request::ConfigRead => config_read().map(Response::ConfigFile),
-        Request::ConfigWrite { content } => config_write(&content).map(Response::ConfigFile),
-        Request::ConfigInfo => config_info().map(Response::ConfigInfo),
-        Request::SetTailscaleAdminToken { token } => {
-            set_tailscale_admin_token(&token)?;
-            Ok(Response::Done)
         }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
@@ -337,68 +330,6 @@ async fn restore(
         service: service.to_string(),
         snapshot: snapshot.to_string(),
     })
-}
-
-/// Read the raw global config file; a missing file reads as empty.
-fn config_read() -> std::result::Result<ConfigFileView, RpcError> {
-    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
-    let content = match std::fs::read_to_string(&paths.config_file) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(core_err(e)),
-    };
-    Ok(ConfigFileView {
-        path: paths.config_file.display().to_string(),
-        content,
-    })
-}
-
-/// Validate the content against the config schema, then write it owner-only.
-/// Writes the raw bytes (preserving the user's formatting and comments), not a
-/// re-serialized struct; validation only gates the write so a typo can't brick
-/// the planner.
-fn config_write(content: &str) -> std::result::Result<ConfigFileView, RpcError> {
-    let parsed: ryra_core::config::schema::Config = toml::from_str(content)
-        .map_err(|e| RpcError::new(ErrorCode::BadRequest, format!("invalid config: {e}")))?;
-    parsed
-        .validate()
-        .map_err(|e| RpcError::new(ErrorCode::BadRequest, format!("invalid config: {e}")))?;
-    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
-    paths.ensure_dirs().map_err(core_err)?;
-    ryra_core::system::atomic_write::atomic_write(&paths.config_file, content.as_bytes(), 0o600)
-        .map_err(core_err)?;
-    Ok(ConfigFileView {
-        path: paths.config_file.display().to_string(),
-        content: content.to_string(),
-    })
-}
-
-/// Non-secret facts about the config for diagnostics: its path, and whether a
-/// Tailscale admin token is set.
-fn config_info() -> std::result::Result<ConfigInfoView, RpcError> {
-    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
-    let tailscale_configured = ryra_core::config::load_or_default(&paths.config_file)
-        .ok()
-        .and_then(|c| c.tailscale)
-        .is_some_and(|t| !t.admin_api_key.is_empty());
-    Ok(ConfigInfoView {
-        config_file: paths.config_file.display().to_string(),
-        tailscale_configured,
-    })
-}
-
-/// Set the Tailscale admin API token, preserving any existing tailnet hint.
-fn set_tailscale_admin_token(token: &str) -> std::result::Result<(), RpcError> {
-    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
-    let mut config = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
-    let tailnet = config.tailscale.and_then(|t| t.tailnet);
-    config.tailscale = Some(ryra_core::config::schema::TailscaleConfig {
-        admin_api_key: token.to_string(),
-        tailnet,
-    });
-    paths.ensure_dirs().map_err(core_err)?;
-    ryra_core::config::save_config(&paths.config_file, &config).map_err(core_err)?;
-    Ok(())
 }
 
 /// Propagate the global config into installed services (`configure --apply`).
