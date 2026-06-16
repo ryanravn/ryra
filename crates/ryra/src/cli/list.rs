@@ -262,7 +262,7 @@ fn storage_label(svc: &ServiceData, home: &str) -> String {
 /// One `systemctl --user list-units` call returns every active unit on
 /// the user manager. Faster than N `is-active` probes when `ryra list`
 /// covers a dozen services.
-fn active_user_units() -> HashSet<String> {
+pub(crate) fn active_user_units() -> HashSet<String> {
     let out = std::process::Command::new("systemctl")
         .args([
             "--user",

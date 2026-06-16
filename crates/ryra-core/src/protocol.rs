@@ -88,6 +88,16 @@ pub enum Response {
     Done,
 }
 
+/// What `ryra rpc` writes to stdout: exactly one of these per request, then it
+/// exits. Tagged so a client can branch without inspecting the exit code,
+/// though `ryra rpc` also exits non-zero on `Error` for shell ergonomics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reply {
+    Ok(Response),
+    Error(RpcError),
+}
+
 /// A structured error, mappable to a JSON-RPC error object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcError {

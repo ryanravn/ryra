@@ -145,6 +145,12 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// One-shot typed RPC: read a single `ryra_core::protocol::Request` as
+    /// JSON on stdin, execute it, write a single `Reply` as JSON on stdout,
+    /// exit. The programmatic seam (a client runs `ryra rpc` as the target
+    /// user and pipes a request in); not a long-lived daemon.
+    #[command(hide = true)]
+    Rpc,
     /// Start an installed service (and its sidecars).
     Start {
         /// Service name. Omit and pass --all to start every installed service.
@@ -656,6 +662,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Status => cli::status::run().await?,
         Command::List { all, long, json } => cli::list::run(all, long, json)?,
+        Command::Rpc => cli::rpc::run().await?,
         Command::Search {
             ref query,
             ref registry,

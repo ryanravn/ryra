@@ -14,6 +14,7 @@ pub mod registry_cmd;
 pub mod remove;
 pub mod reset;
 pub mod revert;
+pub mod rpc;
 pub mod search;
 pub mod status;
 pub mod style;
