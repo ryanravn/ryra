@@ -46,3 +46,42 @@ Now edit your code. If your `run` command watches for changes (`bun --watch`,
 and restarts. `ryra remove --purge` tears it all down.
 
 Your repo *is* the service.
+
+## 3. Zero-downtime deploys (blue/green)
+
+By default `ryra upgrade` restarts the service in place — a brief gap while the
+new version starts. If that gap matters, opt into a blue/green deploy with two
+lines:
+
+```toml
+[service]
+name = "my-app"
+runtime = "native"
+build = "bun install"
+run = "bun run src/index.ts"
+deploy = "blue-green"          # <- opt in
+health_check = "/healthz"      # <- how Ryra knows the new version is live
+
+[[ports]]
+name = "http"
+container_port = 3000
+```
+
+Now Ryra runs **two slots**, `blue` and `green`. On `ryra upgrade` it builds the
+new version on the idle slot, waits for `health_check` to return `200`, swaps the
+reverse proxy over with a graceful reload (no dropped connections), then stops
+the old slot. If the health check never passes, the deploy aborts with the old
+version still serving — a failed deploy is a no-op, never an outage. Because the
+old slot lingers through the swap, the next deploy rolls straight back onto it.
+
+This works the same whether `runtime` is `native` (any language — each slot gets
+its own isolated working copy of your code) or `podman` (each slot is a
+container). Two requirements:
+
+- **The health endpoint must mean it.** Return `200` only once the process is
+  truly ready to serve — database reachable, migrations run. Ryra trusts it as
+  the signal to move traffic.
+- **Migrations must be backwards-compatible.** During the swap both versions are
+  briefly live against the same database, so additive (expand/contract) changes
+  only — don't ship a destructive migration in the same deploy as code that
+  depends on it.
