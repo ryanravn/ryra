@@ -16,6 +16,7 @@ pub mod metrics_bridge;
 pub mod ops;
 pub mod paths;
 pub mod plan;
+pub mod protocol;
 pub mod registry;
 pub mod system;
 pub mod upgrade;
