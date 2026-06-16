@@ -697,6 +697,35 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         }
     }
 
+    // Blue/green: the routable port needs a *second* host port so both color
+    // slots can bind at once. The base resolved port is the blue slot; allocate
+    // a green sibling and expose both as SERVICE_PORT_<NAME>_BLUE / _GREEN. The
+    // base SERVICE_PORT_<NAME> stays pointed at the active (blue) slot so
+    // templates and OIDC redirects keep working. On upgrade, `port_overrides`
+    // pins the green port from the install's `.env` so it stays stable.
+    let blue_green =
+        reg_service.def.service.deploy == registry::service_def::DeployStrategy::BlueGreen;
+    if blue_green {
+        let primary = resolved_ports
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("http"))
+            .or_else(|| resolved_ports.first())
+            .map(|(name, port)| (name.clone(), *port));
+        if let Some((name, blue_port)) = primary {
+            let green_key = format!("{}_green", name.to_ascii_lowercase());
+            let green_port = match port_overrides.get(&green_key) {
+                Some(pinned) => *pinned,
+                None => {
+                    let p = system::port::allocate_port_excluding(&claimed, port_in_use)?;
+                    claimed.insert(p);
+                    p
+                }
+            };
+            resolved_ports.push((format!("{name}_blue"), blue_port));
+            resolved_ports.push((format!("{name}_green"), green_port));
+        }
+    }
+
     let home_dir = service_home(service_name)?;
     let quadlet_path = quadlet_dir()?;
 
@@ -917,7 +946,14 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // 3. Write quadlet files from bundle (real files live in service_home)
     //    and symlink each one into the systemd-mandated quadlet path so
     //    quadlet's generator finds them on daemon-reload.
-    for file in bundle.quadlet_files {
+    //    Blue/green: split the main app container into blue + green slots
+    //    first (aux quadlets pass through untouched).
+    let quadlet_files = if blue_green {
+        deploy::expand_color_quadlets(bundle.quadlet_files, service_name)
+    } else {
+        bundle.quadlet_files
+    };
+    for file in quadlet_files {
         let link = file
             .path
             .file_name()
@@ -1053,7 +1089,13 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
                 .service_dir
                 .join("quadlets")
                 .join(format!("{service_name}.container"));
-            let target_host = caddy::primary_container_name(&primary_quadlet, service_name);
+            // Blue/green routes at the active color's container; the swap
+            // (`ryra upgrade`) repoints this to the other color and reloads.
+            let target_host = if blue_green {
+                deploy::color_unit(service_name, registry::service_def::Color::Blue)
+            } else {
+                caddy::primary_container_name(&primary_quadlet, service_name)
+            };
             let block = caddy::render_site_block(&caddy::CaddySiteParams {
                 service_name: service_name.to_string(),
                 target_host,
@@ -1209,10 +1251,15 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
 
     // 10. Reload and start via systemd
     steps.push(Step::DaemonReload);
-    // Start — dependencies start automatically via Requires=/After= in the quadlet
-    steps.push(Step::StartService {
-        unit: service_name.to_string(),
-    });
+    // Start — dependencies start automatically via Requires=/After= in the quadlet.
+    // Blue/green brings up only the active (blue) slot; the green slot's quadlet
+    // is installed but stays idle until the first `ryra upgrade` rolls onto it.
+    let start_unit = if blue_green {
+        deploy::color_unit(service_name, registry::service_def::Color::Blue)
+    } else {
+        service_name.to_string()
+    };
+    steps.push(Step::StartService { unit: start_unit });
 
     // Collect post-install info
     let allocated_ports: Vec<(String, u16)> = resolved_ports.clone();
@@ -2629,6 +2676,138 @@ pub struct ServiceDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Lay out a minimal path-registry with one podman service and return its
+    /// dir. `deploy_line` is spliced into `[service]` (e.g. `deploy =
+    /// "blue-green"\nhealth_check = "/healthz"`), so one helper covers both the
+    /// blue/green and the plain case.
+    fn write_demo_registry(tmp: &std::path::Path, deploy_line: &str) {
+        let svc_dir = tmp.join("demo");
+        std::fs::create_dir_all(svc_dir.join("quadlets")).unwrap();
+        std::fs::write(
+            svc_dir.join("service.toml"),
+            format!(
+                "[service]\n\
+                 name = \"demo\"\n\
+                 description = \"demo\"\n\
+                 runtime = \"podman\"\n\
+                 {deploy_line}\n\
+                 \n\
+                 [[ports]]\n\
+                 name = \"http\"\n\
+                 container_port = 8080\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            svc_dir.join("quadlets").join("demo.container"),
+            "[Container]\n\
+             Image=docker.io/traefik/whoami:latest\n\
+             ContainerName=demo\n\
+             PublishPort=${SERVICE_PORT_HTTP}:8080\n\
+             EnvironmentFile=%h/.local/share/services/demo/.env\n\
+             \n\
+             [Service]\n\
+             EnvironmentFile=%h/.local/share/services/demo/.env\n\
+             \n\
+             [Install]\n\
+             WantedBy=default.target\n",
+        )
+        .unwrap();
+    }
+
+    fn plan_demo(tmp: &std::path::Path) -> AddResult {
+        let empty_map = std::collections::BTreeMap::new();
+        let empty_ports: std::collections::BTreeMap<String, u16> = std::collections::BTreeMap::new();
+        let empty_set = std::collections::BTreeSet::new();
+        let port_in_use = |_p: u16| false;
+        add_service(AddServiceParams {
+            service_name: "demo",
+            exposure: &exposure::Exposure::Loopback,
+            auth: AuthChoice::None,
+            enable_smtp: false,
+            enable_backup: false,
+            env_overrides: &empty_map,
+            enabled_groups: &empty_set,
+            selected_choices: &empty_map,
+            registry_name: "test",
+            repo_dir: tmp,
+            pre_built_ctx: None,
+            port_in_use: &port_in_use,
+            acme_mode: None,
+            mode: PlanMode::Add,
+            port_overrides: &empty_ports,
+        })
+        .expect("plan add")
+    }
+
+    /// The whole point: `ryra add` on a `deploy = "blue-green"` podman service
+    /// must emit two color slots, allocate a second host port, and start only
+    /// the active (blue) slot — never the bare `<svc>` unit.
+    #[test]
+    fn blue_green_podman_add_emits_two_slots_and_starts_blue() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_demo_registry(tmp.path(), "deploy = \"blue-green\"\nhealth_check = \"/healthz\"");
+        let result = plan_demo(tmp.path());
+
+        // Quadlet files written: demo-blue.container + demo-green.container,
+        // and crucially NOT the bare demo.container.
+        let written: Vec<String> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::WriteFile(f) => f.path.file_name().and_then(|n| n.to_str()).map(String::from),
+                _ => None,
+            })
+            .collect();
+        assert!(written.iter().any(|n| n == "demo-blue.container"), "got {written:?}");
+        assert!(written.iter().any(|n| n == "demo-green.container"), "got {written:?}");
+        assert!(!written.iter().any(|n| n == "demo.container"), "bare slot leaked: {written:?}");
+
+        // The color quadlets carry their color-specific port var + container name.
+        let blue = result.steps.iter().find_map(|s| match s {
+            Step::WriteFile(f) if f.path.ends_with("demo-blue.container") => Some(&f.content),
+            _ => None,
+        }).unwrap();
+        assert!(blue.contains("ContainerName=demo-blue"));
+        assert!(blue.contains("${SERVICE_PORT_HTTP_BLUE}"));
+
+        // Start targets the active (blue) slot, not the bare unit.
+        let started: Vec<&str> = result.steps.iter().filter_map(|s| match s {
+            Step::StartService { unit } => Some(unit.as_str()),
+            _ => None,
+        }).collect();
+        assert!(started.contains(&"demo-blue"), "started: {started:?}");
+        assert!(!started.contains(&"demo"), "bare unit started: {started:?}");
+
+        // A second host port was allocated and exposed as the two color vars.
+        let env = result.steps.iter().find_map(|s| match s {
+            Step::WriteFile(f) if f.path.file_name() == Some(std::ffi::OsStr::new(".env")) => Some(&f.content),
+            _ => None,
+        }).unwrap();
+        assert!(env.contains("SERVICE_PORT_HTTP_BLUE="), "env: {env}");
+        assert!(env.contains("SERVICE_PORT_HTTP_GREEN="), "env: {env}");
+    }
+
+    /// A plain (restart) podman service is untouched by the blue/green path:
+    /// one quadlet, started by its bare name.
+    #[test]
+    fn restart_podman_add_is_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_demo_registry(tmp.path(), "");
+        let result = plan_demo(tmp.path());
+        let written: Vec<String> = result.steps.iter().filter_map(|s| match s {
+            Step::WriteFile(f) => f.path.file_name().and_then(|n| n.to_str()).map(String::from),
+            _ => None,
+        }).collect();
+        assert!(written.iter().any(|n| n == "demo.container"), "got {written:?}");
+        assert!(!written.iter().any(|n| n.contains("-blue")), "got {written:?}");
+        let started: Vec<&str> = result.steps.iter().filter_map(|s| match s {
+            Step::StartService { unit } => Some(unit.as_str()),
+            _ => None,
+        }).collect();
+        assert!(started.contains(&"demo"));
+    }
 
     #[test]
     fn static_template_filter_excludes_secrets_and_credentials() {

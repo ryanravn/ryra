@@ -23,6 +23,7 @@
 //! Either way the swap below is the same five moves, which is why this lives in
 //! one runtime-agnostic builder.
 
+use crate::GeneratedFile;
 use crate::Step;
 use crate::registry::service_def::Color;
 
@@ -33,6 +34,32 @@ use crate::registry::service_def::Color;
 /// stops. Mirrors how a single-instance service's unit is just `<service>`.
 pub fn color_unit(service_name: &str, color: Color) -> String {
     format!("{service_name}-{color}")
+}
+
+/// Expand a podman quadlet bundle for a blue/green service: replace the single
+/// main `<service>.container` with its two color variants
+/// (`<service>-blue.container`, `<service>-green.container`), leaving every aux
+/// quadlet (a bundled DB, a network, a volume) untouched — only the routable
+/// app container is doubled. The main container is identified by filename, the
+/// same convention the bundle renderer uses to inject ExecStartPre, so both
+/// slots inherit those hooks.
+pub fn expand_color_quadlets(files: Vec<GeneratedFile>, service_name: &str) -> Vec<GeneratedFile> {
+    let main = format!("{service_name}.container");
+    let mut out = Vec::with_capacity(files.len() + 1);
+    for f in files {
+        let is_main = f.path.file_name().and_then(|n| n.to_str()) == Some(main.as_str());
+        if is_main {
+            for color in [Color::Blue, Color::Green] {
+                out.push(GeneratedFile {
+                    path: f.path.with_file_name(color_quadlet_filename(service_name, color)),
+                    content: podman_color_quadlet(&f.content, service_name, color),
+                });
+            }
+        } else {
+            out.push(f);
+        }
+    }
+    out
 }
 
 /// Quadlet filename for one color slot: `<service>-<color>.container`.

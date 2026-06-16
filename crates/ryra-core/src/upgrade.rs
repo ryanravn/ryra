@@ -34,10 +34,10 @@ use crate::generate::GeneratedFile;
 use crate::manifest;
 use crate::metadata::{Metadata, load_metadata};
 use crate::registry::resolve::ServiceRef;
-use crate::registry::service_def::Runtime;
+use crate::registry::service_def::{Color, DeployStrategy, Runtime};
 use crate::{
-    AddResult, PlanMode, REGISTRY_DEFAULT, Step, add_service, is_service_installed,
-    resolve_registry_dir, service_home,
+    AddResult, PlanMode, REGISTRY_DEFAULT, Step, add_service, caddy, deploy, is_service_installed,
+    paths::metadata_path, resolve_registry_dir, service_home,
 };
 
 // --- Native source-staleness ("a rebuild would pick up new code") ----------
@@ -521,12 +521,173 @@ pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
     })
 }
 
+/// Plan a zero-downtime color swap for a `deploy = "blue-green"` install.
+///
+/// Returns `None` when the service isn't blue/green, so [`upgrade_service`] can
+/// fall through to its normal restart-based flow. Otherwise the plan:
+///   1. re-renders both color quadlets/units + reloads systemd (so the idle
+///      slot picks up any new image tag or config), keeping `.env` untouched;
+///   2. starts the *idle* slot and gates on its health endpoint;
+///   3. repoints the Caddy upstream at the idle slot and reloads gracefully;
+///   4. stops the old slot and flips `active_color` in metadata.
+///
+/// A health-gate timeout aborts before step 3, leaving the old slot live and
+/// routed — a failed deploy is a no-op, never an outage.
+pub async fn blue_green_swap(service_name: &str) -> Result<Option<UpgradeResult>> {
+    if !is_service_installed(service_name) {
+        return Err(Error::ServiceNotInstalled(service_name.to_string()));
+    }
+    let metadata = load_metadata(service_name)?
+        .ok_or_else(|| Error::ServiceNotInstalled(service_name.to_string()))?;
+
+    // Resolve the registry def to read the deploy strategy + health path.
+    let service_ref = service_ref_for(&metadata, service_name);
+    let repo_dir = resolve_registry_dir(&service_ref).await?;
+    let reg = crate::registry::find_service(&repo_dir, service_name)?;
+    let def = &reg.def;
+    if def.service.deploy != DeployStrategy::BlueGreen {
+        return Ok(None);
+    }
+    let health_check = def.service.health_check.clone().ok_or_else(|| {
+        Error::Template(format!(
+            "{service_name}: deploy = \"blue-green\" but no health_check — validation should have caught this"
+        ))
+    })?;
+
+    // Which slot is live, and which we're rolling onto.
+    let live = metadata.active_color.unwrap_or(Color::Blue);
+    let target = live.other();
+
+    // The idle slot's host port, from the install's `.env`
+    // (`SERVICE_PORT_HTTP_GREEN` etc., written by the blue/green add path).
+    let primary_port_name = def
+        .ports
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("http"))
+        .or_else(|| def.ports.first())
+        .map(|p| p.name.clone())
+        .ok_or_else(|| Error::Template(format!("{service_name}: blue/green needs a routable port")))?;
+    let existing_ports = read_existing_ports(service_name)?;
+    let target_key = format!("{}_{}", primary_port_name.to_ascii_lowercase(), target);
+    let target_port = existing_ports.get(&target_key).copied().ok_or_else(|| {
+        Error::Template(format!(
+            "{service_name}: missing {} in .env — reinstall to allocate the blue/green port pair",
+            deploy::color_port_var(
+                &format!("SERVICE_PORT_{}", primary_port_name.to_uppercase()),
+                target
+            )
+        ))
+    })?;
+    let health_url = format!("http://127.0.0.1:{target_port}{health_check}");
+
+    // Re-render the install (Upgrade mode): emits both color quadlets/units and
+    // pulls any new image. Keep those file writes + pulls + daemon-reload, but
+    // drop the add path's StartService/StopService (we orchestrate the swap
+    // ourselves), its `.env` write (preserve secrets), and its metadata write
+    // (we flip active_color below instead of resetting it to blue).
+    let replanned = replan(service_name).await?;
+    let env_filename = std::ffi::OsStr::new(".env");
+    let metadata_file = metadata_path(service_name)?;
+    let mut steps: Vec<Step> = Vec::new();
+    for step in replanned.result.steps {
+        match step {
+            Step::StartService { .. } | Step::StopService { .. } => continue,
+            Step::WriteFile(GeneratedFile { ref path, .. })
+                if path.file_name() == Some(env_filename) || *path == metadata_file =>
+            {
+                continue;
+            }
+            other => steps.push(other),
+        }
+    }
+
+    // Caddy: repoint the upstream at the idle slot. Only when the install has a
+    // routed URL and a Caddyfile exists (loopback installs swap without it).
+    let caddy_rewrite = blue_green_caddy_rewrite(service_name, def, &metadata, target)?;
+
+    // The runtime-agnostic swap: start idle -> health-gate -> caddy reload ->
+    // stop old. Artifact prep (pull/build) already rode along in `steps` above.
+    steps.extend(deploy::color_swap_steps(deploy::ColorSwap {
+        service_name: service_name.to_string(),
+        live,
+        prepare: None,
+        health_url,
+        health_timeout_secs: 120,
+        caddy_rewrite,
+    }));
+
+    // Flip active_color so the next deploy rolls back onto `live`.
+    let mut new_metadata = metadata.clone();
+    new_metadata.active_color = Some(target);
+    steps.push(Step::WriteFile(GeneratedFile {
+        path: metadata_file,
+        content: toml::to_string_pretty(&new_metadata)?,
+    }));
+
+    Ok(Some(UpgradeResult {
+        service: service_name.to_string(),
+        diff: diff_service(service_name).await?,
+        steps,
+        backup_dir: None,
+        planned_files: replanned.planned,
+        // A swap isn't visible as config drift (the new image/build lives behind
+        // the same quadlet), so force the apply just like the native rebuild path.
+        force_apply: true,
+    }))
+}
+
+/// Re-render the Caddy site block pointing at the idle color and splice it into
+/// the existing Caddyfile. `None` when the install has no routed URL or no
+/// Caddyfile on disk (a loopback blue/green install swaps without Caddy).
+fn blue_green_caddy_rewrite(
+    service_name: &str,
+    def: &crate::registry::service_def::ServiceDef,
+    metadata: &Metadata,
+    target: Color,
+) -> Result<Option<Step>> {
+    let Some(url) = metadata.url.as_deref() else {
+        return Ok(None);
+    };
+    let caddyfile_path = caddy::caddyfile_path()?;
+    let Ok(existing) = std::fs::read_to_string(&caddyfile_path) else {
+        return Ok(None);
+    };
+    let parsed = url::Url::parse(url)
+        .map_err(|e| Error::Template(format!("invalid service URL '{url}': {e}")))?;
+    let domain = parsed
+        .host_str()
+        .ok_or_else(|| Error::Template(format!("service URL '{url}' has no host")))?;
+    let container_port = def.ports.first().map(|p| p.container_port).unwrap_or(80);
+    let paths = crate::config::ConfigPaths::resolve()?;
+    let config = crate::config::load_or_default(&paths.config_file)?;
+    let block = caddy::render_site_block(&caddy::CaddySiteParams {
+        service_name: service_name.to_string(),
+        target_host: deploy::color_unit(service_name, target),
+        domain: domain.to_string(),
+        container_port,
+        https_port: crate::caddy_https_port(&config),
+        force_internal_tls: false,
+    });
+    let updated = caddy::add_route(&existing, service_name, &block);
+    Ok(Some(Step::WriteFile(GeneratedFile {
+        path: caddyfile_path,
+        content: updated,
+    })))
+}
+
 /// Plan an upgrade for an installed service.
 ///
 /// Returns the steps to execute and the backup directory where displaced
 /// files will be copied. The backup dir is *also* baked into the steps
 /// (as `Step::CopyFile` entries placed before each `Step::WriteFile`).
 pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeResult> {
+    // Blue/green services upgrade by a color swap, not an in-place restart, so
+    // they take a different plan entirely. `blue_green_swap` returns None for
+    // restart-strategy installs, falling through to the standard flow below.
+    if let Some(plan) = blue_green_swap(service_name).await? {
+        return Ok(plan);
+    }
+
     let diff = diff_service(service_name).await?;
 
     if !force {
