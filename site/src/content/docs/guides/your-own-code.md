@@ -86,3 +86,24 @@ container). Two requirements:
   briefly live against the same database, so additive (expand/contract) changes
   only — don't ship a destructive migration in the same deploy as code that
   depends on it.
+
+This works the same for a public hostname: `ryra add . --url https://app.example.com`
+puts Caddy in front (it's also the swap point — Cloudflare or any upstream proxy
+never sees the blue/green cutover, just one stable origin).
+
+### Certs behind a proxy
+
+If something upstream already terminates public TLS (Cloudflare's orange-cloud
+proxy, a load balancer), you don't want Let's Encrypt at the origin. Bring your
+own cert instead:
+
+```bash
+ryra add . --url https://app.example.com \
+  --tls-cert /etc/ryra/certs/origin.pem --tls-key /etc/ryra/certs/origin.key
+```
+
+That's exactly where a **Cloudflare Origin CA certificate** goes (pair it with
+Cloudflare's "Full (Strict)" mode). Without `--tls-cert`, Caddy defaults to a
+self-signed internal cert, which Cloudflare accepts in plain "Full" mode. Use
+`--acme` only when the origin is directly internet-facing (no proxy in front).
+The cert lives on Caddy's listener and is untouched by the blue/green swap.
