@@ -84,7 +84,12 @@ enum Command {
         /// together with `--tls-key`. The right choice behind a proxy that
         /// terminates public TLS (e.g. a Cloudflare Origin CA cert with
         /// "Full (Strict)"). Mutually exclusive with `--acme`.
-        #[arg(long, value_name = "CERT_PATH", requires = "tls_key", conflicts_with = "acme")]
+        #[arg(
+            long,
+            value_name = "CERT_PATH",
+            requires = "tls_key",
+            conflicts_with = "acme"
+        )]
         tls_cert: Option<String>,
         /// Private key path that pairs with `--tls-cert`.
         #[arg(long, value_name = "KEY_PATH", requires = "tls_cert")]

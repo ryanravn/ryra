@@ -566,7 +566,9 @@ pub async fn blue_green_swap(service_name: &str) -> Result<Option<UpgradeResult>
         .find(|p| p.name.eq_ignore_ascii_case("http"))
         .or_else(|| def.ports.first())
         .map(|p| p.name.clone())
-        .ok_or_else(|| Error::Template(format!("{service_name}: blue/green needs a routable port")))?;
+        .ok_or_else(|| {
+            Error::Template(format!("{service_name}: blue/green needs a routable port"))
+        })?;
     let existing_ports = read_existing_ports(service_name)?;
     let target_key = format!("{}_{}", primary_port_name.to_ascii_lowercase(), target);
     let target_port = existing_ports.get(&target_key).copied().ok_or_else(|| {

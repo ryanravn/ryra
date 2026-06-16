@@ -249,8 +249,15 @@ async fn execute(step: &Step) -> Result<()> {
                 loop {
                     let code = Command::new("curl")
                         .args([
-                            "-sS", "-k", "-o", "/dev/null", "-w", "%{http_code}", "--max-time",
-                            "5", url,
+                            "-sS",
+                            "-k",
+                            "-o",
+                            "/dev/null",
+                            "-w",
+                            "%{http_code}",
+                            "--max-time",
+                            "5",
+                            url,
                         ])
                         .output()
                         .ok()
@@ -290,18 +297,22 @@ async fn execute(step: &Step) -> Result<()> {
             Ok(())
         }
         Step::SyncDir { src, dst } => {
-            with_simple_spinner(&format!("syncing {} -> {}", src.display(), dst.display()), || {
-                // Clear the destination so a removed source file doesn't linger
-                // in the slot, then copy the tree fresh (skipping build/VCS/dep
-                // dirs — they're rebuilt per slot, and copying e.g. target/ or
-                // node_modules would be huge and wrong).
-                if dst.exists() {
-                    std::fs::remove_dir_all(dst)
-                        .with_context(|| format!("failed to clear {}", dst.display()))?;
-                }
-                copy_tree(src, dst)
-                    .with_context(|| format!("failed to sync {} -> {}", src.display(), dst.display()))
-            })
+            with_simple_spinner(
+                &format!("syncing {} -> {}", src.display(), dst.display()),
+                || {
+                    // Clear the destination so a removed source file doesn't linger
+                    // in the slot, then copy the tree fresh (skipping build/VCS/dep
+                    // dirs — they're rebuilt per slot, and copying e.g. target/ or
+                    // node_modules would be huge and wrong).
+                    if dst.exists() {
+                        std::fs::remove_dir_all(dst)
+                            .with_context(|| format!("failed to clear {}", dst.display()))?;
+                    }
+                    copy_tree(src, dst).with_context(|| {
+                        format!("failed to sync {} -> {}", src.display(), dst.display())
+                    })
+                },
+            )
         }
         Step::Build { dir, command } => {
             println!("  building: {command}");
@@ -1058,6 +1069,19 @@ fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()
     Ok(())
 }
 
+/// Run a command with explicit program and args (no shell interpretation).
+fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
+    let display = format!("{program} {}", args.join(" "));
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to run: {display}"))?;
+    if !status.success() {
+        bail!("command failed: {display}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::copy_tree;
@@ -1086,20 +1110,10 @@ mod tests {
         assert!(dst.join("app/mod.py").exists());
         // Build / dependency / VCS dirs skipped.
         assert!(!dst.join("target").exists(), "target/ should be skipped");
-        assert!(!dst.join("node_modules").exists(), "node_modules/ should be skipped");
+        assert!(
+            !dst.join("node_modules").exists(),
+            "node_modules/ should be skipped"
+        );
         assert!(!dst.join(".git").exists(), ".git/ should be skipped");
     }
-}
-
-/// Run a command with explicit program and args (no shell interpretation).
-fn run_cmd(program: &str, args: &[&str]) -> Result<()> {
-    let display = format!("{program} {}", args.join(" "));
-    let status = Command::new(program)
-        .args(args)
-        .status()
-        .with_context(|| format!("failed to run: {display}"))?;
-    if !status.success() {
-        bail!("command failed: {display}");
-    }
-    Ok(())
 }

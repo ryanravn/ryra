@@ -51,7 +51,9 @@ pub fn expand_color_quadlets(files: Vec<GeneratedFile>, service_name: &str) -> V
         if is_main {
             for color in [Color::Blue, Color::Green] {
                 out.push(GeneratedFile {
-                    path: f.path.with_file_name(color_quadlet_filename(service_name, color)),
+                    path: f
+                        .path
+                        .with_file_name(color_quadlet_filename(service_name, color)),
                     content: podman_color_quadlet(&f.content, service_name, color),
                 });
             }
@@ -361,8 +363,14 @@ EnvironmentFile=%h/.local/share/services/authelia/.env
 
     #[test]
     fn color_port_var_appends_uppercased_color() {
-        assert_eq!(color_port_var("SERVICE_PORT_HTTP", Color::Blue), "SERVICE_PORT_HTTP_BLUE");
-        assert_eq!(color_port_var("SERVICE_PORT_HTTP", Color::Green), "SERVICE_PORT_HTTP_GREEN");
+        assert_eq!(
+            color_port_var("SERVICE_PORT_HTTP", Color::Blue),
+            "SERVICE_PORT_HTTP_BLUE"
+        );
+        assert_eq!(
+            color_port_var("SERVICE_PORT_HTTP", Color::Green),
+            "SERVICE_PORT_HTTP_GREEN"
+        );
     }
 
     #[test]
@@ -380,7 +388,10 @@ EnvironmentFile=%h/.local/share/services/authelia/.env
         // The port override must come AFTER EnvironmentFile so it wins.
         let envfile = unit.find("EnvironmentFile=").unwrap();
         let port_override = unit.find("Environment=SERVICE_PORT_HTTP=9002").unwrap();
-        assert!(port_override > envfile, "port override must follow EnvironmentFile");
+        assert!(
+            port_override > envfile,
+            "port override must follow EnvironmentFile"
+        );
         assert!(unit.contains("ExecStart=/bin/sh -c 'exec python -m app'"));
         assert!(unit.contains("Description=Demo API (green)"));
     }
@@ -405,7 +416,9 @@ EnvironmentFile=%h/.local/share/services/authelia/.env
         let swap = ColorSwap {
             service_name: svc.into(),
             live,
-            prepare: Some(Step::PullImage { image: "authelia:4.40".into() }),
+            prepare: Some(Step::PullImage {
+                image: "authelia:4.40".into(),
+            }),
             health_url: "http://127.0.0.1:9002/api/health".into(),
             health_timeout_secs: 60,
             caddy_rewrite: Some(caddy_write()),

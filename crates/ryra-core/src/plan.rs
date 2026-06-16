@@ -181,7 +181,11 @@ impl Step {
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
             Step::Build { dir, command } => format!("(cd {} && {command})", dir.display()),
             Step::SyncDir { src, dst } => {
-                format!("sync {} -> {} (skip build/VCS dirs)", src.display(), dst.display())
+                format!(
+                    "sync {} -> {} (skip build/VCS dirs)",
+                    src.display(),
+                    dst.display()
+                )
             }
             Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),
             Step::TailscaleEnable { svc_name, ports } => ports

@@ -16,7 +16,20 @@ use ryra_core::Step;
 /// These tests mutate process-global env vars, so they can't run in parallel.
 fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().expect("env lock poisoned")
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock poisoned")
+}
+
+/// Drive an async call to completion from a sync test. Sync tests keep the
+/// `env_lock` guard out of any `.await` (clippy::await_holding_lock) while still
+/// serializing the env-var mutation.
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build runtime")
+        .block_on(f)
 }
 
 /// A faked blue/green install in a tempdir: a path registry holding the
@@ -64,7 +77,9 @@ container_port = 8080
         )
         .expect("write service.toml");
         std::fs::write(
-            service_dir.join("quadlets").join(format!("{service}.container")),
+            service_dir
+                .join("quadlets")
+                .join(format!("{service}.container")),
             format!(
                 "[Container]\n\
                  Image=docker.io/traefik/whoami:latest\n\
@@ -179,63 +194,108 @@ container_port = 8080
     let unit_dir = home.join(".config/systemd/user");
     std::fs::create_dir_all(&unit_dir).expect("unit dir");
     for color in ["blue", "green"] {
-        std::fs::write(unit_dir.join(format!("{service}-{color}.service")), "[Service]\n")
-            .expect("unit");
+        std::fs::write(
+            unit_dir.join(format!("{service}-{color}.service")),
+            "[Service]\n",
+        )
+        .expect("unit");
     }
     tmp
 }
 
 fn started(steps: &[Step]) -> Vec<String> {
-    steps.iter().filter_map(|s| match s {
-        Step::StartService { unit } => Some(unit.clone()),
-        _ => None,
-    }).collect()
+    steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::StartService { unit } => Some(unit.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn stopped(steps: &[Step]) -> Vec<String> {
-    steps.iter().filter_map(|s| match s {
-        Step::StopService { unit } => Some(unit.clone()),
-        _ => None,
-    }).collect()
+    steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::StopService { unit } => Some(unit.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
-#[tokio::test]
-async fn swap_from_blue_rolls_onto_green_and_flips_color() {
+#[test]
+fn swap_from_blue_rolls_onto_green_and_flips_color() {
     let _guard = env_lock();
     let _sb = Sandbox::new("demo", "blue");
 
-    let plan = ryra_core::upgrade::blue_green_swap("demo")
-        .await
+    let plan = block_on(ryra_core::upgrade::blue_green_swap("demo"))
         .expect("swap plans")
         .expect("service is blue/green");
 
     // Starts green, stops blue.
-    assert!(started(&plan.steps).contains(&"demo-green".to_string()), "started: {:?}", started(&plan.steps));
-    assert!(stopped(&plan.steps).contains(&"demo-blue".to_string()), "stopped: {:?}", stopped(&plan.steps));
+    assert!(
+        started(&plan.steps).contains(&"demo-green".to_string()),
+        "started: {:?}",
+        started(&plan.steps)
+    );
+    assert!(
+        stopped(&plan.steps).contains(&"demo-blue".to_string()),
+        "stopped: {:?}",
+        stopped(&plan.steps)
+    );
     assert!(!started(&plan.steps).contains(&"demo-blue".to_string()));
 
     // Health gate hits the *idle* (green) port + the declared path.
-    let (health, timeout) = plan.steps.iter().find_map(|s| match s {
-        Step::WaitForHttpHealthy { url, timeout_secs, .. } => Some((url.clone(), *timeout_secs)),
-        _ => None,
-    }).expect("has a health gate");
+    let (health, timeout) = plan
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::WaitForHttpHealthy {
+                url, timeout_secs, ..
+            } => Some((url.clone(), *timeout_secs)),
+            _ => None,
+        })
+        .expect("has a health gate");
     assert_eq!(health, "http://127.0.0.1:19002/healthz", "got {health}");
     // The service.toml's `health_timeout = 45` flows all the way to the step.
     assert_eq!(timeout, 45, "custom health_timeout should reach the step");
 
     // Ordering: start green BEFORE stop blue (overlap = zero downtime).
-    let start_idx = plan.steps.iter().position(|s| matches!(s, Step::StartService { unit } if unit == "demo-green")).unwrap();
-    let health_idx = plan.steps.iter().position(|s| matches!(s, Step::WaitForHttpHealthy { .. })).unwrap();
-    let stop_idx = plan.steps.iter().position(|s| matches!(s, Step::StopService { unit } if unit == "demo-blue")).unwrap();
+    let start_idx = plan
+        .steps
+        .iter()
+        .position(|s| matches!(s, Step::StartService { unit } if unit == "demo-green"))
+        .unwrap();
+    let health_idx = plan
+        .steps
+        .iter()
+        .position(|s| matches!(s, Step::WaitForHttpHealthy { .. }))
+        .unwrap();
+    let stop_idx = plan
+        .steps
+        .iter()
+        .position(|s| matches!(s, Step::StopService { unit } if unit == "demo-blue"))
+        .unwrap();
     assert!(start_idx < health_idx, "start must precede health gate");
-    assert!(health_idx < stop_idx, "health gate must precede stopping the old slot");
+    assert!(
+        health_idx < stop_idx,
+        "health gate must precede stopping the old slot"
+    );
 
     // active_color flips to green in the metadata write.
-    let meta = plan.steps.iter().rev().find_map(|s| match s {
-        Step::WriteFile(f) if f.path.ends_with("metadata.toml") => Some(f.content.clone()),
-        _ => None,
-    }).expect("metadata write");
-    assert!(meta.contains("active_color = \"green\""), "metadata: {meta}");
+    let meta = plan
+        .steps
+        .iter()
+        .rev()
+        .find_map(|s| match s {
+            Step::WriteFile(f) if f.path.ends_with("metadata.toml") => Some(f.content.clone()),
+            _ => None,
+        })
+        .expect("metadata write");
+    assert!(
+        meta.contains("active_color = \"green\""),
+        "metadata: {meta}"
+    );
 
     // It's a swap, so force the apply even on a clean config diff.
     assert!(plan.force_apply);
@@ -246,74 +306,116 @@ fn remove_tears_down_both_color_slots() {
     let _guard = env_lock();
     let _sb = Sandbox::new("demo", "blue");
 
-    let result = ryra_core::remove_service("demo", ryra_core::RemoveMode::Preserve)
-        .expect("remove plans");
+    let result =
+        ryra_core::remove_service("demo", ryra_core::RemoveMode::Preserve).expect("remove plans");
     let stopped = stopped(&result.steps);
     // Both color slots' units must be stopped — neither leaks.
-    assert!(stopped.contains(&"demo-blue".to_string()), "stopped: {stopped:?}");
-    assert!(stopped.contains(&"demo-green".to_string()), "stopped: {stopped:?}");
+    assert!(
+        stopped.contains(&"demo-blue".to_string()),
+        "stopped: {stopped:?}"
+    );
+    assert!(
+        stopped.contains(&"demo-green".to_string()),
+        "stopped: {stopped:?}"
+    );
     // And both quadlet files get removed.
-    let removed: Vec<String> = result.steps.iter().filter_map(|s| match s {
-        Step::RemoveFile(p) => p.file_name().and_then(|n| n.to_str()).map(String::from),
-        _ => None,
-    }).collect();
-    assert!(removed.iter().any(|n| n == "demo-blue.container"), "removed: {removed:?}");
-    assert!(removed.iter().any(|n| n == "demo-green.container"), "removed: {removed:?}");
+    let removed: Vec<String> = result
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::RemoveFile(p) => p.file_name().and_then(|n| n.to_str()).map(String::from),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        removed.iter().any(|n| n == "demo-blue.container"),
+        "removed: {removed:?}"
+    );
+    assert!(
+        removed.iter().any(|n| n == "demo-green.container"),
+        "removed: {removed:?}"
+    );
 }
 
-#[tokio::test]
-async fn native_swap_rebuilds_only_the_idle_slot() {
+#[test]
+fn native_swap_rebuilds_only_the_idle_slot() {
     let _guard = env_lock();
     let _tmp = native_sandbox("napp", "blue");
 
-    let plan = ryra_core::upgrade::blue_green_swap("napp")
-        .await
+    let plan = block_on(ryra_core::upgrade::blue_green_swap("napp"))
         .expect("swap plans")
         .expect("service is blue/green");
 
     // The idle (green) slot is re-synced + rebuilt; the LIVE (blue) slot is
     // never touched — the isolation that keeps a running interpreted process
     // safe during deploy.
-    let synced: Vec<String> = plan.steps.iter().filter_map(|s| match s {
-        Step::SyncDir { dst, .. } => Some(dst.to_string_lossy().into_owned()),
-        _ => None,
-    }).collect();
-    assert!(synced.iter().any(|d| d.ends_with("colors/green")), "synced: {synced:?}");
-    assert!(!synced.iter().any(|d| d.ends_with("colors/blue")), "live slot re-synced! {synced:?}");
+    let synced: Vec<String> = plan
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::SyncDir { dst, .. } => Some(dst.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        synced.iter().any(|d| d.ends_with("colors/green")),
+        "synced: {synced:?}"
+    );
+    assert!(
+        !synced.iter().any(|d| d.ends_with("colors/blue")),
+        "live slot re-synced! {synced:?}"
+    );
 
-    let built: Vec<String> = plan.steps.iter().filter_map(|s| match s {
-        Step::Build { dir, .. } => Some(dir.to_string_lossy().into_owned()),
-        _ => None,
-    }).collect();
-    assert!(built.iter().any(|d| d.ends_with("colors/green")), "built: {built:?}");
-    assert!(!built.iter().any(|d| d.ends_with("colors/blue")), "live slot rebuilt! {built:?}");
+    let built: Vec<String> = plan
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::Build { dir, .. } => Some(dir.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        built.iter().any(|d| d.ends_with("colors/green")),
+        "built: {built:?}"
+    );
+    assert!(
+        !built.iter().any(|d| d.ends_with("colors/blue")),
+        "live slot rebuilt! {built:?}"
+    );
 
     // Same swap choreography: start green, health-gate green's port, stop blue.
     assert!(started(&plan.steps).contains(&"napp-green".to_string()));
     assert!(stopped(&plan.steps).contains(&"napp-blue".to_string()));
-    let health = plan.steps.iter().find_map(|s| match s {
-        Step::WaitForHttpHealthy { url, .. } => Some(url.clone()),
-        _ => None,
-    }).unwrap();
+    let health = plan
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::WaitForHttpHealthy { url, .. } => Some(url.clone()),
+            _ => None,
+        })
+        .unwrap();
     assert_eq!(health, "http://127.0.0.1:19002/healthz");
 }
 
-#[tokio::test]
-async fn swap_from_green_rolls_back_onto_blue() {
+#[test]
+fn swap_from_green_rolls_back_onto_blue() {
     let _guard = env_lock();
     let _sb = Sandbox::new("demo", "green");
 
-    let plan = ryra_core::upgrade::blue_green_swap("demo")
-        .await
+    let plan = block_on(ryra_core::upgrade::blue_green_swap("demo"))
         .expect("swap plans")
         .expect("service is blue/green");
 
     assert!(started(&plan.steps).contains(&"demo-blue".to_string()));
     assert!(stopped(&plan.steps).contains(&"demo-green".to_string()));
-    let health = plan.steps.iter().find_map(|s| match s {
-        Step::WaitForHttpHealthy { url, .. } => Some(url.clone()),
-        _ => None,
-    }).unwrap();
+    let health = plan
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::WaitForHttpHealthy { url, .. } => Some(url.clone()),
+            _ => None,
+        })
+        .unwrap();
     // Rolling back onto blue -> health-checks the blue port.
     assert_eq!(health, "http://127.0.0.1:19001/healthz");
 }

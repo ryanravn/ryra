@@ -1486,7 +1486,9 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
             .or_else(|| allocated_ports.first())
             .map(|(n, _)| n.clone())
             .ok_or_else(|| {
-                Error::Bundle(format!("blue/green native '{service_name}' has no port to route"))
+                Error::Bundle(format!(
+                    "blue/green native '{service_name}' has no port to route"
+                ))
             })?;
         let port_var = format!("SERVICE_PORT_{}", primary.to_uppercase());
         let home_str = home_dir.to_string_lossy().into_owned();
@@ -2925,7 +2927,8 @@ mod tests {
         exposure: exposure::Exposure,
     ) -> AddResult {
         let empty_map = std::collections::BTreeMap::new();
-        let empty_ports: std::collections::BTreeMap<String, u16> = std::collections::BTreeMap::new();
+        let empty_ports: std::collections::BTreeMap<String, u16> =
+            std::collections::BTreeMap::new();
         let empty_set = std::collections::BTreeSet::new();
         let port_in_use = |_p: u16| false;
         add_service(AddServiceParams {
@@ -2954,7 +2957,10 @@ mod tests {
     #[test]
     fn blue_green_podman_add_emits_two_slots_and_starts_blue() {
         let tmp = tempfile::tempdir().unwrap();
-        write_demo_registry(tmp.path(), "deploy = \"blue-green\"\nhealth_check = \"/healthz\"");
+        write_demo_registry(
+            tmp.path(),
+            "deploy = \"blue-green\"\nhealth_check = \"/healthz\"",
+        );
         let result = plan_demo(tmp.path());
 
         // Quadlet files written: demo-blue.container + demo-green.container,
@@ -2963,35 +2969,62 @@ mod tests {
             .steps
             .iter()
             .filter_map(|s| match s {
-                Step::WriteFile(f) => f.path.file_name().and_then(|n| n.to_str()).map(String::from),
+                Step::WriteFile(f) => f
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(String::from),
                 _ => None,
             })
             .collect();
-        assert!(written.iter().any(|n| n == "demo-blue.container"), "got {written:?}");
-        assert!(written.iter().any(|n| n == "demo-green.container"), "got {written:?}");
-        assert!(!written.iter().any(|n| n == "demo.container"), "bare slot leaked: {written:?}");
+        assert!(
+            written.iter().any(|n| n == "demo-blue.container"),
+            "got {written:?}"
+        );
+        assert!(
+            written.iter().any(|n| n == "demo-green.container"),
+            "got {written:?}"
+        );
+        assert!(
+            !written.iter().any(|n| n == "demo.container"),
+            "bare slot leaked: {written:?}"
+        );
 
         // The color quadlets carry their color-specific port var + container name.
-        let blue = result.steps.iter().find_map(|s| match s {
-            Step::WriteFile(f) if f.path.ends_with("demo-blue.container") => Some(&f.content),
-            _ => None,
-        }).unwrap();
+        let blue = result
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::WriteFile(f) if f.path.ends_with("demo-blue.container") => Some(&f.content),
+                _ => None,
+            })
+            .unwrap();
         assert!(blue.contains("ContainerName=demo-blue"));
         assert!(blue.contains("${SERVICE_PORT_HTTP_BLUE}"));
 
         // Start targets the active (blue) slot, not the bare unit.
-        let started: Vec<&str> = result.steps.iter().filter_map(|s| match s {
-            Step::StartService { unit } => Some(unit.as_str()),
-            _ => None,
-        }).collect();
+        let started: Vec<&str> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::StartService { unit } => Some(unit.as_str()),
+                _ => None,
+            })
+            .collect();
         assert!(started.contains(&"demo-blue"), "started: {started:?}");
         assert!(!started.contains(&"demo"), "bare unit started: {started:?}");
 
         // A second host port was allocated and exposed as the two color vars.
-        let env = result.steps.iter().find_map(|s| match s {
-            Step::WriteFile(f) if f.path.file_name() == Some(std::ffi::OsStr::new(".env")) => Some(&f.content),
-            _ => None,
-        }).unwrap();
+        let env = result
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::WriteFile(f) if f.path.file_name() == Some(std::ffi::OsStr::new(".env")) => {
+                    Some(&f.content)
+                }
+                _ => None,
+            })
+            .unwrap();
         assert!(env.contains("SERVICE_PORT_HTTP_BLUE="), "env: {env}");
         assert!(env.contains("SERVICE_PORT_HTTP_GREEN="), "env: {env}");
     }
@@ -3006,42 +3039,76 @@ mod tests {
         let result = plan_service(tmp.path(), "napp");
 
         // Each color slot gets a SyncDir + a Build in its own dir.
-        let syncs: Vec<String> = result.steps.iter().filter_map(|s| match s {
-            Step::SyncDir { dst, .. } => Some(dst.to_string_lossy().into_owned()),
-            _ => None,
-        }).collect();
-        assert!(syncs.iter().any(|d| d.ends_with("colors/blue")), "syncs: {syncs:?}");
-        assert!(syncs.iter().any(|d| d.ends_with("colors/green")), "syncs: {syncs:?}");
-        let builds: Vec<String> = result.steps.iter().filter_map(|s| match s {
-            Step::Build { dir, .. } => Some(dir.to_string_lossy().into_owned()),
-            _ => None,
-        }).collect();
-        assert!(builds.iter().any(|d| d.ends_with("colors/blue")), "builds: {builds:?}");
-        assert!(builds.iter().any(|d| d.ends_with("colors/green")), "builds: {builds:?}");
+        let syncs: Vec<String> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::SyncDir { dst, .. } => Some(dst.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            syncs.iter().any(|d| d.ends_with("colors/blue")),
+            "syncs: {syncs:?}"
+        );
+        assert!(
+            syncs.iter().any(|d| d.ends_with("colors/green")),
+            "syncs: {syncs:?}"
+        );
+        let builds: Vec<String> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Build { dir, .. } => Some(dir.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            builds.iter().any(|d| d.ends_with("colors/blue")),
+            "builds: {builds:?}"
+        );
+        assert!(
+            builds.iter().any(|d| d.ends_with("colors/green")),
+            "builds: {builds:?}"
+        );
 
         // Two color units written; the green unit runs from its own slot and
         // binds its own port via an explicit override.
-        let green_unit = result.steps.iter().find_map(|s| match s {
-            Step::WriteFile(f) if f.path.ends_with("napp-green.service") => Some(&f.content),
-            _ => None,
-        }).expect("green unit");
+        let green_unit = result
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::WriteFile(f) if f.path.ends_with("napp-green.service") => Some(&f.content),
+                _ => None,
+            })
+            .expect("green unit");
         assert!(green_unit.contains("WorkingDirectory="));
         assert!(green_unit.contains("colors/green"));
         assert!(green_unit.contains("Environment=SERVICE_PORT_HTTP="));
         assert!(green_unit.contains("ExecStart=/bin/sh -c 'exec python -m app'"));
 
         // Only blue is started.
-        let started: Vec<&str> = result.steps.iter().filter_map(|s| match s {
-            Step::StartService { unit } => Some(unit.as_str()),
-            _ => None,
-        }).collect();
+        let started: Vec<&str> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::StartService { unit } => Some(unit.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(started, vec!["napp-blue"], "started: {started:?}");
 
         // Port pair in .env.
-        let env = result.steps.iter().find_map(|s| match s {
-            Step::WriteFile(f) if f.path.file_name() == Some(std::ffi::OsStr::new(".env")) => Some(&f.content),
-            _ => None,
-        }).unwrap();
+        let env = result
+            .steps
+            .iter()
+            .find_map(|s| match s {
+                Step::WriteFile(f) if f.path.file_name() == Some(std::ffi::OsStr::new(".env")) => {
+                    Some(&f.content)
+                }
+                _ => None,
+            })
+            .unwrap();
         assert!(env.contains("SERVICE_PORT_HTTP_BLUE="));
         assert!(env.contains("SERVICE_PORT_HTTP_GREEN="));
     }
@@ -3058,10 +3125,15 @@ mod tests {
         let result = plan_service_exposed(
             tmp.path(),
             "napp",
-            exposure::Exposure::Public { url: "https://napp.example.com".into() },
+            exposure::Exposure::Public {
+                url: "https://napp.example.com".into(),
+            },
         );
         assert!(
-            result.warnings.iter().any(|w| matches!(w, Warning::UrlWithoutReverseProxy { .. })),
+            result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, Warning::UrlWithoutReverseProxy { .. })),
             "native + url + no caddy should warn UrlWithoutReverseProxy"
         );
     }
@@ -3073,16 +3145,34 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_demo_registry(tmp.path(), "");
         let result = plan_demo(tmp.path());
-        let written: Vec<String> = result.steps.iter().filter_map(|s| match s {
-            Step::WriteFile(f) => f.path.file_name().and_then(|n| n.to_str()).map(String::from),
-            _ => None,
-        }).collect();
-        assert!(written.iter().any(|n| n == "demo.container"), "got {written:?}");
-        assert!(!written.iter().any(|n| n.contains("-blue")), "got {written:?}");
-        let started: Vec<&str> = result.steps.iter().filter_map(|s| match s {
-            Step::StartService { unit } => Some(unit.as_str()),
-            _ => None,
-        }).collect();
+        let written: Vec<String> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::WriteFile(f) => f
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(String::from),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            written.iter().any(|n| n == "demo.container"),
+            "got {written:?}"
+        );
+        assert!(
+            !written.iter().any(|n| n.contains("-blue")),
+            "got {written:?}"
+        );
+        let started: Vec<&str> = result
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::StartService { unit } => Some(unit.as_str()),
+                _ => None,
+            })
+            .collect();
         assert!(started.contains(&"demo"));
     }
 
