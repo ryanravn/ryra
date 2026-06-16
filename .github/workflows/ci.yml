@@ -261,6 +261,7 @@ jobs:
             fi
             return 1
           }
+          publish ryra-protocol
           publish ryra-vm
           publish ryra-core
           publish ryra-test

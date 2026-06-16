@@ -12,7 +12,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-ryra-protocol = { path = "../ryra-protocol" }
+ryra-protocol = { path = "../ryra-protocol", version = "0.9.3" }
 serde.workspace = true
 serde_json = "1"
 toml.workspace = true
