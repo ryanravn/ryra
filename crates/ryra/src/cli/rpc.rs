@@ -16,7 +16,8 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_core::protocol::{
-    ApplyOutcome, ErrorCode, Reply, Request, Response, RpcError, ServiceState, ServiceView,
+    ApplyOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, EnvAddition, ErrorCode, Reply,
+    Request, Response, RevertOutcome, RpcError, ServiceState, ServiceView,
 };
 
 use super::apply;
@@ -50,6 +51,21 @@ async fn dispatch(req: Request) -> OpResult {
         // Reads.
         Request::List => Ok(Response::Services(all_views()?)),
         Request::Get { service } => view_of(&service).map(Response::Service),
+        Request::Diff { service } => diff_view(&service).await.map(Response::Diff),
+        Request::Backups { service } => {
+            let snaps = ryra_core::list_backups(&service).map_err(core_err)?;
+            Ok(Response::Backups(
+                snaps
+                    .into_iter()
+                    .map(|s| BackupSnapshotView {
+                        timestamp: s.timestamp,
+                    })
+                    .collect(),
+            ))
+        }
+        Request::Revert { service, at } => {
+            revert(&service, at.as_deref()).await.map(Response::Revert)
+        }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
         Request::Add(r) => run_mutation(Operation::Add(r)).await,
@@ -124,6 +140,64 @@ async fn run_mutation(op: Operation) -> OpResult {
         applied,
         destructive,
     }))
+}
+
+/// What an upgrade would change for a service (read-only).
+async fn diff_view(service: &str) -> std::result::Result<DiffView, RpcError> {
+    let d = ryra_core::diff_service(service).await.map_err(core_err)?;
+    let blocked_by_drift = d
+        .entries
+        .iter()
+        .any(|e| matches!(e.kind, ryra_core::DiffKind::Drift));
+    let upgrade_available = !d.is_clean() || d.source_stale;
+    Ok(DiffView {
+        service: d.service,
+        upgrade_available,
+        blocked_by_drift,
+        source_stale: d.source_stale,
+        entries: d
+            .entries
+            .iter()
+            .filter(|e| !matches!(e.kind, ryra_core::DiffKind::Unchanged))
+            .map(|e| DiffEntry {
+                path: e.path.display().to_string(),
+                kind: map_diff_kind(&e.kind),
+            })
+            .collect(),
+        env_additions: d
+            .env_additions
+            .iter()
+            .map(|a| EnvAddition {
+                key: a.key.clone(),
+                kind: format!("{:?}", a.kind).to_lowercase(),
+                prompt: a.prompt.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn map_diff_kind(k: &ryra_core::DiffKind) -> DiffKind {
+    use ryra_core::DiffKind as Core;
+    match k {
+        Core::Unchanged => DiffKind::Unchanged,
+        Core::Modified => DiffKind::Modified,
+        Core::Drift => DiffKind::Drift,
+        Core::Added => DiffKind::Added,
+        Core::Removed => DiffKind::Removed,
+    }
+}
+
+/// Restore a service from a pre-upgrade snapshot, then execute the restore.
+async fn revert(service: &str, at: Option<&str>) -> std::result::Result<RevertOutcome, RpcError> {
+    let r = ryra_core::revert_service(service, at).map_err(core_err)?;
+    let outcome = RevertOutcome {
+        service: r.service.clone(),
+        timestamp: r.snapshot.timestamp.clone(),
+        files_restored: r.files_to_restore.len(),
+        files_deleted: r.files_to_delete.len(),
+    };
+    apply::execute_all(&r.steps).await.map_err(core_err)?;
+    Ok(outcome)
 }
 
 /// Map any ryra-core error to a structured rpc error. Coarse for now (most

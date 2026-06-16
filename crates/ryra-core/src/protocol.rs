@@ -40,6 +40,79 @@ pub enum Request {
     List,
     /// One service's current view.
     Get { service: String },
+    /// What an upgrade would change for a service (read-only).
+    Diff { service: String },
+    /// The pre-upgrade snapshots available to revert to, newest first.
+    Backups { service: String },
+    /// Restore a service from a pre-upgrade snapshot (latest if `at` is None).
+    Revert {
+        service: String,
+        #[serde(default)]
+        at: Option<String>,
+    },
+}
+
+/// How one file differs between the registry render and disk. Mirrors
+/// `upgrade::DiffKind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffKind {
+    Unchanged,
+    Modified,
+    /// Hand-edited; blocks a plain upgrade without force.
+    Drift,
+    Added,
+    Removed,
+}
+
+/// One changed file in a [`DiffView`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffEntry {
+    pub path: String,
+    pub kind: DiffKind,
+}
+
+/// An env var the registry expects that the install is missing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvAddition {
+    pub key: String,
+    /// Registry env kind (default / prompted / required), as a string.
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// What an upgrade would change for a service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffView {
+    pub service: String,
+    /// Anything (file or env or stale source) would change on upgrade.
+    pub upgrade_available: bool,
+    /// Hand-edited files would block a plain upgrade (needs force).
+    pub blocked_by_drift: bool,
+    /// Native source changed since the process started (rebuild would ship it).
+    pub source_stale: bool,
+    /// Per-file changes; omits unchanged files.
+    pub entries: Vec<DiffEntry>,
+    /// Env vars the registry expects but the `.env` is missing.
+    pub env_additions: Vec<EnvAddition>,
+}
+
+/// One restorable pre-upgrade snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupSnapshotView {
+    /// `YYYY-MM-DDTHH-MM-SSZ`; pass back as `at` to revert to exactly this one.
+    pub timestamp: String,
+}
+
+/// The result of a revert.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevertOutcome {
+    pub service: String,
+    /// The snapshot timestamp restored.
+    pub timestamp: String,
+    pub files_restored: usize,
+    pub files_deleted: usize,
 }
 
 /// Live run state of a service.
@@ -100,6 +173,12 @@ pub enum Response {
     Service(ServiceView),
     /// `list`.
     Services(Vec<ServiceView>),
+    /// `diff`.
+    Diff(DiffView),
+    /// `backups`.
+    Backups(Vec<BackupSnapshotView>),
+    /// `revert`.
+    Revert(RevertOutcome),
     /// `remove`.
     Done,
 }
