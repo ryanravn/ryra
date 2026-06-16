@@ -16,8 +16,9 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_core::protocol::{
-    ApplyOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, EnvAddition, ErrorCode, Reply,
-    Request, Response, RevertOutcome, RpcError, ServiceState, ServiceView,
+    ApplyOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition,
+    ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError, SearchHit,
+    ServiceState, ServiceView, Severity,
 };
 
 use super::apply;
@@ -66,6 +67,32 @@ async fn dispatch(req: Request) -> OpResult {
         Request::Revert { service, at } => {
             revert(&service, at.as_deref()).await.map(Response::Revert)
         }
+        Request::Search { query, registry } => search(query.as_deref(), registry.as_deref())
+            .await
+            .map(Response::SearchResults),
+        Request::Registries => {
+            let regs = ryra_core::registry::manage::list().map_err(core_err)?;
+            Ok(Response::Registries(
+                regs.into_iter()
+                    .map(|r| RegistryInfo {
+                        name: r.name,
+                        url: r.url,
+                        service_count: r.service_count,
+                    })
+                    .collect(),
+            ))
+        }
+        Request::AddRegistry { name, url } => {
+            ryra_core::registry::manage::add(&name, &url)
+                .await
+                .map_err(core_err)?;
+            Ok(Response::Done)
+        }
+        Request::RemoveRegistry { name } => {
+            ryra_core::registry::manage::remove(&name).map_err(core_err)?;
+            Ok(Response::Done)
+        }
+        Request::Doctor => Ok(Response::Doctor(doctor())),
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
         Request::Add(r) => run_mutation(Operation::Add(r)).await,
@@ -198,6 +225,65 @@ async fn revert(service: &str, at: Option<&str>) -> std::result::Result<RevertOu
     };
     apply::execute_all(&r.steps).await.map_err(core_err)?;
     Ok(outcome)
+}
+
+/// Search a registry for installable services (default registry if unset).
+async fn search(
+    query: Option<&str>,
+    registry: Option<&str>,
+) -> std::result::Result<Vec<SearchHit>, RpcError> {
+    use ryra_core::registry::resolve::ServiceRef;
+    let service_ref = match registry {
+        Some(name) => ServiceRef::Custom {
+            registry: name.to_string(),
+            service: String::new(),
+        },
+        None => ServiceRef::Default(String::new()),
+    };
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref)
+        .await
+        .map_err(core_err)?;
+    let results = ryra_core::search_services(&repo_dir, query).map_err(core_err)?;
+    Ok(results
+        .into_iter()
+        .map(|r| SearchHit {
+            name: r.name,
+            description: r.description,
+            installed: r.installed,
+            supports: r.supports,
+        })
+        .collect())
+}
+
+/// The full doctor sweep (same checks as `ryra doctor`).
+fn doctor() -> Vec<DoctorIssue> {
+    use ryra_core::system::doctor;
+    let issues = (|| -> anyhow::Result<Vec<doctor::Issue>> {
+        let paths = ryra_core::config::ConfigPaths::resolve()?;
+        let config = ryra_core::config::load_or_default(&paths.config_file)?;
+        Ok(doctor::check_all(&config)
+            .into_iter()
+            .chain(doctor::check_auth_wiring())
+            .chain(doctor::check_tailscale_services())
+            .collect())
+    })()
+    .unwrap_or_default();
+    issues
+        .into_iter()
+        .map(|i| DoctorIssue {
+            severity: map_severity(i.severity()),
+            message: i.to_string(),
+        })
+        .collect()
+}
+
+fn map_severity(s: ryra_core::system::doctor::Severity) -> Severity {
+    use ryra_core::system::doctor::Severity as S;
+    match s {
+        S::Blocker => Severity::Blocker,
+        S::Warning => Severity::Warning,
+        S::Info => Severity::Info,
+    }
 }
 
 /// Map any ryra-core error to a structured rpc error. Coarse for now (most

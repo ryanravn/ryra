@@ -50,6 +50,58 @@ pub enum Request {
         #[serde(default)]
         at: Option<String>,
     },
+    /// Search a registry for installable services (default registry if unset).
+    Search {
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        registry: Option<String>,
+    },
+    /// List the configured registries.
+    Registries,
+    /// Add a custom registry.
+    AddRegistry { name: String, url: String },
+    /// Remove a custom registry.
+    RemoveRegistry { name: String },
+    /// Run the diagnostics ryra-doctor runs.
+    Doctor,
+}
+
+/// One installable service from a registry search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchHit {
+    pub name: String,
+    pub description: String,
+    pub installed: bool,
+    /// Integrations the service supports (e.g. "oidc", "smtp").
+    pub supports: Vec<String>,
+}
+
+/// A configured registry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryInfo {
+    pub name: String,
+    pub url: String,
+    pub service_count: usize,
+}
+
+/// Severity of a doctor finding. Mirrors `system::doctor::Severity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Blocks installs outright.
+    Blocker,
+    /// Service runs but the user probably wants to fix it.
+    Warning,
+    /// Informational.
+    Info,
+}
+
+/// One diagnostic finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoctorIssue {
+    pub severity: Severity,
+    pub message: String,
 }
 
 /// How one file differs between the registry render and disk. Mirrors
@@ -179,7 +231,13 @@ pub enum Response {
     Backups(Vec<BackupSnapshotView>),
     /// `revert`.
     Revert(RevertOutcome),
-    /// `remove`.
+    /// `search`.
+    SearchResults(Vec<SearchHit>),
+    /// `registries`.
+    Registries(Vec<RegistryInfo>),
+    /// `doctor`.
+    Doctor(Vec<DoctorIssue>),
+    /// `remove` / `add_registry` / `remove_registry`.
     Done,
 }
 
