@@ -119,9 +119,11 @@ async fn dispatch(req: Request) -> OpResult {
             set_backup_enrolled(&service, enabled)?;
             Ok(Response::Done)
         }
-        Request::ServiceDef { service, registry } => service_def_view(&service, registry.as_deref())
-            .await
-            .map(Response::ServiceDef),
+        Request::ServiceDef { service, registry } => {
+            service_def_view(&service, registry.as_deref())
+                .await
+                .map(Response::ServiceDef)
+        }
         Request::ConfigureView { service } => {
             configure_view(&service).await.map(Response::ConfigureView)
         }
@@ -295,10 +297,7 @@ async fn search(
 /// Restore a service's data from a restic snapshot, running its pre/post
 /// restore hooks around the restic restore (the engine half of
 /// `ryra backup restore`).
-async fn restore(
-    service: &str,
-    snapshot: &str,
-) -> std::result::Result<RestoreOutcome, RpcError> {
+async fn restore(service: &str, snapshot: &str) -> std::result::Result<RestoreOutcome, RpcError> {
     let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
     let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
     let installed = ryra_core::list_installed()
@@ -561,9 +560,8 @@ async fn service_def_view(
     let repo_dir = ryra_core::resolve_registry_dir(&service_ref)
         .await
         .map_err(core_err)?;
-    let reg_service = ryra_core::registry::find_service(&repo_dir, name).map_err(|e| {
-        RpcError::new(ErrorCode::NotFound, format!("service '{name}': {e}"))
-    })?;
+    let reg_service = ryra_core::registry::find_service(&repo_dir, name)
+        .map_err(|e| RpcError::new(ErrorCode::NotFound, format!("service '{name}': {e}")))?;
     Ok(def_view(&reg_service.def))
 }
 
