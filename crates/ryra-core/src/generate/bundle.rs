@@ -298,6 +298,11 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
     }
 
     let mut quadlet_files = Vec::new();
+    // Did the chosen options exclude every quadlet? Then an empty result is
+    // legitimate (e.g. a native service whose only quadlet is a bundled DB that
+    // `database=external` drops) — not the "you forgot to ship a quadlet"
+    // error below.
+    let mut any_excluded = false;
     let service_home = crate::service_home(params.service_name)?;
     let data_root = crate::paths::service_data_root()?;
     let canonical_data_root = crate::home_dir()?.join(".local/share/services");
@@ -334,6 +339,7 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
             .iter()
             .any(|q| q == file_name.as_ref())
         {
+            any_excluded = true;
             continue;
         }
 
@@ -387,7 +393,10 @@ pub fn process_quadlet_bundle(params: &ProcessBundleParams<'_>) -> Result<Proces
         });
     }
 
-    if quadlet_files.is_empty() {
+    // Error only when the dir yielded nothing AND nothing was excluded — i.e. a
+    // genuinely empty `quadlets/`. If every quadlet was excluded by the chosen
+    // options, an empty bundle is the correct, valid outcome (no aux containers).
+    if quadlet_files.is_empty() && !any_excluded {
         return Err(Error::Bundle(format!(
             "no quadlet files found in quadlets/ for service '{}'",
             params.service_name
@@ -762,6 +771,38 @@ mod tests {
         };
         let err = process_quadlet_bundle(&params).unwrap_err();
         assert!(err.to_string().contains("no quadlet files found"));
+    }
+
+    #[test]
+    fn process_quadlet_bundle_all_excluded_is_empty_not_error() {
+        // A service whose only quadlet is excluded by the chosen option (e.g.
+        // `database=external` dropping the bundled DB) must yield an empty
+        // bundle, not the "no quadlet files" error.
+        let tmp = tempfile::tempdir().unwrap();
+        let service_dir = tmp.path().join("svc");
+        let quadlets_dir = service_dir.join("quadlets");
+        std::fs::create_dir_all(&quadlets_dir).unwrap();
+        std::fs::write(
+            quadlets_dir.join("svc-db.container"),
+            "[Container]\nImage=docker.io/library/postgres:17-alpine\n",
+        )
+        .unwrap();
+
+        let excluded = vec!["svc-db.container".to_string()];
+        let params = ProcessBundleParams {
+            service_dir: &service_dir,
+            service_name: "svc",
+            extra_networks: &[],
+            extra_volumes: &[],
+            podman_args: &[],
+            extra_exec_start_pre: &[],
+            port_names: &[],
+            excluded_quadlets: &excluded,
+        };
+        let bundle =
+            process_quadlet_bundle(&params).expect("all-excluded should be Ok, not an error");
+        assert!(bundle.quadlet_files.is_empty());
+        assert!(bundle.images.is_empty());
     }
 
     #[test]
