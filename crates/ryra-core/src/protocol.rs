@@ -76,11 +76,27 @@ pub struct ServiceView {
     pub upgrade_available: bool,
 }
 
+/// The outcome of a mutating operation: the affected service's fresh view plus
+/// what the apply actually did. `applied` is the number of steps/changes
+/// executed (0 = nothing to do / already current); `destructive` is true when
+/// the change set deletes data or is otherwise irreversible (the safety signal
+/// `ryra configure` surfaces).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyOutcome {
+    pub service: ServiceView,
+    pub applied: usize,
+    #[serde(default)]
+    pub destructive: bool,
+}
+
 /// The payload of a successful response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Response {
-    /// `add` / `configure` / `lifecycle` / `upgrade` / `get`.
+    /// `add` / `configure` / `lifecycle` / `upgrade`: the service view plus what
+    /// the apply did.
+    Applied(ApplyOutcome),
+    /// `get`: a pure view, no apply.
     Service(ServiceView),
     /// `list`.
     Services(Vec<ServiceView>),

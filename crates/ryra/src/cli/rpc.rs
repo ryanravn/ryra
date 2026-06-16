@@ -16,7 +16,7 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_core::protocol::{
-    ErrorCode, Reply, Request, Response, RpcError, ServiceState, ServiceView,
+    ApplyOutcome, ErrorCode, Reply, Request, Response, RpcError, ServiceState, ServiceView,
 };
 
 use super::apply;
@@ -49,11 +49,7 @@ async fn dispatch(req: Request) -> OpResult {
     match req {
         // Reads.
         Request::List => Ok(Response::Services(all_views()?)),
-        Request::Get { service } => all_views()?
-            .into_iter()
-            .find(|v| v.name == service)
-            .map(Response::Service)
-            .ok_or_else(|| RpcError::new(ErrorCode::NotFound, format!("no service '{service}'"))),
+        Request::Get { service } => view_of(&service).map(Response::Service),
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
         Request::Add(r) => run_mutation(Operation::Add(r)).await,
@@ -64,8 +60,10 @@ async fn dispatch(req: Request) -> OpResult {
     }
 }
 
-/// Plan + execute one mutating operation, then return the affected service's
-/// fresh view (or `Done` for remove).
+/// Plan + execute one mutating operation. Remove returns `Done`; the rest
+/// return an [`ApplyOutcome`] (the fresh service view + how much applied +
+/// whether the change was destructive), so callers don't lose the per-op
+/// accounting the in-process plan exposed.
 async fn run_mutation(op: Operation) -> OpResult {
     // The installed name to re-read afterwards. For Add the request `service`
     // may be a registry ref or path, so we take the resolved name from the plan.
@@ -80,38 +78,52 @@ async fn run_mutation(op: Operation) -> OpResult {
     let ctx = PlanContext::new(&super::is_port_in_use);
     let planned = ops::plan(&op, ctx).await.map_err(core_err)?;
 
+    // Remove has no post-op service view; handle and return early.
+    if let Planned::Remove(r) = planned {
+        apply::execute_all(&r.steps).await.map_err(core_err)?;
+        ryra_core::finalize_remove(&r.service_name).map_err(core_err)?;
+        return Ok(Response::Done);
+    }
+
+    // Capture the apply accounting BEFORE executing (steps are consumed below).
+    let (name, applied, destructive) = match &planned {
+        Planned::Add(p) => (p.service.clone(), p.result.steps.len(), false),
+        Planned::Lifecycle(steps) => (target.clone().unwrap_or_default(), steps.len(), false),
+        Planned::Upgrade(u) => (target.clone().unwrap_or_default(), u.steps.len(), false),
+        Planned::Configure(c) => (
+            target.clone().unwrap_or_default(),
+            if c.is_noop() { 0 } else { c.changes.len() },
+            c.has_destructive,
+        ),
+        Planned::Remove(_) => unreachable!("handled above"),
+        // Not part of the service-management surface this seam exposes.
+        Planned::BackupRun(_) => {
+            return Err(RpcError::new(
+                ErrorCode::BadRequest,
+                "backup_run is not supported over rpc",
+            ));
+        }
+    };
+
     match planned {
         Planned::Add(p) => {
-            let name = p.service.clone();
             p.record_pending().map_err(core_err)?;
             apply::execute_all(&p.result.steps)
                 .await
                 .map_err(core_err)?;
-            one_view(&name)
         }
-        Planned::Remove(r) => {
-            apply::execute_all(&r.steps).await.map_err(core_err)?;
-            ryra_core::finalize_remove(&r.service_name).map_err(core_err)?;
-            Ok(Response::Done)
-        }
-        Planned::Lifecycle(steps) => {
-            apply::execute_all(&steps).await.map_err(core_err)?;
-            one_view(target.as_deref().unwrap_or_default())
-        }
-        Planned::Upgrade(u) => {
-            apply::execute_all(&u.steps).await.map_err(core_err)?;
-            one_view(target.as_deref().unwrap_or_default())
-        }
-        Planned::Configure(c) => {
-            apply::execute_all(&c.steps).await.map_err(core_err)?;
-            one_view(target.as_deref().unwrap_or_default())
-        }
-        // Not part of the service-management surface this seam exposes.
-        Planned::BackupRun(_) => Err(RpcError::new(
-            ErrorCode::BadRequest,
-            "backup_run is not supported over rpc",
-        )),
+        Planned::Lifecycle(steps) => apply::execute_all(&steps).await.map_err(core_err)?,
+        Planned::Upgrade(u) => apply::execute_all(&u.steps).await.map_err(core_err)?,
+        Planned::Configure(c) => apply::execute_all(&c.steps).await.map_err(core_err)?,
+        Planned::Remove(_) | Planned::BackupRun(_) => unreachable!("handled above"),
     }
+
+    let service = view_of(&name)?;
+    Ok(Response::Applied(ApplyOutcome {
+        service,
+        applied,
+        destructive,
+    }))
 }
 
 /// Map any ryra-core error to a structured rpc error. Coarse for now (most
@@ -121,17 +133,11 @@ fn core_err(e: impl std::fmt::Display) -> RpcError {
 }
 
 /// One service's view by name, or NotFound.
-fn one_view(name: &str) -> OpResult {
+fn view_of(name: &str) -> std::result::Result<ServiceView, RpcError> {
     all_views()?
         .into_iter()
         .find(|v| v.name == name)
-        .map(Response::Service)
-        .ok_or_else(|| {
-            RpcError::new(
-                ErrorCode::NotFound,
-                format!("service '{name}' not found after the operation"),
-            )
-        })
+        .ok_or_else(|| RpcError::new(ErrorCode::NotFound, format!("no service '{name}'")))
 }
 
 /// A [`ServiceView`] for every service (installed + orphan), mirroring the data
