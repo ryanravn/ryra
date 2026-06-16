@@ -289,6 +289,20 @@ async fn execute(step: &Step) -> Result<()> {
             })?;
             Ok(())
         }
+        Step::SyncDir { src, dst } => {
+            with_simple_spinner(&format!("syncing {} -> {}", src.display(), dst.display()), || {
+                // Clear the destination so a removed source file doesn't linger
+                // in the slot, then copy the tree fresh (skipping build/VCS/dep
+                // dirs — they're rebuilt per slot, and copying e.g. target/ or
+                // node_modules would be huge and wrong).
+                if dst.exists() {
+                    std::fs::remove_dir_all(dst)
+                        .with_context(|| format!("failed to clear {}", dst.display()))?;
+                }
+                copy_tree(src, dst)
+                    .with_context(|| format!("failed to sync {} -> {}", src.display(), dst.display()))
+            })
+        }
         Step::Build { dir, command } => {
             println!("  building: {command}");
             // Inherit stdio so the user sees compiler progress/errors live.
@@ -1003,6 +1017,78 @@ fn describe_wait(unit: &str, family_glob: &str) -> Option<String> {
         return Some(format!("activating {list}"));
     }
     None
+}
+
+/// Dirs never copied into a color slot: VCS metadata and the usual
+/// build-output/dependency trees across ecosystems (they're rebuilt per slot).
+/// Mirrors the source-staleness exclusions in `upgrade.rs`.
+const SYNC_SKIP_DIRS: &[&str] = &[
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    "vendor",
+    "__pycache__",
+    "venv",
+    ".venv",
+];
+
+/// Recursively copy `src` into `dst`, creating `dst`, skipping [`SYNC_SKIP_DIRS`]
+/// and any dotdir. Symlinks are copied as files (followed). Used by
+/// `Step::SyncDir` to populate a native blue/green color slot.
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let from = entry.path();
+        let to = dst.join(&name);
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            if name_str.starts_with('.') || SYNC_SKIP_DIRS.contains(&name_str.as_ref()) {
+                continue;
+            }
+            copy_tree(&from, &to)?;
+        } else if ft.is_file() || ft.is_symlink() {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_tree;
+
+    #[test]
+    fn copy_tree_copies_source_but_skips_build_and_vcs_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        // A realistic source tree: real code + nested dir, plus build/dep/VCS
+        // dirs that must NOT be copied into a color slot.
+        std::fs::create_dir_all(src.join("app")).unwrap();
+        std::fs::write(src.join("app.py"), "x").unwrap();
+        std::fs::write(src.join("app/mod.py"), "y").unwrap();
+        std::fs::create_dir_all(src.join("target/release")).unwrap();
+        std::fs::write(src.join("target/release/bin"), "huge").unwrap();
+        std::fs::create_dir_all(src.join("node_modules/foo")).unwrap();
+        std::fs::write(src.join("node_modules/foo/x.js"), "dep").unwrap();
+        std::fs::create_dir_all(src.join(".git")).unwrap();
+        std::fs::write(src.join(".git/HEAD"), "ref").unwrap();
+
+        copy_tree(&src, &dst).unwrap();
+
+        // Source files (incl. nested) copied.
+        assert!(dst.join("app.py").exists());
+        assert!(dst.join("app/mod.py").exists());
+        // Build / dependency / VCS dirs skipped.
+        assert!(!dst.join("target").exists(), "target/ should be skipped");
+        assert!(!dst.join("node_modules").exists(), "node_modules/ should be skipped");
+        assert!(!dst.join(".git").exists(), ".git/ should be skipped");
+    }
 }
 
 /// Run a command with explicit program and args (no shell interpretation).

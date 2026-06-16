@@ -113,6 +113,12 @@ pub enum Step {
     /// `bun install`) for a `runtime = "native"` service. Runs at apply time
     /// in the service's source dir, before the unit is (re)started.
     Build { dir: PathBuf, command: String },
+    /// Mirror a source tree into `dst` (clearing `dst` first), skipping
+    /// VCS/build/dependency dirs. The language-agnostic primitive behind native
+    /// blue/green: each color slot gets its own isolated working copy, so a
+    /// rebuild of the idle slot can't mutate source files the live slot is
+    /// still reading (critical for interpreted runtimes like Python/Node).
+    SyncDir { src: PathBuf, dst: PathBuf },
     /// First-time Tailscale Services setup on this tailnet: ensure ACL
     /// has `tag:ryra-host` + `tag:ryra-service` tagOwners and the
     /// services autoApprover entry, then apply `tag:ryra-host` to the
@@ -174,6 +180,9 @@ impl Step {
             } => format!("wait for {url} -> {expect_status} (up to {timeout_secs}s)"),
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
             Step::Build { dir, command } => format!("(cd {} && {command})", dir.display()),
+            Step::SyncDir { src, dst } => {
+                format!("sync {} -> {} (skip build/VCS dirs)", src.display(), dst.display())
+            }
             Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),
             Step::TailscaleEnable { svc_name, ports } => ports
                 .iter()

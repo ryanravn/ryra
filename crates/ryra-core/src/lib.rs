@@ -1386,38 +1386,100 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
     steps.push(Step::CreateDir(home_dir.to_path_buf()));
     steps.push(Step::CreateDir(home_dir.join("data")));
 
-    // Optional build/prepare step (cargo build, bun install) in the source dir.
-    if let Some(command) = build {
-        steps.push(Step::Build {
-            dir: source_dir.clone(),
-            command: command.clone(),
-        });
-    }
+    let blue_green =
+        reg_service.def.service.deploy == registry::service_def::DeployStrategy::BlueGreen;
 
-    // Install record + the generated .env (carries SERVICE_PORT_HTTP).
+    // Install record + the generated .env (carries the SERVICE_PORT_* vars,
+    // including the blue/green color pair when present).
     steps.push(Step::WriteFile(GeneratedFile {
         path: metadata_path(service_name)?,
         content: toml::to_string_pretty(install_metadata)?,
     }));
     steps.push(Step::WriteFile(output.env_file));
 
-    // The unit: real file in the service home, symlinked into the systemd
-    // --user dir so the unit is found on daemon-reload (mirrors quadlets).
-    let unit_name = format!("{service_name}.service");
-    let unit_path = home_dir.join(&unit_name);
-    steps.push(Step::WriteFile(GeneratedFile {
-        path: unit_path.clone(),
-        content: native_unit(
-            home_dir,
-            &source_dir,
-            run,
-            &reg_service.def.service.description,
-        ),
-    }));
-    steps.push(Step::Symlink {
-        link: systemd_user_dir()?.join(&unit_name),
-        target: unit_path,
-    });
+    let description = reg_service.def.service.description.as_str();
+    if blue_green {
+        // Each color slot is its own working copy of the source, built
+        // independently, so the live slot's files are never mutated by an
+        // idle-slot rebuild — the isolation that makes blue/green safe for
+        // interpreted runtimes (Python/Node), not only compiled ones. Both
+        // slots are created at install; only blue is started (below).
+        let primary = allocated_ports
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("http"))
+            .or_else(|| allocated_ports.first())
+            .map(|(n, _)| n.clone())
+            .ok_or_else(|| {
+                Error::Bundle(format!("blue/green native '{service_name}' has no port to route"))
+            })?;
+        let port_var = format!("SERVICE_PORT_{}", primary.to_uppercase());
+        let home_str = home_dir.to_string_lossy().into_owned();
+        for color in [
+            registry::service_def::Color::Blue,
+            registry::service_def::Color::Green,
+        ] {
+            let slot = home_dir.join("colors").join(color.as_str());
+            let slot_str = slot.to_string_lossy().into_owned();
+            let port = allocated_ports
+                .iter()
+                .find(|(n, _)| *n == format!("{}_{}", primary.to_ascii_lowercase(), color))
+                .map(|(_, p)| *p)
+                .ok_or_else(|| {
+                    Error::Bundle(format!(
+                        "blue/green native '{service_name}' missing the {color} port"
+                    ))
+                })?;
+            // Populate + build the slot from the source tree.
+            steps.push(Step::SyncDir {
+                src: source_dir.clone(),
+                dst: slot.clone(),
+            });
+            if let Some(command) = build {
+                steps.push(Step::Build {
+                    dir: slot.clone(),
+                    command: command.clone(),
+                });
+            }
+            let unit_name = format!("{}.service", deploy::color_unit(service_name, color));
+            let unit_path = home_dir.join(&unit_name);
+            steps.push(Step::WriteFile(GeneratedFile {
+                path: unit_path.clone(),
+                content: deploy::native_color_unit(&deploy::NativeColorUnit {
+                    description,
+                    color,
+                    workdir: &slot_str,
+                    home: &home_str,
+                    port_var: &port_var,
+                    port,
+                    run,
+                }),
+            }));
+            steps.push(Step::Symlink {
+                link: systemd_user_dir()?.join(&unit_name),
+                target: unit_path,
+            });
+        }
+    } else {
+        // Optional build/prepare step (cargo build, bun install) in the source dir.
+        if let Some(command) = build {
+            steps.push(Step::Build {
+                dir: source_dir.clone(),
+                command: command.clone(),
+            });
+        }
+        // The unit: real file in the service home, symlinked into the systemd
+        // --user dir so the unit is found on daemon-reload (mirrors quadlets).
+        let unit_name = format!("{service_name}.service");
+        let unit_path = home_dir.join(&unit_name);
+        steps.push(Step::WriteFile(GeneratedFile {
+            path: unit_path.clone(),
+            content: native_unit(home_dir, &source_dir, run, description),
+        }));
+        steps.push(Step::Symlink {
+            link: systemd_user_dir()?.join(&unit_name),
+            target: unit_path,
+        });
+    }
 
     // A native service may ship auxiliary container quadlets (e.g. a bundled
     // postgres) in its `quadlets/` dir, reached over a published loopback port.
@@ -1473,9 +1535,14 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
     for unit in &quadlet_units {
         steps.push(Step::StartService { unit: unit.clone() });
     }
-    steps.push(Step::StartService {
-        unit: service_name.to_string(),
-    });
+    // Blue/green brings up only the active (blue) slot; green is installed but
+    // idle until the first `ryra upgrade` rolls onto it.
+    let app_unit = if blue_green {
+        deploy::color_unit(service_name, registry::service_def::Color::Blue)
+    } else {
+        service_name.to_string()
+    };
+    steps.push(Step::StartService { unit: app_unit });
 
     Ok(AddResult {
         steps,
@@ -1801,7 +1868,18 @@ fn remove_native_service(
     url: Option<String>,
 ) -> Result<RemoveResult> {
     let home = service_home(service_name)?;
-    let unit_name = format!("{service_name}.service");
+    // A restart-strategy install has one `<svc>.service`; a blue/green install
+    // has `<svc>-blue.service` + `<svc>-green.service` and no bare unit. Tear
+    // down whichever actually exist so neither shape leaks a unit.
+    let unit_dir = systemd_user_dir()?;
+    let unit_names: Vec<String> = [
+        format!("{service_name}.service"),
+        format!("{service_name}-blue.service"),
+        format!("{service_name}-green.service"),
+    ]
+    .into_iter()
+    .filter(|u| unit_dir.join(u).exists())
+    .collect();
     let mut steps = Vec::new();
 
     // Tear down any auxiliary container quadlets the native service shipped
@@ -1829,23 +1907,29 @@ fn remove_native_service(
         }
     }
 
-    steps.push(Step::StopService {
-        unit: service_name.to_string(),
-    });
-    steps.push(Step::RemoveFile(systemd_user_dir()?.join(&unit_name)));
+    for unit_name in &unit_names {
+        steps.push(Step::StopService {
+            unit: unit_name.trim_end_matches(".service").to_string(),
+        });
+        steps.push(Step::RemoveFile(unit_dir.join(unit_name)));
+    }
     steps.push(Step::DaemonReload);
 
     match mode {
         RemoveMode::Purge => steps.push(Step::RemoveDir(home)),
         RemoveMode::Preserve => {
             // Keep data/ and metadata.toml; drop the rebuildable binary, the
-            // generated .env, the unit file, and the aux quadlet files (all
-            // re-created on re-add). Container data dirs (db-data/) stay.
-            for child in ["bin", ".env", unit_name.as_str()] {
+            // generated .env, the unit file(s), the blue/green color slots, and
+            // the aux quadlet files (all re-created on re-add). Container data
+            // dirs (db-data/) stay.
+            let mut ephemeral: Vec<String> = vec!["bin".into(), ".env".into(), "colors".into()];
+            ephemeral.extend(unit_names.iter().cloned());
+            for child in &ephemeral {
                 let p = home.join(child);
                 match std::fs::metadata(&p) {
                     Ok(m) if m.is_dir() => steps.push(Step::RemoveDir(p)),
-                    _ => steps.push(Step::RemoveFile(p)),
+                    Ok(_) => steps.push(Step::RemoveFile(p)),
+                    Err(_) => {} // not present (e.g. no colors/ for a restart install)
                 }
             }
             for f in &aux_container_files {
@@ -2406,8 +2490,14 @@ pub fn is_service_installed(name: &str) -> bool {
         return false;
     };
     match meta.runtime {
+        // Blue/green native installs have no bare `<name>.service` — they ship
+        // two color units instead — so accept either form.
         registry::service_def::Runtime::Native => systemd_user_dir()
-            .map(|d| d.join(format!("{name}.service")).exists())
+            .map(|d| {
+                d.join(format!("{name}.service")).exists()
+                    || d.join(format!("{name}-blue.service")).exists()
+                    || d.join(format!("{name}-green.service")).exists()
+            })
             .unwrap_or(false),
         registry::service_def::Runtime::Podman => scan_managed_services()
             .map(|names| names.iter().any(|n| n == name))
@@ -2716,13 +2806,42 @@ mod tests {
         .unwrap();
     }
 
+    /// Native blue/green registry: runtime = native with a build + run command,
+    /// no quadlets — the SyncDir/Build path operates on the source dir directly.
+    fn write_native_registry(tmp: &std::path::Path) {
+        let svc_dir = tmp.join("napp");
+        std::fs::create_dir_all(&svc_dir).unwrap();
+        std::fs::write(
+            svc_dir.join("service.toml"),
+            "[service]\n\
+             name = \"napp\"\n\
+             description = \"native demo\"\n\
+             runtime = \"native\"\n\
+             run = \"python -m app\"\n\
+             build = \"pip install -r requirements.txt\"\n\
+             deploy = \"blue-green\"\n\
+             health_check = \"/healthz\"\n\
+             \n\
+             [[ports]]\n\
+             name = \"http\"\n\
+             container_port = 8080\n",
+        )
+        .unwrap();
+        // A source file to prove SyncDir has something to copy.
+        std::fs::write(svc_dir.join("app.py"), "print('hi')\n").unwrap();
+    }
+
     fn plan_demo(tmp: &std::path::Path) -> AddResult {
+        plan_service(tmp, "demo")
+    }
+
+    fn plan_service(tmp: &std::path::Path, name: &'static str) -> AddResult {
         let empty_map = std::collections::BTreeMap::new();
         let empty_ports: std::collections::BTreeMap<String, u16> = std::collections::BTreeMap::new();
         let empty_set = std::collections::BTreeSet::new();
         let port_in_use = |_p: u16| false;
         add_service(AddServiceParams {
-            service_name: "demo",
+            service_name: name,
             exposure: &exposure::Exposure::Loopback,
             auth: AuthChoice::None,
             enable_smtp: false,
@@ -2787,6 +2906,56 @@ mod tests {
         }).unwrap();
         assert!(env.contains("SERVICE_PORT_HTTP_BLUE="), "env: {env}");
         assert!(env.contains("SERVICE_PORT_HTTP_GREEN="), "env: {env}");
+    }
+
+    /// `ryra add` on a blue/green NATIVE service (any language) must give each
+    /// color its own synced+built working dir, write two units, and start only
+    /// blue — the language-agnostic isolation path.
+    #[test]
+    fn blue_green_native_add_syncs_builds_and_starts_blue() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_native_registry(tmp.path());
+        let result = plan_service(tmp.path(), "napp");
+
+        // Each color slot gets a SyncDir + a Build in its own dir.
+        let syncs: Vec<String> = result.steps.iter().filter_map(|s| match s {
+            Step::SyncDir { dst, .. } => Some(dst.to_string_lossy().into_owned()),
+            _ => None,
+        }).collect();
+        assert!(syncs.iter().any(|d| d.ends_with("colors/blue")), "syncs: {syncs:?}");
+        assert!(syncs.iter().any(|d| d.ends_with("colors/green")), "syncs: {syncs:?}");
+        let builds: Vec<String> = result.steps.iter().filter_map(|s| match s {
+            Step::Build { dir, .. } => Some(dir.to_string_lossy().into_owned()),
+            _ => None,
+        }).collect();
+        assert!(builds.iter().any(|d| d.ends_with("colors/blue")), "builds: {builds:?}");
+        assert!(builds.iter().any(|d| d.ends_with("colors/green")), "builds: {builds:?}");
+
+        // Two color units written; the green unit runs from its own slot and
+        // binds its own port via an explicit override.
+        let green_unit = result.steps.iter().find_map(|s| match s {
+            Step::WriteFile(f) if f.path.ends_with("napp-green.service") => Some(&f.content),
+            _ => None,
+        }).expect("green unit");
+        assert!(green_unit.contains("WorkingDirectory="));
+        assert!(green_unit.contains("colors/green"));
+        assert!(green_unit.contains("Environment=SERVICE_PORT_HTTP="));
+        assert!(green_unit.contains("ExecStart=/bin/sh -c 'exec python -m app'"));
+
+        // Only blue is started.
+        let started: Vec<&str> = result.steps.iter().filter_map(|s| match s {
+            Step::StartService { unit } => Some(unit.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(started, vec!["napp-blue"], "started: {started:?}");
+
+        // Port pair in .env.
+        let env = result.steps.iter().find_map(|s| match s {
+            Step::WriteFile(f) if f.path.file_name() == Some(std::ffi::OsStr::new(".env")) => Some(&f.content),
+            _ => None,
+        }).unwrap();
+        assert!(env.contains("SERVICE_PORT_HTTP_BLUE="));
+        assert!(env.contains("SERVICE_PORT_HTTP_GREEN="));
     }
 
     /// A plain (restart) podman service is untouched by the blue/green path:

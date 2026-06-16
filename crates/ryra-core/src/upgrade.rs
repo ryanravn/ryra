@@ -588,6 +588,13 @@ pub async fn blue_green_swap(service_name: &str) -> Result<Option<UpgradeResult>
     let replanned = replan(service_name).await?;
     let env_filename = std::ffi::OsStr::new(".env");
     let metadata_file = metadata_path(service_name)?;
+    // Never re-sync or rebuild the LIVE slot's working dir — that's the whole
+    // point of the isolation (an in-flight Python/Node process must not have its
+    // source mutated). Drop any SyncDir/Build that targets `colors/<live>`;
+    // keep the idle slot's. (Podman has no such steps — it re-pulls the image,
+    // which is harmless — so this is a native-only filter in practice.)
+    let live_slot = format!("colors/{live}");
+    let touches_live = |p: &std::path::Path| p.to_string_lossy().contains(&live_slot);
     let mut steps: Vec<Step> = Vec::new();
     for step in replanned.result.steps {
         match step {
@@ -597,13 +604,16 @@ pub async fn blue_green_swap(service_name: &str) -> Result<Option<UpgradeResult>
             {
                 continue;
             }
+            Step::SyncDir { ref dst, .. } if touches_live(dst) => continue,
+            Step::Build { ref dir, .. } if touches_live(dir) => continue,
             other => steps.push(other),
         }
     }
 
     // Caddy: repoint the upstream at the idle slot. Only when the install has a
     // routed URL and a Caddyfile exists (loopback installs swap without it).
-    let caddy_rewrite = blue_green_caddy_rewrite(service_name, def, &metadata, target)?;
+    let caddy_rewrite =
+        blue_green_caddy_rewrite(service_name, def, &metadata, target, target_port)?;
 
     // The runtime-agnostic swap: start idle -> health-gate -> caddy reload ->
     // stop old. Artifact prep (pull/build) already rode along in `steps` above.
@@ -644,6 +654,7 @@ fn blue_green_caddy_rewrite(
     def: &crate::registry::service_def::ServiceDef,
     metadata: &Metadata,
     target: Color,
+    target_port: u16,
 ) -> Result<Option<Step>> {
     let Some(url) = metadata.url.as_deref() else {
         return Ok(None);
@@ -657,14 +668,23 @@ fn blue_green_caddy_rewrite(
     let domain = parsed
         .host_str()
         .ok_or_else(|| Error::Template(format!("service URL '{url}' has no host")))?;
-    let container_port = def.ports.first().map(|p| p.container_port).unwrap_or(80);
     let paths = crate::config::ConfigPaths::resolve()?;
     let config = crate::config::load_or_default(&paths.config_file)?;
+    // Podman slots are containers on Caddy's shared network, reachable by name
+    // (`<svc>-<color>:<container_port>`). Native slots are host processes, so
+    // Caddy reaches them over the host bridge at the color's *host* port.
+    let (target_host, port) = match metadata.runtime {
+        Runtime::Podman => (
+            deploy::color_unit(service_name, target),
+            def.ports.first().map(|p| p.container_port).unwrap_or(80),
+        ),
+        Runtime::Native => ("host.containers.internal".to_string(), target_port),
+    };
     let block = caddy::render_site_block(&caddy::CaddySiteParams {
         service_name: service_name.to_string(),
-        target_host: deploy::color_unit(service_name, target),
+        target_host,
         domain: domain.to_string(),
-        container_port,
+        container_port: port,
         https_port: crate::caddy_https_port(&config),
         force_internal_tls: false,
     });

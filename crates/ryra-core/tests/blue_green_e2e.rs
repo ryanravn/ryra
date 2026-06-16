@@ -119,6 +119,71 @@ container_port = 8080
     }
 }
 
+/// A faked blue/green NATIVE install: a path registry with a native (Python)
+/// blue/green service, plus install state (metadata runtime=native, .env port
+/// pair, and the two color systemd units so is_service_installed sees it).
+fn native_sandbox(service: &str, active_color: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let home: PathBuf = tmp.path().to_path_buf();
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::set_var("XDG_DATA_HOME", home.join(".local/share"));
+        std::env::set_var("XDG_CONFIG_HOME", home.join(".config"));
+        std::env::set_var("XDG_STATE_HOME", home.join(".local/state"));
+        std::env::set_var("XDG_CACHE_HOME", home.join(".cache"));
+    }
+
+    let registry_dir = home.join("fake-registry");
+    let service_dir = registry_dir.join(service);
+    std::fs::create_dir_all(&service_dir).expect("svc registry");
+    std::fs::write(
+        service_dir.join("service.toml"),
+        format!(
+            r#"
+[service]
+name = "{service}"
+description = "native test"
+runtime = "native"
+run = "python -m app"
+build = "pip install -r requirements.txt"
+deploy = "blue-green"
+health_check = "/healthz"
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        ),
+    )
+    .expect("service.toml");
+    std::fs::write(service_dir.join("app.py"), "print('hi')\n").expect("app.py");
+
+    let service_home = home.join(".local/share/services").join(service);
+    std::fs::create_dir_all(&service_home).expect("svc home");
+    std::fs::write(
+        service_home.join("metadata.toml"),
+        format!(
+            "registry = \"{}\"\nruntime = \"native\"\nactive_color = \"{active_color}\"\n",
+            registry_dir.display()
+        ),
+    )
+    .expect("metadata");
+    std::fs::write(
+        service_home.join(".env"),
+        "SERVICE_HOME=/tmp\nSERVICE_PORT_HTTP=19001\nSERVICE_PORT_HTTP_BLUE=19001\nSERVICE_PORT_HTTP_GREEN=19002\n",
+    )
+    .expect("env");
+
+    // Color units in the systemd --user dir so is_service_installed sees it.
+    let unit_dir = home.join(".config/systemd/user");
+    std::fs::create_dir_all(&unit_dir).expect("unit dir");
+    for color in ["blue", "green"] {
+        std::fs::write(unit_dir.join(format!("{service}-{color}.service")), "[Service]\n")
+            .expect("unit");
+    }
+    tmp
+}
+
 fn started(steps: &[Step]) -> Vec<String> {
     steps.iter().filter_map(|s| match s {
         Step::StartService { unit } => Some(unit.clone()),
@@ -191,6 +256,43 @@ fn remove_tears_down_both_color_slots() {
     }).collect();
     assert!(removed.iter().any(|n| n == "demo-blue.container"), "removed: {removed:?}");
     assert!(removed.iter().any(|n| n == "demo-green.container"), "removed: {removed:?}");
+}
+
+#[tokio::test]
+async fn native_swap_rebuilds_only_the_idle_slot() {
+    let _guard = env_lock();
+    let _tmp = native_sandbox("napp", "blue");
+
+    let plan = ryra_core::upgrade::blue_green_swap("napp")
+        .await
+        .expect("swap plans")
+        .expect("service is blue/green");
+
+    // The idle (green) slot is re-synced + rebuilt; the LIVE (blue) slot is
+    // never touched — the isolation that keeps a running interpreted process
+    // safe during deploy.
+    let synced: Vec<String> = plan.steps.iter().filter_map(|s| match s {
+        Step::SyncDir { dst, .. } => Some(dst.to_string_lossy().into_owned()),
+        _ => None,
+    }).collect();
+    assert!(synced.iter().any(|d| d.ends_with("colors/green")), "synced: {synced:?}");
+    assert!(!synced.iter().any(|d| d.ends_with("colors/blue")), "live slot re-synced! {synced:?}");
+
+    let built: Vec<String> = plan.steps.iter().filter_map(|s| match s {
+        Step::Build { dir, .. } => Some(dir.to_string_lossy().into_owned()),
+        _ => None,
+    }).collect();
+    assert!(built.iter().any(|d| d.ends_with("colors/green")), "built: {built:?}");
+    assert!(!built.iter().any(|d| d.ends_with("colors/blue")), "live slot rebuilt! {built:?}");
+
+    // Same swap choreography: start green, health-gate green's port, stop blue.
+    assert!(started(&plan.steps).contains(&"napp-green".to_string()));
+    assert!(stopped(&plan.steps).contains(&"napp-blue".to_string()));
+    let health = plan.steps.iter().find_map(|s| match s {
+        Step::WaitForHttpHealthy { url, .. } => Some(url.clone()),
+        _ => None,
+    }).unwrap();
+    assert_eq!(health, "http://127.0.0.1:19002/healthz");
 }
 
 #[tokio::test]
