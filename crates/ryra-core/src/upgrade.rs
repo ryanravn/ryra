@@ -25,18 +25,146 @@
 //! credentials. Its absence from the manifest is the source of truth for that.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::error::{Error, Result};
 use crate::exposure::Exposure;
 use crate::generate::GeneratedFile;
 use crate::manifest;
-use crate::metadata::load_metadata;
+use crate::metadata::{Metadata, load_metadata};
 use crate::registry::resolve::ServiceRef;
+use crate::registry::service_def::Runtime;
 use crate::{
     AddResult, PlanMode, REGISTRY_DEFAULT, Step, add_service, is_service_installed,
     resolve_registry_dir, service_home,
 };
+
+// --- Native source-staleness ("a rebuild would pick up new code") ----------
+//
+// Config drift is detected by `diff_service` (above). But a `runtime =
+// "native"` service can change *without* its rendered config changing: you
+// edit the source and a `cargo build` / `bun install` / restart would ship it.
+// `service.toml` is unchanged, so the diff is clean and the service still looks
+// up to date. This module fills that gap with a language-agnostic signal: did
+// any source file change since the running process last started?
+//
+// The signal is the running process's own start time (no state is written
+// anywhere): we ask systemd for the unit's MainPID and read its start time from
+// `/proc/<pid>/stat`, then flag staleness when any source file is newer. That
+// works for *anything* systemd can run (bash, Python, Node, Rust, C++, ...) --
+// we never inspect a toolchain or look for a "binary". It's a *hint*, not a
+// gate: the remedy is always an idempotent `ryra upgrade`, and the comparison
+// is read-only, so a false positive just costs a needless rebuild.
+
+/// Directory names never treated as source inputs: VCS metadata and the usual
+/// build-output / dependency dirs across ecosystems, plus any dotdir (`.git`,
+/// editor/tool state). Best-effort and language-agnostic -- staleness is a
+/// hint, so a missed exclusion at worst shows a spurious "upgrade available"
+/// that an idempotent `ryra upgrade` clears.
+const IGNORED_DIRS: &[&str] = &[
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    "vendor",
+    "__pycache__",
+    "venv",
+];
+
+/// True if any regular file under `dir` (skipping [`IGNORED_DIRS`] and dotdirs)
+/// was modified after `since`. Stops at the first newer file; symlinks are not
+/// followed. Unreadable dirs/files are skipped (a hint, not a hard check).
+fn any_file_newer_than(dir: &Path, since: SystemTime) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') || IGNORED_DIRS.contains(&name) {
+                continue;
+            }
+            if any_file_newer_than(&path, since) {
+                return true;
+            }
+        } else if file_type.is_file()
+            && let Ok(mtime) = entry.metadata().and_then(|m| m.modified())
+            && mtime > since
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Rebuild the `ServiceRef` we stashed at install time (mirrors `replan`), so
+/// the source dir can be resolved the same way an upgrade would.
+fn service_ref_for(metadata: &Metadata, service_name: &str) -> ServiceRef {
+    if metadata.registry.is_empty() || metadata.registry == REGISTRY_DEFAULT {
+        ServiceRef::Default(service_name.to_string())
+    } else if crate::registry::resolve::is_path_like(&metadata.registry) {
+        ServiceRef::Path {
+            dir: PathBuf::from(&metadata.registry),
+            name: service_name.to_string(),
+        }
+    } else {
+        ServiceRef::Custom {
+            registry: metadata.registry.clone(),
+            service: service_name.to_string(),
+        }
+    }
+}
+
+/// The unit's MainPID per systemd, or `None` when the service is stopped
+/// (MainPID 0) or systemd can't be queried.
+fn unit_main_pid(service_name: &str) -> Option<u32> {
+    let out = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            &format!("{service_name}.service"),
+            "-p",
+            "MainPID",
+            "--value",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+    (pid != 0).then_some(pid)
+}
+
+/// Wall-clock start time of `pid`, from `/proc/<pid>/stat` field 22 (starttime,
+/// in clock ticks since boot) plus `/proc/stat`'s `btime` (boot epoch). `None`
+/// if the process is gone or `/proc` can't be read.
+fn process_start_time(pid: u32) -> Option<SystemTime> {
+    // USER_HZ: the kernel's /proc clock-tick rate. Fixed at 100 on every
+    // mainstream Linux (the value is baked into the ABI, not the runtime CPU
+    // tick), so hardcoding it avoids a libc/sysconf dependency.
+    const USER_HZ: u64 = 100;
+
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // comm (field 2) is parenthesised and may itself contain spaces or `)`, so
+    // the numeric fields resume only after the LAST `)`. field 3 (state) is the
+    // first token there, making starttime (field 22) the 20th -> index 19.
+    let after_comm = stat.rsplit_once(')')?.1;
+    let starttime_ticks: u64 = after_comm.split_whitespace().nth(19)?.parse().ok()?;
+
+    let proc_stat = std::fs::read_to_string("/proc/stat").ok()?;
+    let btime: u64 = proc_stat
+        .lines()
+        .find_map(|l| l.strip_prefix("btime ")?.trim().parse().ok())?;
+
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(btime + starttime_ticks / USER_HZ))
+}
 
 /// Per-file diff classification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +220,12 @@ pub struct DiffResult {
     /// Static env vars the registry expects but the user's `.env` is
     /// missing. Empty when the `.env` already covers everything tracked.
     pub env_additions: Vec<EnvAddition>,
+    /// `runtime = "native"` only: the source changed since the running process
+    /// started, so a rebuild/restart would ship new code even though the
+    /// rendered config is unchanged. Always `false` for podman services and
+    /// stopped natives. Orthogonal to [`Self::is_clean`] (which is config-only)
+    /// -- a service is upgradable when the diff is dirty *or* this is set.
+    pub source_stale: bool,
 }
 
 impl DiffResult {
@@ -118,7 +252,7 @@ impl DiffResult {
 /// back through `add_service` in upgrade mode. Returns the planned step
 /// list and the planned-file content map (path → content). The richer
 /// per-env metadata lives on `AddResult.tracked_envs`.
-async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, String>)> {
+async fn replan(service_name: &str) -> Result<Replanned> {
     if !is_service_installed(service_name) {
         return Err(Error::ServiceNotInstalled(service_name.to_string()));
     }
@@ -130,21 +264,13 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
         None => Exposure::Loopback,
     };
 
-    let service_ref = if metadata.registry.is_empty() || metadata.registry == REGISTRY_DEFAULT {
-        ServiceRef::Default(service_name.to_string())
-    } else if crate::registry::resolve::is_path_like(&metadata.registry) {
-        // Local-path install: re-read ./service.toml from the recorded project dir.
-        ServiceRef::Path {
-            dir: PathBuf::from(&metadata.registry),
-            name: service_name.to_string(),
-        }
-    } else {
-        ServiceRef::Custom {
-            registry: metadata.registry.clone(),
-            service: service_name.to_string(),
-        }
-    };
+    let service_ref = service_ref_for(&metadata, service_name);
     let repo_dir = resolve_registry_dir(&service_ref).await?;
+    // The service's own dir under the resolved registry (where a native build/
+    // run happens). Surfaced so callers — the source-staleness check below —
+    // reuse this single resolution instead of resolving again.
+    let source_dir = crate::registry::find_service(&repo_dir, service_name)?.service_dir;
+    let native = matches!(metadata.runtime, Runtime::Native);
 
     // Recover existing host ports from the install's `.env` so the
     // re-render lands on the same numbers. Without this every dynamically
@@ -191,7 +317,23 @@ async fn replan(service_name: &str) -> Result<(AddResult, BTreeMap<PathBuf, Stri
             planned.insert(file.path.clone(), file.content.clone());
         }
     }
-    Ok((result, planned))
+    Ok(Replanned {
+        result,
+        planned,
+        source_dir,
+        native,
+    })
+}
+
+/// Output of [`replan`]: the re-rendered plan plus the resolved source
+/// location, so callers don't resolve the registry a second time.
+struct Replanned {
+    result: AddResult,
+    planned: BTreeMap<PathBuf, String>,
+    /// The service's source dir (where a native build/run happens).
+    source_dir: PathBuf,
+    /// Whether this is a `runtime = "native"` install.
+    native: bool,
 }
 
 /// Parse the on-disk `.env` for a service into a key→value map. Lines
@@ -274,7 +416,21 @@ fn should_skip_path(path: &std::path::Path, manifest_file: &std::path::Path) -> 
 /// Compute the diff between the registry's render and what's on disk for an
 /// installed service.
 pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
-    let (result, planned) = replan(service_name).await?;
+    let Replanned {
+        result,
+        planned,
+        source_dir,
+        native,
+    } = replan(service_name).await?;
+
+    // Native source-staleness rides along with the diff (same resolution, no
+    // second registry lookup): has any source file changed since the running
+    // process started? See the module note above on why this is the signal.
+    let source_stale = native
+        && unit_main_pid(service_name)
+            .and_then(process_start_time)
+            .is_some_and(|started| any_file_newer_than(&source_dir, started));
+
     let manifest_file = manifest::manifest_path(service_name)?;
     let (manifest_entries, _manifest_envs) = manifest::load(service_name)?.unwrap_or_default();
     let manifest_by_path: BTreeMap<PathBuf, String> = manifest_entries
@@ -361,6 +517,7 @@ pub async fn diff_service(service_name: &str) -> Result<DiffResult> {
         service: service_name.to_string(),
         entries,
         env_additions,
+        source_stale,
     })
 }
 
@@ -382,7 +539,9 @@ pub async fn upgrade_service(service_name: &str, force: bool) -> Result<UpgradeR
         }
     }
 
-    let (result, planned) = replan(service_name).await?;
+    let Replanned {
+        result, planned, ..
+    } = replan(service_name).await?;
     let manifest_file = manifest::manifest_path(service_name)?;
     let env_file = service_home(service_name)?.join(".env");
 
@@ -995,6 +1154,53 @@ mod tests {
         let (kept, removed) = setup_and_prune(&["2026-01-01T00-00-00Z", "2026-02-01T00-00-00Z"], 5);
         assert_eq!(kept.len(), 2);
         assert!(removed.is_empty());
+    }
+
+    fn unique_tmp(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn source_staleness_ignores_build_and_dotdirs() {
+        use std::time::Duration;
+
+        let tmp = unique_tmp("ryra-stale");
+        std::fs::create_dir_all(tmp.join("src")).unwrap();
+        std::fs::create_dir_all(tmp.join("target")).unwrap();
+        std::fs::create_dir_all(tmp.join(".git")).unwrap();
+        std::fs::write(tmp.join("src/main.rs"), "fn main(){}").unwrap();
+        std::fs::write(tmp.join("target/app"), "bin").unwrap();
+        std::fs::write(tmp.join(".git/HEAD"), "ref").unwrap();
+
+        // Baseline after everything we wrote: nothing is newer.
+        assert!(!any_file_newer_than(
+            &tmp,
+            SystemTime::now() + Duration::from_secs(3600)
+        ));
+        // Baseline before everything: the source file trips staleness.
+        assert!(any_file_newer_than(
+            &tmp,
+            SystemTime::now() - Duration::from_secs(3600)
+        ));
+
+        // When only ignored dirs hold newer files, staleness stays false.
+        let ignored_only = unique_tmp("ryra-stale-ign");
+        std::fs::create_dir_all(ignored_only.join("node_modules")).unwrap();
+        std::fs::write(ignored_only.join("node_modules/x.js"), "x").unwrap();
+        assert!(!any_file_newer_than(
+            &ignored_only,
+            SystemTime::now() - Duration::from_secs(3600)
+        ));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(&ignored_only);
     }
 
     #[test]

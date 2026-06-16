@@ -868,6 +868,9 @@ fn build_diff(service_name: &str, result: &AddResult) -> Result<DiffResult> {
         service: service_name.to_string(),
         entries,
         env_additions,
+        // Configure diffs are about changed integration config, not native
+        // source freshness — that signal belongs to the upgrade path.
+        source_stale: false,
     })
 }
 
