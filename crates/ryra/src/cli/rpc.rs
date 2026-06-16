@@ -18,8 +18,9 @@ use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_protocol::{
     ApplyOutcome, BackupOutcome, BackupSnapshotView, ChoiceOptionView, ChoiceView, ConfigureView,
     DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition, EnvGroupView, EnvKindView, EnvVarView,
-    ErrorCode, RegistryInfo, Reply, Request, Response, RestoreOutcome, RevertOutcome, RpcError,
-    SearchHit, ServiceDefView, ServiceState, ServiceView, Severity,
+    EnvKeyChangeView, ErrorCode, ReconcileOutcome, ReconcilePlanView, RegistryInfo, Reply, Request,
+    Response, RestoreOutcome, RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState,
+    ServiceView, Severity,
 };
 
 use super::apply;
@@ -120,6 +121,9 @@ async fn dispatch(req: Request) -> OpResult {
             .map(Response::ServiceDef),
         Request::ConfigureView { service } => {
             configure_view(&service).await.map(Response::ConfigureView)
+        }
+        Request::Reconcile { services, dry_run } => {
+            reconcile(services, dry_run).await.map(Response::Reconcile)
         }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
@@ -326,6 +330,60 @@ async fn restore(
         service: service.to_string(),
         snapshot: snapshot.to_string(),
     })
+}
+
+/// Propagate the global config into installed services (`configure --apply`).
+/// Empty `services` reconciles every installed service; `dry_run` previews
+/// without writing or restarting. A service that fails to reconcile (e.g. an
+/// unresolvable registry) is skipped, not fatal.
+async fn reconcile(
+    services: Vec<String>,
+    dry_run: bool,
+) -> std::result::Result<ReconcileOutcome, RpcError> {
+    let targets: Vec<String> = if services.is_empty() {
+        ryra_core::list_installed()
+            .map_err(core_err)?
+            .into_iter()
+            .map(|s| s.name)
+            .collect()
+    } else {
+        services
+    };
+
+    let mut reconciles = Vec::new();
+    for name in &targets {
+        match ryra_core::reconcile_service(name).await {
+            Ok(r) if !r.changes.is_empty() => reconciles.push(r),
+            Ok(_) => {}
+            Err(e) => eprintln!("reconcile skipped for {name}: {e}"),
+        }
+    }
+
+    let plans: Vec<ReconcilePlanView> = reconciles
+        .iter()
+        .map(|r| ReconcilePlanView {
+            service: r.service.clone(),
+            changes: r
+                .changes
+                .iter()
+                .map(|c| EnvKeyChangeView {
+                    key: c.key.clone(),
+                    from: c.from.clone(),
+                    to: c.to.clone(),
+                    secret: c.secret,
+                })
+                .collect(),
+        })
+        .collect();
+
+    if dry_run {
+        return Ok(ReconcileOutcome { plans, applied: 0 });
+    }
+    for r in &reconciles {
+        apply::execute_all(&r.steps).await.map_err(core_err)?;
+    }
+    let applied = reconciles.len();
+    Ok(ReconcileOutcome { plans, applied })
 }
 
 /// Set whether a service is enrolled in backups (`metadata.backup_enabled`).

@@ -229,6 +229,15 @@ pub enum Request {
     /// The configure view (schema + current selections + `.env`) for an
     /// installed service.
     ConfigureView { service: String },
+    /// Propagate the current global config into installed services
+    /// (`ryra configure --apply`). Empty `services` = every installed service
+    /// whose env would change; `dry_run` previews without writing/restarting.
+    Reconcile {
+        #[serde(default)]
+        services: Vec<String>,
+        #[serde(default)]
+        dry_run: bool,
+    },
 }
 
 /// The result of a backup run.
@@ -245,6 +254,33 @@ pub struct RestoreOutcome {
     pub service: String,
     /// The snapshot restored ("latest" when none was specified).
     pub snapshot: String,
+}
+
+/// One env key a reconcile would change in a service's `.env`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvKeyChangeView {
+    pub key: String,
+    /// On-disk value, or `None` when the key isn't present yet.
+    pub from: Option<String>,
+    pub to: String,
+    /// True when the key name looks sensitive (a client masks it for display).
+    pub secret: bool,
+}
+
+/// What a reconcile would (or did) do to one installed service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconcilePlanView {
+    pub service: String,
+    pub changes: Vec<EnvKeyChangeView>,
+}
+
+/// The outcome of propagating the global config into installed services.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconcileOutcome {
+    /// Affected services and their env diffs (the preview, or what was applied).
+    pub plans: Vec<ReconcilePlanView>,
+    /// How many services were updated and restarted (0 on a dry run).
+    pub applied: usize,
 }
 
 /// One installable service from a registry search.
@@ -506,6 +542,8 @@ pub enum Response {
     ServiceDef(ServiceDefView),
     /// `configure_view`.
     ConfigureView(ConfigureView),
+    /// `reconcile`.
+    Reconcile(ReconcileOutcome),
     /// `remove` / `add_registry` / `remove_registry`.
     Done,
 }
