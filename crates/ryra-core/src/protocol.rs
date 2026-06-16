@@ -65,6 +65,16 @@ pub enum Request {
     RemoveRegistry { name: String },
     /// Run the diagnostics ryra-doctor runs.
     Doctor,
+    /// Take a backup snapshot of a (backup-enabled) service.
+    Backup { service: String },
+}
+
+/// The result of a backup run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupOutcome {
+    pub service: String,
+    /// Paths included in the snapshot.
+    pub paths: usize,
 }
 
 /// One installable service from a registry search.
@@ -237,6 +247,8 @@ pub enum Response {
     Registries(Vec<RegistryInfo>),
     /// `doctor`.
     Doctor(Vec<DoctorIssue>),
+    /// `backup`.
+    Backup(BackupOutcome),
     /// `remove` / `add_registry` / `remove_registry`.
     Done,
 }

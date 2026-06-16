@@ -16,9 +16,9 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_core::protocol::{
-    ApplyOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition,
-    ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError, SearchHit,
-    ServiceState, ServiceView, Severity,
+    ApplyOutcome, BackupOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, DoctorIssue,
+    EnvAddition, ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError,
+    SearchHit, ServiceState, ServiceView, Severity,
 };
 
 use super::apply;
@@ -93,6 +93,16 @@ async fn dispatch(req: Request) -> OpResult {
             Ok(Response::Done)
         }
         Request::Doctor => Ok(Response::Doctor(doctor())),
+        Request::Backup { service } => {
+            let plan = ops::plan_backup_run(&ryra_core::ops::BackupRunRequest {
+                service: service.clone(),
+            })
+            .await
+            .map_err(core_err)?;
+            let paths = plan.paths.len();
+            ryra_core::backup::execute_backup_run(&plan).map_err(core_err)?;
+            Ok(Response::Backup(BackupOutcome { service, paths }))
+        }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
         Request::Add(r) => run_mutation(Operation::Add(r)).await,
