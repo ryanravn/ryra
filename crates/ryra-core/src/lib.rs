@@ -721,13 +721,20 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         resolved_ports.push((p.name.clone(), host));
     }
 
-    // Caddy on rootless podman can't bind <1024 by default — service.toml
-    // therefore declares 8080/8443 as the host ports. When the kernel has
-    // been retuned (`sysctl net.ipv4.ip_unprivileged_port_start=80`), we
-    // can listen on 80/443 directly: cleaner URLs, no router NAT
-    // translation needed. Override here so the quadlet's `PublishPort=`
-    // and the stored config record both reflect the real listen port.
+    // Caddy host-port binding is driven by the `binding` choice, not by ambient
+    // kernel state: `proxied` (default) keeps the always-works high ports
+    // 8080/8443 (rootless-safe, what tests/LAN/behind-a-proxy use); `direct`
+    // is an explicit opt-in to 80/443 for a public origin. `direct` *needs*
+    // the unprivileged low-port sysctl — if it isn't in place we keep the high
+    // ports rather than emit a quadlet that fails to bind at runtime (the CLI
+    // offers to set the sysctl when you choose `direct`, so the common path is
+    // already covered). Default-absent selection reads as `proxied`.
+    let caddy_direct = selected_choices
+        .get("binding")
+        .map(|s| s == "direct")
+        .unwrap_or(false);
     if WellKnownService::Caddy.matches(service_name)
+        && caddy_direct
         && system::sysctl::rootless_can_bind_low_ports()
     {
         for (name, port) in resolved_ports.iter_mut() {

@@ -140,17 +140,27 @@ pub async fn run(request: AddRequest) -> Result<()> {
     // before the service is added (non-interactive equivalent of the
     // TLS prompt below).
 
-    // When this run is the one installing caddy in ACME mode, offer to
-    // lower `net.ipv4.ip_unprivileged_port_start` so Caddy binds 80/443
-    // directly. The check has to run before add_service, because that's
-    // where the caddy quadlet's `PublishPort=` is generated based on the
-    // current sysctl value. Skipped silently if already enabled, or for
-    // LAN/Tailscale paths where 8080/8443 is fine.
-    if acme.is_some()
-        && services
+    // Caddy's host-port binding is the `binding` choice: `direct` (80/443)
+    // needs the unprivileged low-port sysctl; `proxied` (default, 8080/8443)
+    // doesn't. `--acme` implies `direct` — Let's Encrypt's HTTP-01 challenge
+    // and a public hostname both want 80/443, so high ports would break it.
+    // When this run installs a reverse proxy in direct mode, pin the choice
+    // and offer to lower the sysctl. This has to happen before add_service,
+    // where the caddy quadlet's `PublishPort=` is generated from the choice +
+    // sysctl. Skipped for the default proxied path (LAN/behind-a-proxy), where
+    // 8080/8443 is correct.
+    let adding_reverse_proxy = services
+        .iter()
+        .any(|s| service_provides(s, Capability::ReverseProxy));
+    let wants_direct = acme.is_some()
+        || choose_pairs
             .iter()
-            .any(|s| service_provides(s, Capability::ReverseProxy))
-    {
+            .any(|(c, o)| c == "binding" && o == "direct");
+    if adding_reverse_proxy && wants_direct {
+        // --acme implies direct: pin it unless the user set `binding` explicitly.
+        if !choose_pairs.iter().any(|(c, _)| c == "binding") {
+            choose_pairs.push(("binding".to_string(), "direct".to_string()));
+        }
         super::sysctl_low_ports::offer_enable().await?;
     }
 

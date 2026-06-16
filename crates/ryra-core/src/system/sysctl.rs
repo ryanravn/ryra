@@ -10,18 +10,21 @@
 //! only inspects the current value.
 
 /// Current value of `net.ipv4.ip_unprivileged_port_start`, or `None`
-/// when the `sysctl` binary isn't available, the key doesn't exist
-/// (non-Linux), or the output isn't parseable. Treat `None` as
-/// "unknown — assume restrictive (high ports)".
+/// when the key doesn't exist (non-Linux) or the value isn't parseable.
+/// Treat `None` as "unknown — assume restrictive (high ports)".
+///
+/// Reads `/proc` directly rather than shelling out to the `sysctl` binary:
+/// `sysctl` lives in `/usr/sbin`, which is typically NOT on a rootless user's
+/// `$PATH`, so the subprocess silently failed and ryra fell back to high ports
+/// (8080/8443) even on a box whose kernel had been tuned to allow 80/443. A
+/// plain file read has no `$PATH` dependency and is exactly what `sysctl -n`
+/// does under the hood.
 pub fn unprivileged_port_start() -> Option<u16> {
-    let output = std::process::Command::new("sysctl")
-        .args(["-n", "net.ipv4.ip_unprivileged_port_start"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+    std::fs::read_to_string("/proc/sys/net/ipv4/ip_unprivileged_port_start")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Convenience: true when the kernel will let a rootless process bind
