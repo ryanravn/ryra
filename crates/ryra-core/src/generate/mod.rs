@@ -390,6 +390,7 @@ mod tests {
                 post_install: None,
                 deploy: Default::default(),
                 health_check: None,
+                health_timeout: None,
             },
             requirements: None,
             ports: vec![PortDef {

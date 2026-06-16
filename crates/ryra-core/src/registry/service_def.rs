@@ -157,6 +157,27 @@ pub struct ServiceMeta {
     /// serve (DB reachable, migrations run).
     #[serde(default)]
     pub health_check: Option<String>,
+    /// `deploy = "blue-green"` only: how many seconds to wait for the idle
+    /// slot's `health_check` to pass before aborting the deploy (leaving the
+    /// old slot live). Optional — omit it and ryra uses
+    /// [`DEFAULT_HEALTH_TIMEOUT_SECS`]. Bump it for services with a slow cold
+    /// start (big migration, JIT warmup). Read via [`ServiceMeta::health_timeout_secs`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_timeout: Option<u32>,
+}
+
+/// Default seconds to wait for a blue/green slot's health check before aborting
+/// the deploy. Generous enough to cover a normal cold start + migrations;
+/// services that need longer set `health_timeout` in their service.toml.
+pub const DEFAULT_HEALTH_TIMEOUT_SECS: u32 = 120;
+
+impl ServiceMeta {
+    /// The blue/green health-gate timeout in seconds: the author's
+    /// `health_timeout` if set, else [`DEFAULT_HEALTH_TIMEOUT_SECS`]. Callers
+    /// never branch on "was it specified" — they just ask for the value.
+    pub fn health_timeout_secs(&self) -> u32 {
+        self.health_timeout.unwrap_or(DEFAULT_HEALTH_TIMEOUT_SECS)
+    }
 }
 
 /// What role this service plays in the system.
@@ -1015,6 +1036,12 @@ impl ServiceDef {
                 )),
                 Some(_) => {}
             }
+            if self.service.health_timeout == Some(0) {
+                errors.push(
+                    "`health_timeout` must be greater than 0 seconds (omit it for the default)"
+                        .to_string(),
+                );
+            }
         }
 
         if errors.is_empty() {
@@ -1168,6 +1195,62 @@ container_port = 8080
         );
         assert!(svc.validate().is_ok());
         assert_eq!(svc.service.deploy, DeployStrategy::BlueGreen);
+    }
+
+    #[test]
+    fn health_timeout_defaults_to_120_and_honors_override() {
+        let default = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+health_check = "/healthz"
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        assert_eq!(default.service.health_timeout, None);
+        assert_eq!(default.service.health_timeout_secs(), 120);
+
+        let custom = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+health_check = "/healthz"
+health_timeout = 300
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        assert_eq!(custom.service.health_timeout_secs(), 300);
+        assert!(custom.validate().is_ok());
+    }
+
+    #[test]
+    fn health_timeout_zero_is_rejected() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+health_check = "/healthz"
+health_timeout = 0
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("health_timeout"), "got: {err}");
     }
 
     #[test]

@@ -61,6 +61,7 @@ build = "bun install"
 run = "bun run src/index.ts"
 deploy = "blue-green"          # <- opt in
 health_check = "/healthz"      # <- how Ryra knows the new version is live
+# health_timeout = 120         # <- optional; seconds to wait, defaults to 120
 
 [[ports]]
 name = "http"

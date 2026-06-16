@@ -54,6 +54,7 @@ description = "test service"
 runtime = "podman"
 deploy = "blue-green"
 health_check = "/healthz"
+health_timeout = 45
 
 [[ports]]
 name = "http"
@@ -214,11 +215,13 @@ async fn swap_from_blue_rolls_onto_green_and_flips_color() {
     assert!(!started(&plan.steps).contains(&"demo-blue".to_string()));
 
     // Health gate hits the *idle* (green) port + the declared path.
-    let health = plan.steps.iter().find_map(|s| match s {
-        Step::WaitForHttpHealthy { url, .. } => Some(url.clone()),
+    let (health, timeout) = plan.steps.iter().find_map(|s| match s {
+        Step::WaitForHttpHealthy { url, timeout_secs, .. } => Some((url.clone(), *timeout_secs)),
         _ => None,
     }).expect("has a health gate");
     assert_eq!(health, "http://127.0.0.1:19002/healthz", "got {health}");
+    // The service.toml's `health_timeout = 45` flows all the way to the step.
+    assert_eq!(timeout, 45, "custom health_timeout should reach the step");
 
     // Ordering: start green BEFORE stop blue (overlap = zero downtime).
     let start_idx = plan.steps.iter().position(|s| matches!(s, Step::StartService { unit } if unit == "demo-green")).unwrap();

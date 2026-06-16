@@ -622,7 +622,7 @@ pub async fn blue_green_swap(service_name: &str) -> Result<Option<UpgradeResult>
         live,
         prepare: None,
         health_url,
-        health_timeout_secs: 120,
+        health_timeout_secs: def.service.health_timeout_secs(),
         caddy_rewrite,
     }));
 
