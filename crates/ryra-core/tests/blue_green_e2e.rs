@@ -173,6 +173,26 @@ async fn swap_from_blue_rolls_onto_green_and_flips_color() {
     assert!(plan.force_apply);
 }
 
+#[test]
+fn remove_tears_down_both_color_slots() {
+    let _guard = env_lock();
+    let _sb = Sandbox::new("demo", "blue");
+
+    let result = ryra_core::remove_service("demo", ryra_core::RemoveMode::Preserve)
+        .expect("remove plans");
+    let stopped = stopped(&result.steps);
+    // Both color slots' units must be stopped — neither leaks.
+    assert!(stopped.contains(&"demo-blue".to_string()), "stopped: {stopped:?}");
+    assert!(stopped.contains(&"demo-green".to_string()), "stopped: {stopped:?}");
+    // And both quadlet files get removed.
+    let removed: Vec<String> = result.steps.iter().filter_map(|s| match s {
+        Step::RemoveFile(p) => p.file_name().and_then(|n| n.to_str()).map(String::from),
+        _ => None,
+    }).collect();
+    assert!(removed.iter().any(|n| n == "demo-blue.container"), "removed: {removed:?}");
+    assert!(removed.iter().any(|n| n == "demo-green.container"), "removed: {removed:?}");
+}
+
 #[tokio::test]
 async fn swap_from_green_rolls_back_onto_blue() {
     let _guard = env_lock();
