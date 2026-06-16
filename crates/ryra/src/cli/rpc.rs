@@ -189,14 +189,21 @@ async fn run_mutation(op: Operation) -> OpResult {
 
     match planned {
         Planned::Add(p) => {
+            seed_tailscale_token(&p.result.steps)?;
             p.record_pending().map_err(core_err)?;
             apply::execute_all(&p.result.steps)
                 .await
                 .map_err(core_err)?;
         }
         Planned::Lifecycle(steps) => apply::execute_all(&steps).await.map_err(core_err)?,
-        Planned::Upgrade(u) => apply::execute_all(&u.steps).await.map_err(core_err)?,
-        Planned::Configure(c) => apply::execute_all(&c.steps).await.map_err(core_err)?,
+        Planned::Upgrade(u) => {
+            seed_tailscale_token(&u.steps)?;
+            apply::execute_all(&u.steps).await.map_err(core_err)?
+        }
+        Planned::Configure(c) => {
+            seed_tailscale_token(&c.steps)?;
+            apply::execute_all(&c.steps).await.map_err(core_err)?
+        }
         Planned::Remove(_) | Planned::BackupRun(_) => unreachable!("handled above"),
     }
 
@@ -206,6 +213,45 @@ async fn run_mutation(op: Operation) -> OpResult {
         applied,
         destructive,
     }))
+}
+
+/// Ensure the Tailscale admin token is in *this user's* config before an apply
+/// that registers a Tailscale Service (Setup/Enable). The rpc runs as the agent
+/// user, so this writes the agent user's `preferences.toml`, which is the one
+/// the apply's admin-API call reads. Seeds from `TAILSCALE_API_KEY` (forwarded
+/// into the rpc env by the client); a no-op when the token is already set or
+/// the plan touches no Tailscale Service. Quiet by design: the rpc owns stdout
+/// for the single JSON reply, so unlike the CLI path this prints nothing.
+fn seed_tailscale_token(steps: &[ryra_core::Step]) -> std::result::Result<(), RpcError> {
+    let needs = steps.iter().any(|s| {
+        matches!(
+            s,
+            ryra_core::Step::TailscaleSetup | ryra_core::Step::TailscaleEnable { .. }
+        )
+    });
+    if !needs {
+        return Ok(());
+    }
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    if config.tailscale.is_some() {
+        return Ok(());
+    }
+    let admin_api_key = std::env::var("TAILSCALE_API_KEY").map_err(|_| {
+        RpcError::new(
+            ErrorCode::BadRequest,
+            "tailscale exposure needs a Tailscale admin API token: set \
+             TAILSCALE_API_KEY (tskey-api-...) for ryra-api, or add [tailscale] \
+             admin_api_key to the agent user's config",
+        )
+    })?;
+    config.tailscale = Some(ryra_core::config::schema::TailscaleConfig {
+        admin_api_key,
+        tailnet: None,
+    });
+    paths.ensure_dirs().map_err(core_err)?;
+    ryra_core::config::save_config(&paths.config_file, &config).map_err(core_err)?;
+    Ok(())
 }
 
 /// What an upgrade would change for a service (read-only).
