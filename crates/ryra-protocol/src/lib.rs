@@ -238,6 +238,14 @@ pub enum Request {
         #[serde(default)]
         dry_run: bool,
     },
+    /// Read the raw global config file (`preferences.toml`).
+    ConfigRead,
+    /// Validate and write the raw global config file (owner-only perms).
+    ConfigWrite { content: String },
+    /// Non-secret facts about the global config (path + integration flags).
+    ConfigInfo,
+    /// Set the Tailscale admin API token, preserving any existing tailnet hint.
+    SetTailscaleAdminToken { token: String },
 }
 
 /// The result of a backup run.
@@ -281,6 +289,23 @@ pub struct ReconcileOutcome {
     pub plans: Vec<ReconcilePlanView>,
     /// How many services were updated and restarted (0 on a dry run).
     pub applied: usize,
+}
+
+/// The raw global config file (`preferences.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigFileView {
+    pub path: String,
+    /// Raw TOML; empty string when the file doesn't exist yet.
+    pub content: String,
+}
+
+/// Non-secret facts about the global config, for diagnostics panels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigInfoView {
+    /// Absolute path of the config file (may not exist yet).
+    pub config_file: String,
+    /// A Tailscale admin API token is configured.
+    pub tailscale_configured: bool,
 }
 
 /// One installable service from a registry search.
@@ -544,6 +569,10 @@ pub enum Response {
     ConfigureView(ConfigureView),
     /// `reconcile`.
     Reconcile(ReconcileOutcome),
+    /// `config_read` / `config_write`.
+    ConfigFile(ConfigFileView),
+    /// `config_info`.
+    ConfigInfo(ConfigInfoView),
     /// `remove` / `add_registry` / `remove_registry`.
     Done,
 }
