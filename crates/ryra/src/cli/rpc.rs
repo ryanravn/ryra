@@ -4,9 +4,9 @@
 //! writes a single [`Reply`] as JSON on stdout, and exits. This is the
 //! programmatic seam: a client (ryra-api today) runs `ryra rpc` as the target
 //! user and pipes one request in. Run-and-exit, like every other ryra command,
-//! NOT a long-lived daemon. The shared [`ryra_core::protocol`] types give both
-//! ends a compiler-checked contract; the same messages move to a network
-//! transport unchanged when the client moves off-box.
+//! NOT a long-lived daemon. The shared [`ryra_protocol`] types give both ends a
+//! compiler-checked contract; the same messages move to a network transport
+//! unchanged when the client moves off-box.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -16,9 +16,10 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_protocol::{
-    ApplyOutcome, BackupOutcome, BackupSnapshotView, DiffEntry, DiffKind, DiffView, DoctorIssue,
-    EnvAddition, ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError,
-    SearchHit, ServiceState, ServiceView, Severity,
+    ApplyOutcome, BackupOutcome, BackupSnapshotView, ChoiceOptionView, ChoiceView, ConfigureView,
+    DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition, EnvGroupView, EnvKindView, EnvVarView,
+    ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError, SearchHit,
+    ServiceDefView, ServiceState, ServiceView, Severity,
 };
 
 use super::apply;
@@ -102,6 +103,12 @@ async fn dispatch(req: Request) -> OpResult {
             let paths = plan.paths.len();
             ryra_core::backup::execute_backup_run(&plan).map_err(core_err)?;
             Ok(Response::Backup(BackupOutcome { service, paths }))
+        }
+        Request::ServiceDef { service, registry } => service_def_view(&service, registry.as_deref())
+            .await
+            .map(Response::ServiceDef),
+        Request::ConfigureView { service } => {
+            configure_view(&service).await.map(Response::ConfigureView)
         }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
@@ -265,6 +272,153 @@ async fn search(
             supports: r.supports,
         })
         .collect())
+}
+
+/// The installable schema for a registry service (default registry if unset).
+async fn service_def_view(
+    name: &str,
+    registry: Option<&str>,
+) -> std::result::Result<ServiceDefView, RpcError> {
+    use ryra_core::registry::resolve::ServiceRef;
+    let service_ref = match registry {
+        Some(r) => ServiceRef::Custom {
+            registry: r.to_string(),
+            service: name.to_string(),
+        },
+        None => ServiceRef::Default(name.to_string()),
+    };
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref)
+        .await
+        .map_err(core_err)?;
+    let reg_service = ryra_core::registry::find_service(&repo_dir, name).map_err(|e| {
+        RpcError::new(ErrorCode::NotFound, format!("service '{name}': {e}"))
+    })?;
+    Ok(def_view(&reg_service.def))
+}
+
+/// The configure view for an installed service: schema resolved from the
+/// recorded registry, plus the current selections and `.env` values.
+async fn configure_view(name: &str) -> std::result::Result<ConfigureView, RpcError> {
+    use ryra_core::registry::resolve::{ServiceRef, is_path_like};
+    let metadata = ryra_core::metadata::load_metadata(name)
+        .map_err(core_err)?
+        .ok_or_else(|| {
+            RpcError::new(
+                ErrorCode::NotFound,
+                format!("service '{name}' is not installed"),
+            )
+        })?;
+    let registry = &metadata.registry;
+    let service_ref = if registry.is_empty() || registry == ryra_core::REGISTRY_DEFAULT {
+        ServiceRef::Default(name.to_string())
+    } else if is_path_like(registry) {
+        ServiceRef::Path {
+            dir: std::path::PathBuf::from(registry),
+            name: name.to_string(),
+        }
+    } else {
+        ServiceRef::Custom {
+            registry: registry.to_string(),
+            service: name.to_string(),
+        }
+    };
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref)
+        .await
+        .map_err(core_err)?;
+    let reg_service = ryra_core::registry::find_service(&repo_dir, name).map_err(core_err)?;
+    let current_env = ryra_core::service_home(name)
+        .ok()
+        .and_then(|home| std::fs::read_to_string(home.join(".env")).ok())
+        .map(|c| parse_env(&c))
+        .unwrap_or_default();
+    Ok(ConfigureView {
+        name: name.to_string(),
+        def: def_view(&reg_service.def),
+        selected_choices: metadata.selected_choices,
+        enabled_groups: metadata.enabled_groups,
+        current_env,
+    })
+}
+
+/// Project a core service definition onto the wire schema the forms render.
+fn def_view(def: &ryra_core::registry::service_def::ServiceDef) -> ServiceDefView {
+    ServiceDefView {
+        name: def.service.name.clone(),
+        env: def.env.iter().map(env_var_view).collect(),
+        env_groups: def
+            .env_groups
+            .iter()
+            .map(|g| EnvGroupView {
+                name: g.name.clone(),
+                prompt: g.prompt.clone(),
+                env: g.env.iter().map(env_var_view).collect(),
+            })
+            .collect(),
+        choices: def
+            .choices
+            .iter()
+            .map(|c| ChoiceView {
+                name: c.name.clone(),
+                prompt: c.prompt.clone(),
+                default: c.default.clone(),
+                options: c
+                    .options
+                    .iter()
+                    .map(|o| ChoiceOptionView {
+                        name: o.name.clone(),
+                        label: o.label.clone(),
+                        env: o.env.iter().map(env_var_view).collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+fn env_var_view(e: &ryra_core::registry::service_def::EnvVar) -> EnvVarView {
+    use ryra_core::registry::service_def::{EnvFormat, EnvKind};
+    let kind = match e.kind {
+        EnvKind::Default => EnvKindView::Default,
+        EnvKind::Prompted => EnvKindView::Prompted,
+        EnvKind::Required => EnvKindView::Required,
+    };
+    let format = match e.format {
+        EnvFormat::String => "string",
+        EnvFormat::Hex => "hex",
+        EnvFormat::Base64 => "base64",
+        EnvFormat::Base64Url => "base64_url",
+        EnvFormat::Uuid => "uuid",
+        EnvFormat::JwtHs256 => "jwt_hs256",
+    };
+    EnvVarView {
+        name: e.name.clone(),
+        kind,
+        prompt: e.prompt.clone(),
+        format: format.to_string(),
+        generated: e.value.contains("{{secret."),
+        value_empty: e.value.is_empty(),
+    }
+}
+
+/// Parse a rendered `.env` into a key->value map for prefilling a form.
+/// Skips blanks and comments; strips one layer of surrounding quotes.
+fn parse_env(content: &str) -> std::collections::BTreeMap<String, String> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (k, v) = line.split_once('=')?;
+            let v = v.trim();
+            let v = v
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(v);
+            Some((k.trim().to_string(), v.to_string()))
+        })
+        .collect()
 }
 
 /// The full doctor sweep (same checks as `ryra doctor`).

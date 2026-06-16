@@ -213,6 +213,16 @@ pub enum Request {
     Doctor,
     /// Take a backup snapshot of a (backup-enabled) service.
     Backup { service: String },
+    /// The installable env/group/choice schema for a registry service
+    /// (default registry if `registry` is unset).
+    ServiceDef {
+        service: String,
+        #[serde(default)]
+        registry: Option<String>,
+    },
+    /// The configure view (schema + current selections + `.env`) for an
+    /// installed service.
+    ConfigureView { service: String },
 }
 
 /// The result of a backup run.
@@ -373,6 +383,83 @@ pub struct ApplyOutcome {
     pub destructive: bool,
 }
 
+// ---- Service-definition views (the install / configure forms) -------------
+
+/// How a registry env var is treated: a `default` value, a `prompted` one the
+/// user may override, or a `required` one they must supply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvKindView {
+    Default,
+    Prompted,
+    Required,
+}
+
+/// One env var as a form renders it: enough to label it, decide whether it
+/// needs input, and show whether the value is auto-generated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvVarView {
+    pub name: String,
+    pub kind: EnvKindView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Value format: "string", "hex", "base64", "base64_url", "uuid", "jwt_hs256".
+    pub format: String,
+    /// The value comes from a `{{secret.*}}` template, so it's auto-generated.
+    pub generated: bool,
+    /// The declared value is empty (a `prompted` var with no default needs input).
+    pub value_empty: bool,
+}
+
+/// An optional, named group of env vars, enabled together.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvGroupView {
+    pub name: String,
+    pub prompt: String,
+    pub env: Vec<EnvVarView>,
+}
+
+/// One alternative within a [`ChoiceView`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceOptionView {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub env: Vec<EnvVarView>,
+}
+
+/// A single-select `[[choice]]`: pick exactly one option.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChoiceView {
+    pub name: String,
+    pub prompt: String,
+    pub default: String,
+    pub options: Vec<ChoiceOptionView>,
+}
+
+/// A service definition's installable schema, as the install picker renders it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceDefView {
+    pub name: String,
+    pub env: Vec<EnvVarView>,
+    pub env_groups: Vec<EnvGroupView>,
+    pub choices: Vec<ChoiceView>,
+}
+
+/// The configure view for an installed service: its rendered schema plus the
+/// selections and `.env` values currently on disk, so a form can pre-fill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureView {
+    pub name: String,
+    pub def: ServiceDefView,
+    /// Currently selected option per `[[choice]]` (`choice -> option`).
+    pub selected_choices: BTreeMap<String, String>,
+    /// Currently enabled optional groups.
+    pub enabled_groups: Vec<String>,
+    /// Current `.env` values, so prompted/required fields show what's set.
+    pub current_env: BTreeMap<String, String>,
+}
+
 /// The payload of a successful response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -397,6 +484,10 @@ pub enum Response {
     Doctor(Vec<DoctorIssue>),
     /// `backup`.
     Backup(BackupOutcome),
+    /// `service_def`.
+    ServiceDef(ServiceDefView),
+    /// `configure_view`.
+    ConfigureView(ConfigureView),
     /// `remove` / `add_registry` / `remove_registry`.
     Done,
 }
