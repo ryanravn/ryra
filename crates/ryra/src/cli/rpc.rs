@@ -18,8 +18,8 @@ use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_protocol::{
     ApplyOutcome, BackupOutcome, BackupSnapshotView, ChoiceOptionView, ChoiceView, ConfigureView,
     DiffEntry, DiffKind, DiffView, DoctorIssue, EnvAddition, EnvGroupView, EnvKindView, EnvVarView,
-    ErrorCode, RegistryInfo, Reply, Request, Response, RevertOutcome, RpcError, SearchHit,
-    ServiceDefView, ServiceState, ServiceView, Severity,
+    ErrorCode, RegistryInfo, Reply, Request, Response, RestoreOutcome, RevertOutcome, RpcError,
+    SearchHit, ServiceDefView, ServiceState, ServiceView, Severity,
 };
 
 use super::apply;
@@ -103,6 +103,17 @@ async fn dispatch(req: Request) -> OpResult {
             let paths = plan.paths.len();
             ryra_core::backup::execute_backup_run(&plan).map_err(core_err)?;
             Ok(Response::Backup(BackupOutcome { service, paths }))
+        }
+        Request::Restore { service, snapshot } => {
+            restore(&service, &snapshot).await.map(Response::Restore)
+        }
+        Request::BackupEnrolled => {
+            let services = ryra_core::backup::list_backup_enabled().map_err(core_err)?;
+            Ok(Response::BackupEnrolled(services))
+        }
+        Request::SetBackupEnrolled { service, enabled } => {
+            set_backup_enrolled(&service, enabled)?;
+            Ok(Response::Done)
         }
         Request::ServiceDef { service, registry } => service_def_view(&service, registry.as_deref())
             .await
@@ -272,6 +283,67 @@ async fn search(
             supports: r.supports,
         })
         .collect())
+}
+
+/// Restore a service's data from a restic snapshot, running its pre/post
+/// restore hooks around the restic restore (the engine half of
+/// `ryra backup restore`).
+async fn restore(
+    service: &str,
+    snapshot: &str,
+) -> std::result::Result<RestoreOutcome, RpcError> {
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let installed = ryra_core::list_installed()
+        .map_err(core_err)?
+        .into_iter()
+        .find(|s| s.name == service)
+        .ok_or_else(|| {
+            RpcError::new(
+                ErrorCode::NotFound,
+                format!("service '{service}' is not installed"),
+            )
+        })?;
+    let service_ref = ryra_core::service_ref_from_installed(&installed);
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref)
+        .await
+        .map_err(core_err)?;
+    let plan = ryra_core::backup::plan_backup_restore(service, snapshot, &cfg, &repo_dir)
+        .map_err(core_err)?;
+
+    // pre-hook -> restic restore -> post-hook, mirroring the CLI. Hooks let
+    // database services import a dumped file after the filesystem restore.
+    if let Some(hook) = &plan.pre_restore_hook {
+        ryra_core::backup::run_hook("pre_restore", &plan.service_name, hook, &plan.service_home)
+            .map_err(core_err)?;
+    }
+    ryra_core::backup::restic_restore(&plan).map_err(core_err)?;
+    if let Some(hook) = &plan.post_restore_hook {
+        ryra_core::backup::run_hook("post_restore", &plan.service_name, hook, &plan.service_home)
+            .map_err(core_err)?;
+    }
+    Ok(RestoreOutcome {
+        service: service.to_string(),
+        snapshot: snapshot.to_string(),
+    })
+}
+
+/// Set whether a service is enrolled in backups (`metadata.backup_enabled`).
+/// Idempotent; a no-op for a service with no install metadata.
+fn set_backup_enrolled(service: &str, enabled: bool) -> std::result::Result<(), RpcError> {
+    let Some(mut meta) = ryra_core::load_metadata(service).map_err(core_err)? else {
+        return Ok(());
+    };
+    if meta.backup_enabled == enabled {
+        return Ok(());
+    }
+    meta.backup_enabled = enabled;
+    let path = ryra_core::service_home(service)
+        .map_err(core_err)?
+        .join("metadata.toml");
+    let toml = toml::to_string_pretty(&meta).map_err(core_err)?;
+    std::fs::write(&path, toml).map_err(core_err)?;
+    Ok(())
 }
 
 /// The installable schema for a registry service (default registry if unset).

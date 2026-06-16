@@ -213,6 +213,12 @@ pub enum Request {
     Doctor,
     /// Take a backup snapshot of a (backup-enabled) service.
     Backup { service: String },
+    /// Restore a service's data from a restic snapshot ("latest" for newest).
+    Restore { service: String, snapshot: String },
+    /// List the services enrolled in backups (`metadata.backup_enabled`).
+    BackupEnrolled,
+    /// Opt a service in or out of backups.
+    SetBackupEnrolled { service: String, enabled: bool },
     /// The installable env/group/choice schema for a registry service
     /// (default registry if `registry` is unset).
     ServiceDef {
@@ -231,6 +237,14 @@ pub struct BackupOutcome {
     pub service: String,
     /// Paths included in the snapshot.
     pub paths: usize,
+}
+
+/// The result of a restore.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreOutcome {
+    pub service: String,
+    /// The snapshot restored ("latest" when none was specified).
+    pub snapshot: String,
 }
 
 /// One installable service from a registry search.
@@ -484,6 +498,10 @@ pub enum Response {
     Doctor(Vec<DoctorIssue>),
     /// `backup`.
     Backup(BackupOutcome),
+    /// `restore`.
+    Restore(RestoreOutcome),
+    /// `backup_enrolled`.
+    BackupEnrolled(Vec<String>),
     /// `service_def`.
     ServiceDef(ServiceDefView),
     /// `configure_view`.
