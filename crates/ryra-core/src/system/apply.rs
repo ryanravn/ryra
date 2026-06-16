@@ -231,6 +231,45 @@ async fn execute(step: &Step) -> Result<()> {
                 Ok(())
             })
         }
+        Step::WaitForHttpHealthy {
+            url,
+            expect_status,
+            timeout_secs,
+        } => {
+            // curl is already a hard system dep (see CLAUDE.md / the tailscale
+            // path above), so we lean on it rather than pulling an HTTP client
+            // into ryra-core. `-o /dev/null -w %{http_code}` prints just the
+            // status; a connection refused (instance not listening yet) exits
+            // non-zero and we treat that as not-ready. `-k` because a
+            // blue/green instance is probed on its own loopback port where a
+            // cert, if any, won't match.
+            with_simple_spinner(&format!("waiting for {url} to be healthy"), || {
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_secs(*timeout_secs as u64);
+                loop {
+                    let code = Command::new("curl")
+                        .args([
+                            "-sS", "-k", "-o", "/dev/null", "-w", "%{http_code}", "--max-time",
+                            "5", url,
+                        ])
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+                    if code.as_deref() == Some(&expect_status.to_string()) {
+                        return Ok(());
+                    }
+                    if std::time::Instant::now() > deadline {
+                        anyhow::bail!(
+                            "timed out after {timeout_secs}s waiting for {url} to return {expect_status} \
+                             (last: {})",
+                            code.as_deref().unwrap_or("no response")
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            })
+        }
         Step::CopyFile { src, dst } => {
             if let Some(parent) = dst.parent() {
                 std::fs::create_dir_all(parent)

@@ -95,6 +95,16 @@ pub enum Step {
     CreateDir(PathBuf),
     /// Wait for a file to appear (with timeout).
     WaitForFile { path: PathBuf, timeout_secs: u32 },
+    /// Poll an HTTP endpoint until it answers with `expect_status`, or time
+    /// out. The readiness gate for a blue/green deploy: ryra won't swap the
+    /// Caddy upstream onto a freshly started instance until its health endpoint
+    /// says it's actually serving (DB up, migrations run). A timeout aborts the
+    /// deploy with the old instance still live and serving.
+    WaitForHttpHealthy {
+        url: String,
+        expect_status: u16,
+        timeout_secs: u32,
+    },
     /// Copy a file from the registry (or similar source) to a destination.
     /// Used for vendored binary files (e.g. Jellyfin's SSO plugin DLLs)
     /// that don't fit the templated `configs/` pipeline.
@@ -157,6 +167,11 @@ impl Step {
             Step::WaitForFile { path, timeout_secs } => {
                 format!("wait for {} (up to {timeout_secs}s)", path.display())
             }
+            Step::WaitForHttpHealthy {
+                url,
+                expect_status,
+                timeout_secs,
+            } => format!("wait for {url} -> {expect_status} (up to {timeout_secs}s)"),
             Step::CopyFile { src, dst } => format!("cp {} {}", src.display(), dst.display()),
             Step::Build { dir, command } => format!("(cd {} && {command})", dir.display()),
             Step::TailscaleSetup => "tailscale: ensure ACL tags + auto-approval".to_string(),

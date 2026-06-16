@@ -1404,6 +1404,15 @@ fn clone_step(step: &Step) -> Step {
             path: path.clone(),
             timeout_secs: *timeout_secs,
         },
+        Step::WaitForHttpHealthy {
+            url,
+            expect_status,
+            timeout_secs,
+        } => Step::WaitForHttpHealthy {
+            url: url.clone(),
+            expect_status: *expect_status,
+            timeout_secs: *timeout_secs,
+        },
         Step::CopyFile { src, dst } => Step::CopyFile {
             src: src.clone(),
             dst: dst.clone(),

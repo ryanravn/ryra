@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use crate::capability::Capability;
 use crate::error::{Error, Result};
 use crate::paths::metadata_path;
-use crate::registry::service_def::{AuthKind, Runtime};
+use crate::registry::service_def::{AuthKind, Color, Runtime};
 
 /// Per-install record persisted to `~/.local/share/services/<name>/metadata.toml`.
 ///
@@ -71,6 +71,12 @@ pub struct Metadata {
     /// gone). Absent in legacy installs reads back as `Podman`.
     #[serde(default, skip_serializing_if = "Runtime::is_podman")]
     pub runtime: Runtime,
+    /// `deploy = "blue-green"` installs only: which slot is currently live.
+    /// The next deploy rolls the new version onto `active_color.other()`,
+    /// health-checks it, swaps Caddy, then stops this one. Absent for
+    /// restart-strategy installs (the common case) and legacy metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_color: Option<Color>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -130,6 +136,7 @@ registry = "default"
             enabled_groups: vec![],
             selected_choices: BTreeMap::new(),
             runtime: Default::default(),
+            active_color: None,
         };
         let text = toml::to_string(&meta).expect("serialize");
         assert!(
@@ -154,6 +161,7 @@ registry = "default"
             enabled_groups: vec![],
             selected_choices: BTreeMap::new(),
             runtime: Default::default(),
+            active_color: None,
         };
         let text = toml::to_string(&meta).expect("serialize");
         assert!(!text.contains("backup_enabled"), "got: {text}");

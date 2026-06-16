@@ -526,6 +526,8 @@ mod tests {
                 run: None,
                 build: None,
                 post_install: None,
+                deploy: Default::default(),
+                health_check: None,
             },
             requirements: None,
             ports: vec![PortDef {

@@ -145,6 +145,18 @@ pub struct ServiceMeta {
     /// be automated instead.
     #[serde(default)]
     pub post_install: Option<String>,
+    /// How `ryra upgrade` cuts a new version over. `restart` (default) stops
+    /// the old instance before starting the new; `blue-green` runs both and
+    /// swaps traffic for a zero-downtime deploy. See [`DeployStrategy`].
+    #[serde(default, skip_serializing_if = "DeployStrategy::is_restart")]
+    pub deploy: DeployStrategy,
+    /// `deploy = "blue-green"` only: the HTTP path ryra polls on a freshly
+    /// started instance to decide it's live before swapping traffic onto it
+    /// (e.g. `/healthz`). Required for blue/green; ignored otherwise. The
+    /// endpoint should return 200 only once the process is actually ready to
+    /// serve (DB reachable, migrations run).
+    #[serde(default)]
+    pub health_check: Option<String>,
 }
 
 /// What role this service plays in the system.
@@ -176,6 +188,73 @@ impl Runtime {
     /// `runtime = "podman"` in their metadata.
     pub fn is_podman(&self) -> bool {
         matches!(self, Runtime::Podman)
+    }
+}
+
+/// How `ryra upgrade` rolls a new version onto the host.
+///
+/// Orthogonal to [`Runtime`]: a strategy describes the *cutover*, the runtime
+/// describes the *instance*. Both native and podman services can be deployed
+/// either way.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeployStrategy {
+    /// Stop the running instance, then start the new one. A brief gap while the
+    /// new process starts, runs migrations, and binds its port. The default,
+    /// and what every service did before blue/green existed.
+    #[default]
+    Restart,
+    /// Start the new version *alongside* the old one on a second port,
+    /// health-check it, swap the Caddy upstream over (a graceful reload, no
+    /// dropped connections), then stop the old one. Zero-downtime, and because
+    /// the old instance lingers through the drain, rollback is an instant
+    /// upstream swap back — no rebuild. Requires an HTTP port, a Caddy-backed
+    /// exposure, and a `health_check` path.
+    BlueGreen,
+}
+
+impl DeployStrategy {
+    /// Whether this is the default restart strategy. Serde
+    /// `skip_serializing_if` hook so the common case carries no
+    /// `deploy = "restart"` line in metadata.
+    pub fn is_restart(&self) -> bool {
+        matches!(self, DeployStrategy::Restart)
+    }
+}
+
+/// Which of the two blue/green slots is currently live. Persisted in an
+/// install's metadata so the next deploy knows which slot to leave serving and
+/// which to roll the new version onto. Only meaningful for
+/// `deploy = "blue-green"` installs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Color {
+    Blue,
+    Green,
+}
+
+impl Color {
+    /// The standby slot — the one a deploy rolls the new version onto.
+    pub fn other(self) -> Color {
+        match self {
+            Color::Blue => Color::Green,
+            Color::Green => Color::Blue,
+        }
+    }
+
+    /// Lowercase slug used in unit names, container names, and port keys
+    /// (`<svc>-blue`, `SERVICE_PORT_HTTP_GREEN`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Color::Blue => "blue",
+            Color::Green => "green",
+        }
+    }
+}
+
+impl std::fmt::Display for Color {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -912,6 +991,32 @@ impl ServiceDef {
             }
         }
 
+        // --- Blue/green consistency ---
+        // A blue/green deploy swaps a Caddy upstream between two instances, so
+        // it needs (a) a port to route, and (b) a readiness probe to know the
+        // standby is live before cutting over. Make a half-configured strategy
+        // unrepresentable rather than letting it surface as a runtime surprise
+        // mid-deploy. The Caddy-backed-exposure requirement is enforced at
+        // install time (exposure is chosen by `ryra add`, not service.toml).
+        if self.service.deploy == DeployStrategy::BlueGreen {
+            if self.ports.is_empty() {
+                errors.push(
+                    "deploy = \"blue-green\" requires at least one [[ports]] entry to route"
+                        .to_string(),
+                );
+            }
+            match self.service.health_check.as_deref() {
+                None => errors.push(
+                    "deploy = \"blue-green\" requires a `health_check` path under [service]"
+                        .to_string(),
+                ),
+                Some(p) if !p.starts_with('/') => errors.push(format!(
+                    "`health_check` must be an absolute path starting with '/', got {p:?}"
+                )),
+                Some(_) => {}
+            }
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -992,6 +1097,97 @@ mod backup_tests {
 
     fn parse(toml_src: &str) -> ServiceDef {
         toml::from_str(toml_src).expect("parse")
+    }
+
+    #[test]
+    fn blue_green_requires_health_check() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("health_check"), "got: {err}");
+    }
+
+    #[test]
+    fn blue_green_health_check_must_be_absolute_path() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+health_check = "healthz"
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("absolute path"), "got: {err}");
+    }
+
+    #[test]
+    fn blue_green_requires_a_port() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+health_check = "/healthz"
+"#,
+        );
+        let err = svc.validate().expect_err("must reject");
+        assert!(err.contains("[[ports]]"), "got: {err}");
+    }
+
+    #[test]
+    fn blue_green_with_port_and_health_check_validates() {
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+deploy = "blue-green"
+health_check = "/healthz"
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        assert!(svc.validate().is_ok());
+        assert_eq!(svc.service.deploy, DeployStrategy::BlueGreen);
+    }
+
+    #[test]
+    fn deploy_defaults_to_restart_and_is_omitted_when_serialized() {
+        // No `deploy` line -> Restart, and a Restart strategy must not write a
+        // redundant `deploy = "restart"` back out (skip_serializing_if).
+        let svc = parse(
+            r#"
+[service]
+name = "x"
+description = "x"
+
+[[ports]]
+name = "http"
+container_port = 8080
+"#,
+        );
+        assert_eq!(svc.service.deploy, DeployStrategy::Restart);
+        let text = toml::to_string(&svc.service).expect("serialize ServiceMeta");
+        assert!(!text.contains("deploy"), "got: {text}");
     }
 
     #[test]

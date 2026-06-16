@@ -6,6 +6,7 @@ pub mod capability;
 pub mod config;
 pub mod configure;
 pub mod data;
+pub mod deploy;
 pub mod error;
 pub mod exposure;
 pub mod generate;
@@ -808,6 +809,15 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // (`true`) disagrees with what gets serialized. Storing intent keeps
     // metadata stable across re-renders and lets `ryra configure --smtp`
     // remember the choice even before global SMTP is configured.
+    // A blue/green install comes up on the `blue` slot; restart-strategy
+    // installs carry no color. The deploy flow flips this on each `ryra
+    // upgrade`.
+    let active_color = match reg_service.def.service.deploy {
+        registry::service_def::DeployStrategy::BlueGreen => {
+            Some(registry::service_def::Color::Blue)
+        }
+        registry::service_def::DeployStrategy::Restart => None,
+    };
     let install_metadata = Metadata {
         registry: registry_name.to_string(),
         url: url.map(str::to_string),
@@ -818,6 +828,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         enabled_groups: enabled_groups.iter().cloned().collect(),
         selected_choices: selected_choices.clone(),
         runtime: reg_service.def.service.runtime.clone(),
+        active_color,
     };
 
     // Native services have no quadlet bundle / image: build the binary, install
