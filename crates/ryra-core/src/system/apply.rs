@@ -1054,15 +1054,27 @@ fn copy_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()
         let entry = entry?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
+        // Skip VCS/build/dependency entries by NAME, before looking at the type:
+        // these can be a real dir OR a symlink (e.g. a pnpm-style `node_modules`
+        // symlink), and a symlinked one would otherwise fall through to the copy
+        // below and fail when followed.
+        if name_str.starts_with('.') || SYNC_SKIP_DIRS.contains(&name_str.as_ref()) {
+            continue;
+        }
         let from = entry.path();
         let to = dst.join(&name);
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            if name_str.starts_with('.') || SYNC_SKIP_DIRS.contains(&name_str.as_ref()) {
-                continue;
-            }
             copy_tree(&from, &to)?;
-        } else if ft.is_file() || ft.is_symlink() {
+        } else if ft.is_symlink() {
+            // Recreate the link rather than following it: following a broken or
+            // directory symlink would abort the whole sync. A copied-as-is link
+            // mirrors the source faithfully and never errors here.
+            if let Ok(target) = std::fs::read_link(&from) {
+                let _ = std::fs::remove_file(&to);
+                std::os::unix::fs::symlink(target, &to)?;
+            }
+        } else if ft.is_file() {
             std::fs::copy(&from, &to)?;
         }
     }
@@ -1098,22 +1110,33 @@ mod tests {
         std::fs::write(src.join("app/mod.py"), "y").unwrap();
         std::fs::create_dir_all(src.join("target/release")).unwrap();
         std::fs::write(src.join("target/release/bin"), "huge").unwrap();
-        std::fs::create_dir_all(src.join("node_modules/foo")).unwrap();
-        std::fs::write(src.join("node_modules/foo/x.js"), "dep").unwrap();
         std::fs::create_dir_all(src.join(".git")).unwrap();
         std::fs::write(src.join(".git/HEAD"), "ref").unwrap();
+        // A `node_modules` that is a SYMLINK (pnpm-style), not a dir — must be
+        // skipped by name, not followed (this is what broke the real deploy).
+        std::fs::create_dir_all(src.join("nm-store")).unwrap();
+        std::os::unix::fs::symlink("nm-store", src.join("node_modules")).unwrap();
+        // A regular file symlink elsewhere must be preserved, not followed.
+        std::os::unix::fs::symlink("app.py", src.join("app-link.py")).unwrap();
 
         copy_tree(&src, &dst).unwrap();
 
         // Source files (incl. nested) copied.
         assert!(dst.join("app.py").exists());
         assert!(dst.join("app/mod.py").exists());
-        // Build / dependency / VCS dirs skipped.
+        // Build / dependency / VCS dirs skipped — including the node_modules SYMLINK.
         assert!(!dst.join("target").exists(), "target/ should be skipped");
         assert!(
             !dst.join("node_modules").exists(),
-            "node_modules/ should be skipped"
+            "node_modules (symlink) should be skipped"
         );
         assert!(!dst.join(".git").exists(), ".git/ should be skipped");
+        // A non-skipped symlink is preserved as a symlink (not followed/copied).
+        assert!(
+            std::fs::symlink_metadata(dst.join("app-link.py"))
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false),
+            "regular symlink should be preserved"
+        );
     }
 }
