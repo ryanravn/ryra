@@ -284,7 +284,14 @@ async fn replan(service_name: &str) -> Result<Replanned> {
 
     let enabled_groups: BTreeSet<String> = metadata.enabled_groups.iter().cloned().collect();
     let selected_choices = metadata.selected_choices.clone();
-    let no_env_overrides = BTreeMap::new();
+    // Recover the install's existing `.env` values so a re-render reuses what's
+    // already configured instead of re-demanding it. A required choice/group
+    // member (e.g. an `external` database's `DATABASE_URL`) is provided once at
+    // install and lives in the `.env`; without seeding it here the render treats
+    // it as "no value" and the upgrade/diff errors on a service that's running
+    // fine. Same rationale as `port_overrides` above: upgrade re-renders against
+    // the existing install, it doesn't re-ask for what's already set.
+    let env_overrides = read_existing_env_keys(service_name)?;
     let result = add_service(crate::AddServiceParams {
         service_name,
         exposure: &exposure,
@@ -297,7 +304,7 @@ async fn replan(service_name: &str) -> Result<Replanned> {
         // user picked.
         enable_smtp: metadata.smtp_enabled,
         enable_backup: metadata.backup_enabled,
-        env_overrides: &no_env_overrides,
+        env_overrides: &env_overrides,
         enabled_groups: &enabled_groups,
         selected_choices: &selected_choices,
         registry_name: &metadata.registry,
