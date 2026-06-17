@@ -1629,6 +1629,14 @@ fn build_native_add(p: NativeAddParams<'_>) -> Result<AddResult> {
     } else {
         service_name.to_string()
     };
+    // Enable so the native unit auto-starts on boot. Quadlet sidecars get this
+    // from the podman generator via their `[Install]` section, but a native
+    // `.service` needs an explicit enable -- without it the service runs now
+    // but is dead after a reboot (e.g. the self-hosted ryra-api came back with
+    // no control plane until manually enabled).
+    steps.push(Step::EnableService {
+        unit: app_unit.clone(),
+    });
     steps.push(Step::StartService { unit: app_unit });
 
     // Caddy route (if the service is URL-exposed and Caddy is installed),
@@ -1999,9 +2007,11 @@ fn remove_native_service(
     }
 
     for unit_name in &unit_names {
-        steps.push(Step::StopService {
-            unit: unit_name.trim_end_matches(".service").to_string(),
-        });
+        let bare = unit_name.trim_end_matches(".service").to_string();
+        // Disable before removing the unit file, so no `default.target.wants`
+        // symlink dangles after teardown (the dual of the enable on install).
+        steps.push(Step::DisableService { unit: bare.clone() });
+        steps.push(Step::StopService { unit: bare });
         steps.push(Step::RemoveFile(unit_dir.join(unit_name)));
     }
     steps.push(Step::DaemonReload);
