@@ -356,6 +356,10 @@ pub struct SearchHit {
     pub installed: bool,
     /// Integrations the service supports (e.g. "oidc", "smtp").
     pub supports: Vec<String>,
+    /// Recommended RAM in MB from the manifest, when declared. Lets callers
+    /// warn before an install would overcommit the machine's memory.
+    #[serde(default)]
+    pub recommended_ram_mb: Option<u64>,
 }
 
 /// A configured registry.

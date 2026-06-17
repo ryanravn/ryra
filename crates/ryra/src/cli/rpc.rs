@@ -380,6 +380,7 @@ async fn search(
             description: r.description,
             installed: r.installed,
             supports: r.supports,
+            recommended_ram_mb: r.recommended_ram_mb,
         })
         .collect())
 }

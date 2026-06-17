@@ -2753,11 +2753,17 @@ pub fn search_services(repo_dir: &Path, query: Option<&str>) -> Result<Vec<Searc
             if reg_svc.def.integrations.smtp {
                 supports.push("smtp".to_string());
             }
+            let recommended_ram_mb = reg_svc
+                .def
+                .requirements
+                .as_ref()
+                .and_then(|r| r.ram.recommended);
             SearchResult {
                 name: name.clone(),
                 description: reg_svc.def.service.description,
                 installed,
                 supports,
+                recommended_ram_mb,
             }
         })
         .collect();
@@ -2771,6 +2777,9 @@ pub struct SearchResult {
     pub installed: bool,
     /// Integrations this service supports (e.g., "oidc", "smtp").
     pub supports: Vec<String>,
+    /// Recommended RAM in MB from the service's manifest, when declared.
+    /// Used to warn before an install would overcommit the machine's memory.
+    pub recommended_ram_mb: Option<u64>,
 }
 
 /// Get test definitions for an installed service by reading its `test.toml`.
