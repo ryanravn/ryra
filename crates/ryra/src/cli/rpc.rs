@@ -29,6 +29,18 @@ use super::apply;
 type OpResult = std::result::Result<Response, RpcError>;
 
 pub async fn run() -> Result<()> {
+    // The rpc contract is "one Reply as JSON on stdout, nothing else". But the
+    // apply path we share with the CLI prints human progress to stdout, and a
+    // deploy lets podman's pull progress bars flow through the inherited
+    // stdout too -- correct for an interactive `ryra add`, fatal here, because
+    // it interleaves with (and corrupts) the JSON reply the client parses.
+    //
+    // So reserve the real stdout for the reply alone: dup it aside, then point
+    // fd 1 at stderr for the dispatch. Every `println!` and every child's
+    // inherited stdout now lands on stderr (which the client treats as
+    // diagnostics), and we write the reply to the saved fd at the very end.
+    let mut reply_out = hijack_stdout()?;
+
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
 
@@ -43,11 +55,36 @@ pub async fn run() -> Result<()> {
         )),
     };
 
-    println!("{}", serde_json::to_string(&reply)?);
+    // Flush any buffered stdout writes (now aimed at stderr) before the reply,
+    // so progress can't trail in after it on a shared descriptor.
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    writeln!(reply_out, "{}", serde_json::to_string(&reply)?)?;
+    reply_out.flush()?;
     if matches!(reply, Reply::Error(_)) {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Save the real stdout aside and redirect fd 1 to stderr, returning a handle
+/// to the original stdout (where the single reply is written). See [`run`].
+fn hijack_stdout() -> std::io::Result<std::fs::File> {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: dup/dup2 on the process's own standard descriptors; the returned
+    // fd is wrapped in exactly one `File` that owns it.
+    unsafe {
+        let saved = libc::dup(libc::STDOUT_FILENO);
+        if saved < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) < 0 {
+            let err = std::io::Error::last_os_error();
+            libc::close(saved);
+            return Err(err);
+        }
+        Ok(std::fs::File::from_raw_fd(saved))
+    }
 }
 
 async fn dispatch(req: Request) -> OpResult {

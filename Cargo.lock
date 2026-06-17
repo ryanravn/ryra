@@ -884,6 +884,7 @@ dependencies = [
  "console",
  "dialoguer",
  "dirs",
+ "libc",
  "ryra-core",
  "ryra-protocol",
  "ryra-test",
