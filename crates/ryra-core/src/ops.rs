@@ -368,6 +368,26 @@ pub async fn plan_add(req: &AddRequest, ctx: PlanContext<'_>) -> Result<PlannedA
 }
 
 pub fn plan_remove(req: &RemoveRequest) -> Result<RemoveResult> {
+    // Fully installed: the normal teardown.
+    if crate::is_service_installed(&req.service) {
+        return crate::remove_service(&req.service, req.mode);
+    }
+    // Not installed, but an interrupted add (or a preserve-mode remove) left
+    // data behind. With purge, clean that orphan up instead of erroring -- the
+    // same recovery `ryra remove <svc> --purge` performs. Without this the rpc
+    // path dead-ends: the service shows as `stopped`, reinstall refuses with
+    // "leftover state from a prior install", and remove says "not installed".
+    if matches!(req.mode, crate::RemoveMode::Purge)
+        && let Some(svc) = crate::data::enumerate_service(&req.service)?
+    {
+        return Ok(RemoveResult {
+            steps: crate::orphan_purge_steps(&svc),
+            service_name: req.service.clone(),
+            url: None,
+        });
+    }
+    // Genuinely absent (or a preserve-mode orphan, which has nothing to tear
+    // down): keep the original not-installed error.
     crate::remove_service(&req.service, req.mode)
 }
 
