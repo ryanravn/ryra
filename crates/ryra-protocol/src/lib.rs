@@ -249,6 +249,19 @@ pub enum Request {
         #[serde(default)]
         dry_run: bool,
     },
+    /// Discover the registry's test suites (`ryra test search`).
+    ListTests,
+    /// Run one registry test by name on the host (`ryra test <name>`).
+    RunTest { name: String },
+    /// Local test sandbox state: installed services + last results
+    /// (`ryra test list`).
+    TestState,
+    /// Delete stored results for one test, or all tests when `name` is None
+    /// (`ryra test remove`).
+    RemoveTestResults {
+        #[serde(default)]
+        name: Option<String>,
+    },
 }
 
 /// The result of a backup run.
@@ -562,6 +575,61 @@ pub struct ConfigureView {
     pub current_env: BTreeMap<String, String>,
 }
 
+/// One discoverable registry test (`ryra test search`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryTestView {
+    pub name: String,
+    /// `"simple"` (setup then assert) or `"lifecycle"` (interleaved steps).
+    pub kind: String,
+    pub services: Vec<String>,
+    pub step_count: usize,
+    pub step_kinds: Vec<String>,
+    pub needs_browser: bool,
+    pub requires_sudo: bool,
+}
+
+/// The outcome of running one test (`ryra test <name>`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestRunView {
+    pub name: String,
+    pub passed: bool,
+    pub duration_secs: f64,
+    /// `"passed"` / `"skipped"` / a failure message.
+    pub outcome: String,
+    pub events: Vec<TestEventView>,
+}
+
+/// One step/assertion within a test run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestEventView {
+    pub description: String,
+    /// `"step"` or `"assertion"`.
+    pub kind: String,
+    pub passed: bool,
+    pub skipped: bool,
+    pub error: Option<String>,
+    pub duration_secs: f64,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Local test sandbox state: where it lives + the last stored results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestStateView {
+    pub sandbox_path: String,
+    pub tests: Vec<TestResultEntryView>,
+}
+
+/// One stored test result (from a prior run).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestResultEntryView {
+    pub name: String,
+    pub status: String,
+    pub duration_ms: u64,
+    pub timestamp: u64,
+    pub has_playwright: bool,
+}
+
 /// The payload of a successful response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -598,7 +666,13 @@ pub enum Response {
     ConfigureView(ConfigureView),
     /// `reconcile`.
     Reconcile(ReconcileOutcome),
-    /// `remove` / `add_registry` / `remove_registry`.
+    /// `list_tests`.
+    Tests(Vec<RegistryTestView>),
+    /// `run_test`.
+    TestRun(TestRunView),
+    /// `test_state`.
+    TestState(TestStateView),
+    /// `remove` / `add_registry` / `remove_registry` / `remove_test_results`.
     Done,
 }
 

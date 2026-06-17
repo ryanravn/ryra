@@ -19,9 +19,9 @@ use ryra_protocol::{
     ApplyOutcome, BackupBackendSpec, BackupOutcome, BackupSnapshotView, BackupStatusView,
     ChoiceOptionView, ChoiceView, ConfigureView, DiffEntry, DiffKind, DiffView, DoctorIssue,
     EnvAddition, EnvGroupView, EnvKeyChangeView, EnvKindView, EnvVarView, ErrorCode,
-    ReconcileOutcome, ReconcilePlanView, RegistryInfo, Reply, Request, Response, RestoreOutcome,
-    RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState, ServiceView, Severity,
-    SnapshotView,
+    ReconcileOutcome, ReconcilePlanView, RegistryInfo, RegistryTestView, Reply, Request, Response,
+    RestoreOutcome, RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState, ServiceView,
+    Severity, SnapshotView, TestEventView, TestResultEntryView, TestRunView, TestStateView,
 };
 
 use super::apply;
@@ -166,6 +166,13 @@ async fn dispatch(req: Request) -> OpResult {
         }
         Request::Reconcile { services, dry_run } => {
             reconcile(services, dry_run).await.map(Response::Reconcile)
+        }
+        Request::ListTests => list_tests().await.map(Response::Tests),
+        Request::RunTest { name } => run_test(&name).await.map(Response::TestRun),
+        Request::TestState => test_state().map(Response::TestState),
+        Request::RemoveTestResults { name } => {
+            remove_test_results(name.as_deref());
+            Ok(Response::Done)
         }
         // Mutations: plan via the one shared entry point, then execute the
         // typed Steps with the same executor every frontend uses.
@@ -375,6 +382,171 @@ async fn search(
             supports: r.supports,
         })
         .collect())
+}
+
+// -- Tests -------------------------------------------------------------------
+//
+// Test discovery + execution run here, in the rpc (i.e. as the agent user),
+// so the registry resolves in that user's home and test services deploy into
+// their rootless podman -- not ryra-api's. Same `ryra_test` engine the
+// `ryra test` CLI uses.
+
+/// The default registry dir, cloned if absent. Safe here: rpc runs as the
+/// agent user, so the clone lands in their home where the engine reads it.
+async fn registry_dir() -> std::result::Result<std::path::PathBuf, RpcError> {
+    use ryra_core::registry::resolve::ServiceRef;
+    ryra_core::resolve_registry_dir(&ServiceRef::Default(String::new()))
+        .await
+        .map_err(core_err)
+}
+
+async fn list_tests() -> std::result::Result<Vec<RegistryTestView>, RpcError> {
+    let dir = registry_dir().await?;
+    let discovered = ryra_test::registry::discover(&dir).map_err(core_err)?;
+    Ok(discovered
+        .iter()
+        .map(|t| RegistryTestView {
+            name: t.name().to_string(),
+            kind: if t.is_lifecycle() {
+                "lifecycle".to_string()
+            } else {
+                "simple".to_string()
+            },
+            services: t.services().iter().map(|s| s.to_string()).collect(),
+            step_count: t.test_count(),
+            step_kinds: t.step_kinds().iter().map(|s| s.to_string()).collect(),
+            needs_browser: t.needs_browser(),
+            requires_sudo: t.requires_sudo(),
+        })
+        .collect())
+}
+
+fn test_state() -> std::result::Result<TestStateView, RpcError> {
+    let sandbox = ryra_test::test_sandbox_root().ok_or_else(|| core_err("$HOME not set"))?;
+    let tests = ryra_test::reports::scan_results()
+        .into_iter()
+        .map(|r| TestResultEntryView {
+            name: r.name,
+            status: r.status,
+            duration_ms: r.duration_ms,
+            timestamp: r.timestamp,
+            has_playwright: r.has_playwright,
+        })
+        .collect();
+    Ok(TestStateView {
+        sandbox_path: sandbox.display().to_string(),
+        tests,
+    })
+}
+
+fn remove_test_results(name: Option<&str>) {
+    match name {
+        Some(n) => {
+            let _ = ryra_test::reports::delete_test_result(n);
+        }
+        None => {
+            for r in ryra_test::reports::scan_results() {
+                let _ = ryra_test::reports::delete_test_result(&r.name);
+            }
+        }
+    }
+}
+
+async fn run_test(name: &str) -> std::result::Result<TestRunView, RpcError> {
+    let registry_path = registry_dir().await?;
+    let discovered = ryra_test::registry::discover(&registry_path).map_err(core_err)?;
+    let test = discovered
+        .into_iter()
+        .find(|t| t.name() == name)
+        .ok_or_else(|| RpcError::new(ErrorCode::NotFound, format!("no test named '{name}'")))?;
+
+    // Each test gets an isolated config/data sandbox under the test root.
+    let sandbox = ryra_test::test_sandbox_root().ok_or_else(|| core_err("$HOME not set"))?;
+    let test_dir = sandbox.join("tests").join(name);
+    let config_dir = test_dir.join("config");
+    let data_dir = test_dir.join("services");
+    let _ = std::fs::remove_dir_all(&config_dir);
+    std::fs::create_dir_all(&config_dir).map_err(core_err)?;
+    std::fs::create_dir_all(&data_dir).map_err(core_err)?;
+    let executor = ryra_test::executor::LocalExecutor::with_registry(&registry_path)
+        .with_config_dir(&config_dir)
+        .with_data_dir(&data_dir);
+
+    let svcs: Vec<String> = test.services().iter().map(|s| s.to_string()).collect();
+    let pre_test: std::collections::BTreeSet<String> = ryra_core::scan_managed_services()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    ryra_test::purge_services(&executor, &svcs, "before test").await;
+
+    let result = match &test {
+        ryra_test::registry::DiscoveredTest::Lifecycle { steps, .. } => {
+            ryra_test::runner::run_lifecycle_test(
+                &executor,
+                name,
+                steps,
+                false,
+                false,
+                &registry_path,
+                false,
+                None,
+            )
+            .await
+        }
+        ryra_test::registry::DiscoveredTest::Simple { .. } => {
+            ryra_test::runner::run_registry_test(&executor, &test, false, None).await
+        }
+    };
+
+    // Clean up the test's services, plus anything it pulled in as a side effect.
+    ryra_test::purge_services(&executor, &svcs, "after test").await;
+    let leaked: Vec<String> = ryra_core::scan_managed_services()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| !pre_test.contains(s) && !svcs.contains(s))
+        .collect();
+    if !leaked.is_empty() {
+        ryra_test::purge_services(&executor, &leaked, "after test (side-effect)").await;
+    }
+
+    let _ = ryra_test::reports::save_test_result(&result);
+    Ok(scenario_to_view(result))
+}
+
+fn scenario_to_view(r: ryra_test::scenario::ScenarioResult) -> TestRunView {
+    use ryra_test::scenario::{EventKind, Outcome};
+    let passed = r.passed();
+    let duration_secs = r.duration.as_secs_f64();
+    TestRunView {
+        name: r.name,
+        passed,
+        duration_secs,
+        outcome: match &r.outcome {
+            Outcome::Passed => "passed".to_string(),
+            Outcome::Failed(msg) => msg.clone(),
+            Outcome::Skipped => "skipped".to_string(),
+        },
+        events: r
+            .events
+            .into_iter()
+            .map(|ev| TestEventView {
+                description: ev.description,
+                kind: match ev.kind {
+                    EventKind::Step => "step".to_string(),
+                    EventKind::Assertion => "assertion".to_string(),
+                },
+                passed: ev.outcome.is_pass(),
+                skipped: matches!(ev.outcome, Outcome::Skipped),
+                error: match ev.outcome {
+                    Outcome::Failed(msg) => Some(msg),
+                    _ => None,
+                },
+                duration_secs: ev.duration.as_secs_f64(),
+                stdout: ev.stdout,
+                stderr: ev.stderr,
+            })
+            .collect(),
+    }
 }
 
 /// Restore a service's data from a restic snapshot, running its pre/post
