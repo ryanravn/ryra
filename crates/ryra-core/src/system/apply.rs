@@ -659,7 +659,13 @@ mod tailscale_services {
     /// presence here is what makes the tailnet route traffic to us.
     fn verify_control_plane_approval(svc_name: &str) -> Result<()> {
         let svc_key = format!("svc:{svc_name}");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        // Poll briefly for the common fast case (approval usually lands in
+        // ~20-30s, and catching it here means the *.ts.net URL works the moment
+        // install finishes). If it's slower, we don't block the install on it --
+        // the timeout branch below warns and continues, since approval is async
+        // and arrives on its own. Kept short so a slow tailnet doesn't stretch
+        // the install (and trip the caller's request timeout).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let mut announced = false;
         loop {
             let out = Command::new("sudo")
@@ -684,18 +690,23 @@ mod tailscale_services {
                 return Ok(());
             }
             if std::time::Instant::now() > deadline {
-                bail!(
-                    "tailscale serve advertised svc:{svc_name} locally, but the control plane \
-                     hasn't approved this host within 20s.\n\
-                     \n\
-                     The autoApprover ACL entry is in place — this is tailscaled sometimes \
-                     failing to push prefs updates to the coordination server. A daemon \
-                     restart forces a re-sync:\n\
-                     \n  sudo systemctl restart tailscaled\n\
-                     \n\
-                     Then re-run `ryra add ...` (or wait ~10s and confirm with \
-                     `sudo tailscale status --json | jq '.Self.CapMap[\"service-host\"]'`)."
+                // Non-fatal: the service is advertised and the autoApprover is
+                // in place, so the control plane WILL grant the service-host cap
+                // -- it's just async and sometimes slow (>90s on a busy/churning
+                // tailnet). Blocking the whole install on it left a half-rendered
+                // service that no recovery path could resume. Warn and continue:
+                // the container installs and starts now, and tailnet routing to
+                // the *.ts.net URL lights up on its own once the cap lands.
+                eprintln!(
+                    "  Note: svc:{svc_name} is advertised but the control plane \
+                     hasn't approved it yet (can take a minute or two). The \
+                     service is installed and running; its tailnet URL will work \
+                     once approval propagates. Check with:\n\
+                     \n    sudo tailscale status --json | jq '.Self.CapMap[\"service-host\"]'\n\
+                     \n  If it's still missing after a few minutes: \
+                     `sudo systemctl restart tailscaled`."
                 );
+                return Ok(());
             }
             if !announced {
                 println!("  Waiting for control-plane approval of svc:{svc_name}…");
