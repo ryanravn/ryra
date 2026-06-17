@@ -18,6 +18,7 @@ pub mod ops;
 pub mod paths;
 pub mod plan;
 pub mod registry;
+pub mod scope;
 pub mod system;
 pub mod to_protocol;
 pub mod upgrade;
@@ -917,6 +918,7 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     };
     let install_metadata = Metadata {
         registry: registry_name.to_string(),
+        scope: reg_service.def.service.scope,
         url: url.map(str::to_string),
         auth: auth_kind.cloned(),
         provides: reg_service.def.capabilities.provides.clone(),

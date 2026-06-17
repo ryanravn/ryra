@@ -18,6 +18,11 @@ use crate::registry::service_def::{AuthKind, Color, Runtime};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub registry: String,
+    /// Deployment scope. Default `user` (rootless) so installs written before
+    /// scopes existed read back correctly; `system` marks a rootful, host-wide
+    /// install. The on-disk source of truth for which tree a service lives in.
+    #[serde(default)]
+    pub scope: crate::scope::Scope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Auth kind: `oidc` if `--auth` was used, otherwise absent.
@@ -128,6 +133,7 @@ registry = "default"
     fn backup_enabled_round_trips() {
         let meta = Metadata {
             registry: "default".into(),
+            scope: Default::default(),
             url: None,
             auth: None,
             provides: vec![],
@@ -153,6 +159,7 @@ registry = "default"
         // service today): when off, the field shouldn't appear at all.
         let meta = Metadata {
             registry: "default".into(),
+            scope: Default::default(),
             url: None,
             auth: None,
             provides: vec![],

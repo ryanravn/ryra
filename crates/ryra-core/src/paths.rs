@@ -9,6 +9,17 @@
 use std::path::PathBuf;
 
 use crate::error::{Error, Result};
+use crate::scope::Scope;
+
+/// Root for all rootful (System-scope) ryra state. Fixed and tied to the
+/// scope, not to whoever invokes ryra, so running as root never lands state in
+/// `/root/...`. Mirrors the per-user layout one level down. The system config
+/// dir (`/etc/ryra`) lives in [`crate::config::ConfigPaths::resolve_for`].
+const SYSTEM_ROOT: &str = "/var/lib/ryra";
+/// Where rootful podman/quadlet-generator looks for system quadlets.
+const SYSTEM_QUADLET_DIR: &str = "/etc/containers/systemd";
+/// Where the system systemd manager looks for native (non-quadlet) units.
+const SYSTEM_UNIT_DIR: &str = "/etc/systemd/system";
 
 /// Sentinel value for `InstalledService.repo` meaning "came from the
 /// default registry" (the project-managed git repo at
@@ -105,6 +116,63 @@ pub fn service_home(service_name: &str) -> Result<PathBuf> {
 /// later commands can reconstruct the install without scraping comments.
 pub fn metadata_path(service_name: &str) -> Result<PathBuf> {
     Ok(service_home(service_name)?.join("metadata.toml"))
+}
+
+/// Scope-aware quadlet directory. User scope is the per-user
+/// `~/.config/containers/systemd`; System scope is the host-wide
+/// `/etc/containers/systemd`. See [`quadlet_dir`] for the user-scope default.
+pub fn quadlet_dir_for(scope: Scope) -> Result<PathBuf> {
+    match scope {
+        Scope::User => quadlet_dir(),
+        Scope::System => Ok(PathBuf::from(SYSTEM_QUADLET_DIR)),
+    }
+}
+
+/// Scope-aware systemd unit directory for native (non-quadlet) services.
+/// User scope is `~/.config/systemd/user`; System scope is
+/// `/etc/systemd/system`.
+pub fn systemd_unit_dir_for(scope: Scope) -> Result<PathBuf> {
+    match scope {
+        Scope::User => systemd_user_dir(),
+        Scope::System => Ok(PathBuf::from(SYSTEM_UNIT_DIR)),
+    }
+}
+
+/// Scope-aware service-data root. User scope is `~/.local/share/services`;
+/// System scope is `/var/lib/ryra/services` (ignores the test data-dir
+/// override, which is a user-scope-only sandboxing aid).
+pub fn service_data_root_for(scope: Scope) -> Result<PathBuf> {
+    match scope {
+        Scope::User => service_data_root(),
+        Scope::System => Ok(PathBuf::from(SYSTEM_ROOT).join("services")),
+    }
+}
+
+/// Scope-aware per-service home dir. Rejects path-like names exactly like
+/// [`service_home`].
+pub fn service_home_for(scope: Scope, service_name: &str) -> Result<PathBuf> {
+    match scope {
+        Scope::User => service_home(service_name),
+        Scope::System => {
+            validate_service_name(service_name)?;
+            Ok(service_data_root_for(scope)?.join(service_name))
+        }
+    }
+}
+
+/// Reject path-like service names before any `join` (see [`service_home`]).
+fn validate_service_name(service_name: &str) -> Result<()> {
+    if service_name.is_empty()
+        || service_name == "."
+        || service_name == ".."
+        || service_name.contains('/')
+        || service_name.contains('\\')
+    {
+        return Err(Error::ConfigValidation(format!(
+            "invalid service name '{service_name}': names must not be paths"
+        )));
+    }
+    Ok(())
 }
 
 /// Quadlet directory: ~/.config/containers/systemd
