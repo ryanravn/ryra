@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ryra_core::system::doctor::{
-    Issue, Severity, check_all, check_auth_wiring, check_tailscale_services,
+    Issue, Severity, check_all, check_auth_wiring, check_memory, check_tailscale_services,
 };
 
 pub fn run() -> Result<()> {
@@ -14,6 +14,7 @@ pub fn run() -> Result<()> {
         .into_iter()
         .chain(check_auth_wiring())
         .chain(check_tailscale_services())
+        .chain(check_memory(&paths.cache_dir))
         .collect();
 
     if issues.is_empty() {

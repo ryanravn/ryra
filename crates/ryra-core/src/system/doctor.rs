@@ -132,6 +132,18 @@ pub enum Issue {
     /// Surfaced rather than swallowed so the user knows their install
     /// state isn't being checked.
     IntegrityScanFailed { error: String },
+    /// The recommended RAM of all installed services summed exceeds the
+    /// machine's total RAM. Services may fail to start or get OOM-killed under
+    /// load (and with no swap the box can hard-lock). Remove a service or move
+    /// to a larger machine. The install path warns before crossing this line,
+    /// but it's overridable and other paths add services, so a box can drift
+    /// into it.
+    RamOvercommitted { recommended_mb: u64, total_mb: u64 },
+    /// No swap is configured, so memory pressure goes straight to the OOM
+    /// killer with no cushion -- a heavy enough service set can thrash the box
+    /// past the point where even sshd can fork. Add zram (compressed RAM-backed
+    /// swap).
+    NoSwap,
 }
 
 impl Issue {
@@ -148,6 +160,7 @@ impl Issue {
             Issue::DanglingSymlink { .. } | Issue::OrphanQuadletFile { .. } => Severity::Warning,
             Issue::BrokenEnvFileRef { .. } => Severity::Warning,
             Issue::LingerNotEnabled => Severity::Warning,
+            Issue::RamOvercommitted { .. } | Issue::NoSwap => Severity::Warning,
             Issue::PodmanCgroupfsFallback => Severity::Warning,
             Issue::MissingMetadata { .. } => Severity::Info,
             Issue::NativeSourceMissing { .. } => Severity::Warning,
@@ -174,6 +187,8 @@ impl Issue {
             Issue::NativeSourceMissing { .. } => "native_source_missing",
             Issue::BrokenEnvFileRef { .. } => "broken_env_file_ref",
             Issue::LingerNotEnabled => "linger_not_enabled",
+            Issue::RamOvercommitted { .. } => "ram_overcommitted",
+            Issue::NoSwap => "no_swap",
             Issue::PodmanCgroupfsFallback => "podman_cgroupfs_fallback",
             Issue::IntegrityScanFailed { .. } => "integrity_scan_failed",
         }
@@ -382,6 +397,36 @@ impl fmt::Display for Issue {
                        loginctl enable-linger",
                 )
             }
+            Issue::RamOvercommitted {
+                recommended_mb,
+                total_mb,
+            } => {
+                write!(
+                    f,
+                    "installed services recommend {recommended_mb} MB of RAM but this machine \
+                     has {total_mb} MB.\n\
+                     Under load they may fail to start or get OOM-killed, and with no swap the \
+                     box can hard-lock.\n\
+                     \n\
+                     Fix (remove a service, or move to a larger machine):\n  \
+                       ryra remove <service>",
+                )
+            }
+            Issue::NoSwap => {
+                write!(
+                    f,
+                    "this box has no swap, so memory pressure goes straight to the OOM killer \
+                     with no cushion, and a heavy enough service set can thrash it past the \
+                     point where even sshd can fork.\n\
+                     \n\
+                     Fix (add compressed RAM-backed swap):\n  \
+                       sudo apt-get install -y systemd-zram-generator\n  \
+                       printf '[zram0]\\nzram-size = min(ram / 2, 4096)\\ncompression-algorithm = zstd\\n' \
+                       | sudo tee /etc/systemd/zram-generator.conf\n  \
+                       sudo systemctl daemon-reload\n  \
+                       sudo systemctl start systemd-zram-setup@zram0.service",
+                )
+            }
             Issue::PodmanCgroupfsFallback => {
                 write!(
                     f,
@@ -432,6 +477,43 @@ pub fn check_all(_config: &Config) -> Vec<Issue> {
         issues.push(Issue::PodmanCgroupfsFallback);
     }
     issues.extend(check_install_integrity());
+    issues
+}
+
+/// Memory-pressure checks (doctor-only, like [`check_tailscale_services`]): the
+/// box has no swap cushion, or the recommended RAM of installed services already
+/// exceeds total RAM. Deliberately not in [`check_all`] -- no point re-running
+/// it on every `ryra add` blocker gate, where the install path's own RAM check
+/// already warns. Reads only the *cached* registry, never fetching, so it stays
+/// fast and offline. `cache_dir` is `ConfigPaths::cache_dir`.
+pub fn check_memory(cache_dir: &std::path::Path) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    // No swap: pressure goes straight to OOM with no cushion.
+    if crate::system::memory::swap_total_mb() == Some(0) {
+        issues.push(Issue::NoSwap);
+    }
+
+    // Cumulative overcommit: sum the recommended RAM of installed services (from
+    // the cached registry manifests) and compare to total RAM. Any step we
+    // can't complete -> skip silently rather than warn on bad data.
+    if let Some(total_mb) = crate::system::memory::total_ram_mb()
+        && let Some(dir) = crate::registry::resolve::cached_default_registry_dir(cache_dir)
+        && let Ok(catalog) = crate::search_services(&dir, None)
+    {
+        let recommended_mb: u64 = catalog
+            .iter()
+            .filter(|s| s.installed)
+            .filter_map(|s| s.recommended_ram_mb)
+            .sum();
+        if recommended_mb > total_mb {
+            issues.push(Issue::RamOvercommitted {
+                recommended_mb,
+                total_mb,
+            });
+        }
+    }
+
     issues
 }
 

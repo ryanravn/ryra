@@ -126,6 +126,21 @@ impl ServiceRef {
 /// `/opt/ryra-test-registry` inside the VM without network access. Otherwise
 /// the registry is cloned (or pulled) from [`DEFAULT_REGISTRY_URL`] into
 /// `<cache_dir>/default/`.
+/// The default registry's local dir *if it's already cloned* (or pointed at by
+/// `REGISTRY_DIR_ENV`), without any network fetch. For read-only callers like
+/// `ryra doctor` that want to inspect the cached registry but must never block
+/// on a clone/pull. `None` = not present locally; the caller skips its check.
+pub fn cached_default_registry_dir(cache_dir: &Path) -> Option<PathBuf> {
+    if let Ok(override_path) = std::env::var(REGISTRY_DIR_ENV) {
+        let path = PathBuf::from(override_path);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+    let dest = cache_dir.join("default");
+    dest.is_dir().then_some(dest)
+}
+
 pub async fn resolve_default_registry_dir(cache_dir: &Path) -> Result<PathBuf> {
     if let Ok(override_path) = std::env::var(REGISTRY_DIR_ENV) {
         let path = PathBuf::from(override_path);

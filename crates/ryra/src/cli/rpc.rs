@@ -956,6 +956,7 @@ fn doctor() -> Vec<DoctorIssue> {
             .into_iter()
             .chain(doctor::check_auth_wiring())
             .chain(doctor::check_tailscale_services())
+            .chain(doctor::check_memory(&paths.cache_dir))
             .collect())
     })()
     .unwrap_or_default();
