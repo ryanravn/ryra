@@ -69,6 +69,14 @@ pub enum Step {
     DaemonReload,
     /// Start a service under the current user's systemd.
     StartService { unit: String },
+    /// Enable a service so it auto-starts on boot (creates the
+    /// `default.target.wants` symlink). Needed for native `.service` units;
+    /// quadlet containers get this from the podman generator via `[Install]`.
+    EnableService { unit: String },
+    /// Disable a service's boot autostart (drops the `default.target.wants`
+    /// symlink). The dual of [`Step::EnableService`] on teardown, so removing a
+    /// native service doesn't leave a dangling enable symlink behind.
+    DisableService { unit: String },
     /// Stop a service under the current user's systemd.
     StopService { unit: String },
     /// Restart a service under the current user's systemd.
@@ -158,6 +166,8 @@ impl Step {
             }
             Step::DaemonReload => "systemctl --user daemon-reload".into(),
             Step::StartService { unit } => format!("systemctl --user start {unit}"),
+            Step::EnableService { unit } => format!("systemctl --user enable {unit}"),
+            Step::DisableService { unit } => format!("systemctl --user disable {unit}"),
             Step::StopService { unit } => format!("systemctl --user stop {unit}"),
             Step::RestartService { unit } => format!("systemctl --user restart {unit}"),
             Step::ReloadCaddy => {

@@ -1389,6 +1389,8 @@ fn clone_step(step: &Step) -> Step {
         },
         Step::DaemonReload => Step::DaemonReload,
         Step::StartService { unit } => Step::StartService { unit: unit.clone() },
+        Step::EnableService { unit } => Step::EnableService { unit: unit.clone() },
+        Step::DisableService { unit } => Step::DisableService { unit: unit.clone() },
         Step::StopService { unit } => Step::StopService { unit: unit.clone() },
         Step::RestartService { unit } => Step::RestartService { unit: unit.clone() },
         Step::ReloadCaddy => Step::ReloadCaddy,

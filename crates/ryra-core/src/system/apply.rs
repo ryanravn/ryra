@@ -86,6 +86,13 @@ async fn execute(step: &Step) -> Result<()> {
                 }
             })
         }
+        Step::EnableService { unit } => run_cmd("systemctl", &["--user", "enable", unit]),
+        Step::DisableService { unit } => {
+            // Best-effort: a unit that was never enabled (or is already gone)
+            // disables to a no-op; never fail a teardown over it.
+            let _ = run_cmd("systemctl", &["--user", "disable", unit]);
+            Ok(())
+        }
         Step::StopService { unit } => {
             // Stop failures are non-fatal (service may already be stopped).
             // The spinner only kicks in after 2s, so quick stops stay silent.
