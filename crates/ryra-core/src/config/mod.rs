@@ -14,24 +14,6 @@ pub struct ConfigPaths {
 }
 
 impl ConfigPaths {
-    /// Scope-aware config paths. User scope is the per-user layout
-    /// ([`resolve`]); System scope is a fixed host-wide layout under
-    /// `/etc/ryra` + `/var/lib/ryra/cache`, tied to the scope rather than to
-    /// whoever invokes ryra (so running as root never reads `/root/.config`).
-    pub fn resolve_for(scope: crate::scope::Scope) -> Result<Self> {
-        match scope {
-            crate::scope::Scope::User => Self::resolve(),
-            crate::scope::Scope::System => {
-                let config_dir = PathBuf::from("/etc/ryra");
-                Ok(Self {
-                    config_file: config_dir.join("preferences.toml"),
-                    cache_dir: PathBuf::from("/var/lib/ryra/cache"),
-                    config_dir,
-                })
-            }
-        }
-    }
-
     pub fn resolve() -> Result<Self> {
         let home = dirs::home_dir()
             .or_else(|| std::env::var("HOME").ok().map(PathBuf::from))

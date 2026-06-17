@@ -904,7 +904,6 @@ dependencies = [
  "base64",
  "dirs",
  "hmac",
- "libc",
  "minijinja",
  "rand",
  "ryra-protocol",

@@ -123,13 +123,6 @@ pub struct ServiceMeta {
     /// Whether this service requires HTTPS to function.
     #[serde(default)]
     pub https: HttpsRequirement,
-    /// Deployment scope: `user` (rootless, default) or `system` (rootful,
-    /// host-wide). Gates whether this service may ever be installed rootful --
-    /// only operator-infrastructure services should declare `system`. A normal
-    /// customer service can never be deployed as root because its definition
-    /// doesn't opt in here.
-    #[serde(default)]
-    pub scope: crate::scope::Scope,
     /// How this service runs: a podman container (default) or a native process
     /// under systemd --user.
     #[serde(default)]
