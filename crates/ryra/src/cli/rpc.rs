@@ -202,7 +202,9 @@ async fn run_mutation(op: Operation) -> OpResult {
     };
 
     let ctx = PlanContext::new(&super::is_port_in_use);
-    let planned = ops::plan(&op, ctx).await.map_err(core_err)?;
+    // op_err: plan-time precondition failures (already installed, leftover
+    // state, not installed) carry a real status, not a 500.
+    let planned = ops::plan(&op, ctx).await.map_err(op_err)?;
 
     // Remove has no post-op service view; handle and return early.
     if let Planned::Remove(r) = planned {
@@ -980,10 +982,24 @@ fn map_severity(s: ryra_core::system::doctor::Severity) -> Severity {
     }
 }
 
-/// Map any ryra-core error to a structured rpc error. Coarse for now (most
-/// land as `internal`); refine to NotFound/Conflict as the need arises.
+/// Map any displayable error (io, git, ad-hoc strings) to an internal rpc
+/// error. For typed core errors whose *shape* implies a status, use [`op_err`].
 fn core_err(e: impl std::fmt::Display) -> RpcError {
     RpcError::new(ErrorCode::Internal, e.to_string())
+}
+
+/// Map a planning error from a service operation to the status its shape
+/// deserves, so a state conflict (already installed, or leftover state from a
+/// prior install) surfaces as a 409 and a missing service as a 404 rather than
+/// a blanket 500. Anything unanticipated stays internal.
+fn op_err(e: ryra_core::error::Error) -> RpcError {
+    use ryra_core::error::Error as E;
+    let code = match &e {
+        E::ServiceAlreadyInstalled(_) | E::ServiceIncomplete(_) => ErrorCode::Conflict,
+        E::ServiceNotInstalled(_) => ErrorCode::NotFound,
+        _ => ErrorCode::Internal,
+    };
+    RpcError::new(code, e.to_string())
 }
 
 /// One service's view by name, or NotFound.
