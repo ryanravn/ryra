@@ -374,7 +374,9 @@ pub fn resolve_managed_backend() -> Result<crate::config::schema::BackupBackend>
         bucket: c.bucket,
         access_key_id: c.access_key_id,
         secret_access_key: c.secret_access_key,
-        session_token: Some(c.session_token),
+        // Omit an empty token (static creds, e.g. a local MinIO): an empty
+        // AWS_SESSION_TOKEN is rejected by S3/MinIO.
+        session_token: (!c.session_token.is_empty()).then_some(c.session_token),
         prefix: Some(c.prefix),
     })
 }
