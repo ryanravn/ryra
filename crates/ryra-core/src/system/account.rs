@@ -242,3 +242,52 @@ pub fn backup_checkout(token: &str) -> Result<String> {
         ),
     }
 }
+
+/// Short-lived storage credentials vended for a managed backup.
+#[derive(Deserialize)]
+struct VendedCredentials {
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: String,
+    endpoint: String,
+    bucket: String,
+    prefix: String,
+}
+
+/// Vend short-lived, prefix-scoped storage credentials for the calling
+/// account's managed backup (`POST /api/v1/backup/credentials`).
+fn vend_credentials(token: &str) -> Result<VendedCredentials> {
+    let resp = curl("POST", "/api/v1/backup/credentials", token, None)?;
+    match resp.status {
+        200 => serde_json::from_str(&resp.body).context("parsing vended backup credentials"),
+        401 | 403 => {
+            bail!("this key can't vend backup credentials; it needs the backups.write scope")
+        }
+        404 => bail!(
+            "no managed backup plan for this account; run `ryra backup configure` to set one up"
+        ),
+        409 => bail!("managed backup is not available: {}", resp.body.trim()),
+        other => bail!(
+            "unexpected response vending backup credentials: HTTP {other}: {}",
+            resp.body.trim()
+        ),
+    }
+}
+
+/// Resolve a managed backup into concrete, short-lived S3 credentials by vending
+/// them from the user's account. Called at backup/restore time so a box never
+/// stores long-lived storage keys; the restic password stays client-side.
+pub fn resolve_managed_backend() -> Result<crate::config::schema::BackupBackend> {
+    let src = effective_token()?.ok_or_else(|| {
+        anyhow::anyhow!("managed backups need a ryra account; run `ryra account login`")
+    })?;
+    let c = vend_credentials(src.token())?;
+    Ok(crate::config::schema::BackupBackend::S3 {
+        endpoint: c.endpoint,
+        bucket: c.bucket,
+        access_key_id: c.access_key_id,
+        secret_access_key: c.secret_access_key,
+        session_token: Some(c.session_token),
+        prefix: Some(c.prefix),
+    })
+}

@@ -126,5 +126,6 @@ fn format_backend(backend: &BackupBackend) -> String {
             endpoint, bucket, ..
         } => format!("S3 ({endpoint}/{bucket})"),
         BackupBackend::Local { path } => format!("local ({})", path.display()),
+        BackupBackend::Managed => "ryra-managed".to_string(),
     }
 }

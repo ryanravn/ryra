@@ -85,6 +85,10 @@ pub enum BackupBackend {
         bucket: String,
         access_key_id: String,
         secret_access_key: String,
+        /// Short-lived STS-style session token, set only for vended (managed)
+        /// credentials. `None` for static S3 keys.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_token: Option<String>,
         /// Optional path prefix inside the bucket. Lets one bucket
         /// host multiple ryra installs (one per host or per user) by
         /// scoping each to a sub-prefix.
@@ -97,6 +101,11 @@ pub enum BackupBackend {
     /// off-machine storage; a "local" backup gives no protection from
     /// disk failure.
     Local { path: std::path::PathBuf },
+    /// Ryra-managed backups. Carries no credentials: the box authenticates with
+    /// its account key and vends short-lived, prefix-scoped storage credentials
+    /// at backup time, resolving this to `S3` before restic runs. The restic
+    /// password stays client-side (zero-knowledge).
+    Managed,
 }
 
 impl BackupBackend {
@@ -130,6 +139,9 @@ impl BackupBackend {
                 }
             }
             BackupBackend::Local { path } => path.display().to_string(),
+            BackupBackend::Managed => {
+                unreachable!("managed backend must be resolved to S3 before restic runs")
+            }
         }
     }
 
@@ -143,12 +155,22 @@ impl BackupBackend {
             BackupBackend::S3 {
                 access_key_id,
                 secret_access_key,
+                session_token,
                 ..
-            } => vec![
-                ("AWS_ACCESS_KEY_ID", access_key_id.clone()),
-                ("AWS_SECRET_ACCESS_KEY", secret_access_key.clone()),
-            ],
+            } => {
+                let mut env = vec![
+                    ("AWS_ACCESS_KEY_ID", access_key_id.clone()),
+                    ("AWS_SECRET_ACCESS_KEY", secret_access_key.clone()),
+                ];
+                if let Some(token) = session_token {
+                    env.push(("AWS_SESSION_TOKEN", token.clone()));
+                }
+                env
+            }
             BackupBackend::Local { .. } => vec![],
+            BackupBackend::Managed => {
+                unreachable!("managed backend must be resolved to S3 before restic runs")
+            }
         }
     }
 }
@@ -385,6 +407,7 @@ mod tests {
             bucket: "ryra-backups".into(),
             access_key_id: "minio".into(),
             secret_access_key: "minio123".into(),
+            session_token: None,
             prefix: None,
         };
         assert_eq!(
@@ -400,6 +423,7 @@ mod tests {
             bucket: "shared-bucket".into(),
             access_key_id: "k".into(),
             secret_access_key: "s".into(),
+            session_token: None,
             prefix: Some("hosts/laptop".into()),
         };
         assert_eq!(
@@ -417,6 +441,7 @@ mod tests {
             bucket: "b".into(),
             access_key_id: "k".into(),
             secret_access_key: "s".into(),
+            session_token: None,
             prefix: None,
         };
         assert_eq!(backend.restic_repo(), "s3:http://127.0.0.1:9000/b");
@@ -437,6 +462,7 @@ mod tests {
             bucket: "b".into(),
             access_key_id: "the_id".into(),
             secret_access_key: "the_secret".into(),
+            session_token: None,
             prefix: None,
         };
         let env: std::collections::HashMap<_, _> = backend.env().into_iter().collect();
@@ -465,6 +491,7 @@ mod tests {
                     bucket: "ryra".into(),
                     access_key_id: "minio".into(),
                     secret_access_key: "minio123".into(),
+                    session_token: None,
                     prefix: None,
                 },
             }),

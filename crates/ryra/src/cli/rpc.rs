@@ -672,6 +672,7 @@ fn backend_label(backend: &ryra_core::config::schema::BackupBackend) -> String {
         BackupBackend::S3 {
             bucket, endpoint, ..
         } => format!("S3: {bucket} ({endpoint})"),
+        BackupBackend::Managed => "Ryra-managed".to_string(),
     }
 }
 
@@ -783,6 +784,7 @@ fn configure_backup(
             bucket,
             access_key_id,
             secret_access_key,
+            session_token: None,
             prefix,
         },
     };

@@ -692,6 +692,7 @@ mod tests {
                 bucket: "b".into(),
                 access_key_id: "id".into(),
                 secret_access_key: "secret".into(),
+                session_token: None,
                 prefix: None,
             },
         };

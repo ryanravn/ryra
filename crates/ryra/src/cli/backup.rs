@@ -99,10 +99,6 @@ pub enum BackupAction {
         /// install.
         services: Vec<String>,
     },
-    /// Enable ryra-managed backups for this host: check your account, and if
-    /// you have no plan, print the link to subscribe. Requires `ryra account
-    /// login` (or a managed box, which is logged in automatically).
-    Enable,
     /// Show repository overview, per-service last-run timestamps,
     /// and total repo size.
     Status,
@@ -117,6 +113,7 @@ pub enum BackupAction {
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendKind {
+    Managed,
     S3,
     Local,
 }
@@ -157,52 +154,47 @@ impl ScheduleInterval {
 }
 
 // ---------------------------------------------------------------------------
-// Managed backups (control-plane signup)
+// Managed backups
 // ---------------------------------------------------------------------------
 
-/// `ryra backup enable`: check the account's managed-backup state and, when
-/// there's no active plan, print the link to subscribe. The account comes from
-/// `ryra account login` (self-hoster) or the injected `RYRA_TOKEN` (managed box).
-fn enable() -> Result<()> {
+/// Set up the Ryra-managed backend: confirm the account is logged in and has an
+/// active plan (printing the subscribe link if not). Stores no credentials,
+/// they are vended per backup run, and the restic password stays client-side.
+fn collect_managed() -> Result<BackupBackend> {
     use ryra_core::system::account::{self, BackupState};
     let base = account::api_base_url();
     let Some(src) = account::effective_token()? else {
-        println!("You need a ryra account to use managed backups.");
-        println!(
-            "Run `ryra account login` first (create a key at {base}/account), \
-             then re-run `ryra backup enable`."
+        bail!(
+            "managed backups need a ryra account. Run `ryra account login` first \
+             (create a key at {base}/account), then re-run `ryra backup configure`."
         );
-        return Ok(());
     };
-    let token = src.token();
-    match account::backup_status(token)? {
-        BackupState::Active {
-            used_bytes,
-            quota_bytes,
-        } => {
-            println!(
-                "Managed backups are active for this account ({} of {} used).",
-                gib(used_bytes),
-                gib(quota_bytes)
+    match account::backup_status(src.token())? {
+        BackupState::Active { .. } => {
+            println!("  Using your active ryra-managed backup plan.");
+            Ok(BackupBackend::Managed)
+        }
+        BackupState::None | BackupState::Inactive(_) => {
+            let url = account::backup_checkout(src.token())?;
+            bail!(
+                "no active managed backup plan. Subscribe here, then re-run \
+                 `ryra backup configure`:\n  {url}"
             );
         }
-        BackupState::Inactive(status) => {
-            println!("Your backup plan is '{status}', not active.");
-            let url = account::backup_checkout(token)?;
-            println!("Re-subscribe here:\n  {url}");
-        }
-        BackupState::None => {
-            println!("You don't have a managed backup plan yet.");
-            let url = account::backup_checkout(token)?;
-            println!("Subscribe to ryra managed backups here:\n  {url}");
-        }
     }
-    Ok(())
 }
 
-/// Bytes as GiB with one decimal, for human-facing usage/quota lines.
-fn gib(bytes: i64) -> String {
-    format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+/// Load config, resolving a `Managed` backup backend into concrete, short-lived
+/// S3 credentials vended from the user's account. After this the rest of the
+/// backup path only ever sees S3/Local, so the pure planner stays pure.
+fn load_config_resolved(paths: &ConfigPaths) -> Result<Config> {
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+    if let Some(settings) = config.backup.as_mut()
+        && matches!(settings.backend, BackupBackend::Managed)
+    {
+        settings.backend = ryra_core::system::account::resolve_managed_backend()?;
+    }
+    Ok(config)
 }
 
 // ---------------------------------------------------------------------------
@@ -210,13 +202,8 @@ fn gib(bytes: i64) -> String {
 // ---------------------------------------------------------------------------
 
 pub async fn run(action: BackupAction) -> Result<()> {
-    // Enabling managed backups only talks to the control plane; it doesn't need
-    // restic on this host (that matters once backups actually run).
-    if !matches!(action, BackupAction::Enable) {
-        require_restic_installed()?;
-    }
+    require_restic_installed()?;
     match action {
-        BackupAction::Enable => enable(),
         BackupAction::Configure {
             backend,
             endpoint,
@@ -335,11 +322,22 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
         ConfigureMode::Fresh => collect_new_settings(&args, interactive)?,
     };
 
+    // A managed backend stores `Managed` but needs concrete vended creds for
+    // the restic-touching steps below (init + repo display). The STORED settings
+    // keep `Managed`, so each run re-vends fresh short-lived creds.
+    let resolved = if matches!(settings.backend, BackupBackend::Managed) {
+        let mut r = settings.clone();
+        r.backend = ryra_core::system::account::resolve_managed_backend()?;
+        r
+    } else {
+        settings.clone()
+    };
+
     // Init first, then save. Restic talks to the backend during init,
     // so failures here (auth, network, missing bucket) surface BEFORE
     // we touch preferences.toml. That means a failed configure leaves
     // no stale state behind to clean up.
-    init_repo_if_needed(&settings)?;
+    init_repo_if_needed(&resolved)?;
 
     if matches!(mode, ConfigureMode::Fresh) {
         config.backup = Some(settings.clone());
@@ -352,7 +350,7 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
     }
     println!(
         "  Repository ready: {}",
-        style(settings.backend.restic_repo()).dim()
+        style(resolved.backend.restic_repo()).dim()
     );
 
     // Offer to install a daily systemd timer. Default `no` because
@@ -400,10 +398,11 @@ fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<Backu
     let kind = match args.backend {
         Some(k) => k,
         None if interactive => prompt_backend()?,
-        None => bail!("--backend is required in non-interactive mode (s3 or local)"),
+        None => bail!("--backend is required in non-interactive mode (managed, s3, or local)"),
     };
 
     let backend = match kind {
+        BackendKind::Managed => collect_managed()?,
         BackendKind::S3 => collect_s3(args, interactive)?,
         BackendKind::Local => collect_local(args, interactive)?,
     };
@@ -439,16 +438,18 @@ fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<Backu
 
 fn prompt_backend() -> Result<BackendKind> {
     println!("\nWhich backup backend?");
-    println!("  1. S3-compatible  (MinIO, AWS, Backblaze B2, R2, Wasabi)");
-    println!("  2. Local path     (testing only, no off-machine protection)");
+    println!("  1. Ryra-managed   (encrypted off-site via your ryra account)");
+    println!("  2. S3-compatible  (MinIO, AWS, Backblaze B2, R2, Wasabi)");
+    println!("  3. Local path     (testing only, no off-machine protection)");
     let choice: u32 = Input::new()
         .with_prompt("Choose")
         .default(1)
         .interact_text()?;
     match choice {
-        1 => Ok(BackendKind::S3),
-        2 => Ok(BackendKind::Local),
-        n => bail!("expected 1 or 2, got {n}"),
+        1 => Ok(BackendKind::Managed),
+        2 => Ok(BackendKind::S3),
+        3 => Ok(BackendKind::Local),
+        n => bail!("expected 1, 2, or 3, got {n}"),
     }
 }
 
@@ -484,6 +485,7 @@ fn collect_s3(args: &ConfigureArgs, interactive: bool) -> Result<BackupBackend> 
         bucket,
         access_key_id,
         secret_access_key,
+        session_token: None,
         prefix,
     })
 }
@@ -537,7 +539,7 @@ fn init_repo_if_needed(settings: &BackupSettings) -> Result<()> {
 
 async fn run_backup(services: Vec<String>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let config = load_config_resolved(&paths)?;
     if config.backup.is_none() {
         bail!(
             "no backup repository configured: run `{}` first",
@@ -598,7 +600,7 @@ async fn run_one(service_name: &str, config: &Config) -> Result<()> {
 
 async fn restore(service: String, at: Option<String>, force: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let config = load_config_resolved(&paths)?;
     if config.backup.is_none() {
         bail!("no backup repository configured: run `ryra backup configure` first");
     }
@@ -733,7 +735,7 @@ fn run_systemctl(args: &[&str]) -> Result<()> {
 /// location + password) — everything else lives in the repo.
 async fn restore_all(at: Option<String>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let config = load_config_resolved(&paths)?;
     let settings = config.backup.clone().ok_or_else(|| {
         anyhow!(
             "no backup repository configured. Put your saved `preferences.toml` at {} \
@@ -883,7 +885,7 @@ fn list_snapshot_tags(plan: &BackupRestorePlan, snapshot: &str) -> Result<Vec<St
 
 async fn list(services: Vec<String>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let config = load_config_resolved(&paths)?;
     let settings = config
         .backup
         .as_ref()
@@ -928,7 +930,7 @@ async fn list(services: Vec<String>) -> Result<()> {
 
 async fn status() -> Result<()> {
     let paths = ConfigPaths::resolve()?;
-    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {
         println!("Backup not configured. Run `ryra backup configure` first.");
         return Ok(());
