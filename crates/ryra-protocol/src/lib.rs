@@ -464,6 +464,10 @@ pub struct RevertOutcome {
 pub enum ServiceState {
     Running,
     Stopped,
+    /// Install/start is in flight: the unit's start job is still running
+    /// (image pull, container create, health check) so it reports
+    /// `activating`, not yet `active`. A transient state during `ryra add`.
+    Installing,
     /// Removed, but its data is preserved on disk.
     Removed,
 }

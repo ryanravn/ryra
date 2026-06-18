@@ -259,16 +259,30 @@ fn storage_label(svc: &ServiceData, home: &str) -> String {
     }
 }
 
-/// One `systemctl --user list-units` call returns every active unit on
-/// the user manager. Faster than N `is-active` probes when `ryra list`
-/// covers a dozen services.
+/// One `systemctl --user list-units` call returns every running (active)
+/// unit on the user manager. Faster than N `is-active` probes when
+/// `ryra list` covers a dozen services.
 pub(crate) fn active_user_units() -> HashSet<String> {
+    user_units_in_state("active")
+}
+
+/// Units whose start job is still running — image pull, container create,
+/// health check. systemd holds quadlet (`Type=notify`) units in
+/// `activating` until podman signals ready, so this window *is* the
+/// install; the status probe reports it as `Installing`, not `Stopped`.
+pub(crate) fn activating_user_units() -> HashSet<String> {
+    user_units_in_state("activating")
+}
+
+/// Names (without `.service`) of user units whose `ActiveState` matches
+/// `state`. One `systemctl --user list-units` call; empty set on any error.
+fn user_units_in_state(state: &str) -> HashSet<String> {
     let out = std::process::Command::new("systemctl")
         .args([
             "--user",
             "list-units",
             "--type=service",
-            "--state=active",
+            &format!("--state={state}"),
             "--no-legend",
             "--plain",
             "--no-pager",

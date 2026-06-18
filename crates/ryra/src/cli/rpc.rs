@@ -1020,6 +1020,7 @@ fn all_views() -> std::result::Result<Vec<ServiceView>, RpcError> {
     let by_name: HashMap<&str, &InstalledService> =
         installed.iter().map(|s| (s.name.as_str(), s)).collect();
     let active = super::list::active_user_units();
+    let activating = super::list::activating_user_units();
 
     Ok(svcs
         .iter()
@@ -1029,6 +1030,11 @@ fn all_views() -> std::result::Result<Vec<ServiceView>, RpcError> {
                 ServiceState::Removed
             } else if active.contains(&svc.service) {
                 ServiceState::Running
+            } else if activating.contains(&svc.service) {
+                // Unit's start job is still running (image pull, container
+                // create, health check): an install/start is in flight, not
+                // a genuinely stopped service.
+                ServiceState::Installing
             } else {
                 ServiceState::Stopped
             };
