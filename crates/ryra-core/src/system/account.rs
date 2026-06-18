@@ -49,8 +49,8 @@ pub fn load_credentials() -> Result<Option<Credentials>> {
     let path = credentials_path()?;
     match std::fs::read_to_string(&path) {
         Ok(s) => {
-            let creds = toml::from_str(&s)
-                .with_context(|| format!("parsing {}", path.display()))?;
+            let creds =
+                toml::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
             Ok(Some(creds))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -132,7 +132,9 @@ fn curl(method: &str, path: &str, token: &str, body: Option<&str>) -> Result<Api
         cmd.args(["-H", "Content-Type: application/json", "--data-binary", b]);
     }
     cmd.arg(&url);
-    let out = cmd.output().with_context(|| format!("curl {method} {url}"))?;
+    let out = cmd
+        .output()
+        .with_context(|| format!("curl {method} {url}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         bail!("could not reach {url}: {}", err.trim());

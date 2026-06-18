@@ -59,10 +59,10 @@ fn login(with_token: bool) -> Result<()> {
 /// on stdin, then an interactive hidden prompt. A non-interactive shell with
 /// none of the above fails loudly naming the flag, never hangs on stdin.
 fn resolve_login_token(with_token: bool) -> Result<String> {
-    if let Ok(t) = std::env::var("RYRA_TOKEN") {
-        if !t.trim().is_empty() {
-            return Ok(t);
-        }
+    if let Ok(t) = std::env::var("RYRA_TOKEN")
+        && !t.trim().is_empty()
+    {
+        return Ok(t);
     }
     if with_token {
         let mut buf = String::new();
