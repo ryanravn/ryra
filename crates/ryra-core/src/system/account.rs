@@ -172,10 +172,12 @@ fn curl_inner(
 /// Validate a key against the control plane. `Ok(())` means the key is live
 /// and accepted; errors name the likely cause (rejected vs unreachable).
 ///
-/// Uses `GET /api/v1/plans`, an authenticated endpoint with no parameters, so
-/// a 200 proves the key works without depending on any account-specific shape.
+/// Uses `GET /api/v1/auth/whoami`: a scope-agnostic liveness probe that any
+/// live key passes (operator, customer session, or a box's backups-only key).
+/// A capability endpoint like `/plans` would 403 a valid box key for lacking a
+/// scope it was never meant to have, so it can't stand in for "is this key ok".
 pub fn verify_token(token: &str) -> Result<()> {
-    let resp = curl("GET", "/api/v1/plans", token, None)?;
+    let resp = curl("GET", "/api/v1/auth/whoami", token, None)?;
     match resp.status {
         200 => Ok(()),
         401 | 403 => bail!(
