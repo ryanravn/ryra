@@ -119,15 +119,31 @@ struct ApiResponse {
 /// failure (DNS/TLS/offline: curl exits non-zero) from an HTTP error code
 /// (curl succeeds, we read the status off `-w`).
 fn curl(method: &str, path: &str, token: &str, body: Option<&str>) -> Result<ApiResponse> {
+    curl_inner(method, path, Some(token), body)
+}
+
+/// Like [`curl`] but without an `Authorization` header, for the device-auth
+/// endpoints that a box hits before it has any key.
+fn curl_unauthed(method: &str, path: &str, body: Option<&str>) -> Result<ApiResponse> {
+    curl_inner(method, path, None, body)
+}
+
+fn curl_inner(
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&str>,
+) -> Result<ApiResponse> {
     let url = format!("{}{}", api_base_url(), path);
     let mut cmd = Command::new("curl");
     cmd.args(["-sS", "-X", method])
         .arg("-H")
-        .arg(format!("Authorization: Bearer {token}"))
-        .arg("-H")
         .arg("Accept: application/json")
         .arg("-w")
         .arg("\n%{http_code}");
+    if let Some(t) = token {
+        cmd.arg("-H").arg(format!("Authorization: Bearer {t}"));
+    }
     if let Some(b) = body {
         cmd.args(["-H", "Content-Type: application/json", "--data-binary", b]);
     }
@@ -174,6 +190,100 @@ pub fn verify_token(token: &str) -> Result<()> {
                 bail!("unexpected response from the control plane: HTTP {other}");
             }
             bail!("unexpected response from the control plane: HTTP {other}: {detail}");
+        }
+    }
+}
+
+/// A started device-authorization request. The box shows `user_code` /
+/// `verification_uri` to a human, then polls with `device_code` (the secret)
+/// until the request is approved or dies.
+#[derive(Deserialize)]
+pub struct DeviceStart {
+    /// Secret the box polls with; never shown to the user.
+    pub device_code: String,
+    /// Short human-readable code the user confirms in the browser.
+    pub user_code: String,
+    /// Where the user goes to approve (enter `user_code` there).
+    pub verification_uri: String,
+    /// One-click URL with the code pre-filled.
+    pub verification_uri_complete: String,
+    /// Seconds until the request expires (bounds the poll loop).
+    pub expires_in: u64,
+    /// Seconds the box should wait between polls.
+    pub interval: u64,
+}
+
+/// One terminal-or-not outcome of a device-auth poll.
+pub enum DevicePoll {
+    /// Not approved yet; keep polling.
+    Pending,
+    /// Approved: here is the minted API key.
+    Approved(String),
+    /// The user rejected the request in the browser.
+    Denied,
+    /// The request expired before anyone approved it.
+    Expired,
+}
+
+/// Begin a device-authorization flow (`POST /api/v1/device/start`). This is an
+/// unauthenticated endpoint: the box has no key yet. `label` identifies the box
+/// in the approval UI (typically its hostname).
+pub fn device_start(label: &str) -> Result<DeviceStart> {
+    #[derive(Serialize)]
+    struct Req<'a> {
+        label: &'a str,
+    }
+    let body = serde_json::to_string(&Req { label }).context("encoding device/start request")?;
+    let resp = curl_unauthed("POST", "/api/v1/device/start", Some(&body))?;
+    match resp.status {
+        200 => serde_json::from_str(&resp.body).context("parsing device/start response"),
+        other => {
+            let detail = resp.body.trim();
+            if detail.is_empty() {
+                bail!("could not start device login: HTTP {other}");
+            }
+            bail!("could not start device login: HTTP {other}: {detail}");
+        }
+    }
+}
+
+/// Poll a device-authorization request once (`POST /api/v1/device/poll`).
+/// Unauthenticated; `device_code` is the secret from [`device_start`].
+pub fn device_poll(device_code: &str) -> Result<DevicePoll> {
+    #[derive(Serialize)]
+    struct Req<'a> {
+        device_code: &'a str,
+    }
+    let body =
+        serde_json::to_string(&Req { device_code }).context("encoding device/poll request")?;
+    let resp = curl_unauthed("POST", "/api/v1/device/poll", Some(&body))?;
+    match resp.status {
+        200 => {
+            #[derive(Deserialize)]
+            struct Body {
+                status: String,
+                key: Option<String>,
+            }
+            let b: Body = serde_json::from_str(&resp.body).context("parsing device/poll response")?;
+            match b.status.as_str() {
+                "pending" => Ok(DevicePoll::Pending),
+                "approved" => {
+                    let key = b.key.filter(|k| !k.trim().is_empty()).ok_or_else(|| {
+                        anyhow::anyhow!("control plane approved the login but returned no key")
+                    })?;
+                    Ok(DevicePoll::Approved(key))
+                }
+                "denied" => Ok(DevicePoll::Denied),
+                "expired" => Ok(DevicePoll::Expired),
+                other => bail!("unexpected device login status from the control plane: {other:?}"),
+            }
+        }
+        other => {
+            let detail = resp.body.trim();
+            if detail.is_empty() {
+                bail!("could not check device login: HTTP {other}");
+            }
+            bail!("could not check device login: HTTP {other}: {detail}");
         }
     }
 }
