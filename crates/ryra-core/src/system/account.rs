@@ -330,31 +330,6 @@ pub fn backup_status(token: &str) -> Result<BackupState> {
     }
 }
 
-/// Start a managed-backup checkout for the calling account. Returns the URL to
-/// open to subscribe (`POST /api/v1/billing/backup-checkout`).
-pub fn backup_checkout(token: &str) -> Result<String> {
-    let resp = curl("POST", "/api/v1/billing/backup-checkout", token, None)?;
-    match resp.status {
-        200 => {
-            #[derive(Deserialize)]
-            struct Body {
-                url: String,
-            }
-            let b: Body = serde_json::from_str(&resp.body).context("parsing checkout response")?;
-            Ok(b.url)
-        }
-        401 | 403 => bail!(
-            "this key can't start a backup checkout: it needs an account-scoped key with \
-             the billing.write scope. Generate one in the dashboard."
-        ),
-        409 => bail!("backups can't be purchased right now: {}", resp.body.trim()),
-        other => bail!(
-            "unexpected response from the control plane: HTTP {other}: {}",
-            resp.body.trim()
-        ),
-    }
-}
-
 /// Short-lived storage credentials vended for a managed backup.
 #[derive(Deserialize)]
 struct VendedCredentials {

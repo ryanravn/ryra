@@ -196,15 +196,18 @@ async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
             Ok(BackupBackend::Managed)
         }
         BackupState::None | BackupState::Inactive(_) => {
-            let url = account::backup_checkout(src.token())?;
-            // Take the user straight to the pricing/checkout page; the printed
-            // URL is the fallback for headless boxes (open is best-effort).
+            // Subscribing is a billing action the human completes in the
+            // dashboard with their full session; a box's backups-only key
+            // can't (and shouldn't) mint a checkout. Send them to the dashboard
+            // backups page, where Stripe takes over. The printed URL is the
+            // fallback for headless boxes (open is best-effort).
+            let url = format!("{}/backups", account::api_base_url());
             if interactive {
                 super::account::open_browser(&url);
             }
             bail!(
-                "no active managed backup plan. Subscribe here, then re-run \
-                 `ryra backup configure`:\n  {url}"
+                "no active managed backup plan. Subscribe in your dashboard, then \
+                 re-run `ryra backup config`:\n  {url}"
             );
         }
     }
