@@ -300,7 +300,7 @@ async fn replan(service_name: &str) -> Result<Replanned> {
             None => crate::AuthChoice::None,
         },
         // SMTP and backup enablement are per-install state — persisted by
-        // `ryra add` and `ryra configure`. Upgrade preserves whatever the
+        // `ryra add` and `ryra config`. Upgrade preserves whatever the
         // user picked.
         enable_smtp: metadata.smtp_enabled,
         enable_backup: metadata.backup_enabled,

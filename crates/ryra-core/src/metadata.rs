@@ -42,7 +42,7 @@ pub struct Metadata {
     /// SMTP prompt). Stored as *user intent*, NOT as "SMTP is currently
     /// being rendered" — the latter is gated additionally on
     /// `config.smtp.is_some()` inside the planner. Decoupling lets
-    /// `ryra configure` remember the choice across re-renders even when
+    /// `ryra config` remember the choice across re-renders even when
     /// global SMTP isn't configured yet.
     ///
     /// Default `true` so installs that pre-date this field read back
@@ -51,14 +51,14 @@ pub struct Metadata {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub smtp_enabled: bool,
     /// `[[env_group]]` bundles that were enabled at install time.
-    /// Persisted so `ryra configure --disable <group>` and re-renders
+    /// Persisted so `ryra config --disable <group>` and re-renders
     /// know which group members belong in the rendered `.env`. Default
     /// empty for legacy installs (groups are an opt-in feature; an
     /// empty list reads back as "no groups were toggled").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enabled_groups: Vec<String>,
     /// `[[choice]]` selections made at install time, as `choice name ->
-    /// option name`. Persisted so re-renders and `ryra configure` know which
+    /// option name`. Persisted so re-renders and `ryra config` know which
     /// option's members belong in the rendered `.env`. A map (one value per
     /// choice) rather than a set, so "two options of one choice at once" is
     /// unrepresentable. Default empty for legacy installs.

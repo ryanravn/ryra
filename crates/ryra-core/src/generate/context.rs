@@ -214,7 +214,7 @@ pub fn build_context(
     // choice option member. Generate for ALL of them (selection-independent):
     // generating an unused secret is harmless (it's only written if a var that
     // references it is), and it means switching group/choice later via
-    // `ryra configure` finds the secret already minted instead of drifting.
+    // `ryra config` finds the secret already minted instead of drifting.
     let all_envs: Vec<_> = service_def
         .env
         .iter()

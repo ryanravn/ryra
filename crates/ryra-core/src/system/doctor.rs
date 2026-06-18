@@ -293,7 +293,7 @@ impl fmt::Display for Issue {
                      \n\
                      Fix (re-registers using the existing client credentials in {service}'s \
                      .env, no secret rotation):\n  \
-                       ryra configure {service} --reassert-auth -y",
+                       ryra config {service} --reassert-auth -y",
                 )
             }
             Issue::TailscaleServiceUnapproved { service, svc_name } => {
@@ -1004,7 +1004,7 @@ mod tests {
         let s = format!("{issue}");
         assert!(s.contains("seafile"));
         // Points at the non-rotating repair command.
-        assert!(s.contains("ryra configure seafile --reassert-auth"));
+        assert!(s.contains("ryra config seafile --reassert-auth"));
     }
 
     #[test]

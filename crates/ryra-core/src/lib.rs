@@ -901,10 +901,10 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
     // `smtp_enabled` captures *user intent* (the `enable_smtp` flag the
     // caller passed) rather than the gated render flag (`has_smtp`).
     // Otherwise an install on a host without globally-configured SMTP
-    // records `false`, and a later `ryra configure` that doesn't touch
+    // records `false`, and a later `ryra config` that doesn't touch
     // SMTP would still show as "modified" because the legacy default
     // (`true`) disagrees with what gets serialized. Storing intent keeps
-    // metadata stable across re-renders and lets `ryra configure --smtp`
+    // metadata stable across re-renders and lets `ryra config --smtp`
     // remember the choice even before global SMTP is configured.
     // A blue/green install comes up on the `blue` slot; restart-strategy
     // installs carry no color. The deploy flow flips this on each `ryra

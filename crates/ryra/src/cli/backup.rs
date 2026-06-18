@@ -34,6 +34,7 @@ use ryra_core::registry::resolve::ServiceRef;
 pub enum BackupAction {
     /// Set up the encrypted backup repository (run once, then again
     /// to change the backend or rotate the password).
+    #[command(name = "config", alias = "configure")]
     Configure {
         /// `s3` (any S3-compatible store: MinIO, AWS S3, R2, B2-S3,
         /// Wasabi) or `local` (testing only, local disk, no
@@ -175,7 +176,7 @@ async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
             if !want {
                 bail!(
                     "managed backups need a ryra account. Run `ryra account login` \
-                     when you're ready, then re-run `ryra backup configure`."
+                     when you're ready, then re-run `ryra backup config`."
                 );
             }
             super::account::device_login().await?;
@@ -186,7 +187,7 @@ async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
             let base = account::api_base_url();
             bail!(
                 "managed backups need a ryra account. Set RYRA_TOKEN or run \
-                 `ryra account login` (sign in at {base}), then re-run `ryra backup configure`."
+                 `ryra account login` (sign in at {base}), then re-run `ryra backup config`."
             );
         }
     };
@@ -335,7 +336,7 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
             // that as an explicit reconfigure.
             ConfigureMode::Fresh
         } else {
-            // Bare `ryra backup configure` after a prior failed init:
+            // Bare `ryra backup config` after a prior failed init:
             // retry with existing settings.
             ConfigureMode::Retry
         }
@@ -572,7 +573,7 @@ async fn run_backup(services: Vec<String>) -> Result<()> {
     if config.backup.is_none() {
         bail!(
             "no backup repository configured: run `{}` first",
-            style("ryra backup configure").cyan()
+            style("ryra backup config").cyan()
         );
     }
 
@@ -631,7 +632,7 @@ async fn restore(service: String, at: Option<String>, force: bool) -> Result<()>
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     if config.backup.is_none() {
-        bail!("no backup repository configured: run `ryra backup configure` first");
+        bail!("no backup repository configured: run `ryra backup config` first");
     }
 
     let repo_dir = resolve_repo_dir_for_install(&service).await?;
@@ -961,7 +962,7 @@ async fn status() -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {
-        println!("Backup not configured. Run `ryra backup configure` first.");
+        println!("Backup not configured. Run `ryra backup config` first.");
         return Ok(());
     };
 

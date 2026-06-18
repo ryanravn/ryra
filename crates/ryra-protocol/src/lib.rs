@@ -221,7 +221,7 @@ pub enum Request {
     /// (`ryra backup status`).
     BackupStatus,
     /// Point backups at a backend: init the restic repo and persist `[backup]`
-    /// (`ryra backup configure`). `password` is the restic key; when absent the
+    /// (`ryra backup config`). `password` is the restic key; when absent the
     /// engine reuses the existing key or generates a fresh one.
     ConfigureBackup {
         backend: BackupBackendSpec,
@@ -241,7 +241,7 @@ pub enum Request {
     /// installed service.
     ConfigureView { service: String },
     /// Propagate the current global config into installed services
-    /// (`ryra configure --apply`). Empty `services` = every installed service
+    /// (`ryra config --apply`). Empty `services` = every installed service
     /// whose env would change; `dry_run` previews without writing/restarting.
     Reconcile {
         #[serde(default)]

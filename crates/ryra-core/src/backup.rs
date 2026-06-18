@@ -71,7 +71,7 @@ pub struct BackupRestorePlan {
 /// - the service isn't installed,
 /// - its install metadata didn't opt into backups (`--backup` wasn't
 ///   passed at `ryra add`),
-/// - the user hasn't run `ryra backup configure` yet,
+/// - the user hasn't run `ryra backup config` yet,
 /// - the service author hasn't declared backup support (defensive —
 ///   the install-time check should have caught this earlier, but a
 ///   manifest change between install and backup is possible).

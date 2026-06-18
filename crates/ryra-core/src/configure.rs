@@ -1,4 +1,4 @@
-//! `ryra configure <service>` — re-plan an installed service with a
+//! `ryra config <service>` — re-plan an installed service with a
 //! caller-supplied set of [`Overrides`] applied on top of its current
 //! recorded state.
 //!

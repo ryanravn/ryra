@@ -28,7 +28,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
     /// Backup repository + encryption password. Set by
-    /// `ryra backup configure`; consumed by every `ryra backup run`,
+    /// `ryra backup config`; consumed by every `ryra backup run`,
     /// `ryra backup restore`, and `ryra backup list` invocation.
     /// `None` means the user hasn't configured backups yet — every
     /// backup command refuses with [`Error::BackupRepoNotConfigured`].
@@ -57,7 +57,7 @@ impl Config {
 /// so the threat model doesn't change.
 ///
 /// Losing this password = losing access to every snapshot. Surfaced
-/// once by `ryra backup configure` with a print-and-confirm step.
+/// once by `ryra backup config` with a print-and-confirm step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupSettings {
     /// The restic encryption password. Forms the only key that can

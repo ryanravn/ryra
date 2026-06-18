@@ -68,7 +68,7 @@ enum Command {
         /// `ryra backup run`. Only valid for services whose manifest
         /// sets `backup = true` under [integrations]. The actual
         /// backup repository (S3 endpoint, password) is configured
-        /// once with `ryra backup configure`.
+        /// once with `ryra backup config`.
         #[arg(long)]
         backup: bool,
         /// Use Let's Encrypt for Caddy-managed routes. Pass `--acme you@example.com`
@@ -320,6 +320,7 @@ enum Command {
     },
     /// Reconfigure an installed service in place, or (with no service)
     /// edit global preferences and propagate them to installed services.
+    #[command(name = "config", alias = "configure")]
     Configure {
         /// Service name to reconfigure. Omit to edit global config (SMTP
         /// relay, admin email) and push changes into installed services.
@@ -584,7 +585,7 @@ async fn main() -> anyhow::Result<()> {
                 if apply {
                     anyhow::bail!(
                         "--apply reconciles all services against the global config; \
-                         run it without a service name (`ryra configure --apply`)"
+                         run it without a service name (`ryra config --apply`)"
                     );
                 }
                 let flags = cli::configure::ConfigureFlags {
@@ -626,8 +627,8 @@ async fn main() -> anyhow::Result<()> {
                 .map(|(_, name)| *name);
                 if let Some(name) = stray {
                     anyhow::bail!(
-                        "{name} needs a service (e.g. `ryra configure forgejo {name}`); \
-                         with no service, `ryra configure` edits global config"
+                        "{name} needs a service (e.g. `ryra config forgejo {name}`); \
+                         with no service, `ryra config` edits global config"
                     );
                 }
                 let flags = cli::configure_global::GlobalFlags {

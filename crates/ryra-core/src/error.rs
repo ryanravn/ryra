@@ -122,7 +122,7 @@ pub enum Error {
         hint: String,
     },
 
-    #[error("`ryra configure` can't change {field} for service '{service}'. {workaround}")]
+    #[error("`ryra config` can't change {field} for service '{service}'. {workaround}")]
     ConfigureUnsupported {
         service: String,
         field: String,
@@ -170,7 +170,7 @@ pub enum Error {
     )]
     BackupNotSupported(String),
 
-    #[error("backup repository is not configured — run `ryra backup configure` first")]
+    #[error("backup repository is not configured — run `ryra backup config` first")]
     BackupRepoNotConfigured,
 
     #[error("backup is not enabled for service '{0}' — re-install with `ryra add {0} --backup`")]

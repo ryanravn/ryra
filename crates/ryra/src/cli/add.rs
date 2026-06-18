@@ -1151,7 +1151,7 @@ pub async fn run(request: AddRequest) -> Result<()> {
                     "  Note: no SMTP configured — email features (e.g. account verification /"
                 );
                 println!(
-                    "        login codes) won't send. Wire mail with: ryra configure {service} --smtp"
+                    "        login codes) won't send. Wire mail with: ryra config {service} --smtp"
                 );
             }
 

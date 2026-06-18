@@ -1,4 +1,4 @@
-//! `ryra configure <service>` — re-configure an installed service. The
+//! `ryra config <service>` — re-configure an installed service. The
 //! render itself happens in `ryra-core::configure_service`; this module
 //! owns the user-facing flow: collect overrides (from flags or
 //! interactive prompts), print the typed change summary + file diff,
@@ -86,7 +86,7 @@ pub async fn run(service: &str, flags: ConfigureFlags) -> Result<()> {
         build_overrides_interactive(service).await?
     } else {
         // No flags, no TTY — print the current state and exit so a
-        // script that calls `ryra configure foo` accidentally doesn't
+        // script that calls `ryra config foo` accidentally doesn't
         // hang or apply phantom changes. The user gets a usable
         // overview either way.
         print_current_state(service).await?;
@@ -124,7 +124,7 @@ pub async fn run(service: &str, flags: ConfigureFlags) -> Result<()> {
     if !flags.yes {
         if !super::is_interactive() {
             bail!(
-                "non-interactive run without --yes — re-run with `ryra configure {service} --yes` (or --dry-run to preview)"
+                "non-interactive run without --yes — re-run with `ryra config {service} --yes` (or --dry-run to preview)"
             );
         }
         if result.has_destructive {

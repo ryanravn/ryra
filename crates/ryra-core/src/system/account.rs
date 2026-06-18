@@ -351,7 +351,7 @@ fn vend_credentials(token: &str) -> Result<VendedCredentials> {
             bail!("this key can't vend backup credentials; it needs the backups.write scope")
         }
         404 => bail!(
-            "no managed backup plan for this account; run `ryra backup configure` to set one up"
+            "no managed backup plan for this account; run `ryra backup config` to set one up"
         ),
         409 => bail!("managed backup is not available: {}", resp.body.trim()),
         other => bail!(

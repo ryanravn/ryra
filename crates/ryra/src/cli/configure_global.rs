@@ -1,4 +1,4 @@
-//! `ryra configure` with no service argument: edit global preferences
+//! `ryra config` with no service argument: edit global preferences
 //! (the SMTP relay, the admin email) and then propagate the change into
 //! every installed service that renders an env var from it.
 //!
@@ -40,7 +40,7 @@ impl SmtpSecurityArg {
     }
 }
 
-/// Flags for the no-service (global) form of `ryra configure`. Each SMTP
+/// Flags for the no-service (global) form of `ryra config`. Each SMTP
 /// field is individually settable so a script can change one value without
 /// restating the rest.
 #[derive(Debug, Default, Clone)]
