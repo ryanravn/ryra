@@ -95,7 +95,8 @@ fn scripted_login_token(with_token: bool) -> Result<Option<String>> {
 
 /// The browser device-authorization flow: start a request, show the user where
 /// to approve it (with a best-effort auto-open), then poll until approved.
-async fn device_login() -> Result<()> {
+/// Reused by `ryra backup` to offer an inline login when picking managed backups.
+pub(crate) async fn device_login() -> Result<()> {
     let base = account::api_base_url();
     let label = box_label();
     let start = account::device_start(&label).context("starting the device login")?;
@@ -181,7 +182,7 @@ fn box_label() -> String {
 /// Best-effort open `url` in the user's browser. No crate dependency: shell out
 /// to the platform opener. Never fails the flow if it can't open (the printed
 /// URL is the fallback for headless boxes).
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else {

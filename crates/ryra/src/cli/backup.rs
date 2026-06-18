@@ -157,17 +157,38 @@ impl ScheduleInterval {
 // Managed backups
 // ---------------------------------------------------------------------------
 
-/// Set up the Ryra-managed backend: confirm the account is logged in and has an
-/// active plan (printing the subscribe link if not). Stores no credentials,
-/// they are vended per backup run, and the restic password stays client-side.
-fn collect_managed() -> Result<BackupBackend> {
+/// Set up the Ryra-managed backend: confirm the account is logged in (offering
+/// to log in right here if not) and has an active plan (opening the subscribe
+/// page if not). Stores no credentials, they are vended per backup run, and the
+/// restic password stays client-side.
+async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
     use ryra_core::system::account::{self, BackupState};
-    let base = account::api_base_url();
-    let Some(src) = account::effective_token()? else {
-        bail!(
-            "managed backups need a ryra account. Run `ryra account login` first \
-             (create a key at {base}/account), then re-run `ryra backup configure`."
-        );
+    // Make sure we have a token. If not, offer to log in inline rather than
+    // dead-ending the user into a separate command.
+    let src = match account::effective_token()? {
+        Some(src) => src,
+        None if interactive => {
+            let want = Confirm::new()
+                .with_prompt("Managed backups need a ryra account. Log in now?")
+                .default(true)
+                .interact()?;
+            if !want {
+                bail!(
+                    "managed backups need a ryra account. Run `ryra account login` \
+                     when you're ready, then re-run `ryra backup configure`."
+                );
+            }
+            super::account::device_login().await?;
+            account::effective_token()?
+                .ok_or_else(|| anyhow!("login completed but no credential was stored"))?
+        }
+        None => {
+            let base = account::api_base_url();
+            bail!(
+                "managed backups need a ryra account. Set RYRA_TOKEN or run \
+                 `ryra account login` (sign in at {base}), then re-run `ryra backup configure`."
+            );
+        }
     };
     match account::backup_status(src.token())? {
         BackupState::Active { .. } => {
@@ -176,6 +197,11 @@ fn collect_managed() -> Result<BackupBackend> {
         }
         BackupState::None | BackupState::Inactive(_) => {
             let url = account::backup_checkout(src.token())?;
+            // Take the user straight to the pricing/checkout page; the printed
+            // URL is the fallback for headless boxes (open is best-effort).
+            if interactive {
+                super::account::open_browser(&url);
+            }
             bail!(
                 "no active managed backup plan. Subscribe here, then re-run \
                  `ryra backup configure`:\n  {url}"
@@ -319,7 +345,7 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
             .backup
             .clone()
             .ok_or_else(|| anyhow!("retry mode requires existing backup settings"))?,
-        ConfigureMode::Fresh => collect_new_settings(&args, interactive)?,
+        ConfigureMode::Fresh => collect_new_settings(&args, interactive).await?,
     };
 
     // A managed backend stores `Managed` but needs concrete vended creds for
@@ -394,7 +420,7 @@ fn prompt_existing_config_choice() -> Result<ConfigureMode> {
     }
 }
 
-fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<BackupSettings> {
+async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<BackupSettings> {
     let kind = match args.backend {
         Some(k) => k,
         None if interactive => prompt_backend()?,
@@ -402,7 +428,7 @@ fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<Backu
     };
 
     let backend = match kind {
-        BackendKind::Managed => collect_managed()?,
+        BackendKind::Managed => collect_managed(interactive).await?,
         BackendKind::S3 => collect_s3(args, interactive)?,
         BackendKind::Local => collect_local(args, interactive)?,
     };
