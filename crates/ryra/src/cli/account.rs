@@ -1,5 +1,5 @@
-//! `ryra account` — connect this machine to a ryra account on the control
-//! plane (app.ryra.dev). Mirrors `gh auth`: `login` stores an API key,
+//! `ryra account`: log in to a ryra account on the control plane
+//! (app.ryra.dev). Mirrors `gh auth`: `login` stores an API key,
 //! `logout` drops it, `status` reports it. The key is what unlocks
 //! ryra-managed backups.
 //!
@@ -25,9 +25,9 @@ pub enum AccountAction {
         #[arg(long)]
         with_token: bool,
     },
-    /// Remove the stored API key from this machine.
+    /// Remove the stored API key.
     Logout,
-    /// Show whether this machine is logged in, and to which control plane.
+    /// Show whether you're logged in, and to which control plane.
     Status,
 }
 
