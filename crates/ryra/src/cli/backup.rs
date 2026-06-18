@@ -99,6 +99,10 @@ pub enum BackupAction {
         /// install.
         services: Vec<String>,
     },
+    /// Enable ryra-managed backups for this host: check your account, and if
+    /// you have no plan, print the link to subscribe. Requires `ryra account
+    /// login` (or a managed box, which is logged in automatically).
+    Enable,
     /// Show repository overview, per-service last-run timestamps,
     /// and total repo size.
     Status,
@@ -153,12 +157,66 @@ impl ScheduleInterval {
 }
 
 // ---------------------------------------------------------------------------
+// Managed backups (control-plane signup)
+// ---------------------------------------------------------------------------
+
+/// `ryra backup enable`: check the account's managed-backup state and, when
+/// there's no active plan, print the link to subscribe. The account comes from
+/// `ryra account login` (self-hoster) or the injected `RYRA_TOKEN` (managed box).
+fn enable() -> Result<()> {
+    use ryra_core::system::account::{self, BackupState};
+    let base = account::api_base_url();
+    let Some(src) = account::effective_token()? else {
+        println!("You need a ryra account to use managed backups.");
+        println!(
+            "Run `ryra account login` first (create a key at {base}/account), \
+             then re-run `ryra backup enable`."
+        );
+        return Ok(());
+    };
+    let token = src.token();
+    match account::backup_status(token)? {
+        BackupState::Active {
+            used_bytes,
+            quota_bytes,
+        } => {
+            println!(
+                "Managed backups are active for this account ({} of {} used).",
+                gib(used_bytes),
+                gib(quota_bytes)
+            );
+        }
+        BackupState::Inactive(status) => {
+            println!("Your backup plan is '{status}', not active.");
+            let url = account::backup_checkout(token)?;
+            println!("Re-subscribe here:\n  {url}");
+        }
+        BackupState::None => {
+            println!("You don't have a managed backup plan yet.");
+            let url = account::backup_checkout(token)?;
+            println!("Subscribe to ryra managed backups here:\n  {url}");
+        }
+    }
+    Ok(())
+}
+
+/// Bytes as GiB with one decimal, for human-facing usage/quota lines.
+fn gib(bytes: i64) -> String {
+    format!("{:.1} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 pub async fn run(action: BackupAction) -> Result<()> {
-    require_restic_installed()?;
+    // Enabling managed backups only talks to the control plane; it doesn't need
+    // restic on this host (that matters once backups actually run).
+    if !matches!(action, BackupAction::Enable) {
+        require_restic_installed()?;
+    }
     match action {
+        BackupAction::Enable => enable(),
         BackupAction::Configure {
             backend,
             endpoint,

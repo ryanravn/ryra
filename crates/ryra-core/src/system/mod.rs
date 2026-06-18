@@ -1,3 +1,4 @@
+pub mod account;
 pub mod apply;
 pub mod atomic_write;
 pub mod doctor;

@@ -313,6 +313,11 @@ enum Command {
         #[command(subcommand)]
         action: cli::backup::BackupAction,
     },
+    /// Log in to your ryra account (app.ryra.dev) for managed backups.
+    Account {
+        #[command(subcommand)]
+        action: cli::account::AccountAction,
+    },
     /// Reconfigure an installed service in place, or (with no service)
     /// edit global preferences and propagate them to installed services.
     Configure {
@@ -547,6 +552,7 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
         } => cli::revert::run(services, at.as_deref(), yes, dry_run, list).await?,
         Command::Backup { action } => cli::backup::run(action).await?,
+        Command::Account { action } => cli::account::run(action).await?,
         Command::Configure {
             ref service,
             ref smtp_host,

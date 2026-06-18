@@ -1,3 +1,4 @@
+pub mod account;
 pub mod add;
 pub mod apply;
 pub mod backup;
