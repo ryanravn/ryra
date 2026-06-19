@@ -174,8 +174,16 @@ async fn execute(step: &Step) -> Result<()> {
             println!("  Pulling {image}...");
             run_cmd("podman", &["pull", image])
         }
-        Step::RemoveFile(path) => std::fs::remove_file(path)
-            .with_context(|| format!("failed to remove {}", path.display())),
+        Step::RemoveFile(path) => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            // Already gone is the desired end state: an earlier step in the same
+            // plan (e.g. `systemctl --user disable`, which deletes the unit's
+            // symlink) may have removed it. Removal is idempotent.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => {
+                Err(e).with_context(|| format!("failed to remove {}", path.display()))
+            }
+        },
         Step::RemoveDir(path) => {
             // Service data dirs can contain files owned by podman subuids
             // (from rootless user-namespace mappings). Plain `rm -rf` as the
