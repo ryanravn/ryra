@@ -48,7 +48,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - name: Build site
-        working-directory: site
+        working-directory: docs
         env:
           PUBLIC_POSTHOG_PROJECT_TOKEN: ${{ vars.PUBLIC_POSTHOG_PROJECT_TOKEN }}
           PUBLIC_POSTHOG_HOST: ${{ vars.PUBLIC_POSTHOG_HOST }}
@@ -88,14 +88,14 @@ jobs:
 
       - name: Assemble APT repository
         run: |
-          mkdir -p site/dist/deb/pool \
-            site/dist/deb/dists/stable/main/binary-amd64 \
-            site/dist/deb/dists/stable/main/binary-arm64
+          mkdir -p docs/dist/deb/pool \
+            docs/dist/deb/dists/stable/main/binary-amd64 \
+            docs/dist/deb/dists/stable/main/binary-arm64
 
-          cp artifacts/ryra_amd64.deb site/dist/deb/pool/
-          cp artifacts/ryra_arm64.deb site/dist/deb/pool/
+          cp artifacts/ryra_amd64.deb docs/dist/deb/pool/
+          cp artifacts/ryra_arm64.deb docs/dist/deb/pool/
 
-          cd site/dist/deb
+          cd docs/dist/deb
 
           dpkg-scanpackages --arch amd64 pool > dists/stable/main/binary-amd64/Packages
           gzip -k -f dists/stable/main/binary-amd64/Packages
@@ -119,44 +119,44 @@ jobs:
 
       - name: Assemble RPM repository
         run: |
-          mkdir -p site/dist/rpm/x86_64 site/dist/rpm/aarch64
+          mkdir -p docs/dist/rpm/x86_64 docs/dist/rpm/aarch64
 
-          cp artifacts/ryra.x86_64.rpm site/dist/rpm/x86_64/
-          cp artifacts/ryra.aarch64.rpm site/dist/rpm/aarch64/
+          cp artifacts/ryra.x86_64.rpm docs/dist/rpm/x86_64/
+          cp artifacts/ryra.aarch64.rpm docs/dist/rpm/aarch64/
 
-          createrepo_c site/dist/rpm/x86_64
-          createrepo_c site/dist/rpm/aarch64
+          createrepo_c docs/dist/rpm/x86_64
+          createrepo_c docs/dist/rpm/aarch64
 
-          gpg --batch --yes --armor --detach-sign -o site/dist/rpm/x86_64/repodata/repomd.xml.asc site/dist/rpm/x86_64/repodata/repomd.xml
-          gpg --batch --yes --armor --detach-sign -o site/dist/rpm/aarch64/repodata/repomd.xml.asc site/dist/rpm/aarch64/repodata/repomd.xml
+          gpg --batch --yes --armor --detach-sign -o docs/dist/rpm/x86_64/repodata/repomd.xml.asc docs/dist/rpm/x86_64/repodata/repomd.xml
+          gpg --batch --yes --armor --detach-sign -o docs/dist/rpm/aarch64/repodata/repomd.xml.asc docs/dist/rpm/aarch64/repodata/repomd.xml
 
       - name: Assemble Pacman repository
         run: |
-          mkdir -p site/dist/pacman/x86_64 site/dist/pacman/aarch64
+          mkdir -p docs/dist/pacman/x86_64 docs/dist/pacman/aarch64
 
-          cp artifacts/ryra-*-x86_64.pkg.tar.zst site/dist/pacman/x86_64/
-          cp artifacts/ryra-*-aarch64.pkg.tar.zst site/dist/pacman/aarch64/
+          cp artifacts/ryra-*-x86_64.pkg.tar.zst docs/dist/pacman/x86_64/
+          cp artifacts/ryra-*-aarch64.pkg.tar.zst docs/dist/pacman/aarch64/
 
-          docker run --rm -v "$PWD/site/dist/pacman:/repo" archlinux:latest bash -c '
+          docker run --rm -v "$PWD/docs/dist/pacman:/repo" archlinux:latest bash -c '
             pacman -Sy --noconfirm
             repo-add /repo/x86_64/ryra.db.tar.gz /repo/x86_64/*.pkg.tar.zst
             repo-add /repo/aarch64/ryra.db.tar.gz /repo/aarch64/*.pkg.tar.zst
           '
 
       - name: Export GPG public key
-        run: gpg --armor --export > site/dist/gpg.key
+        run: gpg --armor --export > docs/dist/gpg.key
 
       # Serve the package repos at pkg.ryra.dev. The apex (ryra.dev) is the
       # Cloudflare marketing site and docs.ryra.dev the docs, so the
       # install-baked package URLs get their own subdomain here.
       - name: Pin the package-repo domain
-        run: echo "pkg.ryra.dev" > site/dist/CNAME
+        run: echo "pkg.ryra.dev" > docs/dist/CNAME
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/dist
+          path: docs/dist
 
       - name: Deploy to GitHub Pages
         id: deployment

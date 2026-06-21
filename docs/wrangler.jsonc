@@ -1,7 +1,7 @@
 {
   // Cloudflare Workers Static Assets: serve the Astro docs build (`dist/`) with
   // no Worker script. In Cloudflare, set this project's root directory to
-  // `site`. Build with `bun run build`, deploy with `npx wrangler deploy`. The
+  // `docs`. Build with `bun run build`, deploy with `npx wrangler deploy`. The
   // custom domain (docs.ryra.dev) is bound in the dashboard (Domains tab).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ryra-docs",

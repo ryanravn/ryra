@@ -62,19 +62,19 @@ Ryra is a scaffolding tool, not a runtime. It writes plain files and exits, so t
 
 ### A service is a folder
 
-<img src="site/public/screenshots/services-folder.webp" alt="Tree listing of ~/.local/share/services showing each service as its own folder containing quadlets, configs, and bind-mounted data dirs" width="700" />
+<img src="docs/public/screenshots/services-folder.webp" alt="Tree listing of ~/.local/share/services showing each service as its own folder containing quadlets, configs, and bind-mounted data dirs" width="700" />
 
 Every quadlet, env file, network, and bind-mounted data directory for a service lives under `~/.local/share/services/<name>/`. Back up the whole folder with `tar`, or just the data dirs like `db-data/` and `upload/`. Move the folder to another box, the service comes with it.
 
 ### One file of preferences
 
-<img src="site/public/screenshots/preferences-file.webp" alt="Tree listing of ~/.config/services showing a single preferences.toml file" width="700" />
+<img src="docs/public/screenshots/preferences-file.webp" alt="Tree listing of ~/.config/services showing a single preferences.toml file" width="700" />
 
 SMTP credentials, OIDC provider, Tailscale key, custom registries: all the cross-service settings ryra reads at startup live in a single TOML file. The rest is just service folders.
 
 ### Symlinked into systemd
 
-<img src="site/public/screenshots/systemd-symlinks.webp" alt="Tree listing of ~/.config/containers/systemd showing each .container and .network as a symlink back into the service's folder" width="900" />
+<img src="docs/public/screenshots/systemd-symlinks.webp" alt="Tree listing of ~/.config/containers/systemd showing each .container and .network as a symlink back into the service's folder" width="900" />
 
 Each `.container` and `.network` is symlinked from its service folder into `~/.config/containers/systemd/`, where systemd's user generator picks it up. Remove the service and the symlink goes with it. Uninstall ryra and the symlinks plus the services keep running, because there is no ryra runtime.
 
@@ -82,7 +82,7 @@ Each `.container` and `.network` is symlinked from its service folder into `~/.c
 
 ### Replace your cloud storage
 
-<img src="site/public/screenshots/seafile.webp" alt="Seafile file storage UI" width="900" />
+<img src="docs/public/screenshots/seafile.webp" alt="Seafile file storage UI" width="900" />
 
 ```sh
 ryra add seafile
@@ -90,7 +90,7 @@ ryra add seafile
 
 ### Replace your todo list
 
-<img src="site/public/screenshots/vikunja.webp" alt="Vikunja task manager UI" width="900" />
+<img src="docs/public/screenshots/vikunja.webp" alt="Vikunja task manager UI" width="900" />
 
 ```sh
 ryra add vikunja
@@ -98,7 +98,7 @@ ryra add vikunja
 
 ### Run your own AI gateway
 
-<img src="site/public/screenshots/openclaw.webp" alt="OpenClaw AI gateway UI" width="900" />
+<img src="docs/public/screenshots/openclaw.webp" alt="OpenClaw AI gateway UI" width="900" />
 
 ```sh
 ryra add openclaw
@@ -106,7 +106,7 @@ ryra add openclaw
 
 ### Install anything
 
-<img src="site/public/screenshots/custom.webp" alt="A service.toml definition" width="900" />
+<img src="docs/public/screenshots/custom.webp" alt="A service.toml definition" width="900" />
 
 The registry is plain TOML and quadlet files. Drop a definition in for your own app, point ryra at your registry, and install it the same way as anything in the default registry.
 
