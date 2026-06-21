@@ -295,6 +295,10 @@ pub enum BackupBackendSpec {
         #[serde(default)]
         prefix: Option<String>,
     },
+    /// Ryra-managed: the box holds no storage keys; it vends short-lived,
+    /// account-scoped S3 credentials per backup run. Requires an active managed
+    /// backup plan (configuring without one fails at credential-vend time).
+    Managed,
 }
 
 /// One restic data snapshot (`ryra backup list`).

@@ -769,7 +769,9 @@ fn configure_backup(
     password: Option<String>,
 ) -> std::result::Result<(), RpcError> {
     use ryra_core::config::schema::{BackupBackend, BackupSettings};
-    let backend = match backend {
+    // The backend we PERSIST. `Managed` stays `Managed` so each run re-vends
+    // fresh short-lived creds; Local/S3 persist verbatim.
+    let persist_backend = match backend {
         BackupBackendSpec::Local { path } => BackupBackend::Local {
             path: std::path::PathBuf::from(path),
         },
@@ -787,6 +789,16 @@ fn configure_backup(
             session_token: None,
             prefix,
         },
+        BackupBackendSpec::Managed => BackupBackend::Managed,
+    };
+    // The backend we INIT the restic repo against. `Managed` resolves to vended
+    // S3 -- which also verifies a logged-in account WITH an active plan, so
+    // configuring managed without a plan fails here, up front. Others init as-is.
+    let init_backend = match &persist_backend {
+        BackupBackend::Managed => {
+            ryra_core::system::account::resolve_managed_backend().map_err(core_err)?
+        }
+        other => other.clone(),
     };
 
     let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
@@ -794,11 +806,16 @@ fn configure_backup(
     let password = password
         .or_else(|| cfg.backup.as_ref().map(|b| b.password.clone()))
         .unwrap_or_else(ryra_core::system::secret::generate_secret);
-    let settings = BackupSettings { password, backend };
 
     // Init before persisting, so we only record a [backup] that actually works.
-    restic_init(&settings)?;
-    cfg.backup = Some(settings);
+    restic_init(&BackupSettings {
+        password: password.clone(),
+        backend: init_backend,
+    })?;
+    cfg.backup = Some(BackupSettings {
+        password,
+        backend: persist_backend,
+    });
     paths.ensure_dirs().map_err(core_err)?;
     ryra_core::config::save_config(&paths.config_file, &cfg).map_err(core_err)?;
     Ok(())
