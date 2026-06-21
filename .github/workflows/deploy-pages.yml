@@ -146,6 +146,12 @@ jobs:
       - name: Export GPG public key
         run: gpg --armor --export > site/dist/gpg.key
 
+      # Serve the package repos at pkg.ryra.dev. The apex (ryra.dev) is the
+      # Cloudflare marketing site and docs.ryra.dev the docs, so the
+      # install-baked package URLs get their own subdomain here.
+      - name: Pin the package-repo domain
+        run: echo "pkg.ryra.dev" > site/dist/CNAME
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3

@@ -2,7 +2,9 @@
 set -eu
 
 REPO="ryanravn/ryra"
-PAGES_URL="https://ryra.dev"
+# The apt/rpm/pacman package repos live on their own subdomain (GitHub Pages off
+# the public ryra repo); ryra.dev is the marketing site, docs.ryra.dev the docs.
+PAGES_URL="https://pkg.ryra.dev"
 BASE_URL="https://github.com/${REPO}/releases/latest/download"
 
 main() {
