@@ -180,9 +180,7 @@ async fn execute(step: &Step) -> Result<()> {
             // plan (e.g. `systemctl --user disable`, which deletes the unit's
             // symlink) may have removed it. Removal is idempotent.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => {
-                Err(e).with_context(|| format!("failed to remove {}", path.display()))
-            }
+            Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
         },
         Step::RemoveDir(path) => {
             // Service data dirs can contain files owned by podman subuids
