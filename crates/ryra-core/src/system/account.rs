@@ -109,6 +109,27 @@ pub fn delete_credentials() -> Result<bool> {
     }
 }
 
+/// Revoke the stored key on the control plane as part of logout, so the box
+/// stops appearing under "Connected boxes" and the key stops granting access.
+/// Returns whether a request was sent (`false` when there's no stored key).
+///
+/// Acts only on the credentials-file token: a `RYRA_TOKEN` env key belongs to a
+/// managed box's provisioning, not something `logout` should revoke. Transport
+/// or HTTP errors bubble up so the caller can downgrade to a warning -- local
+/// logout must still succeed offline.
+pub fn revoke_stored_key() -> Result<bool> {
+    let Some(creds) = load_credentials()? else {
+        return Ok(false);
+    };
+    let resp = curl("POST", "/api/v1/account/logout", &creds.token, None)?;
+    match resp.status {
+        // Revoked now, or the key was already gone / rejected: either way it no
+        // longer grants access, which is exactly what logout wants.
+        200 | 204 | 401 | 404 => Ok(true),
+        other => bail!("the control plane returned HTTP {other} revoking the key"),
+    }
+}
+
 /// One HTTP response: status code + body. Body may be empty.
 struct ApiResponse {
     status: u16,
@@ -266,7 +287,8 @@ pub fn device_poll(device_code: &str) -> Result<DevicePoll> {
                 status: String,
                 key: Option<String>,
             }
-            let b: Body = serde_json::from_str(&resp.body).context("parsing device/poll response")?;
+            let b: Body =
+                serde_json::from_str(&resp.body).context("parsing device/poll response")?;
             match b.status.as_str() {
                 "pending" => Ok(DevicePoll::Pending),
                 "approved" => {
@@ -350,9 +372,9 @@ fn vend_credentials(token: &str) -> Result<VendedCredentials> {
         401 | 403 => {
             bail!("this key can't vend backup credentials; it needs the backups.write scope")
         }
-        404 => bail!(
-            "no managed backup plan for this account; run `ryra backup config` to set one up"
-        ),
+        404 => {
+            bail!("no managed backup plan for this account; run `ryra backup config` to set one up")
+        }
         409 => bail!("managed backup is not available: {}", resp.body.trim()),
         other => bail!(
             "unexpected response vending backup credentials: HTTP {other}: {}",

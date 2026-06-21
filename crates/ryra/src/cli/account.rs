@@ -101,7 +101,7 @@ pub(crate) async fn device_login() -> Result<()> {
     let label = box_label();
     let start = account::device_start(&label).context("starting the device login")?;
 
-    println!("To connect this box to {base}, approve it in your browser:");
+    println!("To connect this machine to {base}, approve it in your browser:");
     println!();
     println!(
         "  {} {}",
@@ -176,7 +176,7 @@ fn box_label() -> String {
             return name;
         }
     }
-    "a ryra box".to_string()
+    "a ryra machine".to_string()
 }
 
 /// Best-effort open `url` in the user's browser. No crate dependency: shell out
@@ -198,8 +198,27 @@ pub(crate) fn open_browser(url: &str) {
 }
 
 fn logout() -> Result<()> {
+    // Revoke server-side first so the machine disappears from "Connected machines" and
+    // its key stops working. Best-effort: if the control plane is unreachable we
+    // warn and still clear the local key, so logout works offline.
+    let revoked = match account::revoke_stored_key() {
+        Ok(sent) => sent,
+        Err(e) => {
+            eprintln!(
+                "warning: couldn't revoke the key on the control plane ({e:#}); \
+                 removing it locally anyway. Revoke it from Settings if needed."
+            );
+            false
+        }
+    };
     if account::delete_credentials()? {
-        println!("Logged out; removed the stored API key.");
+        if revoked {
+            println!(
+                "Logged out; revoked the API key on the control plane and removed it locally."
+            );
+        } else {
+            println!("Logged out; removed the stored API key.");
+        }
     } else {
         println!("Not logged in; nothing to remove.");
     }
@@ -216,7 +235,7 @@ fn status() -> Result<()> {
     // A managed box is authenticated via RYRA_TOKEN in its env; a self-hoster
     // via the stored credentials file. Name the source so the two are legible.
     let origin = match src {
-        account::TokenSource::Env(_) => "RYRA_TOKEN (managed box / env)",
+        account::TokenSource::Env(_) => "RYRA_TOKEN (managed machine / env)",
         account::TokenSource::Stored(_) => "stored credentials",
     };
     // Live-check the key so status reflects reality, not just "a token exists".
