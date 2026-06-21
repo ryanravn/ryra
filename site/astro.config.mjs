@@ -22,9 +22,10 @@ const posthogHead =
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://ryra.dev",
-  // The marketing landing now lives in the private ryra-marketing repo; this
-  // site is docs-only, so send the root straight to the intro.
+  // Docs live on their own subdomain; ryra.dev (the apex) serves the marketing
+  // landing from the private ryra-marketing repo.
+  site: "https://docs.ryra.dev",
+  // This site is docs-only, so send the root straight to the intro.
   redirects: {
     "/": "/intro/",
   },
