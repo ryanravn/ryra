@@ -383,6 +383,13 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
 
     if matches!(mode, ConfigureMode::Fresh) {
         config.backup = Some(settings.clone());
+        // Persist the stable machine id alongside the backup config. collect_s3
+        // mints + saves it when defaulting the S3 prefix; re-read it here (or
+        // mint for local/managed) and carry it on THIS in-memory config so the
+        // save below doesn't drop the `[machine]` block. Idempotent.
+        config.machine = Some(ryra_core::config::schema::MachineConfig {
+            id: ryra_core::config::machine_id(&paths)?,
+        });
         paths.ensure_dirs()?;
         ryra_core::config::save_config(&paths.config_file, &config)?;
         println!(
@@ -525,7 +532,14 @@ fn collect_s3(args: &ConfigureArgs, interactive: bool) -> Result<BackupBackend> 
             .interact()?,
         None => bail!("--secret-access-key required for S3 backend"),
     };
-    let prefix = args.prefix.clone().filter(|p| !p.is_empty());
+    // Default the prefix to this machine's stable id, so several machines can
+    // share one bucket without colliding and the layout never keys off the
+    // (mutable, non-unique) hostname. An explicit --prefix wins, e.g. to adopt
+    // an existing machine's prefix when migrating to a new box.
+    let prefix = match args.prefix.clone().filter(|p| !p.is_empty()) {
+        Some(p) => Some(p),
+        None => Some(ryra_core::config::machine_id(&ConfigPaths::resolve()?)?),
+    };
 
     Ok(BackupBackend::S3 {
         endpoint,

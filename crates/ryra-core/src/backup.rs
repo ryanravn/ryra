@@ -130,6 +130,13 @@ pub fn plan_backup_run(
     let manifest_sha = manifest_sha256(&svc.service_dir);
     let mut tags = vec![format!("service:{service_name}")];
     tags.push(format!("manifest_sha:{}", &manifest_sha[..16]));
+    // Stamp the stable machine id so a snapshot self-identifies which machine it
+    // came from (the label is the hostname, carried in restic's own `host`
+    // field). Lets the bucket be read back machine-by-machine even with only the
+    // backups in hand.
+    if let Some(machine) = config.machine.as_ref() {
+        tags.push(format!("machine_id:{}", machine.id));
+    }
 
     let backup = svc.def.backup.as_ref();
     let pre = resolve_hook(

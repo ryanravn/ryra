@@ -13,7 +13,7 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use ryra_core::backup::{plan_backup_forget, plan_backup_restore, plan_backup_run, restic_forget};
-use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, RetentionPolicy};
+use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, MachineConfig, RetentionPolicy};
 
 /// Tests in this file all mutate process-global env vars (`HOME`,
 /// `XDG_*`) so they can't safely run in parallel. cargo test defaults
@@ -323,6 +323,51 @@ fn retention_forget_prunes_to_keep_last() {
     let (kept2, removed2) = restic_forget(&dry).expect("restic forget dry-run");
     assert_eq!(kept2, 1);
     assert_eq!(removed2, 0, "nothing left to prune");
+}
+
+#[test]
+fn machine_id_mints_persists_and_is_stable() {
+    // No restic needed — pure config identity.
+    let _guard = env_lock();
+    unsafe { std::env::remove_var("RYRA_MACHINE_ID") };
+    let _sandbox = Sandbox::new("mid-stable"); // sets HOME/XDG into a tempdir
+    let paths = ryra_core::config::ConfigPaths::resolve().expect("paths");
+    let id1 = ryra_core::config::machine_id(&paths).expect("mint");
+    assert!(!id1.is_empty(), "an id should be minted");
+    let id2 = ryra_core::config::machine_id(&paths).expect("again");
+    assert_eq!(id1, id2, "machine id must be stable across calls (no re-mint)");
+    let cfg = ryra_core::config::load_or_default(&paths.config_file).expect("load");
+    assert_eq!(
+        cfg.machine.expect("persisted to [machine]").id,
+        id1,
+        "the minted id is persisted, so a rename/restart never re-mints"
+    );
+}
+
+#[test]
+fn machine_id_adopts_orchestrator_env() {
+    let _guard = env_lock();
+    let _sandbox = Sandbox::new("mid-managed");
+    unsafe { std::env::set_var("RYRA_MACHINE_ID", "orch-id-abc") };
+    let paths = ryra_core::config::ConfigPaths::resolve().expect("paths");
+    let id = ryra_core::config::machine_id(&paths).expect("mint");
+    unsafe { std::env::remove_var("RYRA_MACHINE_ID") };
+    assert_eq!(id, "orch-id-abc", "managed boxes adopt RYRA_MACHINE_ID");
+}
+
+#[test]
+fn plan_tags_include_machine_id() {
+    let _guard = env_lock();
+    let service = "mid-tag";
+    let mut sandbox = Sandbox::new(service);
+    sandbox.install(service);
+    sandbox.config.machine = Some(MachineConfig { id: "MID-XYZ".into() });
+    let plan = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir).expect("plan");
+    assert!(
+        plan.tags.iter().any(|t| t == "machine_id:MID-XYZ"),
+        "snapshot must be tagged with the machine id; got {:?}",
+        plan.tags
+    );
 }
 
 #[test]

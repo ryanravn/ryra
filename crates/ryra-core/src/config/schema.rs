@@ -34,6 +34,22 @@ pub struct Config {
     /// backup command refuses with [`Error::BackupRepoNotConfigured`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<BackupSettings>,
+    /// This machine's stable identity. Minted once via
+    /// [`crate::config::machine_id`] and never derived from mutable state like
+    /// the hostname. `None` until first minted (legacy configs / pre-backup).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<MachineConfig>,
+}
+
+/// Stable per-machine identity. ONLY the id is persisted; the display label is
+/// the hostname (stamped onto each snapshot's `--host`), never stored here — so
+/// renaming the host never moves backups, and there's no second copy to drift.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MachineConfig {
+    /// Opaque, stable id — a UUID for self-host, or the orchestrator's machine
+    /// id (`RYRA_MACHINE_ID`) for managed. This IS the per-machine backup bucket
+    /// prefix, so it must survive hostname changes and reinstalls.
+    pub id: String,
 }
 
 impl Config {

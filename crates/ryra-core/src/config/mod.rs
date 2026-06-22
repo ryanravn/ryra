@@ -119,3 +119,27 @@ pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     crate::system::atomic_write::atomic_write(path, contents.as_bytes(), 0o600)?;
     Ok(())
 }
+
+/// This machine's stable id, minted + persisted on first use and stable forever
+/// after. Managed boxes adopt `RYRA_MACHINE_ID` (the orchestrator's machine id);
+/// self-host mints a fresh UUID. Once written to `[machine].id` it never changes
+/// -- it's the backup bucket prefix, so it must survive hostname changes and
+/// reinstalls (as long as preferences.toml is kept). Idempotent.
+pub fn machine_id(paths: &ConfigPaths) -> Result<String> {
+    let mut config = load_or_default(&paths.config_file)?;
+    if let Some(machine) = &config.machine {
+        return Ok(machine.id.clone());
+    }
+    // Adopt the orchestrator's id on a managed box; otherwise mint a UUID.
+    let id = std::env::var("RYRA_MACHINE_ID")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            crate::system::secret::generate(&crate::registry::service_def::EnvFormat::Uuid, None)
+        });
+    config.machine = Some(schema::MachineConfig { id: id.clone() });
+    paths.ensure_dirs()?;
+    save_config(&paths.config_file, &config)?;
+    Ok(id)
+}
