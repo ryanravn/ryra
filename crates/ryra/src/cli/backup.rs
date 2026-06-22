@@ -26,7 +26,7 @@ use ryra_core::backup::{
     plan_backup_run, restic_forget, restic_restore, run_hook,
 };
 use ryra_core::config::ConfigPaths;
-use ryra_core::config::schema::{BackupBackend, BackupSettings, Config};
+use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, RetentionPolicy};
 use ryra_core::metadata::load_metadata;
 use ryra_core::registry::resolve::ServiceRef;
 
@@ -120,6 +120,28 @@ pub enum BackupAction {
         /// Show what would be removed without deleting anything.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// View or set the retention policy: how many snapshots to keep at each
+    /// cadence. With no flags, shows the current policy. e.g.
+    /// `ryra backup retention --keep-daily 7 --keep-weekly 4 --keep-monthly 6`
+    /// keeps a week of dailies, a month of weeklies, half a year of monthlies.
+    /// Applied after every `backup run` (and on demand via `backup forget`).
+    Retention {
+        /// Keep the N most recent snapshots regardless of age.
+        #[arg(long)]
+        keep_last: Option<u32>,
+        /// Keep the most recent snapshot from each of the last N days.
+        #[arg(long)]
+        keep_daily: Option<u32>,
+        /// Keep the most recent snapshot from each of the last N weeks.
+        #[arg(long)]
+        keep_weekly: Option<u32>,
+        /// Keep the most recent snapshot from each of the last N months.
+        #[arg(long)]
+        keep_monthly: Option<u32>,
+        /// Turn retention off (keep every snapshot forever).
+        #[arg(long)]
+        off: bool,
     },
 }
 
@@ -278,6 +300,13 @@ pub async fn run(action: BackupAction) -> Result<()> {
         BackupAction::Status => status().await,
         BackupAction::Schedule { interval } => schedule(interval).await,
         BackupAction::Forget { services, dry_run } => forget(services, dry_run).await,
+        BackupAction::Retention {
+            keep_last,
+            keep_daily,
+            keep_weekly,
+            keep_monthly,
+            off,
+        } => retention(keep_last, keep_daily, keep_weekly, keep_monthly, off).await,
     }
 }
 
@@ -734,9 +763,29 @@ async fn run_one(service_name: &str, config: &Config) -> Result<()> {
 async fn restore(service: String, at: Option<String>, force: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
-    if config.backup.is_none() {
+    let Some(settings) = config.backup.as_ref() else {
         bail!("no backup repository configured: run `ryra backup config` first");
-    }
+    };
+
+    // Allow a snapshot id in the service position: `ryra backup restore <id>`.
+    // If the arg isn't an installed service, resolve it as a snapshot and
+    // restore the service it belongs to, at that exact point.
+    let (service, at) = if at.is_none() && load_metadata(&service)?.is_none() {
+        match resolve_snapshot_service(settings, &service)? {
+            Some((svc, id)) => {
+                println!(
+                    "{} snapshot {} belongs to {}",
+                    style("restore:").cyan().bold(),
+                    style(&id).cyan(),
+                    style(&svc).cyan()
+                );
+                (svc, Some(id))
+            }
+            None => (service, at),
+        }
+    } else {
+        (service, at)
+    };
 
     let repo_dir = resolve_repo_dir_for_install(&service).await?;
     let snapshot = at.unwrap_or_else(|| "latest".to_string());
@@ -1016,6 +1065,45 @@ fn list_snapshot_tags(plan: &BackupRestorePlan, snapshot: &str) -> Result<Vec<St
 // list
 // ---------------------------------------------------------------------------
 
+/// Find the snapshot whose id matches `id` (short id, or a full-id prefix) and
+/// return (service, short_id) so `ryra backup restore <id>` can restore the
+/// right service at that exact point. None if nothing matches or the snapshot
+/// has no `service:` tag.
+fn resolve_snapshot_service(
+    settings: &BackupSettings,
+    id: &str,
+) -> Result<Option<(String, String)>> {
+    #[derive(serde::Deserialize)]
+    struct Snap {
+        id: String,
+        short_id: String,
+        #[serde(default)]
+        tags: Vec<String>,
+    }
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("snapshots")
+        .arg("--json")
+        .arg("--repo")
+        .arg(settings.backend.restic_repo())
+        .env("RESTIC_PASSWORD", &settings.password);
+    for (k, v) in settings.backend.env() {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().context("spawning `restic snapshots`")?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let snaps: Vec<Snap> = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    for s in snaps {
+        if s.short_id == id || s.id == id || s.id.starts_with(id) {
+            if let Some(svc) = s.tags.iter().find_map(|t| t.strip_prefix("service:")) {
+                return Ok(Some((svc.to_string(), s.short_id)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 async fn list(services: Vec<String>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
@@ -1086,6 +1174,95 @@ async fn list(services: Vec<String>) -> Result<()> {
             println!("  {:<19}  {}", when, s.short_id);
         }
     }
+    println!(
+        "\n{} {}  ({})",
+        style("restore a point:").dim(),
+        style("ryra backup restore <id>").cyan(),
+        style("or `ryra backup restore <service>` for the latest").dim()
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// retention
+// ---------------------------------------------------------------------------
+
+fn print_retention(r: Option<&RetentionPolicy>) {
+    match r {
+        Some(r) => println!(
+            "{} keep {} latest \u{b7} {} daily \u{b7} {} weekly \u{b7} {} monthly",
+            style("Retention:").cyan().bold(),
+            r.keep_last,
+            r.keep_daily,
+            r.keep_weekly,
+            r.keep_monthly
+        ),
+        None => println!(
+            "{} none \u{2014} every snapshot is kept forever.\n  Set one, e.g. {}",
+            style("Retention:").cyan().bold(),
+            style("ryra backup retention --keep-daily 7 --keep-weekly 4 --keep-monthly 6").cyan()
+        ),
+    }
+}
+
+async fn retention(
+    keep_last: Option<u32>,
+    keep_daily: Option<u32>,
+    keep_weekly: Option<u32>,
+    keep_monthly: Option<u32>,
+    off: bool,
+) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+    let Some(settings) = config.backup.as_ref() else {
+        bail!("no backup repository configured: run `ryra backup config` first");
+    };
+    let current = settings.retention.clone();
+
+    if off {
+        config.backup.as_mut().unwrap().retention = None;
+        ryra_core::config::save_config(&paths.config_file, &config)?;
+        println!(
+            "{} retention off \u{2014} keeping every snapshot forever.",
+            style("done:").green().bold()
+        );
+        return Ok(());
+    }
+
+    // No knobs given: just show the current policy.
+    if keep_last.is_none()
+        && keep_daily.is_none()
+        && keep_weekly.is_none()
+        && keep_monthly.is_none()
+    {
+        print_retention(current.as_ref());
+        return Ok(());
+    }
+
+    // Update only the knobs provided, starting from the current policy (or a
+    // sensible default ladder if none was set yet).
+    let mut policy = current.unwrap_or_default();
+    if let Some(v) = keep_last {
+        policy.keep_last = v;
+    }
+    if let Some(v) = keep_daily {
+        policy.keep_daily = v;
+    }
+    if let Some(v) = keep_weekly {
+        policy.keep_weekly = v;
+    }
+    if let Some(v) = keep_monthly {
+        policy.keep_monthly = v;
+    }
+    config.backup.as_mut().unwrap().retention = Some(policy.clone());
+    ryra_core::config::save_config(&paths.config_file, &config)?;
+    println!("{}", style("done:").green().bold());
+    print_retention(Some(&policy));
+    println!(
+        "  Applied after each {} (or now with {}).",
+        style("ryra backup run").cyan(),
+        style("ryra backup forget").cyan()
+    );
     Ok(())
 }
 
