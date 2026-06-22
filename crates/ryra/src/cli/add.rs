@@ -50,6 +50,21 @@ pub enum ExposureRequest {
     Tailscale,
 }
 
+/// How a service's env values get resolved during `ryra add`. Two variants,
+/// so the three real behaviours (walk the user through prompts; skip and use
+/// defaults; a plain headless run) can't combine into an invalid state.
+#[derive(Debug, Clone, Copy)]
+enum Setup {
+    /// Interactive walkthrough: prompt for groups, choices, and prompted /
+    /// required vars.
+    Walkthrough,
+    /// No prompts — values come from defaults plus supplied env (an existing
+    /// `.env`, `--env-file`, process env). `tolerate_missing` distinguishes an
+    /// explicit skip (`true`: install with a notice listing what's unset) from
+    /// a plain headless run (`false`: a missing required var is a hard error).
+    Headless { tolerate_missing: bool },
+}
+
 /// One `ryra add` invocation, typed. Built from clap flags in main, and
 /// by the dependency auto-installs (caddy / authelia / inbucket) here.
 #[derive(Debug, Clone, Default)]
@@ -65,6 +80,16 @@ pub struct AddRequest {
     pub acme: Option<AcmeMode>,
     pub dry_run: bool,
     pub yes: bool,
+    /// Skip the interactive env walkthrough: install with defaults plus any
+    /// supplied env, leaving unset `Required` vars blank in `.env` for the
+    /// operator to fill in. The non-interactive twin of the "Skip setup"
+    /// choice; also auto-applies when a supplied `.env` already covers
+    /// everything.
+    pub no_setup: bool,
+    /// Load `KEY=VALUE` lines from this file as env values for the install
+    /// (declared vars render from them; undeclared keys are written too).
+    /// Bring-your-own config for a single-service `ryra add`.
+    pub env_file: Option<std::path::PathBuf>,
 }
 
 impl AddRequest {
@@ -103,6 +128,8 @@ pub async fn run(request: AddRequest) -> Result<()> {
         acme,
         dry_run,
         yes,
+        no_setup,
+        env_file,
     } = request;
     // Convenience views of the exposure request for the guards and the
     // per-service resolution below. The typed request already rules out
@@ -122,6 +149,20 @@ pub async fn run(request: AddRequest) -> Result<()> {
     if !choose.is_empty() && services.len() > 1 {
         bail!("--choose can only be used when adding a single service");
     }
+    if env_file.is_some() && services.len() > 1 {
+        bail!("--env-file can only be used when adding a single service");
+    }
+    // Parse `--env-file` once, up front (fail fast on an unreadable file). Its
+    // KEY=VALUE lines seed the install's env like process-env vars do, but from
+    // a file — declared vars render from them, undeclared keys are written too.
+    let file_env: BTreeMap<String, String> = match &env_file {
+        Some(path) => {
+            let content = std::fs::read_to_string(path)
+                .map_err(|e| anyhow::anyhow!("--env-file {}: {e}", path.display()))?;
+            parse_env_lines(&content)
+        }
+        None => BTreeMap::new(),
+    };
     // Parse `--choose CHOICE=OPTION` once, up front, so a malformed flag
     // fails before any install work. Names are validated against the
     // service's registered choices per-service below.
@@ -671,8 +712,58 @@ pub async fn run(request: AddRequest) -> Result<()> {
             .any(|e| matches!(e.kind, EnvKind::Prompted | EnvKind::Required));
         let has_groups = !reg_service.def.env_groups.is_empty();
         let has_choices = !reg_service.def.choices.is_empty();
+        let has_promptable = has_promptable_top || has_groups || has_choices;
 
-        if (has_promptable_top || has_groups || has_choices) && interactive {
+        // Resolve how this service's env gets configured. The skip/walkthrough
+        // fork is only offered interactively when there's actually something to
+        // configure; `--no-setup` forces the skip without a prompt.
+        let setup = if no_setup {
+            Setup::Headless {
+                tolerate_missing: true,
+            }
+        } else if interactive && has_promptable {
+            let choice = dialoguer::Select::new()
+                .with_prompt(format!("Configure {service}?"))
+                .items(&[
+                    "Set it up now",
+                    "Skip setup — use defaults, edit .env later",
+                ])
+                .default(0)
+                .interact()?;
+            if choice == 0 {
+                Setup::Walkthrough
+            } else {
+                Setup::Headless {
+                    tolerate_missing: true,
+                }
+            }
+        } else {
+            // Plain headless run (or nothing to configure): a missing required
+            // var is an error, not a skip.
+            Setup::Headless {
+                tolerate_missing: false,
+            }
+        };
+
+        // The service's existing `.env` (a re-add, or a hand-authored
+        // bring-your-own file). The planner merges the render into it rather
+        // than overwriting; we also read its keys so an already-supplied
+        // required var doesn't count as "missing".
+        let existing_env_file: Option<String> =
+            std::fs::read_to_string(ryra_core::service_home(service)?.join(".env")).ok();
+        let existing_keys: BTreeSet<String> = existing_env_file
+            .as_deref()
+            .map(|c| parse_env_lines(c).into_keys().collect())
+            .unwrap_or_default();
+
+        // `--env-file` values are the base: declared vars render from them,
+        // undeclared keys ride along to `.env`. Prompts / process env override.
+        env_overrides.extend(file_env.clone());
+
+        // Required vars left blank under skip-setup, surfaced post-install.
+        let mut unset_required: Vec<String> = Vec::new();
+
+        if matches!(setup, Setup::Walkthrough) {
             // Resolve template variables in defaults so prompts show real values.
             // This context is reused by add_service so the secrets the user saw
             // during prompts match what gets written to .env.
@@ -750,10 +841,9 @@ pub async fn run(request: AddRequest) -> Result<()> {
                 prompt_env(env, &default_ctx, &mut env_overrides)?;
             }
             println!();
-        } else if !interactive {
-            // Non-interactive: read env vars from the process environment.
-            // Required vars must be set; prompted vars use their default but
-            // can be overridden via the environment. Members of groups that
+        } else {
+            // No walkthrough: read env vars from the process environment (on
+            // top of any `--env-file` already seeded). Members of groups that
             // aren't `--enable`d are ignored entirely — they won't be written
             // to `.env`, so missing them is not an error.
             let mut missing_required = Vec::new();
@@ -790,11 +880,25 @@ pub async fn run(request: AddRequest) -> Result<()> {
                     }
                 }
             }
+            // A var already supplied via --env-file or the existing .env is not
+            // missing, even though it isn't in the process environment.
+            missing_required
+                .retain(|k| !env_overrides.contains_key(*k) && !existing_keys.contains(*k));
             if !missing_required.is_empty() {
-                bail!(
-                    "required env vars not provided (run interactively or set via env): {}",
-                    missing_required.join(", ")
-                );
+                match setup {
+                    // Skip-setup: install anyway, blank the unset required vars,
+                    // and list them for the user to fill in afterwards.
+                    Setup::Headless {
+                        tolerate_missing: true,
+                    } => {
+                        unset_required = missing_required.iter().map(|s| s.to_string()).collect();
+                    }
+                    _ => bail!(
+                        "required env vars not provided (run interactively, set via env / --env-file, \
+                         or pass --no-setup to install and fill them in later): {}",
+                        missing_required.join(", ")
+                    ),
+                }
             }
         }
 
@@ -835,6 +939,12 @@ pub async fn run(request: AddRequest) -> Result<()> {
             env: env_overrides.clone(),
             enable_groups: enabled_groups.clone(),
             choose: selected_choices.clone(),
+            allow_unset_required: matches!(
+                setup,
+                Setup::Headless {
+                    tolerate_missing: true
+                }
+            ),
         };
         // One context builder for both the initial attempt and the
         // post-cleanup retry, so the two calls can't drift apart.
@@ -845,6 +955,7 @@ pub async fn run(request: AddRequest) -> Result<()> {
             port_overrides: BTreeMap::new(),
             mode: ryra_core::PlanMode::Add,
             acme: acme_for_service,
+            existing_env: existing_env_file.clone(),
         };
 
         // If a previous add failed partway, clean up before retrying.
@@ -1139,6 +1250,28 @@ pub async fn run(request: AddRequest) -> Result<()> {
             }
             println!("  Config:  {}", home_dir.display());
 
+            // Skip-setup left one or more required vars blank: the service
+            // won't be healthy until they're set, so name them (with their
+            // descriptions) and point at the file + restart command. Loud, not
+            // a hard failure — the deliberate "I'll configure it later" path.
+            if !unset_required.is_empty() {
+                println!();
+                println!(
+                    "  ! Skipped setup — {} required setting(s) still need a value; \
+                     {service} won't be",
+                    unset_required.len()
+                );
+                println!("    healthy until you set them in .env:");
+                for name in &unset_required {
+                    match find_env_prompt(&reg_service.def, name) {
+                        Some(p) => println!("      {name}  ({p})"),
+                        None => println!("      {name}"),
+                    }
+                }
+                println!("    Edit: {}", home_dir.join(".env").display());
+                println!("    Then: systemctl --user restart {service}");
+            }
+
             // Mail-capable service installed without a configured SMTP relay:
             // its email features (account verification, login codes, password
             // resets, notifications) silently won't send. Flag once at install
@@ -1273,6 +1406,43 @@ pub async fn run(request: AddRequest) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse `KEY=VALUE` lines (an `--env-file`) into a map. Blanks, comments,
+/// and lines without `=` are skipped; surrounding whitespace on the key is
+/// trimmed. Mirrors how the on-disk `.env` is read in core, so a file written
+/// by `ryra` round-trips.
+fn parse_env_lines(content: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            out.insert(k.trim().to_string(), v.to_string());
+        }
+    }
+    out
+}
+
+/// The human-readable prompt/description for an env var, searched across the
+/// service's top-level `[[env]]`, group members, and choice-option members.
+/// Used to annotate the skip-setup "fill these in" notice.
+fn find_env_prompt<'a>(
+    def: &'a ryra_core::registry::service_def::ServiceDef,
+    name: &str,
+) -> Option<&'a str> {
+    def.env
+        .iter()
+        .chain(def.env_groups.iter().flat_map(|g| g.env.iter()))
+        .chain(
+            def.choices
+                .iter()
+                .flat_map(|c| c.options.iter().flat_map(|o| o.env.iter())),
+        )
+        .find(|e| e.name == name)
+        .and_then(|e| e.prompt.as_deref())
 }
 
 /// Prompt for a single `prompted`/`required` env var during interactive add.

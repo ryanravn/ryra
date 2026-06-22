@@ -53,6 +53,7 @@ impl From<AddRequest> for p::AddRequest {
             env: r.env,
             enable_groups: r.enable_groups,
             choose: r.choose,
+            allow_unset_required: r.allow_unset_required,
         }
     }
 }

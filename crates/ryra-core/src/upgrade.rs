@@ -316,6 +316,11 @@ async fn replan(service_name: &str) -> Result<Replanned> {
         acme_mode: None,
         mode: PlanMode::Upgrade,
         port_overrides: &port_overrides,
+        // Upgrade preserves the on-disk `.env` via the append-only env_additions
+        // path (it skips this plan's `.env` WriteFile), so it doesn't seed the
+        // merge here; and a re-render never relaxes required-var validation.
+        existing_env_file: None,
+        allow_unset_required: false,
     })?;
 
     let mut planned: BTreeMap<PathBuf, String> = BTreeMap::new();

@@ -50,6 +50,21 @@ pub struct GenerateEnvParams<'a> {
     /// selected option's members are written; absent choices fall back to
     /// their declared `default`.
     pub selected_choices: &'a BTreeMap<String, String>,
+    /// Raw contents of the service's existing on-disk `.env`, when one is
+    /// already present (a re-add, or a hand-authored "bring your own" file).
+    /// The generated env is *merged into* this rather than overwriting it:
+    /// existing lines, comments, and keys the registry doesn't know about are
+    /// preserved; only keys the user set this run (`env_overrides`) are
+    /// updated in place; new declared keys are appended. `None` for a fresh
+    /// install (no file yet) — the generated content is written as-is.
+    pub existing_env_file: Option<&'a str>,
+    /// Skip-setup: render an unset `Required` var that is a member of an
+    /// enabled group / selected choice to an empty value instead of erroring,
+    /// so an install can proceed with the operator filling the blanks in
+    /// `.env` afterwards. `false` keeps the strict default (a missing required
+    /// member is a hard error). A top-level required var renders empty either
+    /// way — it's gated at the CLI prompt layer, not here.
+    pub allow_unset_required: bool,
 }
 
 /// Result of generating env for a service.
@@ -107,18 +122,96 @@ pub fn generate_env(params: GenerateEnvParams<'_>) -> Result<EnvOutput> {
         params.auth_kind,
         params.enabled_groups,
         params.selected_choices,
+        params.allow_unset_required,
     )?;
 
-    // Build .env file content
+    // Ordered KEY=VALUE pairs the registry render produces: declared vars,
+    // ryra's own SERVICE_* lines, CA-trust/extra vars, then any operator keys
+    // the user supplied this run (e.g. via --env-file) that the registry
+    // doesn't declare — so those aren't silently dropped.
     let home_dir = crate::service_home(name)?;
-    let mut env_file = build_env_file(&home_dir, &rendered_env, params.resolved_ports);
+    let generated = build_env_pairs(
+        &home_dir,
+        &rendered_env,
+        params.resolved_ports,
+        &params.extra_env,
+        params.env_overrides,
+    );
 
-    // Append extra env vars (e.g., CA cert trust for OIDC)
-    for (key, value) in &params.extra_env {
-        env_file.content.push_str(&format!("{key}={value}\n"));
-    }
+    // Keys the user set explicitly this run win over what's on disk; every
+    // other existing line (untouched values, comments, undeclared operator
+    // vars) is preserved by the merge.
+    let explicit: BTreeSet<&str> = params.env_overrides.keys().map(String::as_str).collect();
+    let content = merge_env_file(params.existing_env_file, &generated, &explicit);
+    let env_file = GeneratedFile {
+        path: home_dir.join(".env"),
+        content,
+    };
 
     Ok(EnvOutput { env_file, ctx })
+}
+
+/// Merge the registry-rendered env into a service's existing `.env`.
+///
+/// The `.env` carries runtime-rotated secrets and operator-authored keys the
+/// registry never sees, so a re-render must never blindly overwrite it. With
+/// `existing` present (a re-add or a hand-authored file) we walk the file
+/// line by line: comments and blanks pass through verbatim, a key the user set
+/// this run (`explicit`) is updated in place, and every other line is kept as
+/// is. Declared keys absent from the file are appended. With `existing` `None`
+/// (a fresh install, no file yet) the generated content is written as-is.
+fn merge_env_file(
+    existing: Option<&str>,
+    generated: &[(String, String)],
+    explicit: &BTreeSet<&str>,
+) -> String {
+    let render_fresh = || {
+        generated
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    };
+    let Some(existing) = existing else {
+        return render_fresh();
+    };
+    let gen_map: BTreeMap<&str, &str> = generated
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for line in existing.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            out.push(line.to_string());
+            continue;
+        }
+        let Some((raw_key, _)) = line.split_once('=') else {
+            // Not a KEY=VALUE line — preserve verbatim.
+            out.push(line.to_string());
+            continue;
+        };
+        let key = raw_key.trim();
+        seen.insert(key);
+        // Only a key the user set this run replaces its on-disk value; an
+        // untouched key keeps whatever's there (a rotated secret, a manual edit).
+        if explicit.contains(key)
+            && let Some(value) = gen_map.get(key)
+        {
+            out.push(format!("{key}={value}"));
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    // Append declared / SERVICE_* / operator keys the file doesn't have yet.
+    for (key, value) in generated {
+        if !seen.contains(key.as_str()) {
+            out.push(format!("{key}={value}"));
+        }
+    }
+    out.join("\n") + "\n"
 }
 
 /// Insert `service.port_url.<name>` for every declared port — the URL at
@@ -194,38 +287,59 @@ fn insert_port_urls(
     }
 }
 
-/// Build the .env file for a service.
-fn build_env_file(
+/// Ordered KEY=VALUE pairs the registry render produces for a service's `.env`,
+/// before merging with any existing file. Order: declared/group/choice vars,
+/// then ryra's own `SERVICE_*` lines, then CA-trust/extra vars, then any
+/// operator keys the user supplied this run (`--env-file`) that the registry
+/// doesn't declare — so a bring-your-own key isn't silently dropped.
+fn build_env_pairs(
     home_dir: &std::path::Path,
     rendered_env: &[EnvVar],
     resolved_ports: &[(String, u16)],
-) -> GeneratedFile {
-    let mut lines = Vec::new();
+    extra_env: &BTreeMap<String, String>,
+    env_overrides: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
 
     for env in rendered_env {
-        // Write raw KEY=VALUE for podman --env-file. Podman does NOT strip
-        // quotes (single or double), so any shell-style quoting ends up as
-        // literal characters in the container. Tests that source the .env
-        // must stick to values that survive unquoted bash parsing.
-        lines.push(format!("{}={}", env.name, env.value));
+        // Raw KEY=VALUE for podman --env-file. Podman does NOT strip quotes
+        // (single or double), so any shell-style quoting ends up as literal
+        // characters in the container. Tests that source the .env must stick
+        // to values that survive unquoted bash parsing.
+        pairs.push((env.name.clone(), env.value.clone()));
     }
 
-    // Expose service home path so scripts can reference it
-    lines.push(format!("SERVICE_HOME={}", home_dir.display()));
+    // Expose service home path so scripts can reference it.
+    pairs.push(("SERVICE_HOME".to_string(), home_dir.display().to_string()));
 
-    // Expose each [[ports]] entry as SERVICE_PORT_<NAME> with its
-    // resolved host port. The SERVICE_ prefix matches SERVICE_HOME and
-    // makes ryra-emitted vars visually distinct from service-specific
-    // ones (which carry their own naming, e.g. POSTGRES_PASSWORD).
+    // Expose each [[ports]] entry as SERVICE_PORT_<NAME> with its resolved
+    // host port. The SERVICE_ prefix matches SERVICE_HOME and makes
+    // ryra-emitted vars visually distinct from service-specific ones (which
+    // carry their own naming, e.g. POSTGRES_PASSWORD).
     for (name, port) in resolved_ports {
-        let var_name = format!("SERVICE_PORT_{}", name.to_uppercase());
-        lines.push(format!("{var_name}={port}"));
+        pairs.push((
+            format!("SERVICE_PORT_{}", name.to_uppercase()),
+            port.to_string(),
+        ));
     }
 
-    GeneratedFile {
-        path: home_dir.join(".env"),
-        content: lines.join("\n") + "\n",
+    // Extra vars (e.g. CA-cert trust for OIDC).
+    for (key, value) in extra_env {
+        pairs.push((key.clone(), value.clone()));
     }
+
+    // Operator keys the user passed this run (`--env-file`) that none of the
+    // above emitted — undeclared, but explicitly provided, so write them
+    // rather than drop them. (Process-env overrides only ever carry declared
+    // keys, which are already covered above.)
+    let emitted: BTreeSet<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
+    for (key, value) in env_overrides {
+        if !emitted.contains(key.as_str()) {
+            pairs.push((key.clone(), value.clone()));
+        }
+    }
+
+    pairs
 }
 
 // --- Shared helpers ---
@@ -237,11 +351,12 @@ fn render_env_vars(
     auth_kind: Option<&AuthKind>,
     enabled_groups: &BTreeSet<String>,
     selected_choices: &BTreeMap<String, String>,
+    allow_unset_required: bool,
 ) -> Result<Vec<EnvVar>> {
     let mut rendered: Vec<EnvVar> = service_def
         .env
         .iter()
-        .map(|env| render_one(env, env_overrides, ctx, None))
+        .map(|env| render_one(env, env_overrides, ctx, None, allow_unset_required))
         .collect::<Result<Vec<_>>>()?;
 
     // Append members of every enabled `[[env_group]]`. Groups not toggled
@@ -252,7 +367,13 @@ fn render_env_vars(
         }
         let loc = format!("group '{}'", group.name);
         for env in &group.env {
-            rendered.push(render_one(env, env_overrides, ctx, Some(&loc))?);
+            rendered.push(render_one(
+                env,
+                env_overrides,
+                ctx,
+                Some(&loc),
+                allow_unset_required,
+            )?);
         }
     }
 
@@ -269,7 +390,13 @@ fn render_env_vars(
         };
         let loc = format!("choice '{}' option '{}'", choice.name, option.name);
         for env in &option.env {
-            rendered.push(render_one(env, env_overrides, ctx, Some(&loc))?);
+            rendered.push(render_one(
+                env,
+                env_overrides,
+                ctx,
+                Some(&loc),
+                allow_unset_required,
+            )?);
         }
     }
 
@@ -316,7 +443,9 @@ fn render_env_vars(
 
 /// Render a single `EnvVar` — apply an override if present, otherwise run
 /// the template. Required group members without an override are a hard
-/// error so the service never starts with half of a group configured.
+/// error so the service never starts with half of a group configured —
+/// unless `allow_unset_required` (skip-setup), where they render empty for
+/// the operator to fill in afterwards.
 fn render_one(
     env: &EnvVar,
     env_overrides: &BTreeMap<String, String>,
@@ -325,15 +454,17 @@ fn render_one(
     // `"group 'stripe'"` or `"choice 'billing' option 'live'"`. `None` for a
     // top-level var (a required top-level var is caught earlier at prompt time).
     member_of: Option<&str>,
+    allow_unset_required: bool,
 ) -> Result<EnvVar> {
     let value = match env_overrides.get(&env.name) {
         Some(override_value) => override_value.clone(),
         None => {
             if let Some(loc) = member_of
                 && env.kind == EnvKind::Required
+                && !allow_unset_required
             {
                 return Err(Error::Template(format!(
-                    "required env var '{}' in {loc} has no value; provide it via the interactive prompt or process env",
+                    "required env var '{}' in {loc} has no value; provide it via the interactive prompt or process env (or `--no-setup` to install and fill it in later)",
                     env.name
                 )));
             }
@@ -498,6 +629,55 @@ mod tests {
     }
 
     #[test]
+    fn merge_fresh_install_writes_generated_verbatim() {
+        let generated = vec![
+            ("A".to_string(), "1".to_string()),
+            ("B".to_string(), "2".to_string()),
+        ];
+        // No existing file → full overwrite (the original fresh-install behaviour).
+        assert_eq!(
+            merge_env_file(None, &generated, &BTreeSet::new()),
+            "A=1\nB=2\n"
+        );
+    }
+
+    #[test]
+    fn merge_preserves_operator_keys_comments_and_untouched_values() {
+        // A re-add over a file carrying an operator key, a comment, and a
+        // value the user customised — none declared-explicit this run.
+        let existing = "# operator notes\nRYRA_TOKEN=secret-abc\nSITE_TITLE=Custom\n";
+        let generated = vec![
+            ("SITE_TITLE".to_string(), "Default".to_string()),
+            ("ADMIN_EMAIL".to_string(), String::new()),
+            ("SERVICE_HOME".to_string(), "/home/x".to_string()),
+        ];
+        let merged = merge_env_file(Some(existing), &generated, &BTreeSet::new());
+        // Comment + undeclared operator key survive verbatim (the Bug A fix).
+        assert!(merged.contains("# operator notes"));
+        assert!(merged.contains("RYRA_TOKEN=secret-abc"));
+        // A non-explicit existing value is kept, not reset to the default.
+        assert!(merged.contains("SITE_TITLE=Custom"));
+        assert!(!merged.contains("SITE_TITLE=Default"));
+        // New declared keys are appended.
+        assert!(merged.contains("ADMIN_EMAIL="));
+        assert!(merged.contains("SERVICE_HOME=/home/x"));
+    }
+
+    #[test]
+    fn merge_updates_only_explicitly_set_keys() {
+        let existing = "SITE_TITLE=Old\nKEEP=stays\n";
+        let generated = vec![
+            ("SITE_TITLE".to_string(), "New".to_string()),
+            ("KEEP".to_string(), "regenerated".to_string()),
+        ];
+        let explicit = BTreeSet::from(["SITE_TITLE"]);
+        let merged = merge_env_file(Some(existing), &generated, &explicit);
+        assert!(merged.contains("SITE_TITLE=New")); // explicit → updated in place
+        assert!(merged.contains("KEEP=stays")); // untouched → preserved
+        assert!(!merged.contains("KEEP=regenerated"));
+    }
+
+    #[test]
     fn port_url_loopback_uses_host_ports() {
         // No --url: primary == external_url (localhost), others at 127.0.0.1:<port>.
         let ctx = port_urls(None, "http://127.0.0.1:8080");
@@ -548,6 +728,8 @@ mod tests {
             enable_smtp: false,
             enabled_groups,
             selected_choices: &BTreeMap::new(),
+            existing_env_file: None,
+            allow_unset_required: false,
         })?;
         Ok(output.env_file.content)
     }
@@ -572,6 +754,8 @@ mod tests {
             enable_smtp: false,
             enabled_groups: &BTreeSet::new(),
             selected_choices: selected,
+            existing_env_file: None,
+            allow_unset_required: false,
         })?;
         Ok(output.env_file.content)
     }
@@ -799,6 +983,8 @@ kind = "required"
             enable_smtp: false,
             enabled_groups: &no_groups,
             selected_choices: &BTreeMap::new(),
+            existing_env_file: None,
+            allow_unset_required: false,
         })
         .expect("generate_env must succeed with the real host_port");
 

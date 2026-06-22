@@ -476,6 +476,16 @@ pub struct AddServiceParams<'a> {
     /// say they're taken (the running service holds them) and the
     /// allocator would skip to the next free one.
     pub port_overrides: &'a BTreeMap<String, u16>,
+    /// Raw contents of the service's existing on-disk `.env`, when present.
+    /// The rendered env merges into it (preserving operator keys, comments,
+    /// and rotated secrets) instead of overwriting — see [`generate::generate_env`].
+    /// `None` for a fresh install with no file yet. The frontend reads the
+    /// file so planning stays free of system probes.
+    pub existing_env_file: Option<String>,
+    /// Skip-setup: install even when a `Required` group/choice member has no
+    /// value, rendering it empty for the operator to fill in later, rather
+    /// than erroring. `false` is the strict default.
+    pub allow_unset_required: bool,
 }
 
 /// Build the Caddy site-block + reload steps for a service exposed at `url`,
@@ -555,6 +565,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         acme_mode,
         mode,
         port_overrides,
+        existing_env_file,
+        allow_unset_required,
     } = params;
     // Derived views of the typed inputs, bound once for the many body
     // sites that only need one facet. Helpers that need the full picture
@@ -887,6 +899,8 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
         enable_smtp: has_smtp,
         enabled_groups,
         selected_choices,
+        existing_env_file: existing_env_file.as_deref(),
+        allow_unset_required,
     })?;
 
     let podman_args: Vec<String> = Vec::new();
@@ -2975,6 +2989,8 @@ mod tests {
             acme_mode: None,
             mode: PlanMode::Add,
             port_overrides: &empty_ports,
+            existing_env_file: None,
+            allow_unset_required: false,
         })
         .expect("plan add")
     }

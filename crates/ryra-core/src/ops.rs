@@ -80,6 +80,12 @@ pub struct AddRequest {
     /// out fall back to their declared `default`.
     #[serde(default)]
     pub choose: BTreeMap<String, String>,
+    /// Skip-setup: proceed even when a `Required` var has no value, leaving it
+    /// blank in `.env` for the operator to fill in afterwards, rather than
+    /// erroring. The CLI sets this from `--no-setup` / the "Skip setup" choice;
+    /// the strict default (`false`) still fails loudly on a missing required.
+    #[serde(default)]
+    pub allow_unset_required: bool,
 }
 
 impl AddRequest {
@@ -94,6 +100,7 @@ impl AddRequest {
             env: BTreeMap::new(),
             enable_groups: BTreeSet::new(),
             choose: BTreeMap::new(),
+            allow_unset_required: false,
         }
     }
 }
@@ -164,6 +171,12 @@ pub struct PlanContext<'a> {
     /// than in [`AddRequest`] until `AcmeMode` grows serde support;
     /// only the CLI exposes it today.
     pub acme: Option<&'a crate::caddy::AcmeMode>,
+    /// Raw contents of the service's existing on-disk `.env`, read by the
+    /// frontend so the planner can merge the render into it (preserving
+    /// operator keys + rotated secrets) instead of overwriting. `None` for a
+    /// fresh install with no file yet. A system read core won't own itself,
+    /// so it rides here alongside `port_in_use`.
+    pub existing_env: Option<String>,
 }
 
 impl<'a> PlanContext<'a> {
@@ -175,6 +188,7 @@ impl<'a> PlanContext<'a> {
             port_overrides: BTreeMap::new(),
             mode: PlanMode::Add,
             acme: None,
+            existing_env: None,
         }
     }
 }
@@ -354,6 +368,8 @@ pub async fn plan_add(req: &AddRequest, ctx: PlanContext<'_>) -> Result<PlannedA
         acme_mode: ctx.acme,
         mode: ctx.mode,
         port_overrides: &ctx.port_overrides,
+        existing_env_file: ctx.existing_env,
+        allow_unset_required: req.allow_unset_required,
     })?;
 
     Ok(PlannedAdd {

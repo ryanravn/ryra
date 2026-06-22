@@ -71,6 +71,10 @@ pub struct AddRequest {
     /// `[[choice]]` selections (`choice -> option`); unset choices use defaults.
     #[serde(default)]
     pub choose: BTreeMap<String, String>,
+    /// Skip-setup: install even when a `Required` var has no value (left blank
+    /// in `.env` for the operator to fill in later) rather than erroring.
+    #[serde(default)]
+    pub allow_unset_required: bool,
 }
 
 impl AddRequest {
@@ -85,6 +89,7 @@ impl AddRequest {
             env: BTreeMap::new(),
             enable_groups: BTreeSet::new(),
             choose: BTreeMap::new(),
+            allow_unset_required: false,
         }
     }
 }

@@ -100,6 +100,17 @@ enum Command {
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Skip the env walkthrough: install with defaults plus any supplied
+        /// env, leaving unset required vars blank in `.env` for you to fill in
+        /// later (then `systemctl --user restart <service>`). Interactively,
+        /// the same choice is offered as a prompt.
+        #[arg(long)]
+        no_setup: bool,
+        /// Load env values from a `KEY=VALUE` file (like setting them in the
+        /// process env, but from a file). Bring-your-own config; single-service
+        /// installs only.
+        #[arg(long, value_name = "PATH")]
+        env_file: Option<std::path::PathBuf>,
     },
     /// Remove a service
     Remove {
@@ -481,6 +492,8 @@ async fn main() -> anyhow::Result<()> {
             tls_key,
             yes,
             dry_run,
+            no_setup,
+            env_file,
         } => {
             // Map clap's raw flags to typed values at the CLI boundary so
             // every interior call site pattern-matches exhaustive enums
@@ -520,6 +533,8 @@ async fn main() -> anyhow::Result<()> {
                 acme: acme_mode,
                 dry_run,
                 yes,
+                no_setup,
+                env_file,
             })
             .await?
         }

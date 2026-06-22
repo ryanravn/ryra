@@ -343,6 +343,10 @@ pub async fn reconcile_service(service_name: &str) -> Result<ServiceReconcile> {
         acme_mode: None,
         mode: PlanMode::Upgrade,
         port_overrides: &port_overrides,
+        // `ryra config` re-renders the full `.env` and reconciles it against
+        // what's on disk itself, so it doesn't use the planner's merge.
+        existing_env_file: None,
+        allow_unset_required: false,
     })?;
 
     let rendered_content = result
@@ -671,6 +675,10 @@ pub async fn configure_service(
         acme_mode: None,
         mode: PlanMode::Upgrade,
         port_overrides: &port_overrides,
+        // `ryra config` re-renders the full `.env` and reconciles it against
+        // what's on disk itself, so it doesn't use the planner's merge.
+        existing_env_file: None,
+        allow_unset_required: false,
     })?;
 
     let diff = build_diff(service_name, &result)?;
