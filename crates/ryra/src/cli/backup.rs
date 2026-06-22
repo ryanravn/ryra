@@ -126,15 +126,16 @@ pub enum BackupAction {
         #[arg(long)]
         off: bool,
     },
-    /// Prune scheduled (daily/weekly) snapshots to their keep-counts now. Manual
-    /// snapshots are never pruned. Runs automatically after each scheduled
-    /// backup; use this on demand or to preview with `--dry-run`.
-    Forget {
-        /// Service name(s). Omit to sweep every enrolled install.
-        services: Vec<String>,
-        /// Show what would be removed without deleting anything.
-        #[arg(long)]
-        dry_run: bool,
+    /// Permanently delete one backup by its id (the ID column in
+    /// `ryra backup list`). Confirms first unless `-y`. Scheduled (daily/weekly)
+    /// backups are auto-pruned to their keep-counts after each run, so this is
+    /// for removing a specific snapshot on demand -- including manual ones.
+    Delete {
+        /// Snapshot id from `ryra backup list`.
+        id: String,
+        /// Skip the confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -331,7 +332,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
             at,
             off,
         } => schedule(cadence, keep, at, off).await,
-        BackupAction::Forget { services, dry_run } => forget(services, dry_run).await,
+        BackupAction::Delete { id, yes } => delete(id, yes).await,
     }
 }
 
@@ -779,49 +780,52 @@ pub(crate) async fn run_backup(services: Vec<String>, mode: BackupMode) -> Resul
     Ok(())
 }
 
-/// Prune the scheduled (daily + weekly) snapshots to their keep-counts. Manual
-/// snapshots are never pruned. `--dry-run` previews removals.
-async fn forget(services: Vec<String>, dry_run: bool) -> Result<()> {
+/// Permanently delete one snapshot by id (`restic forget <id> --prune`). Asks
+/// to confirm first unless `yes`. The id uniquely identifies the snapshot, so
+/// no service/mode is needed.
+async fn delete(id: String, yes: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
-    if config.backup.is_none() {
+    let Some(settings) = config.backup.as_ref() else {
         bail!(
             "no backup repository configured: run `{}` first",
             style("ryra backup config").cyan()
         );
-    }
-    let targets = if services.is_empty() {
-        list_backup_enabled()?
-    } else {
-        services
     };
-    if targets.is_empty() {
-        println!("No services have backups enabled.");
-        return Ok(());
+    // Managed resolves to short-lived vended creds (as a run/restore does).
+    let mut settings = settings.clone();
+    if matches!(settings.backend, BackupBackend::Managed) {
+        settings.backend = ryra_core::system::account::resolve_managed_backend()?;
     }
-    // Nothing scheduled -> nothing to prune (manual is unlimited).
-    if mode_keep(&config, BackupMode::Daily).is_none()
-        && mode_keep(&config, BackupMode::Weekly).is_none()
+
+    if !yes
+        && !Confirm::new()
+            .with_prompt(format!(
+                "Permanently delete backup {}? This can't be undone",
+                style(&id).cyan()
+            ))
+            .default(false)
+            .interact()?
     {
-        println!(
-            "{} no daily/weekly schedule set — manual backups are kept forever. \
-             Set one with `{}`.",
-            style("nothing to prune:").dim(),
-            style("ryra backup schedule daily --keep N").cyan()
-        );
+        println!("Cancelled.");
         return Ok(());
     }
-    let mut ok = true;
-    for svc in &targets {
-        for mode in [BackupMode::Daily, BackupMode::Weekly] {
-            if let Some(keep) = mode_keep(&config, mode) {
-                ok &= prune_one(&config, svc, mode, keep, dry_run);
-            }
-        }
+
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("forget")
+        .arg(&id)
+        .arg("--prune")
+        .arg("--repo")
+        .arg(settings.backend.restic_repo())
+        .env("RESTIC_PASSWORD", &settings.password);
+    for (k, v) in settings.backend.env() {
+        cmd.env(k, v);
     }
-    if !ok {
-        bail!("one or more prunes failed");
+    let status = cmd.status().context("spawning `restic forget`")?;
+    if !status.success() {
+        bail!("restic couldn't delete {id}");
     }
+    println!("{} deleted backup {id}.", style("done:").green().bold());
     Ok(())
 }
 
@@ -876,6 +880,20 @@ async fn restore(service: String, at: Option<String>, force: bool) -> Result<()>
 
     if !force {
         check_version_match(&plan, &repo_dir).await?;
+        // Restoring overwrites the service's live data, so confirm first.
+        if super::is_interactive()
+            && !Confirm::new()
+                .with_prompt(format!(
+                    "Restore {} from snapshot {}? This overwrites its current data",
+                    style(&plan.service_name).cyan(),
+                    style(&plan.snapshot).cyan()
+                ))
+                .default(false)
+                .interact()?
+        {
+            println!("Cancelled.");
+            return Ok(());
+        }
     }
 
     println!(
