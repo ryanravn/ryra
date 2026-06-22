@@ -431,17 +431,48 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
         style(resolved.backend.restic_repo()).dim()
     );
 
-    // Offer to install a daily systemd timer. Default `no` because
-    // not every user wants their first action after configure to be
-    // a background scheduled job, but the prompt makes the
-    // typical-case answer one keypress away.
+    // Offer an automatic schedule -- a cadence menu, not just daily, since
+    // weekly/hourly are common asks. (Set it later with `ryra backup schedule`.)
     if interactive && !args.yes && read_schedule_state().is_none() {
+        println!("\n  Automatic backups:");
+        println!("  1. Daily      (03:00)");
+        println!("  2. Weekly     (Sunday 03:00)");
+        println!("  3. Hourly");
+        println!("  4. No schedule");
+        let choice: u32 = Input::new()
+            .with_prompt("Choose")
+            .default(1)
+            .interact_text()?;
+        match choice {
+            1 => schedule(ScheduleInterval::Daily).await?,
+            2 => schedule(ScheduleInterval::Weekly).await?,
+            3 => schedule(ScheduleInterval::Hourly).await?,
+            _ => {}
+        }
+    }
+
+    // Offer a retention ladder so snapshots don't grow forever. Skipped when one
+    // is already set (e.g. retrying an existing repo). Tune with the dedicated
+    // `ryra backup retention` command.
+    if interactive
+        && !args.yes
+        && config
+            .backup
+            .as_ref()
+            .and_then(|b| b.retention.as_ref())
+            .is_none()
+    {
         let want = Confirm::new()
-            .with_prompt("Schedule daily backups at 03:00?")
-            .default(false)
+            .with_prompt("Prune old backups automatically? (keep 7 daily, 4 weekly, 6 monthly)")
+            .default(true)
             .interact()?;
         if want {
-            schedule(ScheduleInterval::Daily).await?;
+            if let Some(b) = config.backup.as_mut() {
+                b.retention = Some(RetentionPolicy::default());
+            }
+            ryra_core::config::save_config(&paths.config_file, &config)?;
+            print_retention(config.backup.as_ref().and_then(|b| b.retention.as_ref()));
+            println!("  Tune it anytime with `ryra backup retention`.");
         }
     }
 
