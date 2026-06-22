@@ -618,14 +618,17 @@ async fn run_backup(services: Vec<String>) -> Result<()> {
                 // prune failure must not fail the backup that just succeeded,
                 // and "no policy configured" is a silent no-op (keep forever).
                 match plan_backup_forget(svc, &config, false) {
-                    Ok(Some(plan)) => {
-                        if let Err(e) = restic_forget(&plan) {
-                            eprintln!(
-                                "{} {svc}: retention prune failed: {e:#}",
-                                style("warning:").yellow()
-                            );
-                        }
-                    }
+                    Ok(Some(plan)) => match restic_forget(&plan) {
+                        Ok((_, removed)) if removed > 0 => println!(
+                            "  {} pruned {removed} old snapshot(s)",
+                            style("retention:").dim()
+                        ),
+                        Ok(_) => {}
+                        Err(e) => eprintln!(
+                            "{} {svc}: retention prune failed: {e:#}",
+                            style("warning:").yellow()
+                        ),
+                    },
                     Ok(None) => {}
                     Err(e) => eprintln!(
                         "{} {svc}: retention skipped: {e:#}",
@@ -670,19 +673,17 @@ async fn forget(services: Vec<String>, dry_run: bool) -> Result<()> {
     let mut any_failed = false;
     for svc in &targets {
         match plan_backup_forget(svc, &config, dry_run) {
-            Ok(Some(plan)) => {
-                println!(
-                    "\n{} {svc}{}",
-                    style(if dry_run { "would prune:" } else { "pruning:" })
-                        .cyan()
-                        .bold(),
-                    if dry_run { " (dry run)" } else { "" }
-                );
-                if let Err(e) = restic_forget(&plan) {
+            Ok(Some(plan)) => match restic_forget(&plan) {
+                Ok((kept, removed)) => println!(
+                    "{} {svc}: {removed} removed, {kept} kept{}",
+                    style("pruned:").cyan().bold(),
+                    if dry_run { " (dry run -- nothing deleted)" } else { "" }
+                ),
+                Err(e) => {
                     eprintln!("{} {svc}: {e:#}", style("forget failed:").red().bold());
                     any_failed = true;
                 }
-            }
+            },
             Ok(None) => println!(
                 "{} {svc}: no retention policy set (keeping all snapshots)",
                 style("skip:").dim()

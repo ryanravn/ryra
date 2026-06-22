@@ -152,6 +152,9 @@ async fn dispatch(req: Request) -> OpResult {
             configure_backup(backend, password)?;
             backup_status().map(Response::BackupStatus)
         }
+        Request::ForgetBackups { service, dry_run } => {
+            forget_backups(service, dry_run).map(Response::Forget)
+        }
         Request::SetBackupEnrolled { service, enabled } => {
             set_backup_enrolled(&service, enabled)?;
             Ok(Response::Done)
@@ -742,7 +745,65 @@ fn backup_status() -> std::result::Result<BackupStatusView, RpcError> {
         configured: cfg.backup.is_some(),
         backend_label: cfg.backup.as_ref().map(|s| backend_label(&s.backend)),
         enrolled,
+        retention: cfg
+            .backup
+            .as_ref()
+            .and_then(|s| s.retention.as_ref())
+            .map(|r| ryra_protocol::RetentionView {
+                keep_last: r.keep_last,
+                keep_daily: r.keep_daily,
+                keep_weekly: r.keep_weekly,
+                keep_monthly: r.keep_monthly,
+            }),
     })
+}
+
+/// Prune snapshots to the configured retention ladder, per service. Resolves a
+/// managed backend to vended S3 creds first (same as a backup run). Services
+/// with no policy come back as a zero-effect entry. Returns `(kept, removed)`
+/// counts per service.
+fn forget_backups(
+    service: Option<String>,
+    dry_run: bool,
+) -> std::result::Result<Vec<ryra_protocol::ForgetView>, RpcError> {
+    use ryra_core::config::schema::BackupBackend;
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let mut cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let Some(mut settings) = cfg.backup.clone() else {
+        return Ok(Vec::new());
+    };
+    // Managed resolves to short-lived vended S3 creds (and verifies a logged-in
+    // account with an active plan), exactly as a backup run does.
+    if matches!(settings.backend, BackupBackend::Managed) {
+        settings.backend = ryra_core::system::account::resolve_managed_backend().map_err(core_err)?;
+    }
+    cfg.backup = Some(settings);
+    let targets = match service {
+        Some(s) => vec![s],
+        None => ryra_core::backup::list_backup_enabled().map_err(core_err)?,
+    };
+    let mut out = Vec::new();
+    for svc in targets {
+        match ryra_core::backup::plan_backup_forget(&svc, &cfg, dry_run).map_err(core_err)? {
+            Some(plan) => {
+                let (kept, removed) =
+                    ryra_core::backup::restic_forget(&plan).map_err(core_err)?;
+                out.push(ryra_protocol::ForgetView {
+                    service: svc,
+                    kept,
+                    removed,
+                    dry_run,
+                });
+            }
+            None => out.push(ryra_protocol::ForgetView {
+                service: svc,
+                kept: 0,
+                removed: 0,
+                dry_run,
+            }),
+        }
+    }
+    Ok(out)
 }
 
 /// `restic init`, treating an already-initialised repo as success.

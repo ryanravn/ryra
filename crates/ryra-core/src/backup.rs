@@ -524,11 +524,14 @@ pub fn restic_restore(plan: &BackupRestorePlan) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Execute a planned retention sweep. Filters to the service's
-/// `service:<name>` tag so the keep rules apply only to that service's
-/// snapshots; `--prune` reclaims space afterward (skipped in a dry run, which
-/// only prints what would be removed).
-pub fn restic_forget(plan: &BackupForgetPlan) -> anyhow::Result<()> {
+/// Execute a planned retention sweep, returning `(kept, removed)` snapshot
+/// counts. Runs `restic forget --json` filtered to the service's
+/// `service:<name>` tag (so keep rules apply only to that service), parses the
+/// keep/remove decision, then runs `restic prune` SEPARATELY to reclaim space
+/// (real runs only, when something was actually removed). Splitting prune out
+/// keeps the `--json` output clean to parse. In a dry run nothing is deleted
+/// and `removed` is the count that WOULD be removed.
+pub fn restic_forget(plan: &BackupForgetPlan) -> anyhow::Result<(u32, u32)> {
     use anyhow::{Context, bail};
     let mut cmd = std::process::Command::new("restic");
     cmd.arg("forget")
@@ -536,6 +539,7 @@ pub fn restic_forget(plan: &BackupForgetPlan) -> anyhow::Result<()> {
         .arg(&plan.repo)
         .arg("--tag")
         .arg(&plan.tag)
+        .arg("--json")
         .env("RESTIC_PASSWORD", &plan.password);
     for (k, v) in &plan.env {
         cmd.env(k, v);
@@ -545,16 +549,51 @@ pub fn restic_forget(plan: &BackupForgetPlan) -> anyhow::Result<()> {
     }
     if plan.dry_run {
         cmd.arg("--dry-run");
-    } else if plan.prune {
-        cmd.arg("--prune");
     }
-    let status = cmd
-        .status()
+    let output = cmd
+        .output()
         .with_context(|| format!("spawning `restic forget` for {}", plan.service_name))?;
-    if !status.success() {
-        bail!("restic forget exited with {}", status.code().unwrap_or(-1));
+    if !output.status.success() {
+        bail!(
+            "restic forget exited with {}: {}",
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
-    Ok(())
+    // `restic forget --json` is an array of groups, each with a `keep` list and
+    // a `remove` list (the latter null/absent when nothing is dropped).
+    #[derive(serde::Deserialize)]
+    struct ForgetGroup {
+        #[serde(default)]
+        keep: Vec<serde_json::Value>,
+        #[serde(default)]
+        remove: Option<Vec<serde_json::Value>>,
+    }
+    let groups: Vec<ForgetGroup> = serde_json::from_slice(&output.stdout).unwrap_or_default();
+    let kept: u32 = groups.iter().map(|g| g.keep.len() as u32).sum();
+    let removed: u32 = groups
+        .iter()
+        .map(|g| g.remove.as_ref().map_or(0, Vec::len) as u32)
+        .sum();
+    // Reclaim space, but only for a real run that actually dropped snapshots.
+    if !plan.dry_run && plan.prune && removed > 0 {
+        let mut prune = std::process::Command::new("restic");
+        prune
+            .arg("prune")
+            .arg("--repo")
+            .arg(&plan.repo)
+            .env("RESTIC_PASSWORD", &plan.password);
+        for (k, v) in &plan.env {
+            prune.env(k, v);
+        }
+        let status = prune
+            .status()
+            .with_context(|| format!("spawning `restic prune` for {}", plan.service_name))?;
+        if !status.success() {
+            bail!("restic prune exited with {}", status.code().unwrap_or(-1));
+        }
+    }
+    Ok((kept, removed))
 }
 
 /// KEY=VALUE lines from a `.env` file; malformed lines are skipped the

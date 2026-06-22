@@ -235,6 +235,16 @@ pub enum Request {
     },
     /// Opt a service in or out of backups.
     SetBackupEnrolled { service: String, enabled: bool },
+    /// Prune snapshots to the configured retention ladder (`restic forget`,
+    /// then prune). `None` service = every enrolled service; `dry_run` previews
+    /// what would be removed without deleting. A no-op for a service with no
+    /// retention policy.
+    ForgetBackups {
+        #[serde(default)]
+        service: Option<String>,
+        #[serde(default)]
+        dry_run: bool,
+    },
     /// The installable env/group/choice schema for a registry service
     /// (default registry if `registry` is unset).
     ServiceDef {
@@ -328,6 +338,32 @@ pub struct BackupStatusView {
     pub backend_label: Option<String>,
     /// Services enrolled in backups (`metadata.backup_enabled`).
     pub enrolled: Vec<String>,
+    /// The configured retention ladder, when one is set. `None` = keep every
+    /// snapshot forever (no `restic forget` runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention: Option<RetentionView>,
+}
+
+/// The configured retention ladder (mirrors the engine's `RetentionPolicy`):
+/// how many snapshots to keep at each cadence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionView {
+    pub keep_last: u32,
+    pub keep_daily: u32,
+    pub keep_weekly: u32,
+    pub keep_monthly: u32,
+}
+
+/// Per-service result of a retention sweep (`ForgetBackups`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgetView {
+    pub service: String,
+    /// Snapshots kept after the sweep.
+    pub kept: u32,
+    /// Snapshots removed (in a dry run, the count that WOULD be removed).
+    pub removed: u32,
+    /// True when this was a preview (`--dry-run`); nothing was deleted.
+    pub dry_run: bool,
 }
 
 /// One env key a reconcile would change in a service's `.env`.
@@ -677,6 +713,8 @@ pub enum Response {
     Snapshots(Vec<SnapshotView>),
     /// `backup_status`.
     BackupStatus(BackupStatusView),
+    /// `forget_backups` — per-service retention sweep results.
+    Forget(Vec<ForgetView>),
     /// `service_def`.
     ServiceDef(ServiceDefView),
     /// `configure_view`.

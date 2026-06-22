@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use ryra_core::backup::{plan_backup_restore, plan_backup_run};
-use ryra_core::config::schema::{BackupBackend, BackupSettings, Config};
+use ryra_core::backup::{plan_backup_forget, plan_backup_restore, plan_backup_run, restic_forget};
+use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, RetentionPolicy};
 
 /// Tests in this file all mutate process-global env vars (`HOME`,
 /// `XDG_*`) so they can't safely run in parallel. cargo test defaults
@@ -279,4 +279,63 @@ fn extract_manifest_sha(tags: &[String]) -> String {
         .find_map(|t| t.strip_prefix("manifest_sha:"))
         .expect("snapshot must carry manifest_sha tag")
         .to_string()
+}
+
+#[test]
+fn retention_forget_prunes_to_keep_last() {
+    let _guard = env_lock();
+    if !restic_available() {
+        eprintln!("skipping: restic not on PATH");
+        return;
+    }
+    let service = "demo-retention";
+    let mut sandbox = Sandbox::new(service);
+    sandbox.install(service);
+    sandbox.write_data_file("data/f.txt", "v1");
+    sandbox.init_restic();
+    // Keep only the single most recent snapshot.
+    sandbox.config.backup.as_mut().unwrap().retention = Some(RetentionPolicy {
+        keep_last: 1,
+        keep_daily: 0,
+        keep_weekly: 0,
+        keep_monthly: 0,
+    });
+
+    // Three distinct snapshots.
+    restic_backup_one(&sandbox, service);
+    sandbox.write_data_file("data/f.txt", "v2");
+    restic_backup_one(&sandbox, service);
+    sandbox.write_data_file("data/f.txt", "v3");
+    restic_backup_one(&sandbox, service);
+
+    // Real sweep: keep 1, remove the other 2 (then prune).
+    let plan = plan_backup_forget(service, &sandbox.config, false)
+        .expect("plan forget")
+        .expect("retention policy present");
+    let (kept, removed) = restic_forget(&plan).expect("restic forget");
+    assert_eq!(kept, 1, "keep-last 1 should keep exactly one snapshot");
+    assert_eq!(removed, 2, "the other two should be removed");
+
+    // A dry run on the now-pruned repo previews zero removals and deletes nothing.
+    let dry = plan_backup_forget(service, &sandbox.config, true)
+        .expect("plan dry-run forget")
+        .expect("retention policy present");
+    let (kept2, removed2) = restic_forget(&dry).expect("restic forget dry-run");
+    assert_eq!(kept2, 1);
+    assert_eq!(removed2, 0, "nothing left to prune");
+}
+
+#[test]
+fn forget_is_none_without_a_policy() {
+    // Pure planner check (no restic needed): absent policy => Ok(None).
+    let _guard = env_lock();
+    let service = "demo-noretention";
+    let sandbox = Sandbox::new(service);
+    sandbox.install(service);
+    assert!(
+        plan_backup_forget(service, &sandbox.config, false)
+            .expect("plan")
+            .is_none(),
+        "no retention configured should plan to a no-op (None)"
+    );
 }
