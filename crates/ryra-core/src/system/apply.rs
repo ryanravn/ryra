@@ -106,35 +106,71 @@ async fn execute(step: &Step) -> Result<()> {
         }),
         Step::ReloadCaddy => {
             println!("  Reloading Caddy config...");
-            // Wait for Caddy container to be running before reload
-            for _ in 0..10 {
-                if Command::new("podman")
-                    .args(["exec", "caddy", "true"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
+            // Detect Caddy via `podman ps` rather than `podman exec ... true`:
+            // exec has to join the container's cgroup and fails (exit 126) when
+            // Caddy was started by systemd --user but this process's podman
+            // falls back to the cgroupfs manager (no user dbus session). `ps`
+            // works regardless, so we don't mistake a running Caddy for a dead
+            // one and skip the reload.
+            let caddy_running = || {
+                Command::new("podman")
+                    .args([
+                        "ps",
+                        "--filter",
+                        "name=^caddy$",
+                        "--filter",
+                        "status=running",
+                        "--format",
+                        "{{.Names}}",
+                    ])
+                    .output()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .any(|l| l.trim() == "caddy")
+                    })
                     .unwrap_or(false)
-                {
-                    return run_cmd(
-                        "podman",
-                        &[
-                            "exec",
-                            "caddy",
-                            "caddy",
-                            "reload",
-                            "--config",
-                            "/etc/caddy/Caddyfile",
-                            "--adapter",
-                            "caddyfile",
-                        ],
-                    );
+            };
+            // Give it a moment to come up (first-install / restart races).
+            let mut up = false;
+            for _ in 0..10 {
+                if caddy_running() {
+                    up = true;
+                    break;
                 }
                 std::thread::sleep(std::time::Duration::from_secs(1));
             }
-            // Caddy not running — skip reload (will pick up config on next start)
-            println!("    Caddy not running, skipping reload");
-            Ok(())
+            if !up {
+                // Genuinely not up yet — it loads the current config on its next
+                // start, so skipping here is safe.
+                println!("    Caddy not running, skipping reload");
+                return Ok(());
+            }
+            // Prefer a graceful in-place reload (zero downtime). If that fails
+            // (the exit-126 cgroup case above), fall back to restarting the unit
+            // so the new config is still applied. NEVER silently skip while
+            // Caddy is running: a missed reload during a blue/green cutover
+            // strands traffic on the now-stopped old upstream.
+            if run_cmd(
+                "podman",
+                &[
+                    "exec",
+                    "caddy",
+                    "caddy",
+                    "reload",
+                    "--config",
+                    "/etc/caddy/Caddyfile",
+                    "--adapter",
+                    "caddyfile",
+                ],
+            )
+            .is_ok()
+            {
+                return Ok(());
+            }
+            println!("    graceful reload unavailable; restarting the caddy unit");
+            run_cmd("systemctl", &["--user", "restart", "caddy.service"])
+                .context("caddy reload failed and the caddy unit restart fallback also failed")
         }
         Step::PullImage { image } => {
             // Skip if already available — check both the local store and
