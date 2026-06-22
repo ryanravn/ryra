@@ -235,6 +235,11 @@ pub enum Request {
     },
     /// Opt a service in or out of backups.
     SetBackupEnrolled { service: String, enabled: bool },
+    /// Store an account token in the box's credentials file -- the structured
+    /// equivalent of `ryra account login --with-token`. The control plane uses
+    /// this to sign a managed box into its account for backups, over rpc rather
+    /// than an ad-hoc SSH file write. The engine owns the path/format/perms.
+    AccountLogin { token: String },
     /// Prune snapshots to the configured retention ladder (`restic forget`,
     /// then prune). `None` service = every enrolled service; `dry_run` previews
     /// what would be removed without deleting. A no-op for a service with no

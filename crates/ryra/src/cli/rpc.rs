@@ -152,6 +152,13 @@ async fn dispatch(req: Request) -> OpResult {
             configure_backup(backend, password)?;
             backup_status().map(Response::BackupStatus)
         }
+        Request::AccountLogin { token } => {
+            ryra_core::system::account::save_credentials(
+                &ryra_core::system::account::Credentials { token },
+            )
+            .map_err(core_err)?;
+            Ok(Response::Done)
+        }
         Request::ForgetBackups { service, dry_run } => {
             forget_backups(service, dry_run).map(Response::Forget)
         }
