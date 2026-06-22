@@ -187,6 +187,10 @@ async fn dispatch(req: Request) -> OpResult {
             delete_snapshot(&id)?;
             Ok(Response::Done)
         }
+        Request::DisconnectBackup => {
+            disconnect_backup().await?;
+            Ok(Response::Done)
+        }
         Request::SetBackupEnrolled { service, enabled } => {
             set_backup_enrolled(&service, enabled)?;
             Ok(Response::Done)
@@ -733,6 +737,20 @@ fn delete_snapshot(id: &str) -> std::result::Result<(), RpcError> {
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
+    Ok(())
+}
+
+/// Disconnect backups: drop `[backup]` and remove the schedule timers. Existing
+/// snapshots in the bucket are left untouched.
+async fn disconnect_backup() -> std::result::Result<(), RpcError> {
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    config.backup = None;
+    ryra_core::config::save_config(&paths.config_file, &config).map_err(core_err)?;
+    // No backup config -> apply_schedule removes the daily/weekly timers.
+    super::backup::apply_schedule(&config)
+        .await
+        .map_err(core_err)?;
     Ok(())
 }
 

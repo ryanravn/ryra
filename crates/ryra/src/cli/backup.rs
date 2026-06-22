@@ -133,6 +133,14 @@ pub enum BackupAction {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Disconnect backups: stop backing up + remove the schedule. Existing
+    /// snapshots stay in the bucket; reconnecting to the same backend + password
+    /// picks them back up. Confirms unless `-y`.
+    Disconnect {
+        /// Skip the confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -326,6 +334,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
             off,
         } => schedule(cadence, keep, at, off).await,
         BackupAction::Delete { id, yes } => delete(id, yes).await,
+        BackupAction::Disconnect { yes } => disconnect(yes).await,
     }
 }
 
@@ -819,6 +828,41 @@ async fn delete(id: String, yes: bool) -> Result<()> {
         bail!("restic couldn't delete {id}");
     }
     println!("{} deleted backup {id}.", style("done:").green().bold());
+    Ok(())
+}
+
+/// Disconnect backups: clear `[backup]` + remove the schedule timers. Existing
+/// snapshots in the bucket are left untouched.
+async fn disconnect(yes: bool) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+    if config.backup.is_none() {
+        println!("Backups aren't configured.");
+        return Ok(());
+    }
+    if !yes {
+        println!(
+            "  {} reconnecting to these snapshots needs your CURRENT encryption \n  password (in preferences.toml). Save it first \u{2014} a different password \n  can't read them.",
+            style("\u{26A0}").yellow()
+        );
+        if !Confirm::new()
+            .with_prompt("Disconnect backups? New backups stop; existing snapshots stay in the bucket")
+            .default(false)
+            .interact()?
+        {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+    config.backup = None;
+    ryra_core::config::save_config(&paths.config_file, &config)?;
+    apply_schedule(&config).await?; // no backup config -> removes the timers
+    println!(
+        "{} backups disconnected. Existing snapshots remain in the bucket; \
+         run `{}` to reconnect.",
+        style("done:").green().bold(),
+        style("ryra backup config").cyan()
+    );
     Ok(())
 }
 
