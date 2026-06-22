@@ -183,6 +183,10 @@ async fn dispatch(req: Request) -> OpResult {
             set_schedule(daily, weekly).await?;
             Ok(Response::Done)
         }
+        Request::DeleteSnapshot { id } => {
+            delete_snapshot(&id)?;
+            Ok(Response::Done)
+        }
         Request::SetBackupEnrolled { service, enabled } => {
             set_backup_enrolled(&service, enabled)?;
             Ok(Response::Done)
@@ -705,6 +709,31 @@ fn backend_label(backend: &ryra_core::config::schema::BackupBackend) -> String {
         } => format!("S3: {bucket} ({endpoint})"),
         BackupBackend::Managed => "Ryra-managed".to_string(),
     }
+}
+
+/// Permanently delete one snapshot by id (`restic forget <id> --prune`).
+/// Resolves a managed backend to vended creds first, like a run/restore.
+fn delete_snapshot(id: &str) -> std::result::Result<(), RpcError> {
+    use ryra_core::config::schema::BackupBackend;
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let Some(mut settings) = cfg.backup.clone() else {
+        return Err(core_err("no backup repository configured".to_string()));
+    };
+    if matches!(settings.backend, BackupBackend::Managed) {
+        settings.backend =
+            ryra_core::system::account::resolve_managed_backend().map_err(core_err)?;
+    }
+    let out = restic_cmd(&settings, &["forget", id, "--prune"])
+        .output()
+        .map_err(core_err)?;
+    if !out.status.success() {
+        return Err(core_err(format!(
+            "restic couldn't delete {id}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 /// Build a `restic` command pre-wired with the repo, password, and backend

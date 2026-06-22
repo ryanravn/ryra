@@ -274,6 +274,9 @@ pub enum Request {
         #[serde(default)]
         weekly: Option<ScheduleSpec>,
     },
+    /// Permanently delete one snapshot by id (`restic forget <id> --prune`).
+    /// The rpc twin of `ryra backup delete`.
+    DeleteSnapshot { id: String },
     /// The installable env/group/choice schema for a registry service
     /// (default registry if `registry` is unset).
     ServiceDef {
