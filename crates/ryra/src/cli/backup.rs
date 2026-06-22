@@ -1477,8 +1477,10 @@ pub(crate) async fn apply_schedule(config: &Config) -> Result<()> {
         }
         if any_enable_failed {
             eprintln!(
-                "{} schedule saved, but the timer isn't active yet (no usable \
-                 `systemd --user` session). It'll start on a normal login.",
+                "{} schedule saved; the timer file is written but your systemd \
+                 manager didn't pick it up here (a sandboxed config dir, or a \
+                 pre-login shell). On a normal user session it activates \
+                 automatically.",
                 style("note:").yellow()
             );
         }
