@@ -212,7 +212,9 @@ fn parse_schedule_time(at: Option<&str>) -> Result<String> {
         .split_once(':')
         .ok_or_else(|| anyhow!("time must be HH:MM (24h), e.g. 03:00"))?;
     let h: u32 = h.parse().map_err(|_| anyhow!("invalid hour in '{raw}'"))?;
-    let m: u32 = m.parse().map_err(|_| anyhow!("invalid minute in '{raw}'"))?;
+    let m: u32 = m
+        .parse()
+        .map_err(|_| anyhow!("invalid minute in '{raw}'"))?;
     if h > 23 || m > 59 {
         bail!("time out of range: '{raw}' (00:00-23:59)");
     }
@@ -720,13 +722,21 @@ fn prune_one(config: &Config, svc: &str, mode: BackupMode, keep: u32, dry_run: b
                 true
             }
             Err(e) => {
-                eprintln!("{} {svc} {}: {e:#}", style("prune failed:").yellow(), mode.as_str());
+                eprintln!(
+                    "{} {svc} {}: {e:#}",
+                    style("prune failed:").yellow(),
+                    mode.as_str()
+                );
                 false
             }
         },
         Ok(None) => true,
         Err(e) => {
-            eprintln!("{} {svc} {}: {e:#}", style("prune failed:").yellow(), mode.as_str());
+            eprintln!(
+                "{} {svc} {}: {e:#}",
+                style("prune failed:").yellow(),
+                mode.as_str()
+            );
             false
         }
     }
@@ -846,7 +856,9 @@ async fn disconnect(yes: bool) -> Result<()> {
             style("\u{26A0}").yellow()
         );
         if !Confirm::new()
-            .with_prompt("Disconnect backups? New backups stop; existing snapshots stay in the bucket")
+            .with_prompt(
+                "Disconnect backups? New backups stop; existing snapshots stay in the bucket",
+            )
             .default(false)
             .interact()?
         {
@@ -1233,10 +1245,10 @@ fn resolve_snapshot_service(
     }
     let snaps: Vec<Snap> = serde_json::from_slice(&out.stdout).unwrap_or_default();
     for s in snaps {
-        if s.short_id == id || s.id == id || s.id.starts_with(id) {
-            if let Some(svc) = s.tags.iter().find_map(|t| t.strip_prefix("service:")) {
-                return Ok(Some((svc.to_string(), s.short_id)));
-            }
+        if (s.short_id == id || s.id == id || s.id.starts_with(id))
+            && let Some(svc) = s.tags.iter().find_map(|t| t.strip_prefix("service:"))
+        {
+            return Ok(Some((svc.to_string(), s.short_id)));
         }
     }
     Ok(None)
@@ -1504,8 +1516,14 @@ pub(crate) async fn apply_schedule(config: &Config) -> Result<()> {
         .context("resolving ryra binary path")?;
 
     let modes = [
-        ("daily", config.backup.as_ref().and_then(|b| b.daily.clone())),
-        ("weekly", config.backup.as_ref().and_then(|b| b.weekly.clone())),
+        (
+            "daily",
+            config.backup.as_ref().and_then(|b| b.daily.clone()),
+        ),
+        (
+            "weekly",
+            config.backup.as_ref().and_then(|b| b.weekly.clone()),
+        ),
     ];
     for (cadence, mode) in &modes {
         let (timer, service) = unit_names(cadence);

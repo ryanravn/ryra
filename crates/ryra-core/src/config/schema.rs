@@ -196,7 +196,6 @@ impl BackupBackend {
         }
     }
 
-
     /// Environment variables restic needs to authenticate to this
     /// backend. Returned as a vec of `(key, value)` pairs so the
     /// caller can decide whether to set them on a `Command` or via

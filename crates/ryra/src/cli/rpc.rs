@@ -820,14 +820,12 @@ fn backup_status() -> std::result::Result<BackupStatusView, RpcError> {
         configured: cfg.backup.is_some(),
         backend_label: cfg.backup.as_ref().map(|s| backend_label(&s.backend)),
         enrolled,
-        daily: cfg
-            .backup
-            .as_ref()
-            .and_then(|s| s.daily.as_ref())
-            .map(|m| ryra_protocol::ScheduleSpec {
+        daily: cfg.backup.as_ref().and_then(|s| s.daily.as_ref()).map(|m| {
+            ryra_protocol::ScheduleSpec {
                 keep: m.keep,
                 at: Some(m.at.clone()),
-            }),
+            }
+        }),
         weekly: cfg
             .backup
             .as_ref()
@@ -899,7 +897,8 @@ fn forget_backups(
     // Managed resolves to short-lived vended S3 creds (and verifies a logged-in
     // account with an active plan), exactly as a backup run does.
     if matches!(settings.backend, BackupBackend::Managed) {
-        settings.backend = ryra_core::system::account::resolve_managed_backend().map_err(core_err)?;
+        settings.backend =
+            ryra_core::system::account::resolve_managed_backend().map_err(core_err)?;
     }
     cfg.backup = Some(settings);
     let targets = match service {
@@ -913,12 +912,24 @@ fn forget_backups(
         let mut kept = 0u32;
         let mut removed = 0u32;
         for (mode, keep) in [
-            ("daily", cfg.backup.as_ref().and_then(|s| s.daily.as_ref()).map(|m| m.keep)),
-            ("weekly", cfg.backup.as_ref().and_then(|s| s.weekly.as_ref()).map(|m| m.keep)),
+            (
+                "daily",
+                cfg.backup
+                    .as_ref()
+                    .and_then(|s| s.daily.as_ref())
+                    .map(|m| m.keep),
+            ),
+            (
+                "weekly",
+                cfg.backup
+                    .as_ref()
+                    .and_then(|s| s.weekly.as_ref())
+                    .map(|m| m.keep),
+            ),
         ] {
             let Some(keep) = keep else { continue };
-            if let Some(plan) =
-                ryra_core::backup::plan_mode_prune(&svc, &cfg, mode, keep, dry_run).map_err(core_err)?
+            if let Some(plan) = ryra_core::backup::plan_mode_prune(&svc, &cfg, mode, keep, dry_run)
+                .map_err(core_err)?
             {
                 let (k, r) = ryra_core::backup::restic_forget(&plan).map_err(core_err)?;
                 kept += k;

@@ -259,7 +259,8 @@ fn manifest_sha_changes_between_snapshots_when_definition_changes() {
     sandbox.write_data_file("data/x.txt", "snapshot 1");
     sandbox.init_restic();
 
-    let plan_v1 = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").unwrap();
+    let plan_v1 =
+        plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").unwrap();
     let sha_v1 = extract_manifest_sha(&plan_v1.tags);
 
     // Mutate the registry's service.toml. A snapshot taken now should
@@ -271,7 +272,8 @@ fn manifest_sha_changes_between_snapshots_when_definition_changes() {
     content.push_str("\n# extra comment to bump the hash\n");
     std::fs::write(&svc_toml, content).unwrap();
 
-    let plan_v2 = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").unwrap();
+    let plan_v2 =
+        plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").unwrap();
     let sha_v2 = extract_manifest_sha(&plan_v2.tags);
     assert_ne!(sha_v1, sha_v2, "manifest_sha must change with the file");
 }
@@ -319,7 +321,10 @@ fn retention_forget_prunes_to_keep_last() {
         .expect("plan dry prune")
         .expect("plan");
     let (manual_kept, _) = restic_forget(&manual_left).expect("dry forget manual");
-    assert_eq!(manual_kept, 1, "the manual snapshot survived the daily prune");
+    assert_eq!(
+        manual_kept, 1,
+        "the manual snapshot survived the daily prune"
+    );
 }
 
 #[test]
@@ -332,7 +337,10 @@ fn machine_id_mints_persists_and_is_stable() {
     let id1 = ryra_core::config::machine_id(&paths).expect("mint");
     assert!(!id1.is_empty(), "an id should be minted");
     let id2 = ryra_core::config::machine_id(&paths).expect("again");
-    assert_eq!(id1, id2, "machine id must be stable across calls (no re-mint)");
+    assert_eq!(
+        id1, id2,
+        "machine id must be stable across calls (no re-mint)"
+    );
     let cfg = ryra_core::config::load_or_default(&paths.config_file).expect("load");
     assert_eq!(
         cfg.machine.expect("persisted to [machine]").id,
@@ -358,7 +366,9 @@ fn plan_tags_include_machine_id() {
     let service = "mid-tag";
     let mut sandbox = Sandbox::new(service);
     sandbox.install(service);
-    sandbox.config.machine = Some(MachineConfig { id: "MID-XYZ".into() });
+    sandbox.config.machine = Some(MachineConfig {
+        id: "MID-XYZ".into(),
+    });
     let plan =
         plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").expect("plan");
     assert!(
