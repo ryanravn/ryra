@@ -1034,10 +1034,19 @@ async fn list(services: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
+    // restic's own `snapshots` table is noisy (a "repository … opened" line)
+    // and doesn't match `ryra list`. Parse `--json` (quiet) and render our own
+    // clean, aligned table: newest restore point first, with the id you pass to
+    // `ryra backup restore --at <id>`.
+    #[derive(serde::Deserialize)]
+    struct Snap {
+        short_id: String,
+        time: String,
+    }
     for svc in &targets {
-        println!("\n{} {}", style("service:").cyan().bold(), svc);
         let mut cmd = std::process::Command::new("restic");
         cmd.arg("snapshots")
+            .arg("--json")
             .arg("--repo")
             .arg(settings.backend.restic_repo())
             .arg("--tag")
@@ -1046,12 +1055,35 @@ async fn list(services: Vec<String>) -> Result<()> {
         for (k, v) in settings.backend.env() {
             cmd.env(k, v);
         }
-        let status = cmd.status().context("spawning `restic snapshots`")?;
-        if !status.success() {
+        let out = cmd.output().context("spawning `restic snapshots`")?;
+        if !out.status.success() {
             eprintln!(
-                "{} restic snapshots failed for {svc}",
-                style("warning:").yellow()
+                "{} couldn't list backups for {svc}: {}",
+                style("warning:").yellow(),
+                String::from_utf8_lossy(&out.stderr).trim()
             );
+            continue;
+        }
+        let mut snaps: Vec<Snap> = serde_json::from_slice(&out.stdout).unwrap_or_default();
+        snaps.reverse(); // restic lists oldest-first; show newest restore point first
+        let count = snaps.len();
+        println!(
+            "\n{}  {}",
+            style(svc).cyan().bold(),
+            style(format!(
+                "({count} restore point{})",
+                if count == 1 { "" } else { "s" }
+            ))
+            .dim()
+        );
+        if snaps.is_empty() {
+            println!("  {}", style("no backups yet").dim());
+            continue;
+        }
+        println!("  {:<19}  {}", style("WHEN").dim(), style("ID").dim());
+        for s in &snaps {
+            let when = s.time.get(..19).unwrap_or(&s.time).replace('T', " ");
+            println!("  {:<19}  {}", when, s.short_id);
         }
     }
     Ok(())
