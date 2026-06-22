@@ -450,21 +450,19 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
 
     // Set up the schedule: daily and weekly are independent cadences, each
     // capped at `keep` snapshots (oldest dropped). Manual backups
-    // (`ryra backup run`) are always available and never pruned. Skipped when a
-    // schedule already exists (e.g. retrying an existing repo).
-    let unscheduled = config
-        .backup
-        .as_ref()
-        .map(|b| b.daily.is_none() && b.weekly.is_none())
-        .unwrap_or(false);
-    if interactive && !args.yes && unscheduled {
+    // (`ryra backup run`) are always available and never pruned. Always offered
+    // -- the current values are the defaults, so on a retry you can leave them
+    // untouched (enter through) or change them here.
+    if interactive && !args.yes {
         println!(
             "\n  {} keep the last N of each. Manual backups (`ryra backup run`) \
              are always available and kept forever.",
             style("Scheduled backups:").bold()
         );
-        let daily = prompt_cadence("daily", 7)?;
-        let weekly = prompt_cadence("weekly", 4)?;
+        let cur_daily = config.backup.as_ref().and_then(|b| b.daily.clone());
+        let cur_weekly = config.backup.as_ref().and_then(|b| b.weekly.clone());
+        let daily = prompt_cadence("daily", 7, cur_daily)?;
+        let weekly = prompt_cadence("weekly", 4, cur_weekly)?;
         if let Some(b) = config.backup.as_mut() {
             b.daily = daily;
             b.weekly = weekly;
@@ -477,21 +475,27 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
 }
 
 /// Ask whether to take this cadence; if yes, collect keep-count + time of day.
-fn prompt_cadence(cadence: &str, default_keep: u32) -> Result<Option<ScheduleMode>> {
+/// `current` (the existing schedule, if any) seeds the defaults so a retry can
+/// keep the present settings by pressing enter.
+fn prompt_cadence(
+    cadence: &str,
+    fallback_keep: u32,
+    current: Option<ScheduleMode>,
+) -> Result<Option<ScheduleMode>> {
     let on = Confirm::new()
         .with_prompt(format!("  Take {cadence} backups?"))
-        .default(cadence == "daily")
+        .default(current.is_some() || cadence == "daily")
         .interact()?;
     if !on {
         return Ok(None);
     }
     let keep: u32 = Input::new()
         .with_prompt(format!("    How many {cadence} backups to keep?"))
-        .default(default_keep)
+        .default(current.as_ref().map(|m| m.keep).unwrap_or(fallback_keep))
         .interact_text()?;
     let at: String = Input::new()
         .with_prompt("    Time of day (24h HH:MM)")
-        .default("03:00".to_string())
+        .default(current.map(|m| m.at).unwrap_or_else(|| "03:00".to_string()))
         .interact_text()?;
     Ok(Some(ScheduleMode {
         keep,
@@ -1445,24 +1449,38 @@ pub(crate) async fn apply_schedule(config: &Config) -> Result<()> {
         }
     }
 
+    // Enabling the timers needs a running `systemd --user` session. Where there
+    // isn't one (containers, CI, a sandbox, sometimes a fresh login), the unit
+    // files are still written + the config is saved -- a real session picks them
+    // up on next login. So treat systemctl failures as a warning, not fatal:
+    // the schedule is recorded either way.
     let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
-        .status()
-        .context("systemctl --user daemon-reload")?;
-    if !reload.success() {
-        bail!("systemctl --user daemon-reload failed");
-    }
-    for (cadence, mode) in &modes {
-        if mode.is_some() {
-            let (timer, _) = unit_names(cadence);
-            let st = std::process::Command::new("systemctl")
-                .args(["--user", "enable", "--now", &timer])
-                .status()
-                .with_context(|| format!("systemctl --user enable --now {timer}"))?;
-            if !st.success() {
-                bail!("could not enable {timer}");
+        .status();
+    let systemd_ok = matches!(reload, Ok(s) if s.success());
+    if systemd_ok {
+        for (cadence, mode) in &modes {
+            if mode.is_some() {
+                let (timer, _) = unit_names(cadence);
+                let st = std::process::Command::new("systemctl")
+                    .args(["--user", "enable", "--now", &timer])
+                    .status();
+                if !matches!(st, Ok(s) if s.success()) {
+                    eprintln!(
+                        "{} couldn't enable {timer} (timer file written; it'll \
+                         start once `systemctl --user` is available).",
+                        style("note:").yellow()
+                    );
+                }
             }
         }
+    } else {
+        eprintln!(
+            "{} no `systemd --user` session here, so the timer isn't active yet. \
+             The schedule is saved and the unit files are written; they'll run \
+             once you have a user session (a normal login box does).",
+            style("note:").yellow()
+        );
     }
     Ok(())
 }
