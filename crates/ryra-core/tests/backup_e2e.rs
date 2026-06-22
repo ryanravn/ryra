@@ -111,6 +111,7 @@ backup = true
                 backend: BackupBackend::Local {
                     path: repo_path.clone(),
                 },
+                retention: None,
             }),
             ..Config::default()
         };

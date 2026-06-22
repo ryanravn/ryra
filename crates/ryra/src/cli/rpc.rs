@@ -811,10 +811,14 @@ fn configure_backup(
     restic_init(&BackupSettings {
         password: password.clone(),
         backend: init_backend,
+        // Retention is irrelevant to init; this value is never persisted.
+        retention: None,
     })?;
+    let retention = persist_backend.default_retention();
     cfg.backup = Some(BackupSettings {
         password,
         backend: persist_backend,
+        retention,
     });
     paths.ensure_dirs().map_err(core_err)?;
     ryra_core::config::save_config(&paths.config_file, &cfg).map_err(core_err)?;

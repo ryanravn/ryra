@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use ryra_core::REGISTRY_DEFAULT;
 use ryra_core::backup::{
-    BackupRestorePlan, list_backup_enabled, plan_backup_restore, plan_backup_run, restic_restore,
-    run_hook,
+    BackupRestorePlan, list_backup_enabled, plan_backup_forget, plan_backup_restore,
+    plan_backup_run, restic_forget, restic_restore, run_hook,
 };
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::{BackupBackend, BackupSettings, Config};
@@ -109,6 +109,17 @@ pub enum BackupAction {
         /// `daily` (3am), `weekly` (Sunday 3am), `hourly`, or
         /// `disable` to remove the existing timer.
         interval: ScheduleInterval,
+    },
+    /// Prune snapshots to the configured retention policy (`restic forget`,
+    /// then prune to reclaim space). A no-op when no retention is configured
+    /// (snapshots are kept forever). Runs automatically after each
+    /// `backup run`; use this to prune on demand or preview with `--dry-run`.
+    Forget {
+        /// Service name(s). Omit to sweep every enrolled install.
+        services: Vec<String>,
+        /// Show what would be removed without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -266,6 +277,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
         BackupAction::Schedule { interval } => schedule(interval).await,
+        BackupAction::Forget { services, dry_run } => forget(services, dry_run).await,
     }
 }
 
@@ -463,7 +475,12 @@ async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result
         }
     };
 
-    Ok(BackupSettings { password, backend })
+    let retention = backend.default_retention();
+    Ok(BackupSettings {
+        password,
+        backend,
+        retention,
+    })
 }
 
 fn prompt_backend() -> Result<BackendKind> {
@@ -597,6 +614,24 @@ async fn run_backup(services: Vec<String>) -> Result<()> {
         match run_one(svc, &config).await {
             Ok(()) => {
                 record_status(svc, BackupOutcome::Success)?;
+                // Apply retention after a successful backup. Best-effort: a
+                // prune failure must not fail the backup that just succeeded,
+                // and "no policy configured" is a silent no-op (keep forever).
+                match plan_backup_forget(svc, &config, false) {
+                    Ok(Some(plan)) => {
+                        if let Err(e) = restic_forget(&plan) {
+                            eprintln!(
+                                "{} {svc}: retention prune failed: {e:#}",
+                                style("warning:").yellow()
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!(
+                        "{} {svc}: retention skipped: {e:#}",
+                        style("warning:").yellow()
+                    ),
+                }
             }
             Err(e) => {
                 eprintln!("{} {svc}: {e:#}", style("backup failed:").red().bold());
@@ -607,6 +642,59 @@ async fn run_backup(services: Vec<String>) -> Result<()> {
     }
     if any_failed {
         bail!("one or more services failed to back up");
+    }
+    Ok(())
+}
+
+/// Prune snapshots to the configured retention policy, per service. Services
+/// with no policy are a no-op (with a note — snapshots are kept forever).
+/// `--dry-run` previews removals without deleting (`restic forget --dry-run`).
+async fn forget(services: Vec<String>, dry_run: bool) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let config = load_config_resolved(&paths)?;
+    if config.backup.is_none() {
+        bail!(
+            "no backup repository configured: run `{}` first",
+            style("ryra backup config").cyan()
+        );
+    }
+    let targets = if services.is_empty() {
+        list_backup_enabled()?
+    } else {
+        services
+    };
+    if targets.is_empty() {
+        println!("No services have backups enabled.");
+        return Ok(());
+    }
+    let mut any_failed = false;
+    for svc in &targets {
+        match plan_backup_forget(svc, &config, dry_run) {
+            Ok(Some(plan)) => {
+                println!(
+                    "\n{} {svc}{}",
+                    style(if dry_run { "would prune:" } else { "pruning:" })
+                        .cyan()
+                        .bold(),
+                    if dry_run { " (dry run)" } else { "" }
+                );
+                if let Err(e) = restic_forget(&plan) {
+                    eprintln!("{} {svc}: {e:#}", style("forget failed:").red().bold());
+                    any_failed = true;
+                }
+            }
+            Ok(None) => println!(
+                "{} {svc}: no retention policy set (keeping all snapshots)",
+                style("skip:").dim()
+            ),
+            Err(e) => {
+                eprintln!("{} {svc}: {e:#}", style("forget failed:").red().bold());
+                any_failed = true;
+            }
+        }
+    }
+    if any_failed {
+        bail!("one or more services failed to prune");
     }
     Ok(())
 }

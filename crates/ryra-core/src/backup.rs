@@ -67,6 +67,27 @@ pub struct BackupRestorePlan {
     pub post_restore_hook: Option<PathBuf>,
 }
 
+/// Instructions for pruning one service's snapshots to the retention ladder.
+/// Built from the configured retention policy; the CLI spawns `restic forget`
+/// (then `--prune` to reclaim space) scoped to this service's `service:<name>`
+/// tag, so one service's policy can't evict another's snapshots.
+#[derive(Debug, Clone)]
+pub struct BackupForgetPlan {
+    pub service_name: String,
+    pub repo: String,
+    pub password: String,
+    pub env: BTreeMap<String, String>,
+    /// `service:<name>` — forget only considers this service's snapshots.
+    pub tag: String,
+    /// `--keep-*` flags from the policy. Never empty (the planner returns
+    /// `None` for an absent/all-zero policy rather than an empty plan).
+    pub keep_args: Vec<String>,
+    /// Reclaim space after forgetting. Skipped in a dry run.
+    pub prune: bool,
+    /// Show what would be removed without removing it.
+    pub dry_run: bool,
+}
+
 /// Plan a `ryra backup run <service>` invocation. Errors loudly when:
 /// - the service isn't installed,
 /// - its install metadata didn't opt into backups (`--backup` wasn't
@@ -182,6 +203,40 @@ pub fn plan_backup_restore(
         pre_restore_hook: pre,
         post_restore_hook: post,
     })
+}
+
+/// Plan a retention sweep for one service. Returns `Ok(None)` when no
+/// retention policy is configured (or it is all-zero), so callers treat "no
+/// policy" as "keep everything forever" rather than an error.
+pub fn plan_backup_forget(
+    service_name: &str,
+    config: &Config,
+    dry_run: bool,
+) -> Result<Option<BackupForgetPlan>> {
+    let metadata = load_install_metadata(service_name)?;
+    if !metadata.backup_enabled {
+        return Err(Error::BackupNotEnabled(service_name.to_string()));
+    }
+    let settings = config
+        .backup
+        .as_ref()
+        .ok_or(Error::BackupRepoNotConfigured)?;
+    let Some(policy) = settings.retention.as_ref() else {
+        return Ok(None);
+    };
+    if policy.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(BackupForgetPlan {
+        service_name: service_name.to_string(),
+        repo: settings.backend.restic_repo(),
+        password: settings.password.clone(),
+        env: backend_env_map(&settings.backend),
+        tag: format!("service:{service_name}"),
+        keep_args: policy.keep_args(),
+        prune: true,
+        dry_run,
+    }))
 }
 
 /// List installed services that have `backup_enabled = true` in their
@@ -469,6 +524,39 @@ pub fn restic_restore(plan: &BackupRestorePlan) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Execute a planned retention sweep. Filters to the service's
+/// `service:<name>` tag so the keep rules apply only to that service's
+/// snapshots; `--prune` reclaims space afterward (skipped in a dry run, which
+/// only prints what would be removed).
+pub fn restic_forget(plan: &BackupForgetPlan) -> anyhow::Result<()> {
+    use anyhow::{Context, bail};
+    let mut cmd = std::process::Command::new("restic");
+    cmd.arg("forget")
+        .arg("--repo")
+        .arg(&plan.repo)
+        .arg("--tag")
+        .arg(&plan.tag)
+        .env("RESTIC_PASSWORD", &plan.password);
+    for (k, v) in &plan.env {
+        cmd.env(k, v);
+    }
+    for arg in &plan.keep_args {
+        cmd.arg(arg);
+    }
+    if plan.dry_run {
+        cmd.arg("--dry-run");
+    } else if plan.prune {
+        cmd.arg("--prune");
+    }
+    let status = cmd
+        .status()
+        .with_context(|| format!("spawning `restic forget` for {}", plan.service_name))?;
+    if !status.success() {
+        bail!("restic forget exited with {}", status.code().unwrap_or(-1));
+    }
+    Ok(())
+}
+
 /// KEY=VALUE lines from a `.env` file; malformed lines are skipped the
 /// same way systemd's EnvironmentFile= skips them.
 pub fn parse_env_file(path: &std::path::Path) -> Vec<(String, String)> {
@@ -695,6 +783,7 @@ mod tests {
                 session_token: None,
                 prefix: None,
             },
+            retention: None,
         };
         let env = backend_env_map(&settings.backend);
         assert_eq!(env.get("AWS_ACCESS_KEY_ID"), Some(&"id".to_string()));
