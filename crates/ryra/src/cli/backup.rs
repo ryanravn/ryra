@@ -1454,25 +1454,33 @@ pub(crate) async fn apply_schedule(config: &Config) -> Result<()> {
     // files are still written + the config is saved -- a real session picks them
     // up on next login. So treat systemctl failures as a warning, not fatal:
     // the schedule is recorded either way.
+    // Suppress systemctl's own "Failed to ..." chatter -- we report a single
+    // clean note ourselves when there's no session.
     let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
     let systemd_ok = matches!(reload, Ok(s) if s.success());
     if systemd_ok {
+        let mut any_enable_failed = false;
         for (cadence, mode) in &modes {
             if mode.is_some() {
                 let (timer, _) = unit_names(cadence);
                 let st = std::process::Command::new("systemctl")
                     .args(["--user", "enable", "--now", &timer])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
                     .status();
-                if !matches!(st, Ok(s) if s.success()) {
-                    eprintln!(
-                        "{} couldn't enable {timer} (timer file written; it'll \
-                         start once `systemctl --user` is available).",
-                        style("note:").yellow()
-                    );
-                }
+                any_enable_failed |= !matches!(st, Ok(s) if s.success());
             }
+        }
+        if any_enable_failed {
+            eprintln!(
+                "{} schedule saved, but the timer isn't active yet (no usable \
+                 `systemd --user` session). It'll start on a normal login.",
+                style("note:").yellow()
+            );
         }
     } else {
         eprintln!(
@@ -1531,8 +1539,12 @@ fn write_timer(
 }
 
 fn remove_timer(dir: &Path, timer: &str, service: &str) {
+    // Best-effort + quiet: disabling a never-installed timer is fine, and
+    // systemctl's "Failed to disable" chatter isn't useful here.
     let _ = std::process::Command::new("systemctl")
         .args(["--user", "disable", "--now", timer])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
     let _ = std::fs::remove_file(dir.join(timer));
     let _ = std::fs::remove_file(dir.join(service));
