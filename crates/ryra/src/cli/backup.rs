@@ -17,7 +17,7 @@ use std::process::Stdio;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Subcommand;
 use console::style;
-use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Password, Select};
 use serde::{Deserialize, Serialize};
 
 use ryra_core::REGISTRY_DEFAULT;
@@ -115,8 +115,8 @@ pub enum BackupAction {
     Schedule {
         /// `daily` or `weekly`.
         cadence: ScheduleCadence,
-        /// How many of this cadence's snapshots to keep (default 7). Older ones
-        /// are pruned automatically after each run.
+        /// How many of this cadence's snapshots to keep (default: 2 daily,
+        /// 4 weekly). Older ones are pruned automatically after each run.
         #[arg(long)]
         keep: Option<u32>,
         /// Time of day, 24h `HH:MM` (default 03:00).
@@ -177,6 +177,14 @@ impl ScheduleCadence {
         match self {
             ScheduleCadence::Daily => "daily",
             ScheduleCadence::Weekly => "weekly",
+        }
+    }
+
+    /// Default keep-count when this cadence is first enabled with no `--keep`.
+    fn default_keep(self) -> u32 {
+        match self {
+            ScheduleCadence::Daily => 2,
+            ScheduleCadence::Weekly => 4,
         }
     }
 }
@@ -461,7 +469,7 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
         );
         let cur_daily = config.backup.as_ref().and_then(|b| b.daily.clone());
         let cur_weekly = config.backup.as_ref().and_then(|b| b.weekly.clone());
-        let daily = prompt_cadence("daily", 7, cur_daily)?;
+        let daily = prompt_cadence("daily", 2, cur_daily)?;
         let weekly = prompt_cadence("weekly", 4, cur_weekly)?;
         if let Some(b) = config.backup.as_mut() {
             b.daily = daily;
@@ -511,7 +519,7 @@ enum ConfigureMode {
 }
 
 fn prompt_existing_config_choice() -> Result<ConfigureMode> {
-    let choice = Select::with_theme(&ColorfulTheme::default())
+    let choice = Select::new()
         .with_prompt("A backup repository is already configured")
         .items(&[
             "Retry connection         (reuse saved settings)",
@@ -576,7 +584,7 @@ async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result
 }
 
 fn prompt_backend() -> Result<BackendKind> {
-    let choice = Select::with_theme(&ColorfulTheme::default())
+    let choice = Select::new()
         .with_prompt("Which backup backend?")
         .items(&[
             "Ryra-managed   (encrypted off-site via your ryra account)",
@@ -1402,9 +1410,12 @@ pub(crate) async fn schedule(
         return Ok(());
     }
 
-    // Start from the current schedule for this cadence (or a default), then
-    // apply whichever knobs were passed.
-    let mut mode = cadence_mode(&config, cadence).unwrap_or_default();
+    // Start from the current schedule for this cadence (or its default keep),
+    // then apply whichever knobs were passed.
+    let mut mode = cadence_mode(&config, cadence).unwrap_or(ScheduleMode {
+        keep: cadence.default_keep(),
+        at: "03:00".to_string(),
+    });
     if let Some(k) = keep {
         mode.keep = k;
     }
