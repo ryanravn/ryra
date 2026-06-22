@@ -17,7 +17,7 @@ use std::process::Stdio;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Subcommand;
 use console::style;
-use dialoguer::{Confirm, Input, Password};
+use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 
 use ryra_core::REGISTRY_DEFAULT;
@@ -511,19 +511,19 @@ enum ConfigureMode {
 }
 
 fn prompt_existing_config_choice() -> Result<ConfigureMode> {
-    println!("\n  A backup repository is already configured.");
-    println!("  1. Retry connection         (reuse saved settings)");
-    println!("  2. Reconfigure from scratch (replace saved settings)");
-    println!("  3. Cancel");
-    let choice: u32 = Input::new()
-        .with_prompt("Choose")
-        .default(1)
-        .interact_text()?;
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("A backup repository is already configured")
+        .items(&[
+            "Retry connection         (reuse saved settings)",
+            "Reconfigure from scratch (replace saved settings)",
+            "Cancel",
+        ])
+        .default(0)
+        .interact()?;
     match choice {
-        1 => Ok(ConfigureMode::Retry),
-        2 => Ok(ConfigureMode::Fresh),
-        3 => bail!("cancelled"),
-        n => bail!("invalid choice: {n} (expected 1, 2, or 3)"),
+        0 => Ok(ConfigureMode::Retry),
+        1 => Ok(ConfigureMode::Fresh),
+        _ => bail!("cancelled"),
     }
 }
 
@@ -576,20 +576,20 @@ async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result
 }
 
 fn prompt_backend() -> Result<BackendKind> {
-    println!("\nWhich backup backend?");
-    println!("  1. Ryra-managed   (encrypted off-site via your ryra account)");
-    println!("  2. S3-compatible  (MinIO, AWS, Backblaze B2, R2, Wasabi)");
-    println!("  3. Local path     (testing only, no off-machine protection)");
-    let choice: u32 = Input::new()
-        .with_prompt("Choose")
-        .default(1)
-        .interact_text()?;
-    match choice {
-        1 => Ok(BackendKind::Managed),
-        2 => Ok(BackendKind::S3),
-        3 => Ok(BackendKind::Local),
-        n => bail!("expected 1, 2, or 3, got {n}"),
-    }
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Which backup backend?")
+        .items(&[
+            "Ryra-managed   (encrypted off-site via your ryra account)",
+            "S3-compatible  (MinIO, AWS, Backblaze B2, R2, Wasabi)",
+            "Local path     (testing only, no off-machine protection)",
+        ])
+        .default(0)
+        .interact()?;
+    Ok(match choice {
+        0 => BackendKind::Managed,
+        1 => BackendKind::S3,
+        _ => BackendKind::Local,
+    })
 }
 
 fn collect_s3(args: &ConfigureArgs, interactive: bool) -> Result<BackupBackend> {
