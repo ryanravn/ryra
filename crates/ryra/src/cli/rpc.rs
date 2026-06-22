@@ -162,6 +162,35 @@ async fn dispatch(req: Request) -> OpResult {
         Request::ForgetBackups { service, dry_run } => {
             forget_backups(service, dry_run).map(Response::Forget)
         }
+        // Parity with `ryra backup run/restore(all)/schedule`: reuse the CLI
+        // orchestration directly (their stdout is hijacked to stderr by the rpc
+        // entry, so only the JSON reply reaches the client).
+        Request::RunBackups { services } => {
+            super::backup::run_backup(services).await.map_err(core_err)?;
+            Ok(Response::Done)
+        }
+        Request::RestoreAll { snapshot } => {
+            // "latest" -> newest-per-service; otherwise the explicit snapshot id.
+            let at = (snapshot != "latest").then_some(snapshot);
+            super::backup::restore_all(at).await.map_err(core_err)?;
+            Ok(Response::Done)
+        }
+        Request::ScheduleBackup { interval } => {
+            use super::backup::ScheduleInterval;
+            let interval = match interval.as_str() {
+                "hourly" => ScheduleInterval::Hourly,
+                "daily" => ScheduleInterval::Daily,
+                "weekly" => ScheduleInterval::Weekly,
+                "disable" => ScheduleInterval::Disable,
+                other => {
+                    return Err(core_err(format!(
+                        "invalid schedule interval '{other}' (hourly|daily|weekly|disable)"
+                    )));
+                }
+            };
+            super::backup::schedule(interval).await.map_err(core_err)?;
+            Ok(Response::Done)
+        }
         Request::SetBackupEnrolled { service, enabled } => {
             set_backup_enrolled(&service, enabled)?;
             Ok(Response::Done)

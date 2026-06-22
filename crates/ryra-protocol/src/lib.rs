@@ -250,6 +250,19 @@ pub enum Request {
         #[serde(default)]
         dry_run: bool,
     },
+    /// Back up enrolled services (empty `services` = every enrolled install) --
+    /// the rpc twin of `ryra backup run`, for control-plane/dashboard parity.
+    RunBackups {
+        #[serde(default)]
+        services: Vec<String>,
+    },
+    /// Full disaster recovery: restore EVERY service in the repo at `snapshot`
+    /// ("latest" or an id), in dependency order, re-linking + starting them.
+    /// The rpc twin of `ryra backup restore` with no service.
+    RestoreAll { snapshot: String },
+    /// Install/remove the scheduled-backup systemd timer (the rpc twin of
+    /// `ryra backup schedule`). `interval` is hourly | daily | weekly | disable.
+    ScheduleBackup { interval: String },
     /// The installable env/group/choice schema for a registry service
     /// (default registry if `registry` is unset).
     ServiceDef {

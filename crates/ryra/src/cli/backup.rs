@@ -598,7 +598,7 @@ fn init_repo_if_needed(settings: &BackupSettings) -> Result<()> {
 // run
 // ---------------------------------------------------------------------------
 
-async fn run_backup(services: Vec<String>) -> Result<()> {
+pub(crate) async fn run_backup(services: Vec<String>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     if config.backup.is_none() {
@@ -866,7 +866,7 @@ fn run_systemctl(args: &[&str]) -> Result<()> {
 /// re-link quadlets, bring the stack up, and import any DB dumps. The
 /// only prerequisite is the user's kept `preferences.toml` (the repo
 /// location + password) — everything else lives in the repo.
-async fn restore_all(at: Option<String>) -> Result<()> {
+pub(crate) async fn restore_all(at: Option<String>) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let settings = config.backup.clone().ok_or_else(|| {
@@ -1147,7 +1147,7 @@ fn systemd_user_dir() -> Result<PathBuf> {
     Ok(base.join("systemd").join("user"))
 }
 
-async fn schedule(interval: ScheduleInterval) -> Result<()> {
+pub(crate) async fn schedule(interval: ScheduleInterval) -> Result<()> {
     let dir = systemd_user_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     let timer_path = dir.join(TIMER_UNIT);
