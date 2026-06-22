@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use ryra_core::backup::{plan_backup_forget, plan_backup_restore, plan_backup_run, restic_forget};
-use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, MachineConfig, RetentionPolicy};
+use ryra_core::backup::{plan_backup_restore, plan_backup_run, plan_mode_prune, restic_forget};
+use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, MachineConfig};
 
 /// Tests in this file all mutate process-global env vars (`HOME`,
 /// `XDG_*`) so they can't safely run in parallel. cargo test defaults
@@ -111,7 +111,8 @@ backup = true
                 backend: BackupBackend::Local {
                     path: repo_path.clone(),
                 },
-                retention: None,
+                daily: None,
+                weekly: None,
             }),
             ..Config::default()
         };
@@ -162,8 +163,9 @@ backup_enabled = true
     }
 }
 
-fn restic_backup_one(sandbox: &Sandbox, service: &str) {
-    let plan = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir).expect("plan run");
+fn restic_backup_one(sandbox: &Sandbox, service: &str, mode: &str) {
+    let plan =
+        plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, mode).expect("plan run");
     assert!(plan.tags.contains(&format!("service:{service}")));
     assert!(
         plan.tags.iter().any(|t| t.starts_with("manifest_sha:")),
@@ -222,7 +224,7 @@ fn round_trip_backup_and_restore() {
     sandbox.init_restic();
 
     // 1. Back up the live state.
-    restic_backup_one(&sandbox, service);
+    restic_backup_one(&sandbox, service, "manual");
 
     // 2. Mutate the live state — delete one file, change another.
     std::fs::remove_file(sandbox.service_home.join("data/important.txt")).expect("delete");
@@ -257,7 +259,7 @@ fn manifest_sha_changes_between_snapshots_when_definition_changes() {
     sandbox.write_data_file("data/x.txt", "snapshot 1");
     sandbox.init_restic();
 
-    let plan_v1 = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir).unwrap();
+    let plan_v1 = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").unwrap();
     let sha_v1 = extract_manifest_sha(&plan_v1.tags);
 
     // Mutate the registry's service.toml. A snapshot taken now should
@@ -269,7 +271,7 @@ fn manifest_sha_changes_between_snapshots_when_definition_changes() {
     content.push_str("\n# extra comment to bump the hash\n");
     std::fs::write(&svc_toml, content).unwrap();
 
-    let plan_v2 = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir).unwrap();
+    let plan_v2 = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").unwrap();
     let sha_v2 = extract_manifest_sha(&plan_v2.tags);
     assert_ne!(sha_v1, sha_v2, "manifest_sha must change with the file");
 }
@@ -289,40 +291,35 @@ fn retention_forget_prunes_to_keep_last() {
         return;
     }
     let service = "demo-retention";
-    let mut sandbox = Sandbox::new(service);
+    let sandbox = Sandbox::new(service);
     sandbox.install(service);
     sandbox.write_data_file("data/f.txt", "v1");
     sandbox.init_restic();
-    // Keep only the single most recent snapshot.
-    sandbox.config.backup.as_mut().unwrap().retention = Some(RetentionPolicy {
-        keep_last: 1,
-        keep_daily: 0,
-        keep_weekly: 0,
-        keep_monthly: 0,
-    });
 
-    // Three distinct snapshots.
-    restic_backup_one(&sandbox, service);
+    // Three distinct DAILY snapshots, plus one MANUAL that must survive the
+    // per-mode prune (manual is unlimited).
+    restic_backup_one(&sandbox, service, "daily");
     sandbox.write_data_file("data/f.txt", "v2");
-    restic_backup_one(&sandbox, service);
+    restic_backup_one(&sandbox, service, "daily");
     sandbox.write_data_file("data/f.txt", "v3");
-    restic_backup_one(&sandbox, service);
+    restic_backup_one(&sandbox, service, "daily");
+    restic_backup_one(&sandbox, service, "manual");
 
-    // Real sweep: keep 1, remove the other 2 (then prune).
-    let plan = plan_backup_forget(service, &sandbox.config, false)
-        .expect("plan forget")
-        .expect("retention policy present");
+    // Prune the DAILY mode to keep-last 1: 2 of the 3 dailies go; the manual is
+    // untouched (different mode).
+    let plan = plan_mode_prune(service, &sandbox.config, "daily", 1, false)
+        .expect("plan prune")
+        .expect("keep > 0 yields a plan");
     let (kept, removed) = restic_forget(&plan).expect("restic forget");
-    assert_eq!(kept, 1, "keep-last 1 should keep exactly one snapshot");
-    assert_eq!(removed, 2, "the other two should be removed");
+    assert_eq!(kept, 1, "keep-last 1 keeps exactly one daily");
+    assert_eq!(removed, 2, "the other two dailies are removed");
 
-    // A dry run on the now-pruned repo previews zero removals and deletes nothing.
-    let dry = plan_backup_forget(service, &sandbox.config, true)
-        .expect("plan dry-run forget")
-        .expect("retention policy present");
-    let (kept2, removed2) = restic_forget(&dry).expect("restic forget dry-run");
-    assert_eq!(kept2, 1);
-    assert_eq!(removed2, 0, "nothing left to prune");
+    // The manual snapshot still lists (mode prune never touched it).
+    let manual_left = plan_mode_prune(service, &sandbox.config, "manual", 1, true)
+        .expect("plan dry prune")
+        .expect("plan");
+    let (manual_kept, _) = restic_forget(&manual_left).expect("dry forget manual");
+    assert_eq!(manual_kept, 1, "the manual snapshot survived the daily prune");
 }
 
 #[test]
@@ -362,7 +359,8 @@ fn plan_tags_include_machine_id() {
     let mut sandbox = Sandbox::new(service);
     sandbox.install(service);
     sandbox.config.machine = Some(MachineConfig { id: "MID-XYZ".into() });
-    let plan = plan_backup_run(service, &sandbox.config, &sandbox.registry_dir).expect("plan");
+    let plan =
+        plan_backup_run(service, &sandbox.config, &sandbox.registry_dir, "manual").expect("plan");
     assert!(
         plan.tags.iter().any(|t| t == "machine_id:MID-XYZ"),
         "snapshot must be tagged with the machine id; got {:?}",
@@ -371,16 +369,16 @@ fn plan_tags_include_machine_id() {
 }
 
 #[test]
-fn forget_is_none_without_a_policy() {
-    // Pure planner check (no restic needed): absent policy => Ok(None).
+fn prune_is_none_when_keep_zero() {
+    // Pure planner check (no restic needed): keep == 0 means unlimited => Ok(None).
     let _guard = env_lock();
     let service = "demo-noretention";
     let sandbox = Sandbox::new(service);
     sandbox.install(service);
     assert!(
-        plan_backup_forget(service, &sandbox.config, false)
+        plan_mode_prune(service, &sandbox.config, "daily", 0, false)
             .expect("plan")
             .is_none(),
-        "no retention configured should plan to a no-op (None)"
+        "keep == 0 should plan to a no-op (None)"
     );
 }

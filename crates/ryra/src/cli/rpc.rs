@@ -136,6 +136,7 @@ async fn dispatch(req: Request) -> OpResult {
         Request::Backup { service } => {
             let plan = ops::plan_backup_run(&ryra_core::ops::BackupRunRequest {
                 service: service.clone(),
+                mode: "manual".to_string(),
             })
             .await
             .map_err(core_err)?;
@@ -165,8 +166,11 @@ async fn dispatch(req: Request) -> OpResult {
         // Parity with `ryra backup run/restore(all)/schedule`: reuse the CLI
         // orchestration directly (their stdout is hijacked to stderr by the rpc
         // entry, so only the JSON reply reaches the client).
-        Request::RunBackups { services } => {
-            super::backup::run_backup(services).await.map_err(core_err)?;
+        Request::RunBackups { services, mode } => {
+            let mode = parse_backup_mode(mode.as_deref())?;
+            super::backup::run_backup(services, mode)
+                .await
+                .map_err(core_err)?;
             Ok(Response::Done)
         }
         Request::RestoreAll { snapshot } => {
@@ -175,21 +179,8 @@ async fn dispatch(req: Request) -> OpResult {
             super::backup::restore_all(at).await.map_err(core_err)?;
             Ok(Response::Done)
         }
-        Request::ScheduleBackup { interval, at } => {
-            use super::backup::ScheduleInterval;
-            let interval = match interval.as_str() {
-                "daily" => ScheduleInterval::Daily,
-                "weekly" => ScheduleInterval::Weekly,
-                "disable" => ScheduleInterval::Disable,
-                other => {
-                    return Err(core_err(format!(
-                        "invalid schedule interval '{other}' (daily|weekly|disable)"
-                    )));
-                }
-            };
-            super::backup::schedule(interval, at.as_deref())
-                .await
-                .map_err(core_err)?;
+        Request::SetSchedule { daily, weekly } => {
+            set_schedule(daily, weekly).await?;
             Ok(Response::Done)
         }
         Request::SetBackupEnrolled { service, enabled } => {
@@ -782,23 +773,72 @@ fn backup_status() -> std::result::Result<BackupStatusView, RpcError> {
         configured: cfg.backup.is_some(),
         backend_label: cfg.backup.as_ref().map(|s| backend_label(&s.backend)),
         enrolled,
-        retention: cfg
+        daily: cfg
             .backup
             .as_ref()
-            .and_then(|s| s.retention.as_ref())
-            .map(|r| ryra_protocol::RetentionView {
-                keep_last: r.keep_last,
-                keep_daily: r.keep_daily,
-                keep_weekly: r.keep_weekly,
-                keep_monthly: r.keep_monthly,
+            .and_then(|s| s.daily.as_ref())
+            .map(|m| ryra_protocol::ScheduleSpec {
+                keep: m.keep,
+                at: Some(m.at.clone()),
+            }),
+        weekly: cfg
+            .backup
+            .as_ref()
+            .and_then(|s| s.weekly.as_ref())
+            .map(|m| ryra_protocol::ScheduleSpec {
+                keep: m.keep,
+                at: Some(m.at.clone()),
             }),
     })
 }
 
-/// Prune snapshots to the configured retention ladder, per service. Resolves a
-/// managed backend to vended S3 creds first (same as a backup run). Services
-/// with no policy come back as a zero-effect entry. Returns `(kept, removed)`
-/// counts per service.
+/// Parse a `daily|weekly|manual` mode string (`None` => manual).
+fn parse_backup_mode(s: Option<&str>) -> std::result::Result<super::backup::BackupMode, RpcError> {
+    use super::backup::BackupMode;
+    Ok(match s.unwrap_or("manual") {
+        "daily" => BackupMode::Daily,
+        "weekly" => BackupMode::Weekly,
+        "manual" => BackupMode::Manual,
+        other => {
+            return Err(core_err(format!(
+                "invalid backup mode '{other}' (daily|weekly|manual)"
+            )));
+        }
+    })
+}
+
+/// Replace the full backup schedule (daily/weekly) and reconcile the timers.
+/// Each `Some` enables that cadence; `None` disables it.
+async fn set_schedule(
+    daily: Option<ryra_protocol::ScheduleSpec>,
+    weekly: Option<ryra_protocol::ScheduleSpec>,
+) -> std::result::Result<(), RpcError> {
+    use ryra_core::config::schema::ScheduleMode;
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    if config.backup.is_none() {
+        return Err(core_err("no backup repository configured".to_string()));
+    }
+    if let Some(b) = config.backup.as_mut() {
+        b.daily = daily.map(|s| ScheduleMode {
+            keep: s.keep,
+            at: s.at.unwrap_or_else(|| "03:00".to_string()),
+        });
+        b.weekly = weekly.map(|s| ScheduleMode {
+            keep: s.keep,
+            at: s.at.unwrap_or_else(|| "03:00".to_string()),
+        });
+    }
+    ryra_core::config::save_config(&paths.config_file, &config).map_err(core_err)?;
+    super::backup::apply_schedule(&config)
+        .await
+        .map_err(core_err)?;
+    Ok(())
+}
+
+/// Prune the scheduled (daily + weekly) snapshots to their keep-counts, per
+/// service. Resolves a managed backend to vended S3 creds first (same as a
+/// backup run). Returns summed `(kept, removed)` counts per service.
 fn forget_backups(
     service: Option<String>,
     dry_run: bool,
@@ -821,24 +861,29 @@ fn forget_backups(
     };
     let mut out = Vec::new();
     for svc in targets {
-        match ryra_core::backup::plan_backup_forget(&svc, &cfg, dry_run).map_err(core_err)? {
-            Some(plan) => {
-                let (kept, removed) =
-                    ryra_core::backup::restic_forget(&plan).map_err(core_err)?;
-                out.push(ryra_protocol::ForgetView {
-                    service: svc,
-                    kept,
-                    removed,
-                    dry_run,
-                });
+        // Prune each scheduled cadence to its keep; sum the results. Manual
+        // snapshots have no keep and are never touched.
+        let mut kept = 0u32;
+        let mut removed = 0u32;
+        for (mode, keep) in [
+            ("daily", cfg.backup.as_ref().and_then(|s| s.daily.as_ref()).map(|m| m.keep)),
+            ("weekly", cfg.backup.as_ref().and_then(|s| s.weekly.as_ref()).map(|m| m.keep)),
+        ] {
+            let Some(keep) = keep else { continue };
+            if let Some(plan) =
+                ryra_core::backup::plan_mode_prune(&svc, &cfg, mode, keep, dry_run).map_err(core_err)?
+            {
+                let (k, r) = ryra_core::backup::restic_forget(&plan).map_err(core_err)?;
+                kept += k;
+                removed += r;
             }
-            None => out.push(ryra_protocol::ForgetView {
-                service: svc,
-                kept: 0,
-                removed: 0,
-                dry_run,
-            }),
         }
+        out.push(ryra_protocol::ForgetView {
+            service: svc,
+            kept,
+            removed,
+            dry_run,
+        });
     }
     Ok(out)
 }
@@ -909,14 +954,21 @@ fn configure_backup(
     restic_init(&BackupSettings {
         password: password.clone(),
         backend: init_backend,
-        // Retention is irrelevant to init; this value is never persisted.
-        retention: None,
+        // Schedule is irrelevant to init; these are never persisted from here.
+        daily: None,
+        weekly: None,
     })?;
-    let retention = persist_backend.default_retention();
+    // Preserve any existing schedule across a re-point of the backend.
+    let (daily, weekly) = cfg
+        .backup
+        .as_ref()
+        .map(|b| (b.daily.clone(), b.weekly.clone()))
+        .unwrap_or((None, None));
     cfg.backup = Some(BackupSettings {
         password,
         backend: persist_backend,
-        retention,
+        daily,
+        weekly,
     });
     paths.ensure_dirs().map_err(core_err)?;
     ryra_core::config::save_config(&paths.config_file, &cfg).map_err(core_err)?;

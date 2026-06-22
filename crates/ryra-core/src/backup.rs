@@ -77,7 +77,8 @@ pub struct BackupForgetPlan {
     pub repo: String,
     pub password: String,
     pub env: BTreeMap<String, String>,
-    /// `service:<name>` — forget only considers this service's snapshots.
+    /// restic `--tag` filter (e.g. `service:<name>,mode:daily`) — forget only
+    /// considers snapshots matching all of these comma-joined tags.
     pub tag: String,
     /// `--keep-*` flags from the policy. Never empty (the planner returns
     /// `None` for an absent/all-zero policy rather than an empty plan).
@@ -100,6 +101,7 @@ pub fn plan_backup_run(
     service_name: &str,
     config: &Config,
     repo_dir: &Path,
+    mode: &str,
 ) -> Result<BackupRunPlan> {
     let metadata = load_install_metadata(service_name)?;
     if !metadata.backup_enabled {
@@ -137,6 +139,9 @@ pub fn plan_backup_run(
     if let Some(machine) = config.machine.as_ref() {
         tags.push(format!("machine_id:{}", machine.id));
     }
+    // The cadence this snapshot belongs to (daily | weekly | manual). Drives
+    // per-mode retention (keep the last N of a mode) and the grouped listing.
+    tags.push(format!("mode:{mode}"));
 
     let backup = svc.def.backup.as_ref();
     let pre = resolve_hook(
@@ -212,14 +217,21 @@ pub fn plan_backup_restore(
     })
 }
 
-/// Plan a retention sweep for one service. Returns `Ok(None)` when no
-/// retention policy is configured (or it is all-zero), so callers treat "no
-/// policy" as "keep everything forever" rather than an error.
-pub fn plan_backup_forget(
+/// Plan a per-mode prune for one service: keep at most `keep` snapshots tagged
+/// `mode:<mode>` (the daily or weekly cap), dropping the oldest beyond that.
+/// Manual snapshots are never pruned, so callers only pass `daily`/`weekly`.
+/// Returns `Ok(None)` when `keep == 0` (unlimited) rather than running a
+/// keep-nothing forget.
+pub fn plan_mode_prune(
     service_name: &str,
     config: &Config,
+    mode: &str,
+    keep: u32,
     dry_run: bool,
 ) -> Result<Option<BackupForgetPlan>> {
+    if keep == 0 {
+        return Ok(None);
+    }
     let metadata = load_install_metadata(service_name)?;
     if !metadata.backup_enabled {
         return Err(Error::BackupNotEnabled(service_name.to_string()));
@@ -228,19 +240,14 @@ pub fn plan_backup_forget(
         .backup
         .as_ref()
         .ok_or(Error::BackupRepoNotConfigured)?;
-    let Some(policy) = settings.retention.as_ref() else {
-        return Ok(None);
-    };
-    if policy.is_empty() {
-        return Ok(None);
-    }
     Ok(Some(BackupForgetPlan {
         service_name: service_name.to_string(),
         repo: settings.backend.restic_repo(),
         password: settings.password.clone(),
         env: backend_env_map(&settings.backend),
-        tag: format!("service:{service_name}"),
-        keep_args: policy.keep_args(),
+        // AND of both tags ("a,b"): only THIS service's snapshots in THIS mode.
+        tag: format!("service:{service_name},mode:{mode}"),
+        keep_args: vec!["--keep-last".to_string(), keep.to_string()],
         prune: true,
         dry_run,
     }))
@@ -829,7 +836,8 @@ mod tests {
                 session_token: None,
                 prefix: None,
             },
-            retention: None,
+            daily: None,
+            weekly: None,
         };
         let env = backend_env_map(&settings.backend);
         assert_eq!(env.get("AWS_ACCESS_KEY_ID"), Some(&"id".to_string()));

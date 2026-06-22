@@ -84,71 +84,40 @@ pub struct BackupSettings {
     /// invalid combinations of credentials are unrepresentable and
     /// the CLI can prompt for the right fields per backend.
     pub backend: BackupBackend,
-    /// Snapshot retention ladder. `None` keeps every snapshot forever (the
-    /// legacy default — no `restic forget` ever runs). When set, scheduled
-    /// backup runs prune to this ladder. A snapshot survives if ANY rule keeps
-    /// it, so this is "keep the N most recent, plus a daily for a week, a weekly
-    /// for a month, a monthly for longer".
+    /// Daily schedule. `Some` = take a daily backup, keeping at most `keep`
+    /// (oldest dropped past that); `None` = no daily backups. The daily systemd
+    /// timer keys off this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retention: Option<RetentionPolicy>,
+    pub daily: Option<ScheduleMode>,
+    /// Weekly schedule (runs Sunday). Same shape as `daily`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly: Option<ScheduleMode>,
+    // Manual backups (`ryra backup run`) are always available and are NEVER
+    // pruned -- they need no configuration, so there's no field for them.
 }
 
-/// How many snapshots to keep at each cadence. Maps directly onto restic's
-/// `forget --keep-last/-daily/-weekly/-monthly`. Zero = that rule is off.
+fn default_schedule_time() -> String {
+    "03:00".to_string()
+}
+
+/// A scheduled backup cadence (daily or weekly): keep at most `keep` snapshots
+/// of this mode -- the oldest is dropped once a newer one pushes past the cap --
+/// taken at `at` (24h `HH:MM`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RetentionPolicy {
-    /// Always keep the N most recent snapshots, regardless of age.
-    #[serde(default)]
-    pub keep_last: u32,
-    #[serde(default)]
-    pub keep_daily: u32,
-    #[serde(default)]
-    pub keep_weekly: u32,
-    #[serde(default)]
-    pub keep_monthly: u32,
+pub struct ScheduleMode {
+    /// Max snapshots of this cadence to retain.
+    pub keep: u32,
+    /// Time of day to run, 24h `HH:MM`.
+    #[serde(default = "default_schedule_time")]
+    pub at: String,
 }
 
-impl Default for RetentionPolicy {
-    /// The default applied when a managed backup is configured: a small recent
-    /// buffer plus a day/week/month ladder, so an "hour/day/week/month ago"
-    /// reliably exists without snapshots growing without bound.
+impl Default for ScheduleMode {
     fn default() -> Self {
         Self {
-            keep_last: 3,
-            keep_daily: 7,
-            keep_weekly: 4,
-            keep_monthly: 6,
+            keep: 7,
+            at: default_schedule_time(),
         }
-    }
-}
-
-impl RetentionPolicy {
-    /// The `--keep-*` flags for `restic forget`. Only non-zero rules are
-    /// emitted; an all-zero policy yields no flags (the caller skips forget,
-    /// since restic refuses a forget with no keep rules).
-    pub fn keep_args(&self) -> Vec<String> {
-        let mut args = Vec::new();
-        for (flag, n) in [
-            ("--keep-last", self.keep_last),
-            ("--keep-daily", self.keep_daily),
-            ("--keep-weekly", self.keep_weekly),
-            ("--keep-monthly", self.keep_monthly),
-        ] {
-            if n > 0 {
-                args.push(flag.to_string());
-                args.push(n.to_string());
-            }
-        }
-        args
-    }
-
-    /// True when no rule keeps anything — forget must not run (it would be a
-    /// no-op at best, or an error at worst).
-    pub fn is_empty(&self) -> bool {
-        self.keep_last == 0
-            && self.keep_daily == 0
-            && self.keep_weekly == 0
-            && self.keep_monthly == 0
     }
 }
 
@@ -227,14 +196,6 @@ impl BackupBackend {
         }
     }
 
-    /// The retention policy applied by default when this backend is first
-    /// configured. Managed backups run on ryra-controlled storage, so they get
-    /// a sane day/week/month ladder out of the box; a user's own S3/local repo
-    /// is left untouched (they opt in by setting `[backup.retention]`), since
-    /// we don't auto-delete data from storage we don't own.
-    pub fn default_retention(&self) -> Option<RetentionPolicy> {
-        matches!(self, BackupBackend::Managed).then(RetentionPolicy::default)
-    }
 
     /// Environment variables restic needs to authenticate to this
     /// backend. Returned as a vec of `(key, value)` pairs so the
@@ -585,7 +546,8 @@ mod tests {
                     session_token: None,
                     prefix: None,
                 },
-                retention: None,
+                daily: None,
+                weekly: None,
             }),
             ..Config::default()
         };
@@ -603,42 +565,18 @@ mod tests {
     }
 
     #[test]
-    fn retention_keep_args_skips_zero_rules() {
-        let p = RetentionPolicy {
-            keep_last: 3,
-            keep_daily: 7,
-            keep_weekly: 0,
-            keep_monthly: 0,
+    fn schedule_mode_round_trips_and_defaults_time() {
+        // `at` defaults to 03:00 when omitted; an explicit time round-trips.
+        let parsed: ScheduleMode = toml::from_str("keep = 4\n").unwrap();
+        assert_eq!(parsed.keep, 4);
+        assert_eq!(parsed.at, "03:00");
+        let m = ScheduleMode {
+            keep: 7,
+            at: "02:30".into(),
         };
-        assert_eq!(
-            p.keep_args(),
-            vec!["--keep-last", "3", "--keep-daily", "7"]
-        );
-        assert!(!p.is_empty());
-        let none = RetentionPolicy {
-            keep_last: 0,
-            keep_daily: 0,
-            keep_weekly: 0,
-            keep_monthly: 0,
-        };
-        assert!(none.is_empty());
-        assert!(none.keep_args().is_empty());
-    }
-
-    #[test]
-    fn managed_backend_gets_default_retention_others_opt_in() {
-        assert!(
-            BackupBackend::Managed.default_retention().is_some(),
-            "managed should default to a retention ladder"
-        );
-        assert!(
-            BackupBackend::Local {
-                path: "/tmp/x".into()
-            }
-            .default_retention()
-            .is_none(),
-            "a user's own repo should not auto-prune by default"
-        );
+        let back: ScheduleMode = toml::from_str(&toml::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(ScheduleMode::default().keep, 7);
     }
 
     #[test]
@@ -651,7 +589,8 @@ mod tests {
                 backend: BackupBackend::Local {
                     path: "/tmp/r".into(),
                 },
-                retention: None,
+                daily: None,
+                weekly: None,
             }),
             ..Config::default()
         };

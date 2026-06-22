@@ -255,18 +255,24 @@ pub enum Request {
     RunBackups {
         #[serde(default)]
         services: Vec<String>,
+        /// Cadence tag for the snapshots: `daily` | `weekly` | `manual`.
+        /// Defaults to `manual` (hand-run, never pruned).
+        #[serde(default)]
+        mode: Option<String>,
     },
     /// Full disaster recovery: restore EVERY service in the repo at `snapshot`
     /// ("latest" or an id), in dependency order, re-linking + starting them.
     /// The rpc twin of `ryra backup restore` with no service.
     RestoreAll { snapshot: String },
-    /// Install/remove the scheduled-backup systemd timer (the rpc twin of
-    /// `ryra backup schedule`). `interval` is daily | weekly | disable;
-    /// `at` is the 24h `HH:MM` time of day (default 03:00).
-    ScheduleBackup {
-        interval: String,
+    /// Set the full backup schedule (rpc twin of `ryra backup config`'s schedule
+    /// step + `ryra backup schedule`). Each cadence: `Some` enables it (keep N
+    /// at `HH:MM`), `None` disables it. Installs/removes the daily + weekly
+    /// timers to match. Manual backups are always available and unaffected.
+    SetSchedule {
         #[serde(default)]
-        at: Option<String>,
+        daily: Option<ScheduleSpec>,
+        #[serde(default)]
+        weekly: Option<ScheduleSpec>,
     },
     /// The installable env/group/choice schema for a registry service
     /// (default registry if `registry` is unset).
@@ -361,20 +367,22 @@ pub struct BackupStatusView {
     pub backend_label: Option<String>,
     /// Services enrolled in backups (`metadata.backup_enabled`).
     pub enrolled: Vec<String>,
-    /// The configured retention ladder, when one is set. `None` = keep every
-    /// snapshot forever (no `restic forget` runs).
+    /// Daily schedule (keep N at HH:MM), if enabled. `None` = no daily backups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retention: Option<RetentionView>,
+    pub daily: Option<ScheduleSpec>,
+    /// Weekly schedule (Sunday), if enabled. `None` = no weekly backups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weekly: Option<ScheduleSpec>,
 }
 
-/// The configured retention ladder (mirrors the engine's `RetentionPolicy`):
-/// how many snapshots to keep at each cadence.
+/// A scheduled backup cadence: keep at most `keep` snapshots of this mode,
+/// run at `at` (24h `HH:MM`; `None` => the 03:00 default). Used both to set
+/// the schedule (`SetSchedule`) and to report it (`BackupStatusView`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetentionView {
-    pub keep_last: u32,
-    pub keep_daily: u32,
-    pub keep_weekly: u32,
-    pub keep_monthly: u32,
+pub struct ScheduleSpec {
+    pub keep: u32,
+    #[serde(default)]
+    pub at: Option<String>,
 }
 
 /// Per-service result of a retention sweep (`ForgetBackups`).

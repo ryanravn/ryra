@@ -414,6 +414,14 @@ pub fn plan_lifecycle(req: &LifecycleRequest) -> Result<Vec<Step>> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupRunRequest {
     pub service: String,
+    /// Cadence this snapshot belongs to: `daily` | `weekly` | `manual`.
+    /// Defaults to `manual` (the hand-run, never-pruned mode).
+    #[serde(default = "default_backup_mode")]
+    pub mode: String,
+}
+
+fn default_backup_mode() -> String {
+    "manual".to_string()
 }
 
 /// Plan a backup of one service: resolves the install's registry dir and
@@ -428,5 +436,5 @@ pub async fn plan_backup_run(req: &BackupRunRequest) -> Result<crate::backup::Ba
         .ok_or_else(|| Error::ServiceNotInstalled(req.service.clone()))?;
     let service_ref = crate::service_ref_from_installed(&installed);
     let repo_dir = crate::resolve_registry_dir(&service_ref).await?;
-    crate::backup::plan_backup_run(&req.service, &cfg, &repo_dir)
+    crate::backup::plan_backup_run(&req.service, &cfg, &repo_dir, &req.mode)
 }

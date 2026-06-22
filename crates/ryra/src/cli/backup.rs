@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 
 use ryra_core::REGISTRY_DEFAULT;
 use ryra_core::backup::{
-    BackupRestorePlan, list_backup_enabled, plan_backup_forget, plan_backup_restore,
-    plan_backup_run, restic_forget, restic_restore, run_hook,
+    BackupRestorePlan, list_backup_enabled, plan_backup_restore, plan_backup_run, plan_mode_prune,
+    restic_forget, restic_restore, run_hook,
 };
 use ryra_core::config::ConfigPaths;
-use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, RetentionPolicy};
+use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, ScheduleMode};
 use ryra_core::metadata::load_metadata;
 use ryra_core::registry::resolve::ServiceRef;
 
@@ -71,11 +71,15 @@ pub enum BackupAction {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Push a snapshot of each backup-enabled install (or just the
-    /// listed services) to the configured restic repository.
+    /// Push a snapshot of each backup-enabled install (or just the listed
+    /// services). Hand runs are `manual` (kept forever); the daily/weekly
+    /// timers pass `--mode` so their snapshots are capped by the schedule.
     Run {
         /// Service name(s). Omit to back up every enabled install.
         services: Vec<String>,
+        /// Cadence tag for these snapshots. `manual` (default) is never pruned.
+        #[arg(long, value_enum, default_value_t = BackupMode::Manual)]
+        mode: BackupMode,
     },
     /// Restore from a snapshot. With a service name, restores just that
     /// install's folder. With no name, performs full disaster recovery:
@@ -94,7 +98,8 @@ pub enum BackupAction {
         #[arg(long)]
         force: bool,
     },
-    /// List snapshots for one or all backup-enabled services.
+    /// List backups grouped by mode (daily / weekly / manual), for one or all
+    /// backup-enabled services.
     List {
         /// Service name(s). Omit to list snapshots for every enabled
         /// install.
@@ -103,47 +108,33 @@ pub enum BackupAction {
     /// Show repository overview, per-service last-run timestamps,
     /// and total repo size.
     Status,
-    /// Install or remove a systemd --user timer that runs
-    /// `ryra backup run` on a schedule.
+    /// Turn a scheduled cadence on or off. `daily`/`weekly` install a systemd
+    /// --user timer that runs `ryra backup run --mode <cadence>` and keeps the
+    /// last `--keep`; `--off` removes it. Manual backups are always available
+    /// and unlimited.
     Schedule {
-        /// `daily`, `weekly` (Sunday), or `disable` to remove the timer.
-        interval: ScheduleInterval,
-        /// Time of day, 24h `HH:MM` (default 03:00). Ignored for `disable`.
-        #[arg(long, default_value = "03:00")]
-        at: String,
+        /// `daily` or `weekly`.
+        cadence: ScheduleCadence,
+        /// How many of this cadence's snapshots to keep (default 7). Older ones
+        /// are pruned automatically after each run.
+        #[arg(long)]
+        keep: Option<u32>,
+        /// Time of day, 24h `HH:MM` (default 03:00).
+        #[arg(long)]
+        at: Option<String>,
+        /// Remove this cadence's schedule (stop taking it).
+        #[arg(long)]
+        off: bool,
     },
-    /// Prune snapshots to the configured retention policy (`restic forget`,
-    /// then prune to reclaim space). A no-op when no retention is configured
-    /// (snapshots are kept forever). Runs automatically after each
-    /// `backup run`; use this to prune on demand or preview with `--dry-run`.
+    /// Prune scheduled (daily/weekly) snapshots to their keep-counts now. Manual
+    /// snapshots are never pruned. Runs automatically after each scheduled
+    /// backup; use this on demand or to preview with `--dry-run`.
     Forget {
         /// Service name(s). Omit to sweep every enrolled install.
         services: Vec<String>,
         /// Show what would be removed without deleting anything.
         #[arg(long)]
         dry_run: bool,
-    },
-    /// View or set the retention policy: how many snapshots to keep at each
-    /// cadence. With no flags, shows the current policy. e.g.
-    /// `ryra backup retention --keep-daily 7 --keep-weekly 4 --keep-monthly 6`
-    /// keeps a week of dailies, a month of weeklies, half a year of monthlies.
-    /// Applied after every `backup run` (and on demand via `backup forget`).
-    Retention {
-        /// Keep the N most recent snapshots regardless of age.
-        #[arg(long)]
-        keep_last: Option<u32>,
-        /// Keep the most recent snapshot from each of the last N days.
-        #[arg(long)]
-        keep_daily: Option<u32>,
-        /// Keep the most recent snapshot from each of the last N weeks.
-        #[arg(long)]
-        keep_weekly: Option<u32>,
-        /// Keep the most recent snapshot from each of the last N months.
-        #[arg(long)]
-        keep_monthly: Option<u32>,
-        /// Turn retention off (keep every snapshot forever).
-        #[arg(long)]
-        off: bool,
     },
 }
 
@@ -154,30 +145,49 @@ pub enum BackendKind {
     Local,
 }
 
+/// Which cadence a backup snapshot belongs to. `manual` is unlimited (never
+/// pruned); `daily` and `weekly` are capped by the schedule.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScheduleInterval {
+pub enum BackupMode {
     Daily,
     Weekly,
-    Disable,
+    Manual,
 }
 
-impl ScheduleInterval {
-    /// The systemd `OnCalendar=` expression for this cadence at `at` (HH:MM).
-    fn on_calendar(self, at: &str) -> String {
+impl BackupMode {
+    pub fn as_str(self) -> &'static str {
         match self {
-            ScheduleInterval::Daily => format!("*-*-* {at}:00"),
-            ScheduleInterval::Weekly => format!("Sun *-*-* {at}:00"),
-            // unreachable: Disable doesn't write a timer
-            ScheduleInterval::Disable => String::new(),
+            BackupMode::Daily => "daily",
+            BackupMode::Weekly => "weekly",
+            BackupMode::Manual => "manual",
         }
     }
+}
 
-    fn label(self, at: &str) -> String {
+/// A schedulable cadence -- [`BackupMode`] without `manual` (you can't schedule
+/// manual backups; they're always available on demand).
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduleCadence {
+    Daily,
+    Weekly,
+}
+
+impl ScheduleCadence {
+    fn as_str(self) -> &'static str {
         match self {
-            ScheduleInterval::Daily => format!("daily at {at}"),
-            ScheduleInterval::Weekly => format!("Sunday at {at}"),
-            ScheduleInterval::Disable => "disabled".to_string(),
+            ScheduleCadence::Daily => "daily",
+            ScheduleCadence::Weekly => "weekly",
         }
+    }
+}
+
+/// The systemd `OnCalendar=` expression for a cadence at `at` (HH:MM). Weekly
+/// fires Sunday; daily every day.
+fn on_calendar(cadence: &str, at: &str) -> String {
+    if cadence == "weekly" {
+        format!("Sun *-*-* {at}:00")
+    } else {
+        format!("*-*-* {at}:00")
     }
 }
 
@@ -300,22 +310,20 @@ pub async fn run(action: BackupAction) -> Result<()> {
             })
             .await
         }
-        BackupAction::Run { services } => run_backup(services).await,
+        BackupAction::Run { services, mode } => run_backup(services, mode).await,
         BackupAction::Restore { service, at, force } => match service {
             Some(svc) => restore(svc, at, force).await,
             None => restore_all(at).await,
         },
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
-        BackupAction::Schedule { interval, at } => schedule(interval, Some(&at)).await,
-        BackupAction::Forget { services, dry_run } => forget(services, dry_run).await,
-        BackupAction::Retention {
-            keep_last,
-            keep_daily,
-            keep_weekly,
-            keep_monthly,
+        BackupAction::Schedule {
+            cadence,
+            keep,
+            at,
             off,
-        } => retention(keep_last, keep_daily, keep_weekly, keep_monthly, off).await,
+        } => schedule(cadence, keep, at, off).await,
+        BackupAction::Forget { services, dry_run } => forget(services, dry_run).await,
     }
 }
 
@@ -440,57 +448,55 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
         style(resolved.backend.restic_repo()).dim()
     );
 
-    // Offer an automatic schedule -- daily or weekly, at a time you choose
-    // (default 03:00). (Change it later with `ryra backup schedule`.)
-    if interactive && !args.yes && read_schedule_state().is_none() {
-        println!("\n  Automatic backups:");
-        println!("  1. Daily");
-        println!("  2. Weekly (Sunday)");
-        println!("  3. No schedule");
-        let choice: u32 = Input::new()
-            .with_prompt("Choose")
-            .default(1)
-            .interact_text()?;
-        let interval = match choice {
-            1 => Some(ScheduleInterval::Daily),
-            2 => Some(ScheduleInterval::Weekly),
-            _ => None,
-        };
-        if let Some(interval) = interval {
-            let at: String = Input::new()
-                .with_prompt("Time of day (24h HH:MM)")
-                .default("03:00".to_string())
-                .interact_text()?;
-            schedule(interval, Some(&at)).await?;
+    // Set up the schedule: daily and weekly are independent cadences, each
+    // capped at `keep` snapshots (oldest dropped). Manual backups
+    // (`ryra backup run`) are always available and never pruned. Skipped when a
+    // schedule already exists (e.g. retrying an existing repo).
+    let unscheduled = config
+        .backup
+        .as_ref()
+        .map(|b| b.daily.is_none() && b.weekly.is_none())
+        .unwrap_or(false);
+    if interactive && !args.yes && unscheduled {
+        println!(
+            "\n  {} keep the last N of each. Manual backups (`ryra backup run`) \
+             are always available and kept forever.",
+            style("Scheduled backups:").bold()
+        );
+        let daily = prompt_cadence("daily", 7)?;
+        let weekly = prompt_cadence("weekly", 4)?;
+        if let Some(b) = config.backup.as_mut() {
+            b.daily = daily;
+            b.weekly = weekly;
         }
-    }
-
-    // Offer a retention ladder so snapshots don't grow forever. Skipped when one
-    // is already set (e.g. retrying an existing repo). Tune with the dedicated
-    // `ryra backup retention` command.
-    if interactive
-        && !args.yes
-        && config
-            .backup
-            .as_ref()
-            .and_then(|b| b.retention.as_ref())
-            .is_none()
-    {
-        let want = Confirm::new()
-            .with_prompt("Prune old backups automatically? (keep 7 daily, 4 weekly, 6 monthly)")
-            .default(true)
-            .interact()?;
-        if want {
-            if let Some(b) = config.backup.as_mut() {
-                b.retention = Some(RetentionPolicy::default());
-            }
-            ryra_core::config::save_config(&paths.config_file, &config)?;
-            print_retention(config.backup.as_ref().and_then(|b| b.retention.as_ref()));
-            println!("  Tune it anytime with `ryra backup retention`.");
-        }
+        ryra_core::config::save_config(&paths.config_file, &config)?;
+        apply_schedule(&config).await?;
     }
 
     Ok(())
+}
+
+/// Ask whether to take this cadence; if yes, collect keep-count + time of day.
+fn prompt_cadence(cadence: &str, default_keep: u32) -> Result<Option<ScheduleMode>> {
+    let on = Confirm::new()
+        .with_prompt(format!("  Take {cadence} backups?"))
+        .default(cadence == "daily")
+        .interact()?;
+    if !on {
+        return Ok(None);
+    }
+    let keep: u32 = Input::new()
+        .with_prompt(format!("    How many {cadence} backups to keep?"))
+        .default(default_keep)
+        .interact_text()?;
+    let at: String = Input::new()
+        .with_prompt("    Time of day (24h HH:MM)")
+        .default("03:00".to_string())
+        .interact_text()?;
+    Ok(Some(ScheduleMode {
+        keep,
+        at: parse_schedule_time(Some(&at))?,
+    }))
 }
 
 enum ConfigureMode {
@@ -556,11 +562,12 @@ async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result
         }
     };
 
-    let retention = backend.default_retention();
+    // Schedule (daily/weekly) is set up after the backend, in `configure`.
     Ok(BackupSettings {
         password,
         backend,
-        retention,
+        daily: None,
+        weekly: None,
     })
 }
 
@@ -672,7 +679,45 @@ fn init_repo_if_needed(settings: &BackupSettings) -> Result<()> {
 // run
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn run_backup(services: Vec<String>) -> Result<()> {
+/// The keep-count configured for a scheduled cadence (`None` for manual, or a
+/// cadence with no schedule set — those are never auto-pruned).
+fn mode_keep(config: &Config, mode: BackupMode) -> Option<u32> {
+    let b = config.backup.as_ref()?;
+    match mode {
+        BackupMode::Daily => b.daily.as_ref().map(|s| s.keep),
+        BackupMode::Weekly => b.weekly.as_ref().map(|s| s.keep),
+        BackupMode::Manual => None,
+    }
+}
+
+/// Prune one service's snapshots in `mode` to `keep` (best-effort). Logged, not
+/// fatal. Shared by the post-run auto-prune and `ryra backup forget`.
+fn prune_one(config: &Config, svc: &str, mode: BackupMode, keep: u32, dry_run: bool) -> bool {
+    match plan_mode_prune(svc, config, mode.as_str(), keep, dry_run) {
+        Ok(Some(plan)) => match restic_forget(&plan) {
+            Ok((kept, removed)) => {
+                println!(
+                    "  {} {svc} {}: {removed} removed, {kept} kept{}",
+                    style("pruned:").dim(),
+                    mode.as_str(),
+                    if dry_run { " (dry run)" } else { "" }
+                );
+                true
+            }
+            Err(e) => {
+                eprintln!("{} {svc} {}: {e:#}", style("prune failed:").yellow(), mode.as_str());
+                false
+            }
+        },
+        Ok(None) => true,
+        Err(e) => {
+            eprintln!("{} {svc} {}: {e:#}", style("prune failed:").yellow(), mode.as_str());
+            false
+        }
+    }
+}
+
+pub(crate) async fn run_backup(services: Vec<String>, mode: BackupMode) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     if config.backup.is_none() {
@@ -699,29 +744,14 @@ pub(crate) async fn run_backup(services: Vec<String>) -> Result<()> {
 
     let mut any_failed = false;
     for svc in &targets {
-        match run_one(svc, &config).await {
+        match run_one(svc, &config, mode).await {
             Ok(()) => {
                 record_status(svc, BackupOutcome::Success)?;
-                // Apply retention after a successful backup. Best-effort: a
-                // prune failure must not fail the backup that just succeeded,
-                // and "no policy configured" is a silent no-op (keep forever).
-                match plan_backup_forget(svc, &config, false) {
-                    Ok(Some(plan)) => match restic_forget(&plan) {
-                        Ok((_, removed)) if removed > 0 => println!(
-                            "  {} pruned {removed} old snapshot(s)",
-                            style("retention:").dim()
-                        ),
-                        Ok(_) => {}
-                        Err(e) => eprintln!(
-                            "{} {svc}: retention prune failed: {e:#}",
-                            style("warning:").yellow()
-                        ),
-                    },
-                    Ok(None) => {}
-                    Err(e) => eprintln!(
-                        "{} {svc}: retention skipped: {e:#}",
-                        style("warning:").yellow()
-                    ),
+                // Cap this cadence to its keep. Manual is unlimited (mode_keep
+                // returns None). Best-effort: a prune failure never fails the
+                // backup that just succeeded.
+                if let Some(keep) = mode_keep(&config, mode) {
+                    prune_one(&config, svc, mode, keep, false);
                 }
             }
             Err(e) => {
@@ -737,9 +767,8 @@ pub(crate) async fn run_backup(services: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Prune snapshots to the configured retention policy, per service. Services
-/// with no policy are a no-op (with a note — snapshots are kept forever).
-/// `--dry-run` previews removals without deleting (`restic forget --dry-run`).
+/// Prune the scheduled (daily + weekly) snapshots to their keep-counts. Manual
+/// snapshots are never pruned. `--dry-run` previews removals.
 async fn forget(services: Vec<String>, dry_run: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
@@ -758,43 +787,40 @@ async fn forget(services: Vec<String>, dry_run: bool) -> Result<()> {
         println!("No services have backups enabled.");
         return Ok(());
     }
-    let mut any_failed = false;
+    // Nothing scheduled -> nothing to prune (manual is unlimited).
+    if mode_keep(&config, BackupMode::Daily).is_none()
+        && mode_keep(&config, BackupMode::Weekly).is_none()
+    {
+        println!(
+            "{} no daily/weekly schedule set — manual backups are kept forever. \
+             Set one with `{}`.",
+            style("nothing to prune:").dim(),
+            style("ryra backup schedule daily --keep N").cyan()
+        );
+        return Ok(());
+    }
+    let mut ok = true;
     for svc in &targets {
-        match plan_backup_forget(svc, &config, dry_run) {
-            Ok(Some(plan)) => match restic_forget(&plan) {
-                Ok((kept, removed)) => println!(
-                    "{} {svc}: {removed} removed, {kept} kept{}",
-                    style("pruned:").cyan().bold(),
-                    if dry_run { " (dry run -- nothing deleted)" } else { "" }
-                ),
-                Err(e) => {
-                    eprintln!("{} {svc}: {e:#}", style("forget failed:").red().bold());
-                    any_failed = true;
-                }
-            },
-            Ok(None) => println!(
-                "{} {svc}: no retention policy set (keeping all snapshots)",
-                style("skip:").dim()
-            ),
-            Err(e) => {
-                eprintln!("{} {svc}: {e:#}", style("forget failed:").red().bold());
-                any_failed = true;
+        for mode in [BackupMode::Daily, BackupMode::Weekly] {
+            if let Some(keep) = mode_keep(&config, mode) {
+                ok &= prune_one(&config, svc, mode, keep, dry_run);
             }
         }
     }
-    if any_failed {
-        bail!("one or more services failed to prune");
+    if !ok {
+        bail!("one or more prunes failed");
     }
     Ok(())
 }
 
-async fn run_one(service_name: &str, config: &Config) -> Result<()> {
+async fn run_one(service_name: &str, config: &Config, mode: BackupMode) -> Result<()> {
     let repo_dir = resolve_repo_dir_for_install(service_name).await?;
-    let plan = plan_backup_run(service_name, config, &repo_dir)?;
+    let plan = plan_backup_run(service_name, config, &repo_dir, mode.as_str())?;
     println!(
-        "\n{} {} ({} path(s))",
+        "\n{} {} ({}, {} path(s))",
         style("backing up:").cyan().bold(),
         plan.service_name,
+        mode.as_str(),
         plan.paths.len()
     );
 
@@ -1175,6 +1201,8 @@ async fn list(services: Vec<String>) -> Result<()> {
     struct Snap {
         short_id: String,
         time: String,
+        #[serde(default)]
+        tags: Vec<String>,
     }
     for svc in &targets {
         let mut cmd = std::process::Command::new("restic");
@@ -1213,10 +1241,20 @@ async fn list(services: Vec<String>) -> Result<()> {
             println!("  {}", style("no backups yet").dim());
             continue;
         }
-        println!("  {:<19}  {}", style("WHEN").dim(), style("ID").dim());
+        println!(
+            "  {:<19}  {:<7}  {}",
+            style("WHEN").dim(),
+            style("MODE").dim(),
+            style("ID").dim()
+        );
         for s in &snaps {
             let when = s.time.get(..19).unwrap_or(&s.time).replace('T', " ");
-            println!("  {:<19}  {}", when, s.short_id);
+            let mode = s
+                .tags
+                .iter()
+                .find_map(|t| t.strip_prefix("mode:"))
+                .unwrap_or("manual");
+            println!("  {:<19}  {:<7}  {}", when, mode, s.short_id);
         }
     }
     println!(
@@ -1224,89 +1262,6 @@ async fn list(services: Vec<String>) -> Result<()> {
         style("restore a point:").dim(),
         style("ryra backup restore <id>").cyan(),
         style("or `ryra backup restore <service>` for the latest").dim()
-    );
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// retention
-// ---------------------------------------------------------------------------
-
-fn print_retention(r: Option<&RetentionPolicy>) {
-    match r {
-        Some(r) => println!(
-            "{} keep {} latest \u{b7} {} daily \u{b7} {} weekly \u{b7} {} monthly",
-            style("Retention:").cyan().bold(),
-            r.keep_last,
-            r.keep_daily,
-            r.keep_weekly,
-            r.keep_monthly
-        ),
-        None => println!(
-            "{} none \u{2014} every snapshot is kept forever.\n  Set one, e.g. {}",
-            style("Retention:").cyan().bold(),
-            style("ryra backup retention --keep-daily 7 --keep-weekly 4 --keep-monthly 6").cyan()
-        ),
-    }
-}
-
-async fn retention(
-    keep_last: Option<u32>,
-    keep_daily: Option<u32>,
-    keep_weekly: Option<u32>,
-    keep_monthly: Option<u32>,
-    off: bool,
-) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
-    let Some(settings) = config.backup.as_ref() else {
-        bail!("no backup repository configured: run `ryra backup config` first");
-    };
-    let current = settings.retention.clone();
-
-    if off {
-        config.backup.as_mut().unwrap().retention = None;
-        ryra_core::config::save_config(&paths.config_file, &config)?;
-        println!(
-            "{} retention off \u{2014} keeping every snapshot forever.",
-            style("done:").green().bold()
-        );
-        return Ok(());
-    }
-
-    // No knobs given: just show the current policy.
-    if keep_last.is_none()
-        && keep_daily.is_none()
-        && keep_weekly.is_none()
-        && keep_monthly.is_none()
-    {
-        print_retention(current.as_ref());
-        return Ok(());
-    }
-
-    // Update only the knobs provided, starting from the current policy (or a
-    // sensible default ladder if none was set yet).
-    let mut policy = current.unwrap_or_default();
-    if let Some(v) = keep_last {
-        policy.keep_last = v;
-    }
-    if let Some(v) = keep_daily {
-        policy.keep_daily = v;
-    }
-    if let Some(v) = keep_weekly {
-        policy.keep_weekly = v;
-    }
-    if let Some(v) = keep_monthly {
-        policy.keep_monthly = v;
-    }
-    config.backup.as_mut().unwrap().retention = Some(policy.clone());
-    ryra_core::config::save_config(&paths.config_file, &config)?;
-    println!("{}", style("done:").green().bold());
-    print_retention(Some(&policy));
-    println!(
-        "  Applied after each {} (or now with {}).",
-        style("ryra backup run").cyan(),
-        style("ryra backup forget").cyan()
     );
     Ok(())
 }
@@ -1327,22 +1282,21 @@ async fn status() -> Result<()> {
         "  Repository: {}",
         style(settings.backend.restic_repo()).dim()
     );
-    match read_schedule_state() {
-        Some(ScheduleState { interval, next_run }) => {
-            println!(
-                "  Schedule:   {} (next: {})",
-                style(interval).green(),
-                style(next_run.unwrap_or_else(|| "?".into())).dim()
-            );
-        }
-        None => {
-            println!(
-                "  Schedule:   {} ({} to enable)",
-                style("none").yellow(),
-                style("ryra backup schedule daily").cyan()
-            );
+    println!("  Schedule:");
+    for (label, mode) in [
+        ("daily ", settings.daily.as_ref()),
+        ("weekly", settings.weekly.as_ref()),
+    ] {
+        match mode {
+            Some(m) => println!(
+                "    {label}: {} (keep {})",
+                style(&m.at).green(),
+                style(m.keep).green()
+            ),
+            None => println!("    {label}: {}", style("off").dim()),
         }
     }
+    println!("    manual: always available (kept forever)");
 
     let enabled = list_backup_enabled()?;
     if enabled.is_empty() {
@@ -1391,90 +1345,105 @@ async fn status() -> Result<()> {
 // Schedule (systemd --user timer)
 // ---------------------------------------------------------------------------
 
-/// Unit names + paths for the user-level backup timer. Kept as
-/// constants so installing and removing reference the same files.
-const TIMER_UNIT: &str = "ryra-backup.timer";
-const SERVICE_UNIT: &str = "ryra-backup.service";
-
 fn systemd_user_dir() -> Result<PathBuf> {
     let base = dirs::config_dir().ok_or_else(|| anyhow!("could not determine $XDG_CONFIG_HOME"))?;
     Ok(base.join("systemd").join("user"))
 }
 
-pub(crate) async fn schedule(interval: ScheduleInterval, at: Option<&str>) -> Result<()> {
-    let dir = systemd_user_dir()?;
-    std::fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    let timer_path = dir.join(TIMER_UNIT);
-    let service_path = dir.join(SERVICE_UNIT);
+/// Timer + oneshot-service unit names for a cadence (`daily` / `weekly`).
+fn unit_names(cadence: &str) -> (String, String) {
+    (
+        format!("ryra-backup-{cadence}.timer"),
+        format!("ryra-backup-{cadence}.service"),
+    )
+}
 
-    if interval == ScheduleInterval::Disable {
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "disable", "--now", TIMER_UNIT])
-            .status();
-        // Best-effort file removal; missing files mean "already gone."
-        let _ = std::fs::remove_file(&timer_path);
-        let _ = std::fs::remove_file(&service_path);
-        let _ = std::process::Command::new("systemctl")
-            .args(["--user", "daemon-reload"])
-            .status();
-        println!("  {} timer removed.", style("ryra-backup").cyan());
+fn cadence_mode(config: &Config, cadence: ScheduleCadence) -> Option<ScheduleMode> {
+    let b = config.backup.as_ref()?;
+    match cadence {
+        ScheduleCadence::Daily => b.daily.clone(),
+        ScheduleCadence::Weekly => b.weekly.clone(),
+    }
+}
+
+fn set_cadence(config: &mut Config, cadence: ScheduleCadence, mode: Option<ScheduleMode>) {
+    if let Some(b) = config.backup.as_mut() {
+        match cadence {
+            ScheduleCadence::Daily => b.daily = mode,
+            ScheduleCadence::Weekly => b.weekly = mode,
+        }
+    }
+}
+
+/// `ryra backup schedule <daily|weekly> [--keep N] [--at HH:MM] | --off`:
+/// turn a cadence on (persist its keep/time + install the timer) or off.
+pub(crate) async fn schedule(
+    cadence: ScheduleCadence,
+    keep: Option<u32>,
+    at: Option<String>,
+    off: bool,
+) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+    if config.backup.is_none() {
+        bail!("no backup repository configured: run `ryra backup config` first");
+    }
+    let name = cadence.as_str();
+
+    if off {
+        set_cadence(&mut config, cadence, None);
+        ryra_core::config::save_config(&paths.config_file, &config)?;
+        apply_schedule(&config).await?;
+        println!("  {} {name} backups off.", style("ryra-backup").cyan());
         return Ok(());
     }
 
-    let time = parse_schedule_time(at)?;
+    // Start from the current schedule for this cadence (or a default), then
+    // apply whichever knobs were passed.
+    let mut mode = cadence_mode(&config, cadence).unwrap_or_default();
+    if let Some(k) = keep {
+        mode.keep = k;
+    }
+    if let Some(a) = at {
+        mode.at = parse_schedule_time(Some(&a))?;
+    }
+    set_cadence(&mut config, cadence, Some(mode.clone()));
+    ryra_core::config::save_config(&paths.config_file, &config)?;
+    apply_schedule(&config).await?;
+    println!(
+        "  {} {name} backups at {}, keeping the last {}.",
+        style("ryra-backup").cyan(),
+        style(&mode.at).green(),
+        style(mode.keep).green()
+    );
+    super::linger::warn_if_disabled().await?;
+    Ok(())
+}
 
-    // Find the installed ryra binary so the unit file points at the
-    // same one the user just invoked. `current_exe()` gives the
-    // absolute path, which is more robust than `ryra` in the unit's
-    // PATH (especially for ~/.cargo/bin/ryra or release tarball
-    // installs where $PATH at boot differs from the login shell).
+/// Reconcile the systemd --user timers to match `config`: write + enable a
+/// timer for each enabled cadence, remove the rest, one daemon-reload. Shared
+/// by `config`, `schedule`, and the rpc.
+pub(crate) async fn apply_schedule(config: &Config) -> Result<()> {
+    let dir = systemd_user_dir()?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
+    // Point unit files at the exact binary the user invoked, not bare `ryra`
+    // (its $PATH at boot differs from the login shell).
     let exe = std::env::current_exe()
         .context("locating the current ryra binary")?
         .canonicalize()
         .context("resolving ryra binary path")?;
 
-    std::fs::write(
-        &service_path,
-        format!(
-            "[Unit]\n\
-             Description=Ryra: push encrypted snapshots of every backup-enabled service\n\
-             # Network is needed for S3-backed remotes; harmless for local repos.\n\
-             After=network-online.target\n\
-             Wants=network-online.target\n\
-             \n\
-             [Service]\n\
-             Type=oneshot\n\
-             ExecStart={exe} backup run\n\
-             # Don't keep restarting if a single backup fails; the\n\
-             # next scheduled fire will try again. Status DB records\n\
-             # the failure so `ryra backup status` shows it.\n\
-             Restart=no\n",
-            exe = exe.display(),
-        ),
-    )
-    .with_context(|| format!("write {}", service_path.display()))?;
-
-    std::fs::write(
-        &timer_path,
-        format!(
-            "[Unit]\n\
-             Description=Ryra backup timer ({label})\n\
-             \n\
-             [Timer]\n\
-             OnCalendar={on_calendar}\n\
-             # Run a missed schedule when the host comes back up\n\
-             # (laptops, after a reboot, after suspend).\n\
-             Persistent=true\n\
-             Unit={service}\n\
-             \n\
-             [Install]\n\
-             WantedBy=timers.target\n",
-            label = interval.label(&time),
-            on_calendar = interval.on_calendar(&time),
-            service = SERVICE_UNIT,
-        ),
-    )
-    .with_context(|| format!("write {}", timer_path.display()))?;
+    let modes = [
+        ("daily", config.backup.as_ref().and_then(|b| b.daily.clone())),
+        ("weekly", config.backup.as_ref().and_then(|b| b.weekly.clone())),
+    ];
+    for (cadence, mode) in &modes {
+        let (timer, service) = unit_names(cadence);
+        match mode {
+            Some(m) => write_timer(&dir, &exe, cadence, &m.at, &timer, &service)?,
+            None => remove_timer(&dir, &timer, &service),
+        }
+    }
 
     let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
@@ -1483,83 +1452,72 @@ pub(crate) async fn schedule(interval: ScheduleInterval, at: Option<&str>) -> Re
     if !reload.success() {
         bail!("systemctl --user daemon-reload failed");
     }
-    let enable = std::process::Command::new("systemctl")
-        .args(["--user", "enable", "--now", TIMER_UNIT])
-        .status()
-        .context("systemctl --user enable --now ryra-backup.timer")?;
-    if !enable.success() {
-        bail!("could not enable {TIMER_UNIT}");
+    for (cadence, mode) in &modes {
+        if mode.is_some() {
+            let (timer, _) = unit_names(cadence);
+            let st = std::process::Command::new("systemctl")
+                .args(["--user", "enable", "--now", &timer])
+                .status()
+                .with_context(|| format!("systemctl --user enable --now {timer}"))?;
+            if !st.success() {
+                bail!("could not enable {timer}");
+            }
+        }
     }
-
-    println!(
-        "  {} scheduled: {}",
-        style("ryra-backup").cyan(),
-        style(interval.label(&time)).green()
-    );
-    super::linger::warn_if_disabled().await?;
     Ok(())
 }
 
-/// State of the backup timer, if any. Used by `status` to show
-/// whether scheduled runs are wired up and when the next one fires.
-struct ScheduleState {
-    interval: String,
-    next_run: Option<String>,
+fn write_timer(
+    dir: &Path,
+    exe: &Path,
+    cadence: &str,
+    at: &str,
+    timer: &str,
+    service: &str,
+) -> Result<()> {
+    std::fs::write(
+        dir.join(service),
+        format!(
+            "[Unit]\n\
+             Description=Ryra {cadence} backup: snapshot every backup-enabled service\n\
+             After=network-online.target\n\
+             Wants=network-online.target\n\
+             \n\
+             [Service]\n\
+             Type=oneshot\n\
+             ExecStart={exe} backup run --mode {cadence}\n\
+             Restart=no\n",
+            exe = exe.display(),
+        ),
+    )
+    .with_context(|| format!("write {service}"))?;
+    std::fs::write(
+        dir.join(timer),
+        format!(
+            "[Unit]\n\
+             Description=Ryra {cadence} backup timer\n\
+             \n\
+             [Timer]\n\
+             OnCalendar={oncal}\n\
+             # Catch up a missed run after a reboot/suspend.\n\
+             Persistent=true\n\
+             Unit={service}\n\
+             \n\
+             [Install]\n\
+             WantedBy=timers.target\n",
+            oncal = on_calendar(cadence, at),
+        ),
+    )
+    .with_context(|| format!("write {timer}"))?;
+    Ok(())
 }
 
-fn read_schedule_state() -> Option<ScheduleState> {
-    // If the timer unit file doesn't exist, the timer isn't
-    // installed. Cheap check; avoids a `systemctl` fork on every
-    // `ryra backup status` invocation when no timer is configured.
-    let dir = systemd_user_dir().ok()?;
-    if !dir.join(TIMER_UNIT).exists() {
-        return None;
-    }
-
-    // Read the OnCalendar back from the unit so we don't have to
-    // mirror the value in two places.
-    let content = std::fs::read_to_string(dir.join(TIMER_UNIT)).ok()?;
-    let interval = content
-        .lines()
-        .find_map(|l| l.strip_prefix("OnCalendar="))
-        .unwrap_or("?")
-        .to_string();
-
-    // Next-run is best-effort: ask systemctl, parse `Next` row. Fail
-    // open (None) on any error so a stale unit doesn't break status.
-    let next_run = std::process::Command::new("systemctl")
-        .args([
-            "--user",
-            "list-timers",
-            "--no-pager",
-            "--no-legend",
-            TIMER_UNIT,
-        ])
-        .output()
-        .ok()
-        .and_then(|o| {
-            let text = String::from_utf8_lossy(&o.stdout);
-            // Format: NEXT LEFT LAST PASSED UNIT ACTIVATES
-            // Take everything before the first sequence of >=2 spaces
-            // after the timestamp to capture the "next run" timestamp.
-            let first_line = text.lines().next()?;
-            let stripped = first_line.trim();
-            if stripped.is_empty() {
-                None
-            } else {
-                // The first two fields concatenated are the absolute
-                // timestamp (e.g. "Thu 2026-05-22 03:00:00 CEST").
-                Some(
-                    stripped
-                        .split_whitespace()
-                        .take(4)
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                )
-            }
-        });
-
-    Some(ScheduleState { interval, next_run })
+fn remove_timer(dir: &Path, timer: &str, service: &str) {
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "disable", "--now", timer])
+        .status();
+    let _ = std::fs::remove_file(dir.join(timer));
+    let _ = std::fs::remove_file(dir.join(service));
 }
 
 // ---------------------------------------------------------------------------
