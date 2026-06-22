@@ -81,20 +81,16 @@ pub enum BackupAction {
         #[arg(long, value_enum, default_value_t = BackupMode::Manual)]
         mode: BackupMode,
     },
-    /// Restore from a snapshot. With a service name, restores just that
-    /// install's folder. With no name, performs full disaster recovery:
-    /// every service in the repo is restored, re-linked, and started
-    /// (needs your `preferences.toml` in place for the repo creds).
+    /// Restore a backup. Pass a snapshot id from `ryra backup list` (or a
+    /// service name to restore its most recent snapshot). Confirms first since
+    /// it overwrites the service's current data.
     Restore {
-        /// Service name. Omit to restore everything (disaster recovery).
-        service: Option<String>,
-        /// Specific restic snapshot id (hex prefix). Omit to use the
-        /// newest snapshot tagged for this service.
-        #[arg(long)]
-        at: Option<String>,
-        /// Restore even if the snapshot was taken against a different
-        /// version of the service manifest. May fail to start:
-        /// expect to migrate by hand.
+        /// Snapshot id (from `ryra backup list`), or a service name for its
+        /// latest snapshot.
+        target: String,
+        /// Restore even if the snapshot was taken against a different version
+        /// of the service manifest. May fail to start: expect to migrate by
+        /// hand. Also skips the confirmation.
         #[arg(long)]
         force: bool,
     },
@@ -320,10 +316,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
             .await
         }
         BackupAction::Run { services, mode } => run_backup(services, mode).await,
-        BackupAction::Restore { service, at, force } => match service {
-            Some(svc) => restore(svc, at, force).await,
-            None => restore_all(at).await,
-        },
+        BackupAction::Restore { target, force } => restore(target, force).await,
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
         BackupAction::Schedule {
@@ -847,35 +840,35 @@ async fn run_one(service_name: &str, config: &Config, mode: BackupMode) -> Resul
 // restore
 // ---------------------------------------------------------------------------
 
-async fn restore(service: String, at: Option<String>, force: bool) -> Result<()> {
+async fn restore(target: String, force: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {
         bail!("no backup repository configured: run `ryra backup config` first");
     };
 
-    // Allow a snapshot id in the service position: `ryra backup restore <id>`.
-    // If the arg isn't an installed service, resolve it as a snapshot and
-    // restore the service it belongs to, at that exact point.
-    let (service, at) = if at.is_none() && load_metadata(&service)?.is_none() {
-        match resolve_snapshot_service(settings, &service)? {
-            Some((svc, id)) => {
-                println!(
-                    "{} snapshot {} belongs to {}",
-                    style("restore:").cyan().bold(),
-                    style(&id).cyan(),
-                    style(&svc).cyan()
-                );
-                (svc, Some(id))
-            }
-            None => (service, at),
-        }
+    // `target` is a snapshot id (the usual case) or a service name (restore its
+    // latest). Installed service -> latest; otherwise resolve the snapshot id to
+    // its service + that exact point; neither -> a clear error.
+    let (service, snapshot) = if load_metadata(&target)?.is_some() {
+        (target, "latest".to_string())
+    } else if let Some((svc, id)) = resolve_snapshot_service(settings, &target)? {
+        println!(
+            "{} snapshot {} belongs to {}",
+            style("restore:").cyan().bold(),
+            style(&id).cyan(),
+            style(&svc).cyan()
+        );
+        (svc, id)
     } else {
-        (service, at)
+        bail!(
+            "'{target}' is neither an installed service nor a known snapshot id. \
+             Run `{}` to see snapshot ids.",
+            style("ryra backup list").cyan()
+        );
     };
 
     let repo_dir = resolve_repo_dir_for_install(&service).await?;
-    let snapshot = at.unwrap_or_else(|| "latest".to_string());
     let plan = plan_backup_restore(&service, &snapshot, &config, &repo_dir)?;
 
     if !force {
