@@ -113,7 +113,7 @@ fn run_json(svcs: &[ServiceData]) -> Result<()> {
             let installed = by_name.get(svc.service.as_str()).copied();
             let status = if matches!(svc.status, ServiceStatus::Orphan) {
                 "removed"
-            } else if active.contains(&svc.service) {
+            } else if is_running(&svc.service, &active) {
                 "running"
             } else {
                 "stopped"
@@ -160,7 +160,7 @@ fn print_short(
     println!("{:<name_w$} {:<8}  URL", "SERVICE", "STATUS");
     for svc in svcs {
         let installed = by_name.get(svc.service.as_str()).copied();
-        let status = style::list_status(&svc.status, active.contains(&svc.service), 8);
+        let status = style::list_status(&svc.status, is_running(&svc.service, active), 8);
         let url = url_for(svc, installed);
         println!("{:<name_w$} {}  {}", svc.service, status, url);
     }
@@ -197,7 +197,7 @@ fn print_long(
     );
     for svc in svcs {
         let installed = by_name.get(svc.service.as_str()).copied();
-        let status = style::list_status(&svc.status, active.contains(&svc.service), 8);
+        let status = style::list_status(&svc.status, is_running(&svc.service, active), 8);
         let url = url_for(svc, installed);
         let size = match compute_total(svc, &vol_sizes) {
             Size::Bytes(b) => human_size(b),
@@ -264,6 +264,15 @@ fn storage_label(svc: &ServiceData, home: &str) -> String {
 /// `ryra list` covers a dozen services.
 pub(crate) fn active_user_units() -> HashSet<String> {
     user_units_in_state("active")
+}
+
+/// Whether a service is running. A blue/green service's live systemd unit is
+/// `<name>-blue` / `<name>-green`, not the bare `<name>`, so check those too --
+/// otherwise `ryra list` reports a healthy blue/green service as "stopped".
+pub(crate) fn is_running(name: &str, active: &HashSet<String>) -> bool {
+    active.contains(name)
+        || active.contains(&format!("{name}-blue"))
+        || active.contains(&format!("{name}-green"))
 }
 
 /// Units whose start job is still running — image pull, container create,
