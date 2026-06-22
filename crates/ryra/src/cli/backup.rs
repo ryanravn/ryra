@@ -106,9 +106,11 @@ pub enum BackupAction {
     /// Install or remove a systemd --user timer that runs
     /// `ryra backup run` on a schedule.
     Schedule {
-        /// `daily` (3am), `weekly` (Sunday 3am), `hourly`, or
-        /// `disable` to remove the existing timer.
+        /// `daily`, `weekly` (Sunday), or `disable` to remove the timer.
         interval: ScheduleInterval,
+        /// Time of day, 24h `HH:MM` (default 03:00). Ignored for `disable`.
+        #[arg(long, default_value = "03:00")]
+        at: String,
     },
     /// Prune snapshots to the configured retention policy (`restic forget`,
     /// then prune to reclaim space). A no-op when no retention is configured
@@ -154,37 +156,44 @@ pub enum BackendKind {
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScheduleInterval {
-    Hourly,
     Daily,
     Weekly,
     Disable,
 }
 
 impl ScheduleInterval {
-    /// The systemd `OnCalendar=` expression for this interval.
-    fn on_calendar(self) -> &'static str {
+    /// The systemd `OnCalendar=` expression for this cadence at `at` (HH:MM).
+    fn on_calendar(self, at: &str) -> String {
         match self {
-            ScheduleInterval::Hourly => "hourly",
-            // 3am is the standard low-traffic window; not configurable
-            // here because if you want a specific time you can edit
-            // ~/.config/systemd/user/ryra-backup.timer directly. Keeping
-            // the schedule subcommand to a fixed small set prevents the
-            // service from sprouting a half-built cron DSL.
-            ScheduleInterval::Daily => "*-*-* 03:00:00",
-            ScheduleInterval::Weekly => "Sun *-*-* 03:00:00",
+            ScheduleInterval::Daily => format!("*-*-* {at}:00"),
+            ScheduleInterval::Weekly => format!("Sun *-*-* {at}:00"),
             // unreachable: Disable doesn't write a timer
-            ScheduleInterval::Disable => "",
+            ScheduleInterval::Disable => String::new(),
         }
     }
 
-    fn label(self) -> &'static str {
+    fn label(self, at: &str) -> String {
         match self {
-            ScheduleInterval::Hourly => "hourly",
-            ScheduleInterval::Daily => "daily at 03:00",
-            ScheduleInterval::Weekly => "Sunday at 03:00",
-            ScheduleInterval::Disable => "disabled",
+            ScheduleInterval::Daily => format!("daily at {at}"),
+            ScheduleInterval::Weekly => format!("Sunday at {at}"),
+            ScheduleInterval::Disable => "disabled".to_string(),
         }
     }
+}
+
+/// Validate + normalize a 24h `HH:MM` time. `None` -> the 03:00 default
+/// (the standard low-traffic window).
+fn parse_schedule_time(at: Option<&str>) -> Result<String> {
+    let raw = at.unwrap_or("03:00").trim();
+    let (h, m) = raw
+        .split_once(':')
+        .ok_or_else(|| anyhow!("time must be HH:MM (24h), e.g. 03:00"))?;
+    let h: u32 = h.parse().map_err(|_| anyhow!("invalid hour in '{raw}'"))?;
+    let m: u32 = m.parse().map_err(|_| anyhow!("invalid minute in '{raw}'"))?;
+    if h > 23 || m > 59 {
+        bail!("time out of range: '{raw}' (00:00-23:59)");
+    }
+    Ok(format!("{h:02}:{m:02}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +307,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
         },
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
-        BackupAction::Schedule { interval } => schedule(interval).await,
+        BackupAction::Schedule { interval, at } => schedule(interval, Some(&at)).await,
         BackupAction::Forget { services, dry_run } => forget(services, dry_run).await,
         BackupAction::Retention {
             keep_last,
@@ -431,23 +440,28 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
         style(resolved.backend.restic_repo()).dim()
     );
 
-    // Offer an automatic schedule -- a cadence menu, not just daily, since
-    // weekly/hourly are common asks. (Set it later with `ryra backup schedule`.)
+    // Offer an automatic schedule -- daily or weekly, at a time you choose
+    // (default 03:00). (Change it later with `ryra backup schedule`.)
     if interactive && !args.yes && read_schedule_state().is_none() {
         println!("\n  Automatic backups:");
-        println!("  1. Daily      (03:00)");
-        println!("  2. Weekly     (Sunday 03:00)");
-        println!("  3. Hourly");
-        println!("  4. No schedule");
+        println!("  1. Daily");
+        println!("  2. Weekly (Sunday)");
+        println!("  3. No schedule");
         let choice: u32 = Input::new()
             .with_prompt("Choose")
             .default(1)
             .interact_text()?;
-        match choice {
-            1 => schedule(ScheduleInterval::Daily).await?,
-            2 => schedule(ScheduleInterval::Weekly).await?,
-            3 => schedule(ScheduleInterval::Hourly).await?,
-            _ => {}
+        let interval = match choice {
+            1 => Some(ScheduleInterval::Daily),
+            2 => Some(ScheduleInterval::Weekly),
+            _ => None,
+        };
+        if let Some(interval) = interval {
+            let at: String = Input::new()
+                .with_prompt("Time of day (24h HH:MM)")
+                .default("03:00".to_string())
+                .interact_text()?;
+            schedule(interval, Some(&at)).await?;
         }
     }
 
@@ -1387,7 +1401,7 @@ fn systemd_user_dir() -> Result<PathBuf> {
     Ok(base.join("systemd").join("user"))
 }
 
-pub(crate) async fn schedule(interval: ScheduleInterval) -> Result<()> {
+pub(crate) async fn schedule(interval: ScheduleInterval, at: Option<&str>) -> Result<()> {
     let dir = systemd_user_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     let timer_path = dir.join(TIMER_UNIT);
@@ -1406,6 +1420,8 @@ pub(crate) async fn schedule(interval: ScheduleInterval) -> Result<()> {
         println!("  {} timer removed.", style("ryra-backup").cyan());
         return Ok(());
     }
+
+    let time = parse_schedule_time(at)?;
 
     // Find the installed ryra binary so the unit file points at the
     // same one the user just invoked. `current_exe()` gives the
@@ -1453,8 +1469,8 @@ pub(crate) async fn schedule(interval: ScheduleInterval) -> Result<()> {
              \n\
              [Install]\n\
              WantedBy=timers.target\n",
-            label = interval.label(),
-            on_calendar = interval.on_calendar(),
+            label = interval.label(&time),
+            on_calendar = interval.on_calendar(&time),
             service = SERVICE_UNIT,
         ),
     )
@@ -1478,7 +1494,7 @@ pub(crate) async fn schedule(interval: ScheduleInterval) -> Result<()> {
     println!(
         "  {} scheduled: {}",
         style("ryra-backup").cyan(),
-        style(interval.label()).green()
+        style(interval.label(&time)).green()
     );
     super::linger::warn_if_disabled().await?;
     Ok(())

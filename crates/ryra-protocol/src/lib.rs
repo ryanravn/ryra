@@ -261,8 +261,13 @@ pub enum Request {
     /// The rpc twin of `ryra backup restore` with no service.
     RestoreAll { snapshot: String },
     /// Install/remove the scheduled-backup systemd timer (the rpc twin of
-    /// `ryra backup schedule`). `interval` is hourly | daily | weekly | disable.
-    ScheduleBackup { interval: String },
+    /// `ryra backup schedule`). `interval` is daily | weekly | disable;
+    /// `at` is the 24h `HH:MM` time of day (default 03:00).
+    ScheduleBackup {
+        interval: String,
+        #[serde(default)]
+        at: Option<String>,
+    },
     /// The installable env/group/choice schema for a registry service
     /// (default registry if `registry` is unset).
     ServiceDef {

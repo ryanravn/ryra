@@ -175,20 +175,21 @@ async fn dispatch(req: Request) -> OpResult {
             super::backup::restore_all(at).await.map_err(core_err)?;
             Ok(Response::Done)
         }
-        Request::ScheduleBackup { interval } => {
+        Request::ScheduleBackup { interval, at } => {
             use super::backup::ScheduleInterval;
             let interval = match interval.as_str() {
-                "hourly" => ScheduleInterval::Hourly,
                 "daily" => ScheduleInterval::Daily,
                 "weekly" => ScheduleInterval::Weekly,
                 "disable" => ScheduleInterval::Disable,
                 other => {
                     return Err(core_err(format!(
-                        "invalid schedule interval '{other}' (hourly|daily|weekly|disable)"
+                        "invalid schedule interval '{other}' (daily|weekly|disable)"
                     )));
                 }
             };
-            super::backup::schedule(interval).await.map_err(core_err)?;
+            super::backup::schedule(interval, at.as_deref())
+                .await
+                .map_err(core_err)?;
             Ok(Response::Done)
         }
         Request::SetBackupEnrolled { service, enabled } => {
