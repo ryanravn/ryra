@@ -119,6 +119,11 @@ pub enum BackupAction {
         /// hand. Also skips the confirmation.
         #[arg(long)]
         force: bool,
+        /// Also restore the global `preferences.toml` (SMTP, auth, backup
+        /// config) bundled in the snapshot, OVERWRITING your current global
+        /// config. For disaster recovery on a fresh box, not routine restores.
+        #[arg(long)]
+        config: bool,
     },
     /// List backups grouped by mode (daily / weekly / manual), for one or all
     /// backup-enabled services.
@@ -325,7 +330,11 @@ pub async fn run(action: BackupAction) -> Result<()> {
             };
             run_backup(Vec::new(), mode).await
         }
-        BackupAction::Restore { target, force } => restore(target, force).await,
+        BackupAction::Restore {
+            target,
+            force,
+            config,
+        } => restore(target, force, config).await,
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
         BackupAction::Delete { id, yes } => delete(id, yes).await,
@@ -1063,7 +1072,7 @@ async fn run_one(service_name: &str, config: &Config, mode: BackupMode) -> Resul
 // restore
 // ---------------------------------------------------------------------------
 
-async fn restore(target: String, force: bool) -> Result<()> {
+async fn restore(target: String, force: bool, include_config: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {
@@ -1092,17 +1101,23 @@ async fn restore(target: String, force: bool) -> Result<()> {
     };
 
     let repo_dir = resolve_repo_dir_for_install(&service).await?;
-    let plan = plan_backup_restore(&service, &snapshot, &config, &repo_dir)?;
+    let mut plan = plan_backup_restore(&service, &snapshot, &config, &repo_dir)?;
+    plan.include_config = include_config;
 
     if !force {
         check_version_match(&plan, &repo_dir).await?;
         // Restoring replaces the service's live data, so confirm first. A cold
         // restore (the default) also stops the service while it's replaced.
-        let warn = if plan.online {
-            "This overwrites its current data."
+        let mut warn = if plan.online {
+            "This overwrites its current data.".to_string()
         } else {
-            "This stops the service, replaces its data, and restarts it."
+            "This stops the service, replaces its data, and restarts it.".to_string()
         };
+        if include_config {
+            warn.push_str(
+                " It ALSO overwrites your global preferences.toml (SMTP, auth, backup config).",
+            );
+        }
         if super::is_interactive()
             && !Confirm::new()
                 .with_prompt(format!(

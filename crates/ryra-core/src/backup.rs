@@ -83,6 +83,11 @@ pub struct BackupRestorePlan {
     /// The service's data directories (absolute), derived from `[backup].paths`.
     /// A cold restore wipes these to a clean tree before `restic restore`.
     pub data_paths: Vec<PathBuf>,
+    /// Also restore the global `preferences.toml` bundled in the snapshot.
+    /// Default `false`: a per-service restore must NOT clobber global config
+    /// (SMTP/auth/backup creds/other services) with a stale copy. `true` is the
+    /// disaster-recovery opt-in (`ryra backup restore --config`).
+    pub include_config: bool,
     pub pre_restore_hook: Option<PathBuf>,
     pub post_restore_hook: Option<PathBuf>,
 }
@@ -252,6 +257,9 @@ pub fn plan_backup_restore(
         online,
         units,
         data_paths: data,
+        // Per-service restore never touches the global config by default; the
+        // CLI's `--config` flag flips this for disaster recovery.
+        include_config: false,
         pre_restore_hook: pre,
         post_restore_hook: post,
     })
@@ -641,6 +649,15 @@ pub fn restic_restore(plan: &BackupRestorePlan) -> anyhow::Result<()> {
         .env("RESTIC_PASSWORD", &plan.password);
     for (k, v) in &plan.env {
         cmd.env(k, v);
+    }
+    // Every snapshot bundles the global preferences.toml (for disaster
+    // recovery), but a normal per-service restore must NOT overwrite the live
+    // global config (SMTP/auth/backup creds/other services) with this snapshot's
+    // possibly-stale copy. Exclude it unless the caller opted in.
+    if !plan.include_config
+        && let Ok(paths) = ConfigPaths::resolve()
+    {
+        cmd.arg("--exclude").arg(&paths.config_file);
     }
     let status = cmd.status().context("spawning `restic restore`")?;
     if !status.success() {
