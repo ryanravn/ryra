@@ -222,13 +222,22 @@ pub enum Request {
     Restore { service: String, snapshot: String },
     /// List a service's restic data snapshots, newest first (`ryra backup list`).
     Snapshots { service: String },
+    /// Whether backing up / restoring this service stops it (derived from its
+    /// `[backup]` config + units), so the UI can warn about downtime up front.
+    BackupInfo { service: String },
+    /// Select which machine this box backs up as: the S3 prefix
+    /// (`bucket/<machine>/`). Re-points + re-inits the repo. Point it at another
+    /// machine's id to recover/adopt its backups. Only valid for S3/BYO
+    /// backends (managed assigns the prefix server-side). Twin of `config`'s
+    /// machine step.
+    SetBackupMachine { machine: String },
     /// The effective backup configuration + enrolled services
     /// (`ryra backup status`).
     BackupStatus,
     /// Point backups at a backend: init the restic repo and persist `[backup]`
-    /// (`ryra backup config`). `password` is the restic key; when absent the
+    /// (`ryra backup connect`). `password` is the restic key; when absent the
     /// engine reuses the existing key or generates a fresh one.
-    ConfigureBackup {
+    ConnectBackup {
         backend: BackupBackendSpec,
         #[serde(default)]
         password: Option<String>,
@@ -240,34 +249,10 @@ pub enum Request {
     /// this to sign a managed box into its account for backups, over rpc rather
     /// than an ad-hoc SSH file write. The engine owns the path/format/perms.
     AccountLogin { token: String },
-    /// Prune snapshots to the configured retention ladder (`restic forget`,
-    /// then prune). `None` service = every enrolled service; `dry_run` previews
-    /// what would be removed without deleting. A no-op for a service with no
-    /// retention policy.
-    ForgetBackups {
-        #[serde(default)]
-        service: Option<String>,
-        #[serde(default)]
-        dry_run: bool,
-    },
-    /// Back up enrolled services (empty `services` = every enrolled install) --
-    /// the rpc twin of `ryra backup run`, for control-plane/dashboard parity.
-    RunBackups {
-        #[serde(default)]
-        services: Vec<String>,
-        /// Cadence tag for the snapshots: `daily` | `weekly` | `manual`.
-        /// Defaults to `manual` (hand-run, never pruned).
-        #[serde(default)]
-        mode: Option<String>,
-    },
-    /// Full disaster recovery: restore EVERY service in the repo at `snapshot`
-    /// ("latest" or an id), in dependency order, re-linking + starting them.
-    /// The rpc twin of `ryra backup restore` with no service.
-    RestoreAll { snapshot: String },
-    /// Set the full backup schedule (rpc twin of `ryra backup config`'s schedule
-    /// step + `ryra backup schedule`). Each cadence: `Some` enables it (keep N
-    /// at `HH:MM`), `None` disables it. Installs/removes the daily + weekly
-    /// timers to match. Manual backups are always available and unaffected.
+    /// Set the full backup schedule (rpc twin of `ryra backup config`). Each
+    /// cadence: `Some` enables it (keep N at `HH:MM`), `None`
+    /// disables it. Installs/removes the daily + weekly timers to match. Manual
+    /// backups are always available and unaffected.
     SetSchedule {
         #[serde(default)]
         daily: Option<ScheduleSpec>,
@@ -364,6 +349,22 @@ pub struct SnapshotView {
     pub tags: Vec<String>,
 }
 
+/// Whether a service's backup/restore stops it, derived from its `[backup]`
+/// config. Drives the dashboard's downtime notices (`ryra backup` shows the
+/// same up front in its prompts).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupInfoView {
+    /// The service declares backup support (`[backup]` is present).
+    pub supported: bool,
+    /// Enrolled in the daily/weekly schedule (`metadata.backup_enabled`). A
+    /// one-off backup doesn't require this; it only governs scheduled runs.
+    pub enrolled: bool,
+    /// A backup stops the service (cold snapshot) rather than running live.
+    pub stops_backup: bool,
+    /// A restore stops the service while its data is replaced.
+    pub stops_restore: bool,
+}
+
 /// The effective backup configuration plus enrolled services
 /// (`ryra backup status`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -373,6 +374,14 @@ pub struct BackupStatusView {
     /// Human label for the backend, e.g. "S3: my-bucket (...)". None when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_label: Option<String>,
+    /// Which machine this box backs up as: the S3 prefix (`bucket/<machine>/`).
+    /// `None` for managed (the account assigns it) or local backends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// Whether the machine is client-selectable (true for S3/BYO; false for
+    /// managed, where the account vends a fixed prefix, and for local).
+    #[serde(default)]
+    pub machine_selectable: bool,
     /// Services enrolled in backups (`metadata.backup_enabled`).
     pub enrolled: Vec<String>,
     /// Daily schedule (keep N at HH:MM), if enabled. `None` = no daily backups.
@@ -391,18 +400,6 @@ pub struct ScheduleSpec {
     pub keep: u32,
     #[serde(default)]
     pub at: Option<String>,
-}
-
-/// Per-service result of a retention sweep (`ForgetBackups`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForgetView {
-    pub service: String,
-    /// Snapshots kept after the sweep.
-    pub kept: u32,
-    /// Snapshots removed (in a dry run, the count that WOULD be removed).
-    pub removed: u32,
-    /// True when this was a preview (`--dry-run`); nothing was deleted.
-    pub dry_run: bool,
 }
 
 /// One env key a reconcile would change in a service's `.env`.
@@ -750,10 +747,10 @@ pub enum Response {
     Restore(RestoreOutcome),
     /// `snapshots`.
     Snapshots(Vec<SnapshotView>),
+    /// `backup_info`.
+    BackupInfo(BackupInfoView),
     /// `backup_status`.
     BackupStatus(BackupStatusView),
-    /// `forget_backups` — per-service retention sweep results.
-    Forget(Vec<ForgetView>),
     /// `service_def`.
     ServiceDef(ServiceDefView),
     /// `configure_view`.

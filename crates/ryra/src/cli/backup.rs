@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use ryra_core::REGISTRY_DEFAULT;
 use ryra_core::backup::{
     BackupRestorePlan, list_backup_enabled, plan_backup_restore, plan_backup_run, plan_mode_prune,
-    restic_forget, restic_restore, run_hook,
+    restic_forget,
 };
 use ryra_core::config::ConfigPaths;
 use ryra_core::config::schema::{BackupBackend, BackupSettings, Config, ScheduleMode};
@@ -32,9 +32,11 @@ use ryra_core::registry::resolve::ServiceRef;
 
 #[derive(Subcommand, Debug)]
 pub enum BackupAction {
-    /// Set up the encrypted backup repository (run once, then again
-    /// to change the backend or rotate the password).
-    #[command(name = "config", alias = "configure")]
+    /// Connect backups to an encrypted repository: pick a backend and set the
+    /// encryption password. Run again to change the backend or rotate the
+    /// password. Set the schedule with `ryra backup config`; tear it all down
+    /// with `ryra backup disconnect`.
+    #[command(name = "connect")]
     Configure {
         /// `s3` (any S3-compatible store: MinIO, AWS S3, R2, B2-S3,
         /// Wasabi) or `local` (testing only, local disk, no
@@ -54,10 +56,6 @@ pub enum BackupAction {
         /// S3 secret access key.
         #[arg(long)]
         secret_access_key: Option<String>,
-        /// Optional path prefix inside the bucket. Lets one bucket
-        /// host multiple ryra installs.
-        #[arg(long)]
-        prefix: Option<String>,
         /// Local-backend path. Use only for testing.
         #[arg(long)]
         path: Option<PathBuf>,
@@ -71,15 +69,43 @@ pub enum BackupAction {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Push a snapshot of each backup-enabled install (or just the listed
-    /// services). Hand runs are `manual` (kept forever); the daily/weekly
-    /// timers pass `--mode` so their snapshots are capped by the schedule.
-    Run {
-        /// Service name(s). Omit to back up every enabled install.
+    /// Configure how this box uses the connected repository: which machine it
+    /// backs up as (its sub-folder in the bucket; point it at another machine's
+    /// to recover that machine's backups) and the daily/weekly schedule.
+    /// Requires a connected repo (`ryra backup connect`).
+    Config,
+    /// Start backing up one or more installed services (the backup twin of
+    /// `ryra add`): add them to the daily/weekly schedule, then offer to take a
+    /// first snapshot. Adding does NOT snapshot on its own.
+    Add {
+        /// Service name(s) to start backing up.
         services: Vec<String>,
-        /// Cadence tag for these snapshots. `manual` (default) is never pruned.
-        #[arg(long, value_enum, default_value_t = BackupMode::Manual)]
-        mode: BackupMode,
+        /// Take a snapshot immediately, skipping the prompt.
+        #[arg(long)]
+        now: bool,
+    },
+    /// Stop backing up one or more services (the twin of `ryra remove`). Drops
+    /// them from the schedule; existing snapshots stay in the bucket.
+    Remove {
+        /// Service name(s) to stop backing up.
+        services: Vec<String>,
+    },
+    /// Take a backup snapshot now. Manual snapshots are kept forever (never
+    /// auto-pruned). Name one or more services, or omit names to snapshot every
+    /// service in backups. A named service that isn't in the schedule still gets
+    /// a one-off snapshot.
+    Manual {
+        /// Service name(s) to snapshot. Omit to snapshot every service in
+        /// backups. A named service need not be in the schedule (one-off).
+        services: Vec<String>,
+    },
+    /// Internal: snapshot every service in backups at the given cadence (capped
+    /// by the schedule's keep count). Invoked by the systemd daily/weekly timers,
+    /// not meant to be run by hand -- use `ryra backup manual`.
+    #[command(hide = true)]
+    Scheduled {
+        /// `daily` or `weekly`.
+        cadence: ScheduleCadence,
     },
     /// Restore a backup. Pass a snapshot id from `ryra backup list` (or a
     /// service name to restore its most recent snapshot). Confirms first since
@@ -104,24 +130,6 @@ pub enum BackupAction {
     /// Show repository overview, per-service last-run timestamps,
     /// and total repo size.
     Status,
-    /// Turn a scheduled cadence on or off. `daily`/`weekly` install a systemd
-    /// --user timer that runs `ryra backup run --mode <cadence>` and keeps the
-    /// last `--keep`; `--off` removes it. Manual backups are always available
-    /// and unlimited.
-    Schedule {
-        /// `daily` or `weekly`.
-        cadence: ScheduleCadence,
-        /// How many of this cadence's snapshots to keep (default: 2 daily,
-        /// 4 weekly). Older ones are pruned automatically after each run.
-        #[arg(long)]
-        keep: Option<u32>,
-        /// Time of day, 24h `HH:MM` (default 03:00).
-        #[arg(long)]
-        at: Option<String>,
-        /// Remove this cadence's schedule (stop taking it).
-        #[arg(long)]
-        off: bool,
-    },
     /// Permanently delete one backup by its id (the ID column in
     /// `ryra backup list`). Confirms first unless `-y`. Scheduled (daily/weekly)
     /// backups are auto-pruned to their keep-counts after each run, so this is
@@ -177,23 +185,6 @@ pub enum ScheduleCadence {
     Weekly,
 }
 
-impl ScheduleCadence {
-    fn as_str(self) -> &'static str {
-        match self {
-            ScheduleCadence::Daily => "daily",
-            ScheduleCadence::Weekly => "weekly",
-        }
-    }
-
-    /// Default keep-count when this cadence is first enabled with no `--keep`.
-    fn default_keep(self) -> u32 {
-        match self {
-            ScheduleCadence::Daily => 2,
-            ScheduleCadence::Weekly => 4,
-        }
-    }
-}
-
 /// The systemd `OnCalendar=` expression for a cadence at `at` (HH:MM). Weekly
 /// fires Sunday; daily every day.
 fn on_calendar(cadence: &str, at: &str) -> String {
@@ -243,7 +234,7 @@ async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
             if !want {
                 bail!(
                     "managed backups need a ryra account. Run `ryra account login` \
-                     when you're ready, then re-run `ryra backup config`."
+                     when you're ready, then re-run `ryra backup connect`."
                 );
             }
             super::account::device_login().await?;
@@ -254,7 +245,7 @@ async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
             let base = account::api_base_url();
             bail!(
                 "managed backups need a ryra account. Set RYRA_TOKEN or run \
-                 `ryra account login` (sign in at {base}), then re-run `ryra backup config`."
+                 `ryra account login` (sign in at {base}), then re-run `ryra backup connect`."
             );
         }
     };
@@ -275,7 +266,7 @@ async fn collect_managed(interactive: bool) -> Result<BackupBackend> {
             }
             bail!(
                 "no active managed backup plan. Subscribe in your dashboard, then \
-                 re-run `ryra backup config`:\n  {url}"
+                 re-run `ryra backup connect`:\n  {url}"
             );
         }
     }
@@ -307,7 +298,6 @@ pub async fn run(action: BackupAction) -> Result<()> {
             bucket,
             access_key_id,
             secret_access_key,
-            prefix,
             path,
             password,
             yes,
@@ -318,23 +308,26 @@ pub async fn run(action: BackupAction) -> Result<()> {
                 bucket,
                 access_key_id,
                 secret_access_key,
-                prefix,
                 path,
                 password,
                 yes,
             })
             .await
         }
-        BackupAction::Run { services, mode } => run_backup(services, mode).await,
+        BackupAction::Config => configure_backups().await,
+        BackupAction::Add { services, now } => backup_add(services, now).await,
+        BackupAction::Remove { services } => backup_remove(services).await,
+        BackupAction::Manual { services } => run_backup(services, BackupMode::Manual).await,
+        BackupAction::Scheduled { cadence } => {
+            let mode = match cadence {
+                ScheduleCadence::Daily => BackupMode::Daily,
+                ScheduleCadence::Weekly => BackupMode::Weekly,
+            };
+            run_backup(Vec::new(), mode).await
+        }
         BackupAction::Restore { target, force } => restore(target, force).await,
         BackupAction::List { services } => list(services).await,
         BackupAction::Status => status().await,
-        BackupAction::Schedule {
-            cadence,
-            keep,
-            at,
-            off,
-        } => schedule(cadence, keep, at, off).await,
         BackupAction::Delete { id, yes } => delete(id, yes).await,
         BackupAction::Disconnect { yes } => disconnect(yes).await,
     }
@@ -382,7 +375,6 @@ struct ConfigureArgs {
     bucket: Option<String>,
     access_key_id: Option<String>,
     secret_access_key: Option<String>,
-    prefix: Option<String>,
     path: Option<PathBuf>,
     password: Option<String>,
     yes: bool,
@@ -407,7 +399,7 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
             // that as an explicit reconfigure.
             ConfigureMode::Fresh
         } else {
-            // Bare `ryra backup config` after a prior failed init:
+            // Bare `ryra backup connect` after a prior failed init:
             // retry with existing settings.
             ConfigureMode::Retry
         }
@@ -461,43 +453,115 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
         style(resolved.backend.restic_repo()).dim()
     );
 
-    // Set up the schedule: daily and weekly are independent cadences, each
-    // capped at `keep` snapshots (oldest dropped). Manual backups
-    // (`ryra backup run`) are always available and never pruned. Always offered
-    // -- the current values are the defaults, so on a retry you can leave them
-    // untouched (enter through) or change them here.
-    if interactive && !args.yes {
+    // Connecting only establishes the repository. The schedule is separate
+    // (`ryra backup config`), and services are added separately too. Point the
+    // way on a fresh connect so the next steps are obvious.
+    if matches!(mode, ConfigureMode::Fresh) {
         println!(
-            "\n  {} keep the last N of each. Manual backups (`ryra backup run`) \
-             are always available and kept forever.",
-            style("Scheduled backups:").bold()
+            "\n  Next: pick a schedule with `{}`, then add services with `{}`.",
+            style("ryra backup config").cyan(),
+            style("ryra backup add <service>").cyan()
         );
-        let cur_daily = config.backup.as_ref().and_then(|b| b.daily.clone());
-        let cur_weekly = config.backup.as_ref().and_then(|b| b.weekly.clone());
-        let daily = prompt_cadence("daily", 2, cur_daily)?;
-        let weekly = prompt_cadence("weekly", 4, cur_weekly)?;
-        if let Some(b) = config.backup.as_mut() {
-            b.daily = daily;
-            b.weekly = weekly;
-        }
-        ryra_core::config::save_config(&paths.config_file, &config)?;
-        apply_schedule(&config).await?;
     }
 
     Ok(())
 }
 
+/// `ryra backup config`: configure how THIS box uses the connected repository --
+/// which machine it backs up as (its sub-folder in the bucket) and the
+/// daily/weekly schedule. `connect` establishes the repository; this configures
+/// how this box uses it. Interactive.
+async fn configure_backups() -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
+    if config.backup.is_none() {
+        bail!(
+            "no backup repository connected: run `{}` first",
+            style("ryra backup connect").cyan()
+        );
+    }
+    if !super::is_interactive() {
+        bail!("`ryra backup config` is interactive; run it in a terminal");
+    }
+
+    // 1. Machine: which sub-folder of the bucket this box reads/writes. Default
+    //    is its own stable id; point it at another machine's id to recover or
+    //    adopt that machine's backups. Managed backends assign this server-side.
+    let mut prefix_changed = false;
+    match &mut config.backup.as_mut().unwrap().backend {
+        BackupBackend::S3 { prefix, .. } => {
+            let own = ryra_core::config::machine_id(&paths)?;
+            let current = prefix.clone().unwrap_or_else(|| own.clone());
+            println!(
+                "  {} this box backs up into one machine's sub-folder of the bucket. \
+                 Use its own id, or another machine's to work with that machine's backups.",
+                style("Machine:").bold()
+            );
+            let chosen: String = Input::new()
+                .with_prompt("  Back up as machine")
+                .default(current.clone())
+                .interact_text()?;
+            let chosen = chosen.trim().to_string();
+            if !chosen.is_empty() && chosen != current {
+                *prefix = Some(chosen);
+                prefix_changed = true;
+            }
+        }
+        BackupBackend::Managed => {
+            println!(
+                "  {} your Ryra account assigns this machine's storage (not selectable here).",
+                style("Machine:").bold()
+            );
+        }
+        BackupBackend::Local { .. } => {}
+    }
+    if prefix_changed {
+        // Make sure the selected machine's repo is reachable (init if it's new).
+        init_repo_if_needed(config.backup.as_ref().unwrap())?;
+        println!("  {} machine set.", style("ok:").green());
+    }
+
+    // 2. Schedule: daily/weekly cadences + keep counts.
+    println!(
+        "\n  {} keep the last N of each. Manual backups (`ryra backup manual`) are \
+         always available and kept forever.",
+        style("Scheduled backups:").bold()
+    );
+    let cur_daily = config.backup.as_ref().and_then(|b| b.daily.clone());
+    let cur_weekly = config.backup.as_ref().and_then(|b| b.weekly.clone());
+    let daily = prompt_cadence("daily", 2, cur_daily)?;
+    let weekly = prompt_cadence("weekly", 4, cur_weekly)?;
+    if let Some(b) = config.backup.as_mut() {
+        b.daily = daily;
+        b.weekly = weekly;
+    }
+
+    ryra_core::config::save_config(&paths.config_file, &config)?;
+    apply_schedule(&config).await?;
+    super::linger::warn_if_disabled().await?;
+    println!("{} backup config updated.", style("done:").green().bold());
+    Ok(())
+}
+
 /// Ask whether to take this cadence; if yes, collect keep-count + time of day.
-/// `current` (the existing schedule, if any) seeds the defaults so a retry can
-/// keep the present settings by pressing enter.
+/// `current` (the existing schedule, if any) is shown in the prompt and seeds
+/// every default, so re-running `config` shows what's set and pressing enter
+/// keeps it.
 fn prompt_cadence(
     cadence: &str,
     fallback_keep: u32,
     current: Option<ScheduleMode>,
 ) -> Result<Option<ScheduleMode>> {
+    // Surface the current setting right in the question so the user can see
+    // what's configured before deciding. The keep/time defaults below echo it too.
+    let state = match &current {
+        Some(m) => format!("currently keep {} at {}", m.keep, m.at),
+        None => "currently off".to_string(),
+    };
     let on = Confirm::new()
-        .with_prompt(format!("  Take {cadence} backups?"))
-        .default(current.is_some() || cadence == "daily")
+        .with_prompt(format!("  Take {cadence} backups? ({state})"))
+        // Default matches reality so the [Y/n] capitalisation isn't misleading.
+        .default(current.is_some())
         .interact()?;
     if !on {
         return Ok(None);
@@ -630,14 +694,12 @@ fn collect_s3(args: &ConfigureArgs, interactive: bool) -> Result<BackupBackend> 
             .interact()?,
         None => bail!("--secret-access-key required for S3 backend"),
     };
-    // Default the prefix to this machine's stable id, so several machines can
-    // share one bucket without colliding and the layout never keys off the
-    // (mutable, non-unique) hostname. An explicit --prefix wins, e.g. to adopt
-    // an existing machine's prefix when migrating to a new box.
-    let prefix = match args.prefix.clone().filter(|p| !p.is_empty()) {
-        Some(p) => Some(p),
-        None => Some(ryra_core::config::machine_id(&ConfigPaths::resolve()?)?),
-    };
+    // Default the prefix (which machine's sub-folder in the bucket) to this
+    // box's stable id, so several machines can share one bucket without
+    // colliding and the layout never keys off the (mutable) hostname. Connect
+    // never asks for it; selecting a different machine (e.g. to recover another
+    // box's backups) is done afterward with `ryra backup config`.
+    let prefix = Some(ryra_core::config::machine_id(&ConfigPaths::resolve()?)?);
 
     Ok(BackupBackend::S3 {
         endpoint,
@@ -708,7 +770,7 @@ fn mode_keep(config: &Config, mode: BackupMode) -> Option<u32> {
 }
 
 /// Prune one service's snapshots in `mode` to `keep` (best-effort). Logged, not
-/// fatal. Shared by the post-run auto-prune and `ryra backup forget`.
+/// fatal. Runs after each scheduled backup to cap that cadence.
 fn prune_one(config: &Config, svc: &str, mode: BackupMode, keep: u32, dry_run: bool) -> bool {
     match plan_mode_prune(svc, config, mode.as_str(), keep, dry_run) {
         Ok(Some(plan)) => match restic_forget(&plan) {
@@ -742,35 +804,129 @@ fn prune_one(config: &Config, svc: &str, mode: BackupMode, keep: u32, dry_run: b
     }
 }
 
+/// `ryra backup add <svc>...`: add installed services to backups (the backup
+/// twin of `ryra add`), then offer a first snapshot. Adding only enrolls them in
+/// the schedule -- taking the snapshot is a separate, prompted step.
+async fn backup_add(services: Vec<String>, now: bool) -> Result<()> {
+    let paths = ConfigPaths::resolve()?;
+    let config = ryra_core::config::load_or_default(&paths.config_file)?;
+    if config.backup.is_none() {
+        bail!(
+            "no backup repository configured: run `{}` first",
+            style("ryra backup connect").cyan()
+        );
+    }
+    if services.is_empty() {
+        bail!("name at least one service to add to backups");
+    }
+    for svc in &services {
+        if load_metadata(svc)?.is_none() {
+            bail!(
+                "'{svc}' isn't installed. Install it with `{}` first.",
+                style(format!("ryra add {svc}")).cyan()
+            );
+        }
+        if ryra_core::backup::set_backup_enabled(svc, true)? {
+            println!("{} {svc}", style("added to backups:").green().bold());
+        } else {
+            println!("{} {svc}", style("already in backups:").dim());
+        }
+    }
+
+    // A snapshot is never taken automatically: offer one (default yes, since
+    // adding a service is usually "protect it now"), or `--now` to skip asking.
+    let take = now
+        || (super::is_interactive()
+            && Confirm::new()
+                .with_prompt("Take a snapshot now?")
+                .default(true)
+                .interact()?);
+    if take {
+        run_backup(services, BackupMode::Manual).await
+    } else {
+        println!(
+            "Added. Snapshot when you're ready with `{}`.",
+            style("ryra backup manual").cyan()
+        );
+        Ok(())
+    }
+}
+
+/// `ryra backup remove <svc>...`: stop backing up services (the twin of
+/// `ryra remove`). Drops them from the schedule; existing snapshots are kept.
+async fn backup_remove(services: Vec<String>) -> Result<()> {
+    if services.is_empty() {
+        bail!("name at least one service to remove from backups");
+    }
+    for svc in &services {
+        if ryra_core::backup::set_backup_enabled(svc, false)? {
+            println!("{} {svc}", style("removed from backups:").green().bold());
+        } else {
+            println!("{} {svc}", style("not in backups:").dim());
+        }
+    }
+    println!(
+        "Existing snapshots stay in the bucket. Remove them with `{}`.",
+        style("ryra backup delete <id>").cyan()
+    );
+    Ok(())
+}
+
 pub(crate) async fn run_backup(services: Vec<String>, mode: BackupMode) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     if config.backup.is_none() {
         bail!(
             "no backup repository configured: run `{}` first",
-            style("ryra backup config").cyan()
+            style("ryra backup connect").cyan()
         );
     }
 
-    let targets = if services.is_empty() {
-        let enabled = list_backup_enabled()?;
-        if enabled.is_empty() {
-            println!(
-                "No services have backups enabled. Pass {} on `ryra add`, or use \
-                 `ryra add <svc> --backup` to opt in.",
-                style("--backup").cyan()
-            );
-            return Ok(());
+    // Snapshot the named services or, with no names, every service in backups
+    // (the scheduled-timer path). Naming a service takes a snapshot now whether
+    // or not it's enrolled: a one-off backup of any backup-capable install is
+    // fine. `run` never enrolls -- `ryra backup add` is the way into the
+    // schedule.
+    let enrolled: std::collections::HashSet<String> = list_backup_enabled()?.into_iter().collect();
+    let targets = if !services.is_empty() {
+        for svc in &services {
+            if !enrolled.contains(svc.as_str()) {
+                println!(
+                    "  {} {svc} {}",
+                    style("one-off:").dim(),
+                    style("not in the schedule; `ryra backup add` to back it up daily/weekly")
+                        .dim()
+                );
+            }
         }
-        enabled
-    } else {
         services
+    } else {
+        // A backup that captures nothing isn't a backup. Refuse loudly rather
+        // than report a hollow success -- this error also reaches the dashboard
+        // over rpc, so a scheduled run can't silently no-op.
+        if enrolled.is_empty() {
+            bail!(
+                "no services are in backups yet: add one with `{}`, then run this again",
+                style("ryra backup add <service>").cyan()
+            );
+        }
+        let mut v: Vec<String> = enrolled.into_iter().collect();
+        v.sort();
+        v
     };
 
+    println!(
+        "{} {} service(s)",
+        style("backing up").cyan().bold(),
+        targets.len()
+    );
+
     let mut any_failed = false;
+    let mut succeeded = 0usize;
     for svc in &targets {
         match run_one(svc, &config, mode).await {
             Ok(()) => {
+                succeeded += 1;
                 record_status(svc, BackupOutcome::Success)?;
                 // Cap this cadence to its keep. Manual is unlimited (mode_keep
                 // returns None). Best-effort: a prune failure never fails the
@@ -789,6 +945,11 @@ pub(crate) async fn run_backup(services: Vec<String>, mode: BackupMode) -> Resul
     if any_failed {
         bail!("one or more services failed to back up");
     }
+    println!(
+        "\n{} {} service(s)",
+        style("backed up").green().bold(),
+        succeeded
+    );
     Ok(())
 }
 
@@ -801,7 +962,7 @@ async fn delete(id: String, yes: bool) -> Result<()> {
     let Some(settings) = config.backup.as_ref() else {
         bail!(
             "no backup repository configured: run `{}` first",
-            style("ryra backup config").cyan()
+            style("ryra backup connect").cyan()
         );
     };
     // Managed resolves to short-lived vended creds (as a run/restore does).
@@ -873,7 +1034,7 @@ async fn disconnect(yes: bool) -> Result<()> {
         "{} backups disconnected. Existing snapshots remain in the bucket; \
          run `{}` to reconnect.",
         style("done:").green().bold(),
-        style("ryra backup config").cyan()
+        style("ryra backup connect").cyan()
     );
     Ok(())
 }
@@ -888,6 +1049,12 @@ async fn run_one(service_name: &str, config: &Config, mode: BackupMode) -> Resul
         mode.as_str(),
         plan.paths.len()
     );
+    if !plan.online {
+        println!(
+            "  {}",
+            style("stops the service briefly for a consistent snapshot, then restarts it").dim()
+        );
+    }
 
     ryra_core::backup::execute_backup_run(&plan)
 }
@@ -900,7 +1067,7 @@ async fn restore(target: String, force: bool) -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {
-        bail!("no backup repository configured: run `ryra backup config` first");
+        bail!("no backup repository configured: run `ryra backup connect` first");
     };
 
     // `target` is a snapshot id (the usual case) or a service name (restore its
@@ -929,11 +1096,17 @@ async fn restore(target: String, force: bool) -> Result<()> {
 
     if !force {
         check_version_match(&plan, &repo_dir).await?;
-        // Restoring overwrites the service's live data, so confirm first.
+        // Restoring replaces the service's live data, so confirm first. A cold
+        // restore (the default) also stops the service while it's replaced.
+        let warn = if plan.online {
+            "This overwrites its current data."
+        } else {
+            "This stops the service, replaces its data, and restarts it."
+        };
         if super::is_interactive()
             && !Confirm::new()
                 .with_prompt(format!(
-                    "Restore {} from snapshot {}? This overwrites its current data",
+                    "Restore {} from snapshot {}? {warn}",
                     style(&plan.service_name).cyan(),
                     style(&plan.snapshot).cyan()
                 ))
@@ -952,15 +1125,10 @@ async fn restore(target: String, force: bool) -> Result<()> {
         plan.snapshot
     );
 
-    if let Some(hook) = &plan.pre_restore_hook {
-        run_hook("pre_restore", &plan.service_name, hook, &plan.service_home)?;
-    }
+    // ryra owns the stop/wipe/restore/restart for cold services; online ones
+    // run only their own hooks. See `execute_backup_restore`.
+    ryra_core::backup::execute_backup_restore(&plan)?;
 
-    restic_restore(&plan)?;
-
-    if let Some(hook) = &plan.post_restore_hook {
-        run_hook("post_restore", &plan.service_name, hook, &plan.service_home)?;
-    }
     println!(
         "\n{} {} restored. Run `{}` if the service didn't restart cleanly.",
         style("done:").green().bold(),
@@ -970,18 +1138,10 @@ async fn restore(target: String, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Infra/auth services come up before apps so the reverse proxy and
-/// OIDC provider are ready when apps start. Lower sorts earlier.
-fn restore_priority(service: &str) -> u8 {
-    match service {
-        "caddy" => 0,
-        "authelia" | "minio" => 1,
-        _ => 2,
-    }
-}
-
 /// Distinct services with snapshots in the repo, read from the
-/// `service:<name>` tags on `restic snapshots --json`.
+/// `service:<name>` tags on `restic snapshots --json`. Used as the fallback for
+/// `ryra backup list` on a box where nothing is enrolled yet (fresh-machine
+/// recovery: "which services have snapshots here?" with only preferences.toml).
 fn list_repo_services(
     repo: &str,
     password: &str,
@@ -1019,128 +1179,6 @@ fn list_repo_services(
         }
     }
     Ok(set.into_iter().collect())
-}
-
-/// Re-create quadlet symlinks for a restored service — every
-/// `*.container`/`*.network`/`*.volume` in the service home gets linked
-/// into `~/.config/containers/systemd/`, matching `ryra add`. Idempotent.
-fn link_quadlets(home: &Path, quadlet_dir: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(home)
-        .with_context(|| format!("reading {}", home.display()))?
-        .flatten()
-    {
-        let name = entry.file_name();
-        let n = name.to_string_lossy();
-        if n.ends_with(".container") || n.ends_with(".network") || n.ends_with(".volume") {
-            let link = quadlet_dir.join(&name);
-            if std::fs::symlink_metadata(&link).is_ok() {
-                std::fs::remove_file(&link).ok();
-            }
-            std::os::unix::fs::symlink(entry.path(), &link).with_context(|| {
-                format!("symlink {} -> {}", link.display(), entry.path().display())
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn run_systemctl(args: &[&str]) -> Result<()> {
-    let mut full = vec!["--user"];
-    full.extend_from_slice(args);
-    let status = std::process::Command::new("systemctl")
-        .args(&full)
-        .status()
-        .context("spawning systemctl")?;
-    if !status.success() {
-        bail!(
-            "systemctl {} exited with {}",
-            args.join(" "),
-            status.code().unwrap_or(-1)
-        );
-    }
-    Ok(())
-}
-
-/// Full disaster recovery: restore every service folder in the repo,
-/// re-link quadlets, bring the stack up, and import any DB dumps. The
-/// only prerequisite is the user's kept `preferences.toml` (the repo
-/// location + password) — everything else lives in the repo.
-pub(crate) async fn restore_all(at: Option<String>) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-    let config = load_config_resolved(&paths)?;
-    let settings = config.backup.clone().ok_or_else(|| {
-        anyhow!(
-            "no backup repository configured. Put your saved `preferences.toml` at {} \
-             (it carries the repo location + password), then re-run `ryra backup restore`.",
-            paths.config_file.display()
-        )
-    })?;
-
-    let repo = settings.backend.restic_repo();
-    let env: std::collections::BTreeMap<String, String> = settings
-        .backend
-        .env()
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-    let snapshot = at.unwrap_or_else(|| "latest".to_string());
-
-    let mut services = list_repo_services(&repo, &settings.password, &env)?;
-    if services.is_empty() {
-        bail!("no service snapshots found in {repo}");
-    }
-    services.sort_by_key(|s| (restore_priority(s), s.clone()));
-
-    println!(
-        "{} {}",
-        style("disaster recovery — restoring:").cyan().bold(),
-        services.join(", ")
-    );
-
-    // 1. Lay every folder back (whole-folder snapshots: config + data).
-    for svc in &services {
-        let plan = BackupRestorePlan {
-            service_name: svc.clone(),
-            service_home: ryra_core::service_home(svc)?,
-            repo: repo.clone(),
-            password: settings.password.clone(),
-            env: env.clone(),
-            snapshot: snapshot.clone(),
-            pre_restore_hook: None,
-            post_restore_hook: None,
-        };
-        println!("\n{} {svc}", style("restoring folder:").cyan());
-        restic_restore(&plan)?;
-    }
-
-    // 2. Re-link quadlets for all of them, then reload systemd once.
-    let quadlet_dir = ryra_core::quadlet_dir()?;
-    std::fs::create_dir_all(&quadlet_dir)
-        .with_context(|| format!("creating {}", quadlet_dir.display()))?;
-    for svc in &services {
-        link_quadlets(&ryra_core::service_home(svc)?, &quadlet_dir)?;
-    }
-    run_systemctl(&["daemon-reload"])?;
-
-    // 3. Start each service (infra first); run its restore-post hook
-    //    against the now-running stack. Dump services import their SQL
-    //    here; cold-stop services just re-sequence their startup.
-    for svc in &services {
-        let home = ryra_core::service_home(svc)?;
-        println!("\n{} {svc}", style("starting:").cyan());
-        run_systemctl(&["start", &format!("{svc}.service")])?;
-        let hook = home.join("configs").join("scripts").join("restore-post.sh");
-        if hook.exists() {
-            run_hook("post_restore", svc, &hook, &home)?;
-        }
-    }
-
-    println!(
-        "\n{} {} service(s) restored and started.",
-        style("done:").green().bold(),
-        services.len()
-    );
-    Ok(())
 }
 
 async fn check_version_match(plan: &BackupRestorePlan, repo_dir: &Path) -> Result<()> {
@@ -1262,13 +1300,27 @@ async fn list(services: Vec<String>) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow!("no backup repository configured"))?;
 
-    let targets = if services.is_empty() {
-        list_backup_enabled()?
-    } else {
+    let targets = if !services.is_empty() {
         services
+    } else {
+        let enabled = list_backup_enabled()?;
+        if enabled.is_empty() {
+            // Nothing enrolled (e.g. a fresh box with only preferences.toml in
+            // hand): discover services straight from the repo so recovery can
+            // see what's restorable, then `ryra backup restore <id>`.
+            let env: std::collections::BTreeMap<String, String> = settings
+                .backend
+                .env()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            list_repo_services(&settings.backend.restic_repo(), &settings.password, &env)?
+        } else {
+            enabled
+        }
     };
     if targets.is_empty() {
-        println!("No services with backups enabled.");
+        println!("No services with backups enabled, and none found in the repository.");
         return Ok(());
     }
 
@@ -1353,7 +1405,7 @@ async fn status() -> Result<()> {
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {
-        println!("Backup not configured. Run `ryra backup config` first.");
+        println!("Backup not configured. Run `ryra backup connect` first.");
         return Ok(());
     };
 
@@ -1437,74 +1489,9 @@ fn unit_names(cadence: &str) -> (String, String) {
     )
 }
 
-fn cadence_mode(config: &Config, cadence: ScheduleCadence) -> Option<ScheduleMode> {
-    let b = config.backup.as_ref()?;
-    match cadence {
-        ScheduleCadence::Daily => b.daily.clone(),
-        ScheduleCadence::Weekly => b.weekly.clone(),
-    }
-}
-
-fn set_cadence(config: &mut Config, cadence: ScheduleCadence, mode: Option<ScheduleMode>) {
-    if let Some(b) = config.backup.as_mut() {
-        match cadence {
-            ScheduleCadence::Daily => b.daily = mode,
-            ScheduleCadence::Weekly => b.weekly = mode,
-        }
-    }
-}
-
-/// `ryra backup schedule <daily|weekly> [--keep N] [--at HH:MM] | --off`:
-/// turn a cadence on (persist its keep/time + install the timer) or off.
-pub(crate) async fn schedule(
-    cadence: ScheduleCadence,
-    keep: Option<u32>,
-    at: Option<String>,
-    off: bool,
-) -> Result<()> {
-    let paths = ConfigPaths::resolve()?;
-    let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
-    if config.backup.is_none() {
-        bail!("no backup repository configured: run `ryra backup config` first");
-    }
-    let name = cadence.as_str();
-
-    if off {
-        set_cadence(&mut config, cadence, None);
-        ryra_core::config::save_config(&paths.config_file, &config)?;
-        apply_schedule(&config).await?;
-        println!("  {} {name} backups off.", style("ryra-backup").cyan());
-        return Ok(());
-    }
-
-    // Start from the current schedule for this cadence (or its default keep),
-    // then apply whichever knobs were passed.
-    let mut mode = cadence_mode(&config, cadence).unwrap_or(ScheduleMode {
-        keep: cadence.default_keep(),
-        at: "03:00".to_string(),
-    });
-    if let Some(k) = keep {
-        mode.keep = k;
-    }
-    if let Some(a) = at {
-        mode.at = parse_schedule_time(Some(&a))?;
-    }
-    set_cadence(&mut config, cadence, Some(mode.clone()));
-    ryra_core::config::save_config(&paths.config_file, &config)?;
-    apply_schedule(&config).await?;
-    println!(
-        "  {} {name} backups at {}, keeping the last {}.",
-        style("ryra-backup").cyan(),
-        style(&mode.at).green(),
-        style(mode.keep).green()
-    );
-    super::linger::warn_if_disabled().await?;
-    Ok(())
-}
-
 /// Reconcile the systemd --user timers to match `config`: write + enable a
 /// timer for each enabled cadence, remove the rest, one daemon-reload. Shared
-/// by `config`, `schedule`, and the rpc.
+/// by `config` (which owns the schedule) and the rpc.
 pub(crate) async fn apply_schedule(config: &Config) -> Result<()> {
     let dir = systemd_user_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
@@ -1597,7 +1584,7 @@ fn write_timer(
              \n\
              [Service]\n\
              Type=oneshot\n\
-             ExecStart={exe} backup run --mode {cadence}\n\
+             ExecStart={exe} backup scheduled {cadence}\n\
              Restart=no\n",
             exe = exe.display(),
         ),

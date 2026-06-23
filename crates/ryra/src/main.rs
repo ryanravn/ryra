@@ -65,10 +65,10 @@ enum Command {
         #[arg(long, conflicts_with = "url")]
         tailscale: bool,
         /// Include this install in encrypted backups managed by
-        /// `ryra backup run`. Only valid for services whose manifest
+        /// `ryra backup manual`. Only valid for services whose manifest
         /// sets `backup = true` under [integrations]. The actual
         /// backup repository (S3 endpoint, password) is configured
-        /// once with `ryra backup config`.
+        /// once with `ryra backup connect`.
         #[arg(long)]
         backup: bool,
         /// Use Let's Encrypt for Caddy-managed routes. Pass `--acme you@example.com`

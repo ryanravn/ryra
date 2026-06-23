@@ -16,9 +16,9 @@ use ryra_core::config::schema::InstalledService;
 use ryra_core::data::{ServiceStatus, enumerate_all};
 use ryra_core::ops::{self, Operation, PlanContext, Planned};
 use ryra_protocol::{
-    ApplyOutcome, BackupBackendSpec, BackupOutcome, BackupSnapshotView, BackupStatusView,
-    ChoiceOptionView, ChoiceView, ConfigureView, DiffEntry, DiffKind, DiffView, DoctorIssue,
-    EnvAddition, EnvGroupView, EnvKeyChangeView, EnvKindView, EnvVarView, ErrorCode,
+    ApplyOutcome, BackupBackendSpec, BackupInfoView, BackupOutcome, BackupSnapshotView,
+    BackupStatusView, ChoiceOptionView, ChoiceView, ConfigureView, DiffEntry, DiffKind, DiffView,
+    DoctorIssue, EnvAddition, EnvGroupView, EnvKeyChangeView, EnvKindView, EnvVarView, ErrorCode,
     ReconcileOutcome, ReconcilePlanView, RegistryInfo, RegistryTestView, Reply, Request, Response,
     RestoreOutcome, RevertOutcome, RpcError, SearchHit, ServiceDefView, ServiceState, ServiceView,
     Severity, SnapshotView, TestEventView, TestResultEntryView, TestRunView, TestStateView,
@@ -148,9 +148,10 @@ async fn dispatch(req: Request) -> OpResult {
             restore(&service, &snapshot).await.map(Response::Restore)
         }
         Request::Snapshots { service } => snapshots(&service).map(Response::Snapshots),
+        Request::BackupInfo { service } => backup_info(&service).await.map(Response::BackupInfo),
         Request::BackupStatus => backup_status().map(Response::BackupStatus),
-        Request::ConfigureBackup { backend, password } => {
-            configure_backup(backend, password)?;
+        Request::ConnectBackup { backend, password } => {
+            connect_backup(backend, password)?;
             backup_status().map(Response::BackupStatus)
         }
         Request::AccountLogin { token } => {
@@ -160,23 +161,8 @@ async fn dispatch(req: Request) -> OpResult {
             .map_err(core_err)?;
             Ok(Response::Done)
         }
-        Request::ForgetBackups { service, dry_run } => {
-            forget_backups(service, dry_run).map(Response::Forget)
-        }
-        // Parity with `ryra backup run/restore(all)/schedule`: reuse the CLI
-        // orchestration directly (their stdout is hijacked to stderr by the rpc
-        // entry, so only the JSON reply reaches the client).
-        Request::RunBackups { services, mode } => {
-            let mode = parse_backup_mode(mode.as_deref())?;
-            super::backup::run_backup(services, mode)
-                .await
-                .map_err(core_err)?;
-            Ok(Response::Done)
-        }
-        Request::RestoreAll { snapshot } => {
-            // "latest" -> newest-per-service; otherwise the explicit snapshot id.
-            let at = (snapshot != "latest").then_some(snapshot);
-            super::backup::restore_all(at).await.map_err(core_err)?;
+        Request::SetBackupMachine { machine } => {
+            set_backup_machine(machine)?;
             Ok(Response::Done)
         }
         Request::SetSchedule { daily, weekly } => {
@@ -614,17 +600,10 @@ async fn restore(service: &str, snapshot: &str) -> std::result::Result<RestoreOu
     let plan = ryra_core::backup::plan_backup_restore(service, snapshot, &cfg, &repo_dir)
         .map_err(core_err)?;
 
-    // pre-hook -> restic restore -> post-hook, mirroring the CLI. Hooks let
-    // database services import a dumped file after the filesystem restore.
-    if let Some(hook) = &plan.pre_restore_hook {
-        ryra_core::backup::run_hook("pre_restore", &plan.service_name, hook, &plan.service_home)
-            .map_err(core_err)?;
-    }
-    ryra_core::backup::restic_restore(&plan).map_err(core_err)?;
-    if let Some(hook) = &plan.post_restore_hook {
-        ryra_core::backup::run_hook("post_restore", &plan.service_name, hook, &plan.service_home)
-            .map_err(core_err)?;
-    }
+    // ryra owns the stop/wipe/restore/restart for cold services and runs only
+    // the hooks for online ones, mirroring the CLI. Hooks let database services
+    // import a dumped file (or sequence a DB-readiness wait) after restic.
+    ryra_core::backup::execute_backup_restore(&plan).map_err(core_err)?;
     Ok(RestoreOutcome {
         service: service.to_string(),
         snapshot: snapshot.to_string(),
@@ -686,20 +665,10 @@ async fn reconcile(
 }
 
 /// Set whether a service is enrolled in backups (`metadata.backup_enabled`).
-/// Idempotent; a no-op for a service with no install metadata.
+/// Idempotent; a no-op for a service with no install metadata. Thin wrapper over
+/// the core setter so the CLI picker and the rpc layer share one source of truth.
 fn set_backup_enrolled(service: &str, enabled: bool) -> std::result::Result<(), RpcError> {
-    let Some(mut meta) = ryra_core::load_metadata(service).map_err(core_err)? else {
-        return Ok(());
-    };
-    if meta.backup_enabled == enabled {
-        return Ok(());
-    }
-    meta.backup_enabled = enabled;
-    let path = ryra_core::service_home(service)
-        .map_err(core_err)?
-        .join("metadata.toml");
-    let toml = toml::to_string_pretty(&meta).map_err(core_err)?;
-    std::fs::write(&path, toml).map_err(core_err)?;
+    ryra_core::backup::set_backup_enabled(service, enabled).map_err(core_err)?;
     Ok(())
 }
 
@@ -780,6 +749,39 @@ struct ResticSnapshot {
 
 /// A service's restic data snapshots, newest first. Empty when backups aren't
 /// configured (the engine half of `ryra backup list`).
+/// Whether this service's backup/restore stops it, derived from its `[backup]`
+/// config (online vs cold) + restore hooks. Drives the dashboard downtime
+/// notices. A not-installed service reports unsupported rather than erroring.
+async fn backup_info(service: &str) -> std::result::Result<BackupInfoView, RpcError> {
+    let Some(installed) = ryra_core::list_installed()
+        .map_err(core_err)?
+        .into_iter()
+        .find(|s| s.name == service)
+    else {
+        return Ok(BackupInfoView {
+            supported: false,
+            enrolled: false,
+            stops_backup: false,
+            stops_restore: false,
+        });
+    };
+    let service_ref = ryra_core::service_ref_from_installed(&installed);
+    let repo_dir = ryra_core::resolve_registry_dir(&service_ref)
+        .await
+        .map_err(core_err)?;
+    let svc = ryra_core::registry::find_service(&repo_dir, service).map_err(core_err)?;
+    let home = ryra_core::service_home(service).map_err(core_err)?;
+    let enrolled = ryra_core::load_metadata(service)
+        .map_err(core_err)?
+        .is_some_and(|m| m.backup_enabled);
+    Ok(BackupInfoView {
+        supported: svc.def.backup.is_some(),
+        enrolled,
+        stops_backup: ryra_core::backup::backup_stops_service(&svc.def),
+        stops_restore: ryra_core::backup::restore_stops_service(&svc.def, &home),
+    })
+}
+
 fn snapshots(service: &str) -> std::result::Result<Vec<SnapshotView>, RpcError> {
     let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
     let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
@@ -816,9 +818,17 @@ fn backup_status() -> std::result::Result<BackupStatusView, RpcError> {
     let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
     let cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
     let enrolled = ryra_core::backup::list_backup_enabled().map_err(core_err)?;
+    // Machine = the S3 prefix this box backs up under; only S3/BYO backends let
+    // you pick it (managed vends a fixed prefix server-side).
+    let (machine, machine_selectable) = match cfg.backup.as_ref().map(|s| &s.backend) {
+        Some(ryra_core::config::schema::BackupBackend::S3 { prefix, .. }) => (prefix.clone(), true),
+        _ => (None, false),
+    };
     Ok(BackupStatusView {
         configured: cfg.backup.is_some(),
         backend_label: cfg.backup.as_ref().map(|s| backend_label(&s.backend)),
+        machine,
+        machine_selectable,
         enrolled,
         daily: cfg.backup.as_ref().and_then(|s| s.daily.as_ref()).map(|m| {
             ryra_protocol::ScheduleSpec {
@@ -837,19 +847,45 @@ fn backup_status() -> std::result::Result<BackupStatusView, RpcError> {
     })
 }
 
-/// Parse a `daily|weekly|manual` mode string (`None` => manual).
-fn parse_backup_mode(s: Option<&str>) -> std::result::Result<super::backup::BackupMode, RpcError> {
-    use super::backup::BackupMode;
-    Ok(match s.unwrap_or("manual") {
-        "daily" => BackupMode::Daily,
-        "weekly" => BackupMode::Weekly,
-        "manual" => BackupMode::Manual,
-        other => {
-            return Err(core_err(format!(
-                "invalid backup mode '{other}' (daily|weekly|manual)"
-            )));
+/// Select which machine this box backs up as (the S3 prefix). Re-points the
+/// repo to `bucket/<machine>/` and inits it (a no-op if that machine's repo
+/// already exists, which is the recovery case). Only S3/BYO backends; managed
+/// vends a fixed prefix server-side.
+fn set_backup_machine(machine: String) -> std::result::Result<(), RpcError> {
+    use ryra_core::config::schema::{BackupBackend, BackupSettings};
+    let machine = machine.trim().to_string();
+    if machine.is_empty() {
+        return Err(core_err("machine id may not be empty".to_string()));
+    }
+    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
+    let mut cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
+    let Some(settings) = cfg.backup.as_mut() else {
+        return Err(core_err("no backup repository connected".to_string()));
+    };
+    match &mut settings.backend {
+        BackupBackend::S3 { prefix, .. } => *prefix = Some(machine),
+        BackupBackend::Managed => {
+            return Err(core_err(
+                "the backup machine is assigned by your Ryra account and can't be changed here"
+                    .to_string(),
+            ));
         }
-    })
+        BackupBackend::Local { .. } => {
+            return Err(core_err(
+                "local backends have no machine to select".to_string(),
+            ));
+        }
+    }
+    // Make sure the (possibly new) machine's repo is reachable before persisting.
+    let settings = settings.clone();
+    restic_init(&BackupSettings {
+        password: settings.password.clone(),
+        backend: settings.backend.clone(),
+        daily: None,
+        weekly: None,
+    })?;
+    ryra_core::config::save_config(&paths.config_file, &cfg).map_err(core_err)?;
+    Ok(())
 }
 
 /// Replace the full backup schedule (daily/weekly) and reconcile the timers.
@@ -881,71 +917,6 @@ async fn set_schedule(
     Ok(())
 }
 
-/// Prune the scheduled (daily + weekly) snapshots to their keep-counts, per
-/// service. Resolves a managed backend to vended S3 creds first (same as a
-/// backup run). Returns summed `(kept, removed)` counts per service.
-fn forget_backups(
-    service: Option<String>,
-    dry_run: bool,
-) -> std::result::Result<Vec<ryra_protocol::ForgetView>, RpcError> {
-    use ryra_core::config::schema::BackupBackend;
-    let paths = ryra_core::config::ConfigPaths::resolve().map_err(core_err)?;
-    let mut cfg = ryra_core::config::load_or_default(&paths.config_file).map_err(core_err)?;
-    let Some(mut settings) = cfg.backup.clone() else {
-        return Ok(Vec::new());
-    };
-    // Managed resolves to short-lived vended S3 creds (and verifies a logged-in
-    // account with an active plan), exactly as a backup run does.
-    if matches!(settings.backend, BackupBackend::Managed) {
-        settings.backend =
-            ryra_core::system::account::resolve_managed_backend().map_err(core_err)?;
-    }
-    cfg.backup = Some(settings);
-    let targets = match service {
-        Some(s) => vec![s],
-        None => ryra_core::backup::list_backup_enabled().map_err(core_err)?,
-    };
-    let mut out = Vec::new();
-    for svc in targets {
-        // Prune each scheduled cadence to its keep; sum the results. Manual
-        // snapshots have no keep and are never touched.
-        let mut kept = 0u32;
-        let mut removed = 0u32;
-        for (mode, keep) in [
-            (
-                "daily",
-                cfg.backup
-                    .as_ref()
-                    .and_then(|s| s.daily.as_ref())
-                    .map(|m| m.keep),
-            ),
-            (
-                "weekly",
-                cfg.backup
-                    .as_ref()
-                    .and_then(|s| s.weekly.as_ref())
-                    .map(|m| m.keep),
-            ),
-        ] {
-            let Some(keep) = keep else { continue };
-            if let Some(plan) = ryra_core::backup::plan_mode_prune(&svc, &cfg, mode, keep, dry_run)
-                .map_err(core_err)?
-            {
-                let (k, r) = ryra_core::backup::restic_forget(&plan).map_err(core_err)?;
-                kept += k;
-                removed += r;
-            }
-        }
-        out.push(ryra_protocol::ForgetView {
-            service: svc,
-            kept,
-            removed,
-            dry_run,
-        });
-    }
-    Ok(out)
-}
-
 /// `restic init`, treating an already-initialised repo as success.
 fn restic_init(
     settings: &ryra_core::config::schema::BackupSettings,
@@ -965,7 +936,7 @@ fn restic_init(
 /// errors up front), then persist `[backup]`. `password` is used as-is when
 /// given, else the existing repo key is reused (so re-pointing doesn't orphan
 /// snapshots under the old key), else a fresh key is generated.
-fn configure_backup(
+fn connect_backup(
     backend: BackupBackendSpec,
     password: Option<String>,
 ) -> std::result::Result<(), RpcError> {

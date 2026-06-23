@@ -47,6 +47,16 @@ pub struct BackupRunPlan {
     pub tags: Vec<String>,
     pub paths: Vec<PathBuf>,
     pub excludes: Vec<String>,
+    /// False (the default) means a cold snapshot: ryra stops `units`, makes
+    /// `data_paths` readable, snapshots, then restarts. True means ryra leaves
+    /// the service running and only drives the hooks (see [`BackupConfig`]).
+    pub online: bool,
+    /// The service's systemd units (one per container quadlet), derived so ryra
+    /// can stop the whole stack for a cold snapshot. Empty for an online service.
+    pub units: Vec<String>,
+    /// The service's data directories (absolute), derived from `[backup].paths`.
+    /// Cold snapshots `podman unshare chown` these so restic can read them.
+    pub data_paths: Vec<PathBuf>,
     pub pre_backup_hook: Option<PathBuf>,
     pub post_backup_hook: Option<PathBuf>,
 }
@@ -63,6 +73,16 @@ pub struct BackupRestorePlan {
     /// `latest` to grab the newest snapshot, or a specific restic
     /// snapshot id (hex prefix) when the user passed `--at <id>`.
     pub snapshot: String,
+    /// Mirror of [`BackupRunPlan::online`]. A cold restore stops `units`, wipes
+    /// `data_paths` to a clean tree, restores, then restarts. An online restore
+    /// runs only the hooks around restic.
+    pub online: bool,
+    /// The service's systemd units, derived so ryra can stop the stack before a
+    /// cold restore. Empty for an online service.
+    pub units: Vec<String>,
+    /// The service's data directories (absolute), derived from `[backup].paths`.
+    /// A cold restore wipes these to a clean tree before `restic restore`.
+    pub data_paths: Vec<PathBuf>,
     pub pre_restore_hook: Option<PathBuf>,
     pub post_restore_hook: Option<PathBuf>,
 }
@@ -89,24 +109,24 @@ pub struct BackupForgetPlan {
     pub dry_run: bool,
 }
 
-/// Plan a `ryra backup run <service>` invocation. Errors loudly when:
+/// Plan a `ryra backup manual <service>` invocation. Errors loudly when:
 /// - the service isn't installed,
-/// - its install metadata didn't opt into backups (`--backup` wasn't
-///   passed at `ryra add`),
-/// - the user hasn't run `ryra backup config` yet,
+/// - the user hasn't run `ryra backup connect` yet,
 /// - the service author hasn't declared backup support (defensive —
 ///   the install-time check should have caught this earlier, but a
 ///   manifest change between install and backup is possible).
+///
+/// Note: a snapshot does NOT require the service to be enrolled
+/// (`backup_enabled`). Enrollment only governs the daily/weekly schedule; a
+/// manual one-off backup of any backup-capable install is allowed.
 pub fn plan_backup_run(
     service_name: &str,
     config: &Config,
     repo_dir: &Path,
     mode: &str,
 ) -> Result<BackupRunPlan> {
-    let metadata = load_install_metadata(service_name)?;
-    if !metadata.backup_enabled {
-        return Err(Error::BackupNotEnabled(service_name.to_string()));
-    }
+    // Ensure it's installed (errors otherwise); enrollment is not required.
+    load_install_metadata(service_name)?;
     let settings = config
         .backup
         .as_ref()
@@ -154,6 +174,14 @@ pub fn plan_backup_run(
         &home,
         "backup-post.sh",
     );
+    let online = backup.is_some_and(|b| b.online);
+    // Cold snapshots stop the stack; online ones don't, so they need no units.
+    let units = if online {
+        Vec::new()
+    } else {
+        service_units(&home)
+    };
+    let data = data_paths(&svc.def, &home);
 
     Ok(BackupRunPlan {
         service_name: service_name.to_string(),
@@ -164,6 +192,9 @@ pub fn plan_backup_run(
         tags,
         paths,
         excludes,
+        online,
+        units,
+        data_paths: data,
         pre_backup_hook: pre,
         post_backup_hook: post,
     })
@@ -181,10 +212,9 @@ pub fn plan_backup_restore(
     config: &Config,
     repo_dir: &Path,
 ) -> Result<BackupRestorePlan> {
-    let metadata = load_install_metadata(service_name)?;
-    if !metadata.backup_enabled {
-        return Err(Error::BackupNotEnabled(service_name.to_string()));
-    }
+    // Ensure it's installed (errors otherwise); a snapshot can be restored
+    // whether or not the service is enrolled in the schedule.
+    load_install_metadata(service_name)?;
     let settings = config
         .backup
         .as_ref()
@@ -204,6 +234,13 @@ pub fn plan_backup_restore(
         &home,
         "restore-post.sh",
     );
+    let online = backup.is_some_and(|b| b.online);
+    let units = if online {
+        Vec::new()
+    } else {
+        service_units(&home)
+    };
+    let data = data_paths(&svc.def, &home);
 
     Ok(BackupRestorePlan {
         service_name: service_name.to_string(),
@@ -212,6 +249,9 @@ pub fn plan_backup_restore(
         password: settings.password.clone(),
         env: backend_env_map(&settings.backend),
         snapshot: snapshot.to_string(),
+        online,
+        units,
+        data_paths: data,
         pre_restore_hook: pre,
         post_restore_hook: post,
     })
@@ -254,7 +294,7 @@ pub fn plan_mode_prune(
 }
 
 /// List installed services that have `backup_enabled = true` in their
-/// metadata. The CLI's `ryra backup run` (no service argument) uses
+/// metadata. The CLI's `ryra backup manual` (no service argument) uses
 /// this to iterate every enabled install.
 pub fn list_backup_enabled() -> Result<Vec<String>> {
     let root = crate::paths::service_data_root()?;
@@ -282,6 +322,25 @@ pub fn list_backup_enabled() -> Result<Vec<String>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// Enroll or unenroll a service in backups by flipping `backup_enabled` in its
+/// `metadata.toml`. Returns whether the flag actually changed (`false` if the
+/// service isn't installed, or was already in that state). This on-disk flag is
+/// what [`list_backup_enabled`] and a no-argument `ryra backup manual` read, so it
+/// is the single source of truth both the CLI picker and the rpc layer set.
+pub fn set_backup_enabled(service: &str, enabled: bool) -> Result<bool> {
+    let Some(mut meta) = load_metadata(service)? else {
+        return Ok(false);
+    };
+    if meta.backup_enabled == enabled {
+        return Ok(false);
+    }
+    meta.backup_enabled = enabled;
+    let path = service_home(service)?.join("metadata.toml");
+    let toml = toml::to_string_pretty(&meta)?;
+    std::fs::write(&path, toml).map_err(|source| Error::FileWrite { path, source })?;
+    Ok(true)
 }
 
 fn load_install_metadata(service_name: &str) -> Result<Metadata> {
@@ -365,6 +424,58 @@ fn config_artifacts(home: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// The service's systemd units — one `<stem>.service` per `<stem>.container`
+/// quadlet in the service home. This is the set ryra stops for a cold snapshot
+/// or restore (`Requires=` governs startup, not shutdown, so the whole stack is
+/// stopped explicitly). Sorted for determinism.
+fn service_units(home: &Path) -> Vec<String> {
+    let mut units = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(home) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if let Some(stem) = name.to_string_lossy().strip_suffix(".container") {
+                units.push(format!("{stem}.service"));
+            }
+        }
+    }
+    units.sort();
+    units
+}
+
+/// The service's data directories (absolute) — the `[backup].paths` entries
+/// resolved against the home. These are the trees a cold snapshot chowns so
+/// restic can read them, and a cold restore wipes to a clean tree first. Config
+/// artifacts and `preferences.toml` are never in this set (never wiped). Empty
+/// when the service declares no explicit paths.
+fn data_paths(def: &ServiceDef, home: &Path) -> Vec<PathBuf> {
+    def.backup
+        .as_ref()
+        .map(|b| b.paths.iter().map(|p| home.join(p)).collect())
+        .unwrap_or_default()
+}
+
+/// Whether backing up this service stops it. Cold services (the default) take a
+/// stop-the-stack snapshot; `online` services snapshot live. Surfaced to the UI
+/// so "Back up now" can warn about the brief downtime.
+pub fn backup_stops_service(def: &ServiceDef) -> bool {
+    def.backup.as_ref().is_some_and(|b| !b.online)
+}
+
+/// Whether restoring this service stops it. A cold restore always stops the
+/// stack to wipe + replace its data; an `online` service stops only if it ships
+/// restore hooks (e.g. it pauses the app while re-importing a dump). Surfaced to
+/// the UI so the restore confirm can warn about downtime.
+pub fn restore_stops_service(def: &ServiceDef, home: &Path) -> bool {
+    match def.backup.as_ref() {
+        None => false,
+        Some(b) if !b.online => true,
+        Some(b) => {
+            resolve_hook(b.pre_restore.as_deref(), home, "restore-pre.sh").is_some()
+                || resolve_hook(b.post_restore.as_deref(), home, "restore-post.sh").is_some()
+        }
+    }
 }
 
 fn hook_path(home: &Path, filename: &str) -> PathBuf {
@@ -629,21 +740,169 @@ pub fn parse_env_file(path: &std::path::Path) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Run a planned backup end-to-end: pre hook, restic, post hook. The
-/// post hook runs even when restic fails (it usually cleans up a dump
-/// file), but its own failure never masks restic's error.
+/// How long to let units settle after a stop before touching their data, so
+/// the database has flushed and file handles are closed. Matches the `sleep`
+/// the per-service hook scripts used to do.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Stop a service's units for a cold snapshot/restore. Best-effort, like the
+/// hook scripts' `systemctl stop ... || true`: a unit that isn't running is not
+/// an error. `Requires=` governs startup not shutdown, so every unit is listed.
+fn stop_units(units: &[String]) {
+    if units.is_empty() {
+        return;
+    }
+    let mut cmd = std::process::Command::new("systemctl");
+    cmd.arg("--user").arg("stop");
+    for u in units {
+        cmd.arg(u);
+    }
+    let _ = cmd.status();
+}
+
+/// Bring a service back up after a cold snapshot/restore: clear any
+/// start-limit/failed state left by the stop+start churn, then start the
+/// primary unit (`<service>.service`), whose `Requires=` cascades its sidecars.
+/// Services that need more (extra units, or a DB-readiness wait) ship a
+/// post_backup/post_restore hook instead.
+fn start_service(service: &str) -> anyhow::Result<()> {
+    use anyhow::{Context, bail};
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "reset-failed"])
+        .status();
+    let unit = format!("{service}.service");
+    let status = std::process::Command::new("systemctl")
+        .args(["--user", "start", &unit])
+        .status()
+        .with_context(|| format!("spawning `systemctl --user start {unit}`"))?;
+    if !status.success() {
+        bail!(
+            "`systemctl --user start {unit}` exited with {}",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+/// Make container-owned bind mounts readable by the invoking user so restic can
+/// snapshot them. `podman unshare chown -R 0:0` maps namespace-root (= this
+/// user); the next container start re-applies `:U`. A no-op for data that is
+/// already user-owned (no `:U` mount).
+fn chown_for_read(paths: &[PathBuf]) -> anyhow::Result<()> {
+    use anyhow::{Context, bail};
+    for p in paths {
+        if !p.exists() {
+            continue;
+        }
+        let status = std::process::Command::new("podman")
+            .args(["unshare", "chown", "-R", "0:0"])
+            .arg(p)
+            .status()
+            .with_context(|| format!("spawning `podman unshare chown` on {}", p.display()))?;
+        if !status.success() {
+            bail!("`podman unshare chown` on {} failed", p.display());
+        }
+    }
+    Ok(())
+}
+
+/// Wipe a cold service's data dirs to a clean tree before `restic restore`, so
+/// files created after the snapshot don't linger and desync the restored state.
+/// `podman unshare` so `:U`-chowned (container-uid) trees are removable; the
+/// dirs are recreated empty since podman refuses to start a container whose
+/// bind-mount source is missing.
+fn wipe_for_restore(paths: &[PathBuf]) -> anyhow::Result<()> {
+    use anyhow::Context;
+    for p in paths {
+        let _ = std::process::Command::new("podman")
+            .args(["unshare", "rm", "-rf"])
+            .arg(p)
+            .status();
+        std::fs::create_dir_all(p).with_context(|| format!("recreating {}", p.display()))?;
+    }
+    Ok(())
+}
+
+/// Run a planned backup end-to-end.
+///
+/// `online` services (a live dump, or safe-to-copy flat data) run only their
+/// own hooks around restic: `pre_backup` -> restic -> `post_backup`. The post
+/// hook runs even when restic fails (it usually cleans up a dump), but its own
+/// failure never masks restic's error.
+///
+/// Cold services (the default) get the full lifecycle ryra derives from their
+/// units + paths: stop the stack, make the data readable, optional `pre_backup`
+/// prep, restic, then bring the service back (a `post_backup` hook if present,
+/// else start the primary unit). The service is always brought back up, even
+/// when restic fails, so a failed backup never leaves it down.
 pub fn execute_backup_run(plan: &BackupRunPlan) -> anyhow::Result<()> {
+    if plan.online {
+        if let Some(hook) = &plan.pre_backup_hook {
+            run_hook("pre_backup", &plan.service_name, hook, &plan.service_home)?;
+        }
+        let restic_result = restic_backup(plan);
+        if let Some(hook) = &plan.post_backup_hook
+            && let Err(e) = run_hook("post_backup", &plan.service_name, hook, &plan.service_home)
+            && restic_result.is_ok()
+        {
+            return Err(e);
+        }
+        return restic_result;
+    }
+
+    // Cold snapshot: ryra owns the stop/chown/restart the hook scripts used to.
+    stop_units(&plan.units);
+    std::thread::sleep(SETTLE);
+    chown_for_read(&plan.data_paths)?;
     if let Some(hook) = &plan.pre_backup_hook {
         run_hook("pre_backup", &plan.service_name, hook, &plan.service_home)?;
     }
     let restic_result = restic_backup(plan);
-    if let Some(hook) = &plan.post_backup_hook
-        && let Err(e) = run_hook("post_backup", &plan.service_name, hook, &plan.service_home)
-        && restic_result.is_ok()
-    {
-        return Err(e);
+    // Always bring the service back, even if restic failed.
+    let bring_up = match &plan.post_backup_hook {
+        Some(hook) => run_hook("post_backup", &plan.service_name, hook, &plan.service_home),
+        None => start_service(&plan.service_name),
+    };
+    match (restic_result, bring_up) {
+        (Ok(()), bring) => bring,
+        (Err(e), _) => Err(e),
     }
-    restic_result
+}
+
+/// Run a planned restore end-to-end.
+///
+/// `online` services run only their own hooks around restic: `pre_restore` ->
+/// restic -> `post_restore` (e.g. seafile pauses the app, restores the tree,
+/// re-imports a live dump). Cold services (the default) get ryra's derived
+/// lifecycle: stop the stack, wipe `data_paths` to a clean tree, optional
+/// `pre_restore` (extra wipes), restic restore, then bring the service back (a
+/// `post_restore` hook if present — typically a DB-readiness wait — else start
+/// the primary unit).
+pub fn execute_backup_restore(plan: &BackupRestorePlan) -> anyhow::Result<()> {
+    if plan.online {
+        if let Some(hook) = &plan.pre_restore_hook {
+            run_hook("pre_restore", &plan.service_name, hook, &plan.service_home)?;
+        }
+        restic_restore(plan)?;
+        if let Some(hook) = &plan.post_restore_hook {
+            run_hook("post_restore", &plan.service_name, hook, &plan.service_home)?;
+        }
+        return Ok(());
+    }
+
+    // Cold restore: stop, wipe to a clean tree, restore, bring back up.
+    stop_units(&plan.units);
+    std::thread::sleep(SETTLE);
+    wipe_for_restore(&plan.data_paths)?;
+    if let Some(hook) = &plan.pre_restore_hook {
+        run_hook("pre_restore", &plan.service_name, hook, &plan.service_home)?;
+    }
+    restic_restore(plan)?;
+    match &plan.post_restore_hook {
+        Some(hook) => run_hook("post_restore", &plan.service_name, hook, &plan.service_home)?,
+        None => start_service(&plan.service_name)?,
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -822,6 +1081,72 @@ mod tests {
     fn manifest_sha256_returns_zero_hash_on_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(manifest_sha256(dir.path()), "0".repeat(64));
+    }
+
+    #[test]
+    fn service_units_one_per_container_quadlet() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // Container quadlets -> .service units; network/volume quadlets don't.
+        std::fs::write(home.join("forgejo.container"), "").unwrap();
+        std::fs::write(home.join("forgejo-postgres.container"), "").unwrap();
+        std::fs::write(home.join("forgejo.network"), "").unwrap();
+        assert_eq!(
+            service_units(home),
+            vec![
+                "forgejo-postgres.service".to_string(),
+                "forgejo.service".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn data_paths_are_backup_paths_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let def = def_with_backup(Some(BackupConfig {
+            paths: vec!["db-data".into(), "data".into()],
+            ..Default::default()
+        }));
+        assert_eq!(
+            data_paths(&def, home),
+            vec![home.join("db-data"), home.join("data")]
+        );
+        // No explicit paths -> nothing to chown/wipe (whole-folder backup).
+        let whole = def_with_backup(Some(BackupConfig::default()));
+        assert!(data_paths(&whole, home).is_empty());
+    }
+
+    #[test]
+    fn stop_flags_track_online_and_restore_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+
+        // Cold (default): both backup and restore stop the service.
+        let cold = def_with_backup(Some(BackupConfig::default()));
+        assert!(backup_stops_service(&cold));
+        assert!(restore_stops_service(&cold, home));
+
+        // Online with no restore hooks: neither stops (e.g. flat/append data).
+        let online = def_with_backup(Some(BackupConfig {
+            online: true,
+            ..Default::default()
+        }));
+        assert!(!backup_stops_service(&online));
+        assert!(!restore_stops_service(&online, home));
+
+        // Online but ships a restore hook (e.g. seafile re-imports a dump):
+        // backup runs live, restore still stops.
+        let scripts = home.join("configs").join("scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("restore-post.sh"), "#!/bin/sh\n").unwrap();
+        assert!(!backup_stops_service(&online));
+        assert!(restore_stops_service(&online, home));
+
+        // No backup support at all: never stops.
+        let none = def_with_backup(None);
+        assert!(!backup_stops_service(&none));
+        assert!(!restore_stops_service(&none, home));
     }
 
     #[test]

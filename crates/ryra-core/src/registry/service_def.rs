@@ -618,12 +618,27 @@ fn default_true() -> bool {
 /// as those scripts: `$SERVICE_HOME` plus everything in the service's
 /// `.env` file.
 ///
-/// Pre/post hooks form a pair around the operation:
+/// By default a backup is a **cold snapshot**: ryra stops the service's
+/// units, makes the data readable, runs `restic`, then restarts. The
+/// stop/chown/wipe/start lifecycle is derived from the service's units and
+/// `paths`, so a typical service.toml `[backup]` is a single `paths = [...]`
+/// line with no scripts at all. Hooks remain for the parts ryra can't
+/// derive:
 ///
 /// ```text
-/// backup:  [pre_backup]  -> restic snapshot   -> [post_backup]
-/// restore: [pre_restore] -> restic restore    -> [post_restore]
+/// cold backup:   stop units -> chown -> [pre_backup] -> restic -> [post_backup | start]
+/// cold restore:  stop units -> wipe  -> [pre_restore] -> restic -> [post_restore | start]
 /// ```
+///
+/// `[post_backup]`/`[post_restore]` override ryra's generic restart when a
+/// service needs special bring-up (extra units, or a DB-readiness wait before
+/// the app starts). `[pre_*]` add extra prep after ryra's stop (a non-default
+/// dump, or wiping a derived dir like a search index).
+///
+/// Set `online = true` to opt out of the cold lifecycle entirely: ryra runs
+/// only the hooks around restic and never stops, chowns, or wipes. Use it for
+/// services that snapshot consistently while live (a `pre_backup` DB dump) or
+/// whose data is safe to copy in place (append-only / flat files).
 ///
 /// Hooks must dump to `$SERVICE_HOME/.backup/` (a sibling of `data/`)
 /// so it's clear which files are user-owned data versus snapshot
@@ -640,20 +655,32 @@ pub struct BackupConfig {
     /// Useful for skipping caches, previews, transcoding artefacts.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// Back up without stopping the service. Default false: ryra takes a cold
+    /// snapshot (stop units -> chown -> restic -> restart). Set true when the
+    /// service makes itself consistent while live (a `pre_backup` dump) or its
+    /// data is safe to copy in place; then ryra runs only the hooks around
+    /// restic and never touches the service's lifecycle.
+    #[serde(default)]
+    pub online: bool,
     /// Script filename (in `configs/scripts/`) run before the restic
-    /// snapshot. Typically dumps a database to `$SERVICE_HOME/.backup/`.
+    /// snapshot, after ryra has stopped the service (cold) or while it's live
+    /// (online). Typically dumps a database to `$SERVICE_HOME/.backup/`.
     #[serde(default)]
     pub pre_backup: Option<String>,
-    /// Script filename run after a successful restic snapshot.
-    /// Typically cleans up `$SERVICE_HOME/.backup/`.
+    /// Script filename run after the restic snapshot. When present on a cold
+    /// service it owns the restart (e.g. starting extra units); otherwise ryra
+    /// starts the primary unit. Also used to clean up a dump.
     #[serde(default)]
     pub post_backup: Option<String>,
-    /// Script filename run before restoring (typically stops the
-    /// service and wipes the live data dir).
+    /// Script filename run before `restic restore`, after ryra has stopped the
+    /// service and wiped `paths`. Typically wipes an extra derived dir (a
+    /// search index) the standard wipe doesn't cover.
     #[serde(default)]
     pub pre_restore: Option<String>,
-    /// Script filename run after restoring (typically imports the
-    /// dump back into the live database and restarts the service).
+    /// Script filename run after `restic restore`. When present it owns the
+    /// restart (e.g. bring the database up, wait for it to accept connections,
+    /// then start the app); otherwise ryra starts the primary unit. Also used
+    /// to import a dump back into the live database.
     #[serde(default)]
     pub post_restore: Option<String>,
 }

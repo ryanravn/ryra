@@ -30,7 +30,7 @@ pub struct Metadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub provides: Vec<Capability>,
     /// True if `--backup` was passed at `ryra add` time. Drives
-    /// whether `ryra backup run` picks this install up.
+    /// whether `ryra backup manual` picks this install up.
     ///
     /// Default `false` so an existing install (written by a ryra
     /// version that pre-dates the backup feature) reads back as

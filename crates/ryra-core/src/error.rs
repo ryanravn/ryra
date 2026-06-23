@@ -170,14 +170,14 @@ pub enum Error {
     )]
     BackupNotSupported(String),
 
-    #[error("backup repository is not configured — run `ryra backup config` first")]
+    #[error("backup repository is not configured — run `ryra backup connect` first")]
     BackupRepoNotConfigured,
 
     #[error("backup is not enabled for service '{0}' — re-install with `ryra add {0} --backup`")]
     BackupNotEnabled(String),
 
     #[error(
-        "no snapshots found for service '{0}' in the backup repository — has `ryra backup run` ever succeeded?"
+        "no snapshots found for service '{0}' in the backup repository - has `ryra backup manual` ever succeeded?"
     )]
     BackupNoSnapshots(String),
 

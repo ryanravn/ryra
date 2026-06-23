@@ -139,7 +139,7 @@ impl ConfigureChange {
     /// - Disabling auth removes the OIDC client and SSO env vars; users
     ///   who logged in via SSO can no longer reach the service that way.
     /// - Disabling SMTP cuts off outbound mail for the service.
-    /// - Disabling backup means future `ryra backup run` calls skip this
+    /// - Disabling backup means future `ryra backup manual` calls skip this
     ///   install — historical snapshots are kept on the restic repo.
     /// - Disabling a group drops env vars the service had access to;
     ///   features depending on them stop working until re-enabled.

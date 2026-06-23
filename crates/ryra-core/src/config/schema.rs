@@ -28,7 +28,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryEntry>,
     /// Backup repository + encryption password. Set by
-    /// `ryra backup config`; consumed by every `ryra backup run`,
+    /// `ryra backup connect`; consumed by every `ryra backup manual`,
     /// `ryra backup restore`, and `ryra backup list` invocation.
     /// `None` means the user hasn't configured backups yet — every
     /// backup command refuses with [`Error::BackupRepoNotConfigured`].
@@ -68,12 +68,12 @@ impl Config {
 /// Top-level backup repository configuration. Persisted in
 /// preferences.toml under `[backup]`. Storing the password here (vs.
 /// requiring it on every invocation) is the only ergonomic way to run
-/// `ryra backup run` from a systemd timer — but the file is already
+/// `ryra backup manual` from a systemd timer — but the file is already
 /// 0600 and contains comparably-sensitive SMTP and Tailscale tokens,
 /// so the threat model doesn't change.
 ///
 /// Losing this password = losing access to every snapshot. Surfaced
-/// once by `ryra backup config` with a print-and-confirm step.
+/// once by `ryra backup connect` with a print-and-confirm step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupSettings {
     /// The restic encryption password. Forms the only key that can
@@ -92,7 +92,7 @@ pub struct BackupSettings {
     /// Weekly schedule (runs Sunday). Same shape as `daily`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weekly: Option<ScheduleMode>,
-    // Manual backups (`ryra backup run`) are always available and are NEVER
+    // Manual backups (`ryra backup manual`) are always available and are NEVER
     // pruned -- they need no configuration, so there's no field for them.
 }
 
