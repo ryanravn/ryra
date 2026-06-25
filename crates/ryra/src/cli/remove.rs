@@ -21,7 +21,13 @@ pub async fn run(
     // `-a` expands to every installed service. With `--purge` it also
     // sweeps every orphan. `ryra reset` remains distinct — it
     // additionally wipes ryra's own config, CAs, and registry caches.
-    let (targets, effective_purge) = if orphans {
+    //
+    // Removing more than one service at once — whether via `-a`,
+    // `--orphans`, or an explicit `ryra remove a b c` — goes through the
+    // single bulk prompt (`confirm_bulk`): list the services, settle the
+    // purge question once, type "remove all" to confirm. The per-service
+    // type-the-name confirm is reserved for the single-service case.
+    let (targets, effective_purge, skip_prompt) = if orphans {
         let names: Vec<String> = ryra_core::data::enumerate_all()?
             .into_iter()
             .filter(|s| matches!(s.status, ServiceStatus::Orphan))
@@ -31,8 +37,8 @@ pub async fn run(
             println!("No orphan data to purge.");
             return Ok(());
         }
-        confirm_bulk(&names, true, yes, dry_run)?;
-        (names, true)
+        let eff = confirm_bulk(&names, true, yes, dry_run)?;
+        (names, eff, true)
     } else if all {
         let mut names: Vec<String> = ryra_core::scan_managed_services()?;
         if purge {
@@ -47,16 +53,16 @@ pub async fn run(
             return Ok(());
         }
         names.sort();
-        confirm_bulk(&names, purge, yes, dry_run)?;
-        (names, purge)
+        let eff = confirm_bulk(&names, purge, yes, dry_run)?;
+        (names, eff, true)
+    } else if services.len() > 1 {
+        let eff = confirm_bulk(services, purge, yes, dry_run)?;
+        (services.to_vec(), eff, true)
     } else {
-        (services.to_vec(), purge)
+        // Single named service: the per-service prompt in `remove_one`
+        // handles confirmation. `-y`/`--dry-run` still skip it.
+        (services.to_vec(), purge, yes || dry_run)
     };
-
-    // With `-a` or `--orphans`, the bulk prompt ran once up front. With
-    // `-y` or `--dry-run`, we don't prompt at all. Otherwise prompt
-    // per service.
-    let skip_prompt = all || orphans || yes || dry_run;
 
     // Serialize concurrent removals so two processes don't clobber each
     // other's edits to authelia's configuration.yml when unregistering
@@ -161,10 +167,17 @@ async fn remove_one(service: &str, purge: bool, skip_prompt: bool, dry_run: bool
         match &svc {
             None => anyhow::bail!("no service named '{service}'"),
             Some(s) => {
-                if skip_prompt || !super::is_interactive() {
+                if !super::is_interactive() {
                     anyhow::bail!(
                         "'{service}' is already removed but still has data. Run `ryra remove {service} --purge` to wipe it."
                     );
+                }
+                // `skip_prompt` here means a bulk prompt already ran (or
+                // `-y`): the purge question was settled and the answer
+                // was "keep data". Nothing left to do for this orphan.
+                if skip_prompt {
+                    println!("{service}: already removed; data left in place.");
+                    return Ok(());
                 }
                 if !ask_orphan_purge_upgrade(s)? {
                     return Ok(());
@@ -327,9 +340,14 @@ fn prompt_orphan(svc: &ServiceData) -> Result<()> {
     Ok(())
 }
 
-fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Result<()> {
+/// Confirm removal of several services at once. Lists them, settles the
+/// purge question once for the whole batch, and gates on the user typing
+/// "remove all". Returns the effective purge decision (the `--purge`
+/// flag, or the answer to the batch-wide upgrade prompt). With `-y` /
+/// `--dry-run` it doesn't prompt and just echoes back `purge`.
+fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Result<bool> {
     if yes || dry_run {
-        return Ok(());
+        return Ok(purge);
     }
     if !super::is_interactive() {
         anyhow::bail!("use --yes (-y) to confirm in non-interactive mode");
@@ -355,19 +373,50 @@ fn confirm_bulk(names: &[String], purge: bool, yes: bool, dry_run: bool) -> Resu
         );
         println!();
     }
-    if purge {
+
+    // Settle purge once for the batch. With `--purge` it's already
+    // decided. Otherwise, if any listed service has data on disk, offer
+    // a single upgrade covering all of them rather than making the user
+    // re-run with `--purge`.
+    let effective_purge = if purge {
         println!("Mode: --purge — every listed service AND its data/volumes will be wiped.");
+        println!();
+        true
     } else {
-        println!("Mode: data-preserving — run `ryra remove -a --purge` later to wipe data.");
-    }
-    println!();
+        let with_data: Vec<(&String, Vec<String>)> = names
+            .iter()
+            .map(|n| (n, preserved_items(n)))
+            .filter(|(_, items)| !items.is_empty())
+            .collect();
+        if with_data.is_empty() {
+            println!("Mode: data-preserving (these services store no data, or it's already gone).");
+            println!();
+            false
+        } else {
+            println!("These services have data that would be preserved:");
+            for (n, items) in &with_data {
+                println!("  {n}:");
+                for item in items {
+                    println!("      {item}");
+                }
+            }
+            let upgrade = Confirm::new()
+                .with_prompt("Also delete ALL of this data?")
+                .default(false)
+                .interact()?;
+            println!();
+            upgrade
+        }
+    };
+
     let input: String = Input::new()
         .with_prompt("Type \"remove all\" to confirm")
         .interact_text()?;
     if input != "remove all" {
         anyhow::bail!("cancelled");
     }
-    Ok(())
+    println!();
+    Ok(effective_purge)
 }
 
 fn print_installed_tail(
