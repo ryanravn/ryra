@@ -75,6 +75,7 @@ impl GlobalFlags {
 }
 
 pub async fn run(flags: GlobalFlags) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(flags.dry_run)?;
     let paths = ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     let had_secrets_before = config.has_secrets();

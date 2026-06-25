@@ -390,6 +390,7 @@ struct ConfigureArgs {
 }
 
 async fn configure(args: ConfigureArgs) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(false)?;
     let paths = ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     let interactive = super::is_interactive();
@@ -481,6 +482,7 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
 /// daily/weekly schedule. `connect` establishes the repository; this configures
 /// how this box uses it. Interactive.
 async fn configure_backups() -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(false)?;
     let paths = ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.backup.is_none() {
@@ -817,6 +819,7 @@ fn prune_one(config: &Config, svc: &str, mode: BackupMode, keep: u32, dry_run: b
 /// twin of `ryra add`), then offer a first snapshot. Adding only enrolls them in
 /// the schedule -- taking the snapshot is a separate, prompted step.
 async fn backup_add(services: Vec<String>, now: bool) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(false)?;
     let paths = ConfigPaths::resolve()?;
     let config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.backup.is_none() {
@@ -842,6 +845,10 @@ async fn backup_add(services: Vec<String>, now: bool) -> Result<()> {
         }
     }
 
+    // Release before the (possibly slow) first snapshot — a long upload must
+    // not hold the global mutation lock and block other commands.
+    drop(_lock);
+
     // A snapshot is never taken automatically: offer one (default yes, since
     // adding a service is usually "protect it now"), or `--now` to skip asking.
     let take = now
@@ -864,6 +871,7 @@ async fn backup_add(services: Vec<String>, now: bool) -> Result<()> {
 /// `ryra backup remove <svc>...`: stop backing up services (the twin of
 /// `ryra remove`). Drops them from the schedule; existing snapshots are kept.
 async fn backup_remove(services: Vec<String>) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(false)?;
     if services.is_empty() {
         bail!("name at least one service to remove from backups");
     }
@@ -1014,6 +1022,7 @@ async fn delete(id: String, yes: bool) -> Result<()> {
 /// Disconnect backups: clear `[backup]` + remove the schedule timers. Existing
 /// snapshots in the bucket are left untouched.
 async fn disconnect(yes: bool) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(false)?;
     let paths = ConfigPaths::resolve()?;
     let mut config = ryra_core::config::load_or_default(&paths.config_file)?;
     if config.backup.is_none() {
@@ -1073,6 +1082,9 @@ async fn run_one(service_name: &str, config: &Config, mode: BackupMode) -> Resul
 // ---------------------------------------------------------------------------
 
 async fn restore(target: String, force: bool, include_config: bool) -> Result<()> {
+    // Held for the whole restore: it writes the service's data dir, so it must
+    // not race a concurrent add/upgrade/remove of the same service.
+    let _lock = super::lock::MutationLock::acquire(false)?;
     let paths = ConfigPaths::resolve()?;
     let config = load_config_resolved(&paths)?;
     let Some(settings) = config.backup.as_ref() else {

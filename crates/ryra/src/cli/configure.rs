@@ -56,6 +56,8 @@ pub async fn run(service: &str, flags: ConfigureFlags) -> Result<()> {
     if flags.no_url && flags.tailscale {
         bail!("--no-url and --tailscale are mutually exclusive");
     }
+
+    let _lock = super::lock::MutationLock::acquire(flags.dry_run)?;
     if flags.smtp && flags.no_smtp {
         bail!("--smtp and --no-smtp are mutually exclusive");
     }

@@ -10,6 +10,7 @@ use super::apply;
 /// — clap enforces this at the arg layer, so reaching here with neither is
 /// a defensive `bail!`.
 pub async fn run(service: Option<&str>, all: bool, action: Lifecycle, dry_run: bool) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(dry_run)?;
     let targets: Vec<String> = if all {
         let installed = ryra_core::list_installed()?;
         if installed.is_empty() {

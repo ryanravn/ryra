@@ -216,6 +216,7 @@ async fn dispatch(req: Request) -> OpResult {
 /// whether the change was destructive), so callers don't lose the per-op
 /// accounting the in-process plan exposed.
 async fn run_mutation(op: Operation) -> OpResult {
+    let _lock = rpc_lock(false)?;
     // The installed name to re-read afterwards. For Add the request `service`
     // may be a registry ref or path, so we take the resolved name from the plan.
     let target = match &op {
@@ -372,6 +373,7 @@ fn map_diff_kind(k: &ryra_core::DiffKind) -> DiffKind {
 
 /// Restore a service from a pre-upgrade snapshot, then execute the restore.
 async fn revert(service: &str, at: Option<&str>) -> std::result::Result<RevertOutcome, RpcError> {
+    let _lock = rpc_lock(false)?;
     let r = ryra_core::revert_service(service, at).map_err(core_err)?;
     let outcome = RevertOutcome {
         service: r.service.clone(),
@@ -618,6 +620,7 @@ async fn reconcile(
     services: Vec<String>,
     dry_run: bool,
 ) -> std::result::Result<ReconcileOutcome, RpcError> {
+    let _lock = rpc_lock(dry_run)?;
     let targets: Vec<String> = if services.is_empty() {
         ryra_core::list_installed()
             .map_err(core_err)?
@@ -1188,6 +1191,14 @@ fn map_severity(s: ryra_core::system::doctor::Severity) -> Severity {
 /// error. For typed core errors whose *shape* implies a status, use [`op_err`].
 fn core_err(e: impl std::fmt::Display) -> RpcError {
     RpcError::new(ErrorCode::Internal, e.to_string())
+}
+
+/// Take the global mutation lock for an RPC mutation. Contention surfaces as a
+/// retryable `Conflict` so a client (the orchestrator) backs off and retries
+/// rather than racing another in-flight mutation on the same box.
+fn rpc_lock(dry_run: bool) -> std::result::Result<Option<super::lock::MutationLock>, RpcError> {
+    super::lock::MutationLock::acquire(dry_run)
+        .map_err(|e| RpcError::new(ErrorCode::Conflict, e.to_string()))
 }
 
 /// Map a planning error from a service operation to the status its shape

@@ -15,6 +15,8 @@ pub async fn run(
 ) -> Result<()> {
     let paths = ryra_core::config::ConfigPaths::resolve()?;
 
+    let _lock = super::lock::MutationLock::acquire(dry_run)?;
+
     // `--orphans` purges every orphan service (leftover data with no
     // config entry). Never touches installed services. `--purge` is
     // implied — orphans have nothing else to preserve.

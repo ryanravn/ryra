@@ -29,6 +29,8 @@ pub async fn run(
         anyhow::bail!("no services specified — pass a service name, or run `ryra revert --list`");
     }
 
+    let _lock = super::lock::MutationLock::acquire(dry_run)?;
+
     if at.is_some() && targets.len() != 1 {
         anyhow::bail!("--at can only be used when reverting a single service");
     }

@@ -10,6 +10,7 @@ pub mod init;
 pub mod lifecycle;
 pub mod linger;
 pub mod list;
+pub mod lock;
 pub mod prompts;
 pub mod registry_cmd;
 pub mod remove;

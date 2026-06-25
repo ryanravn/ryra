@@ -131,6 +131,9 @@ pub async fn run(request: AddRequest) -> Result<()> {
         no_setup,
         env_file,
     } = request;
+
+    let _lock = super::lock::MutationLock::acquire(dry_run)?;
+
     // Convenience views of the exposure request for the guards and the
     // per-service resolution below. The typed request already rules out
     // the url+tailscale combination.

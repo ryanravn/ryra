@@ -5,6 +5,7 @@ use ryra_core::Step;
 use super::{apply, remove_caddy_ca};
 
 pub async fn run(yes: bool, dry_run: bool) -> Result<()> {
+    let _lock = super::lock::MutationLock::acquire(dry_run)?;
     let result = ryra_core::reset()?;
     if result.steps.is_empty() {
         println!("Nothing to reset — no ryra artifacts found.");

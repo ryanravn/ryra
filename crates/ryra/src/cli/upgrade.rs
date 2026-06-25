@@ -21,6 +21,8 @@ pub async fn run(services: &[String], yes: bool, force: bool, dry_run: bool) -> 
         return Ok(());
     }
 
+    let _lock = super::lock::MutationLock::acquire(dry_run)?;
+
     // Plan every service first. Aborting early on a hand-edit (without
     // --force) means we never partially upgrade some services and refuse
     // others.
