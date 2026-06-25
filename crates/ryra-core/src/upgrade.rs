@@ -414,12 +414,17 @@ pub(crate) fn read_existing_ports(service_name: &str) -> Result<BTreeMap<String,
     Ok(overrides)
 }
 
-/// Lockfile-tracked files we never want to flag as drift. The `.env` carries
-/// generated secrets that rotate at runtime; `service.manifest` itself is the
-/// manifest, not a tracked file. Both are excluded from the planned set
-/// during diffing so they don't appear as Removed/Added.
+/// Files we never want to flag as drift. The `.env` carries generated secrets
+/// that rotate at runtime; `service.manifest` itself is the manifest, not a
+/// tracked file; the auth bridge's CA bundle and `/etc/hosts` overlay are
+/// rewritten by an `ExecStartPre` hook on every start, so their on-disk bytes
+/// never match ryra's seed. All are excluded from the planned set during
+/// diffing so they don't appear as Removed/Added/Drift.
 fn should_skip_path(path: &std::path::Path, manifest_file: &std::path::Path) -> bool {
     if path == manifest_file {
+        return true;
+    }
+    if crate::auth_bridge::is_hook_rewritten(path) {
         return true;
     }
     matches!(path.file_name().and_then(|n| n.to_str()), Some(".env"))

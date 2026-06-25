@@ -1308,6 +1308,14 @@ pub fn add_service(params: AddServiceParams<'_>) -> Result<AddResult> {
             if file.path.file_name() == Some(env_filename) {
                 continue;
             }
+            // Hook-rewritten files (the auth bridge's CA bundle and /etc/hosts
+            // overlay) are owned by an ExecStartPre script after first start, so
+            // a recorded hash would never match the live bytes. Leaving them out
+            // keeps `ryra upgrade` from flagging them as drift forever. The same
+            // predicate gates `upgrade::should_skip_path`.
+            if auth_bridge::is_hook_rewritten(&file.path) {
+                continue;
+            }
             manifest_entries.push(manifest::ManifestEntry {
                 path: file.path.clone(),
                 sha256: manifest::hash_bytes(file.content.as_bytes()),

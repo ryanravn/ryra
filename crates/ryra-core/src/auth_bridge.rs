@@ -24,6 +24,29 @@ const SYSTEM_CA_PATHS: &[&str] = &[
     "/etc/pki/tls/certs/ca-bundle.crt",
 ];
 
+/// The CA bundle file, rebuilt by `refresh-ca-bundle.sh` on every start.
+const CA_BUNDLE_FILE: &str = "ca-bundle.crt";
+/// The `/etc/hosts` overlay, rewritten by `resolve-auth-host.sh` on every start.
+const AUTH_HOSTS_FILE: &str = "auth-hosts.txt";
+
+/// Files [`build`] seeds but whose content an `ExecStartPre` hook owns and
+/// rewrites on every service start. ryra writes an initial value so the
+/// bind-mount target exists, but the live bytes never match that seed — so
+/// drift detection and the manifest must skip them (see [`is_hook_rewritten`]),
+/// or every upgrade would re-flag them as hand-edited.
+const HOOK_REWRITTEN_FILES: [&str; 2] = [CA_BUNDLE_FILE, AUTH_HOSTS_FILE];
+
+/// True when `path` is one of the auth-bridge data files an `ExecStartPre` hook
+/// rewrites on every start (see [`HOOK_REWRITTEN_FILES`]). Drift detection
+/// (`upgrade::should_skip_path`) and the install manifest both consult this to
+/// leave these files out of drift classification — ryra seeds them, but the
+/// hook owns their content thereafter.
+pub(crate) fn is_hook_rewritten(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| HOOK_REWRITTEN_FILES.contains(&n))
+}
+
 /// Quadlet + filesystem artifacts a caller should merge into the service's
 /// generated unit and execute as part of the install plan.
 pub struct AuthBridge {
@@ -109,10 +132,10 @@ pub fn build(params: &AuthBridgeParams<'_>) -> Result<Option<AuthBridge>> {
         .ok_or_else(|| Error::Bundle("service data dir has no parent directory".into()))?
         .to_path_buf();
 
-    let merged_bundle = params.service_data.join("ca-bundle.crt");
+    let merged_bundle = params.service_data.join(CA_BUNDLE_FILE);
     let refresh_ca_script = params.service_data.join("refresh-ca-bundle.sh");
     let auth_host_script = params.service_data.join("resolve-auth-host.sh");
-    let auth_hosts = params.service_data.join("auth-hosts.txt");
+    let auth_hosts = params.service_data.join(AUTH_HOSTS_FILE);
 
     let mut volumes = Vec::new();
     let mut env = BTreeMap::new();
@@ -501,6 +524,41 @@ mod tests {
         assert!(paths.contains(&service_data.join("refresh-ca-bundle.sh").as_path()));
         assert!(paths.contains(&service_data.join("resolve-auth-host.sh").as_path()));
         assert!(paths.contains(&service_data.join("auth-hosts.txt").as_path()));
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_hook_rewritten_data_files_are_skipped_from_drift() -> TestResult {
+        // The CA bundle and /etc/hosts overlay are rewritten by ExecStartPre on
+        // every start, so drift detection + the manifest must skip them
+        // (`is_hook_rewritten`) — otherwise every upgrade flags them as
+        // hand-edited. The scripts that do the rewriting are static ryra-owned
+        // content and must stay drift-checked. Pin that split.
+        let tmp = tempfile::tempdir()?;
+        let service_data = tmp.path().join("forgejo");
+        assert!(is_hook_rewritten(&service_data.join("ca-bundle.crt")));
+        assert!(is_hook_rewritten(&service_data.join("auth-hosts.txt")));
+        assert!(!is_hook_rewritten(
+            &service_data.join("refresh-ca-bundle.sh")
+        ));
+        assert!(!is_hook_rewritten(
+            &service_data.join("resolve-auth-host.sh")
+        ));
+
+        // And the bridge actually emits exactly those two skipped files —
+        // guards against the predicate and the writer drifting apart.
+        let bridge = build_forgejo_bridge(&service_data, Some("https://auth.internal"))?;
+        let skipped: Vec<&Path> = write_paths(&bridge)
+            .into_iter()
+            .filter(|p| is_hook_rewritten(p))
+            .collect();
+        assert_eq!(
+            skipped,
+            vec![
+                service_data.join("ca-bundle.crt").as_path(),
+                service_data.join("auth-hosts.txt").as_path(),
+            ]
+        );
         Ok(())
     }
 
