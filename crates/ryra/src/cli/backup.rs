@@ -68,6 +68,13 @@ pub enum BackupAction {
         /// confirm.
         #[arg(long, short = 'y')]
         yes: bool,
+        /// Replace the encryption key with a fresh one. By default a
+        /// reconnect REUSES the existing key — generating a new one
+        /// orphans every existing snapshot (restic can't decrypt old
+        /// data with a new key, and managed backups aren't escrowed),
+        /// so rotation is opt-in.
+        #[arg(long)]
+        rotate_key: bool,
     },
     /// Configure how this box uses the connected repository: which machine it
     /// backs up as (its sub-folder in the bucket; point it at another machine's
@@ -306,6 +313,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
             path,
             password,
             yes,
+            rotate_key,
         } => {
             configure(ConfigureArgs {
                 backend,
@@ -316,6 +324,7 @@ pub async fn run(action: BackupAction) -> Result<()> {
                 path,
                 password,
                 yes,
+                rotate_key,
             })
             .await
         }
@@ -387,6 +396,7 @@ struct ConfigureArgs {
     path: Option<PathBuf>,
     password: Option<String>,
     yes: bool,
+    rotate_key: bool,
 }
 
 async fn configure(args: ConfigureArgs) -> Result<()> {
@@ -422,7 +432,10 @@ async fn configure(args: ConfigureArgs) -> Result<()> {
             .backup
             .clone()
             .ok_or_else(|| anyhow!("retry mode requires existing backup settings"))?,
-        ConfigureMode::Fresh => collect_new_settings(&args, interactive).await?,
+        ConfigureMode::Fresh => {
+            let existing_password = config.backup.as_ref().map(|b| b.password.clone());
+            collect_new_settings(&args, interactive, existing_password).await?
+        }
     };
 
     // A managed backend stores `Managed` but needs concrete vended creds for
@@ -615,7 +628,11 @@ fn prompt_existing_config_choice() -> Result<ConfigureMode> {
     }
 }
 
-async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result<BackupSettings> {
+async fn collect_new_settings(
+    args: &ConfigureArgs,
+    interactive: bool,
+    existing_password: Option<String>,
+) -> Result<BackupSettings> {
     let kind = match args.backend {
         Some(k) => k,
         None if interactive => prompt_backend()?,
@@ -631,27 +648,55 @@ async fn collect_new_settings(args: &ConfigureArgs, interactive: bool) -> Result
     let password = match &args.password {
         Some(p) if p.trim().is_empty() => bail!("--password may not be empty"),
         Some(p) => p.clone(),
-        None => {
-            let generated = generate_password();
-            if interactive && !args.yes {
-                println!(
-                    "\n  {}: {}",
-                    style("Generated encryption password").bold(),
-                    style(&generated).cyan()
-                );
-                println!(
-                    "  Store this somewhere safe: it's the only key that can decrypt your backups."
-                );
-                let confirm = Confirm::new()
-                    .with_prompt("Have you saved the password?")
-                    .default(false)
-                    .interact()?;
-                if !confirm {
-                    bail!("aborting: confirm the password is saved before continuing");
+        // Reconnecting with an existing key REUSES it by default. Silently
+        // generating a fresh key orphans every existing snapshot — restic
+        // can't decrypt old data with a new key, and managed backups aren't
+        // escrowed, so the old data becomes permanently unrecoverable. That
+        // exact footgun once wiped a user's backups. Rotation is opt-in via
+        // `--rotate-key`.
+        None => match (existing_password, args.rotate_key) {
+            (Some(existing), false) => {
+                if interactive {
+                    println!(
+                        "  Reusing the existing encryption key (pass --rotate-key to replace it)."
+                    );
                 }
+                existing
             }
-            generated
-        }
+            (existing, _) => {
+                let rotating = existing.is_some();
+                let generated = generate_password();
+                if interactive && !args.yes {
+                    if rotating {
+                        println!(
+                            "\n  {}",
+                            style(
+                                "WARNING: --rotate-key replaces the encryption key. Every existing \
+                                 snapshot becomes PERMANENTLY unreadable — restic cannot decrypt \
+                                 old data with a new key."
+                            )
+                            .red()
+                        );
+                    }
+                    println!(
+                        "\n  {}: {}",
+                        style("Generated encryption password").bold(),
+                        style(&generated).cyan()
+                    );
+                    println!(
+                        "  Store this somewhere safe: it's the only key that can decrypt your backups."
+                    );
+                    let confirm = Confirm::new()
+                        .with_prompt("Have you saved the password?")
+                        .default(false)
+                        .interact()?;
+                    if !confirm {
+                        bail!("aborting: confirm the password is saved before continuing");
+                    }
+                }
+                generated
+            }
+        },
     };
 
     // Schedule (daily/weekly) is set up after the backend, in `configure`.
