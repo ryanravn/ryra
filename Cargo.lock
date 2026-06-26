@@ -876,7 +876,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "ryra"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "anyhow",
  "chrono",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "ryra-core"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "anyhow",
  "base64",
@@ -919,7 +919,7 @@ dependencies = [
 
 [[package]]
 name = "ryra-protocol"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "serde",
  "serde_json",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "ryra-test"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "ryra-vm"
-version = "0.9.14"
+version = "0.9.15"
 dependencies = [
  "anyhow",
  "dirs",
